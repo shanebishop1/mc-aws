@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# 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
 # 1. Update & install prerequisites
 yum update -y
 rpm --import https://yum.corretto.aws/corretto.key
