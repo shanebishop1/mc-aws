@@ -5,3 +5,7 @@
 * see live output from mc server: `sudo journalctl -u minecraft.service -f`
 * see logs from shell init:  `vi /var/log/cloud-init-output.log`
 * interact console mc: `sudo -u minecraft screen -r mc-server`
+
+
+email goes to cloudflare with MX record of ddns -> us west 1 email receiving -> ses
+cloudflare zone id- "6b87aa58326735e0cd2be765519df8d2"
