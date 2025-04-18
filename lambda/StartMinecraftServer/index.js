@@ -6,15 +6,15 @@ import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 const ec2 = new EC2Client({});
 const ses = new SESClient({});
 
-const MAX_POLL_ATTEMPTS = 60; // Max attempts to get IP (e.g., 60 attempts * 5s = 5 minutes)
-const POLL_INTERVAL_MS = 5000; // Wait 5 seconds between polls
+const MAX_POLL_ATTEMPTS = 150; // Max attempts to get IP (e.g., 60 attempts * 5s = 5 minutes)
+const POLL_INTERVAL_MS = 2000; // Wait 5 seconds between polls
 
 export const handler = async (event) => {
   // 1. Extract SNS payload and parse email data
   let payload;
   let toAddr;
-  let subject;
-  let body;
+  let subject = ""; // Initialize to empty string
+  let body = "";    // Initialize to empty string
   try {
     if (!event.Records || !event.Records[0] || !event.Records[0].Sns || !event.Records[0].Sns.Message) {
         console.error("Invalid SNS event structure:", JSON.stringify(event));
@@ -33,16 +33,16 @@ export const handler = async (event) => {
     // Get subject
     subject = (payload.mail?.commonHeaders?.subject || "").toLowerCase();
 
-    // Decode the full raw email and get its body text
-    if (!payload.content) {
-        console.error("Email content missing in payload.");
-        return { statusCode: 400, body: "Email content missing." };
+    // Decode the full raw email and get its body text, if content exists
+    if (payload.content) {
+      const raw = Buffer.from(payload.content, "base64").toString("utf8");
+      body = raw.toLowerCase(); // crude full‑email search
+    } else {
+      console.log("Email content (body) is missing, proceeding with subject check only.");
     }
-    const raw = Buffer.from(payload.content, "base64").toString("utf8");
-    body = raw.toLowerCase(); // crude full‑email search
 
   } catch (parseError) {
-    console.error("Error parsing SNS message or email content:", parseError);
+    console.error("Error parsing SNS message:", parseError); // Removed "or email content" as it's handled now
     return { statusCode: 400, body: "Error processing incoming message." };
   }
 

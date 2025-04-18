@@ -9,3 +9,5 @@
 
 email goes to cloudflare with MX record of ddns -> us west 1 email receiving -> ses
 cloudflare zone id- "6b87aa58326735e0cd2be765519df8d2"
+
+topic arn- "arn:aws:sns:us-west-1:123456789012:IncomingMailTopic"
