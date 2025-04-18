@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-# REDACTED_GITHUB_TOKEN
 # 1. Update & install prerequisites
 yum update -y
 rpm --import https://yum.corretto.aws/corretto.key
