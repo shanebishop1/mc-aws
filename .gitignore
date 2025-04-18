@@ -1,4 +1,1 @@
-*.test
-/opt/minecraft/server/
-/var/log/minecraft/
-/**/*.jar
+**/node_modules/
