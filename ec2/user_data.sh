@@ -38,7 +38,7 @@ sudo -u minecraft git clone \
 # 5. Download Paper jar
 sudo -u minecraft bash -c '
   cd /opt/minecraft/server
-  wget https://api.papermc.io/v2/projects/paper/versions/1.20.1/builds/146/downloads/paper-1.20.1-146.jar -O paper.jar
+  wget https://api.papermc.io/v2/projects/paper/versions/1.21.4/builds/226/downloads/paper-1.21.4-226.jar -O paper.jar
   echo "eula=true" > eula.txt
 '
 
