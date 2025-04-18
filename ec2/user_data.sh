@@ -1,5 +1,4 @@
 #!/usr/bin/env bash
-
 # 1. Update & install prerequisites
 dnf update -y
 
@@ -38,6 +37,10 @@ sudo -u minecraft bash -c '
   wget https://api.papermc.io/v2/projects/paper/versions/1.21.4/builds/226/downloads/paper-1.21.4-226.jar -O paper.jar
   echo "eula=true" > eula.txt
 '
+
+# 7.1 Copy your custom server.properties
+cp /opt/setup/server/server.properties /opt/minecraft/server/server.properties
+chown minecraft:minecraft /opt/minecraft/server/server.properties
 
 # 8. Deploy service unit and shutdown script
 cp /opt/setup/ec2/minecraft.service /etc/systemd/system/
