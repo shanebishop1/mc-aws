@@ -10,20 +10,66 @@ const MAX_POLL_ATTEMPTS = 60; // Max attempts to get IP (e.g., 60 attempts * 5s 
 const POLL_INTERVAL_MS = 5000; // Wait 5 seconds between polls
 
 export const handler = async (event) => {
-  const instanceId = process.env.INSTANCE_ID;
-  const fromAddr = process.env.VERIFIED_SENDER;
-  const toAddr = event.mail?.commonHeaders?.from?.[0]; // Safely access sender address
+  // 1. Extract SNS payload and parse email data
+  let payload;
+  let toAddr;
+  let subject;
+  let body;
+  try {
+    if (!event.Records || !event.Records[0] || !event.Records[0].Sns || !event.Records[0].Sns.Message) {
+        console.error("Invalid SNS event structure:", JSON.stringify(event));
+        return { statusCode: 400, body: "Invalid event structure." };
+    }
+    const snsRecord = event.Records[0].Sns;
+    payload = JSON.parse(snsRecord.Message);
 
-  if (!instanceId || !fromAddr || !toAddr) {
-    console.error("Missing required environment variables (INSTANCE_ID, VERIFIED_SENDER) or sender address in event.");
-    // Optionally send an error email to an admin address here
-    return { statusCode: 400, body: "Configuration error." };
+    // Safely access sender address
+    toAddr = payload.mail?.commonHeaders?.from?.[0];
+    if (!toAddr) {
+        console.error("Sender address not found in email headers.");
+        return { statusCode: 400, body: "Sender address missing." };
+    }
+
+    // Get subject
+    subject = (payload.mail?.commonHeaders?.subject || "").toLowerCase();
+
+    // Decode the full raw email and get its body text
+    if (!payload.content) {
+        console.error("Email content missing in payload.");
+        return { statusCode: 400, body: "Email content missing." };
+    }
+    const raw = Buffer.from(payload.content, "base64").toString("utf8");
+    body = raw.toLowerCase(); // crude full‑email search
+
+  } catch (parseError) {
+    console.error("Error parsing SNS message or email content:", parseError);
+    return { statusCode: 400, body: "Error processing incoming message." };
   }
 
-  console.log(`Received request to start instance ${instanceId} from ${toAddr}`);
+  // 2. Check for keyword "start"
+  if (!subject.includes("start") && !body.includes("start")) {
+    console.log(`No 'start' keyword found in subject ('${subject}') or body for email from ${toAddr}; skipping.`);
+    return { statusCode: 200, body: "Keyword not found, no action taken." };
+  }
+
+  // 3. Check for required environment variables
+  const instanceId = process.env.INSTANCE_ID;
+  const fromAddr = process.env.VERIFIED_SENDER;
+  const zone = process.env.CLOUDFLARE_ZONE_ID;
+  const record = process.env.CLOUDFLARE_RECORD_ID;
+  const domain = process.env.CLOUDFLARE_MC_DOMAIN;
+  const cfToken = process.env.CLOUDFLARE_API_TOKEN;
+
+  if (!instanceId || !fromAddr || !zone || !record || !domain || !cfToken) {
+    console.error("Missing required environment variables (INSTANCE_ID, VERIFIED_SENDER, Cloudflare details).");
+    // Optionally send an error email to an admin address here
+    return { statusCode: 500, body: "Configuration error." }; // Use 500 for server-side config issues
+  }
+
+  console.log(`'start' keyword found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
 
   try {
-    // 1. Start EC2 Instance
+    // 4. Start EC2 Instance
     console.log(`Attempting to start EC2 instance: ${instanceId}`);
     await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
     console.log(`Successfully sent start command for instance: ${instanceId}`);
@@ -75,19 +121,14 @@ export const handler = async (event) => {
     if (!publicIp) {
       console.error(`Failed to obtain public IP for instance ${instanceId} after ${attempts} attempts.`);
       throw new Error("Timed out waiting for public IP address.");
+    } // End while loop
+
+    if (!publicIp) {
+      console.error(`Failed to obtain public IP for instance ${instanceId} after ${attempts} attempts.`);
+      throw new Error("Timed out waiting for public IP address.");
     }
 
-    // 3. Update Cloudflare DNS A record
-    const zone = process.env.CLOUDFLARE_ZONE_ID;
-    const record = process.env.CLOUDFLARE_RECORD_ID;
-    const domain = process.env.CLOUDFLARE_MC_DOMAIN;
-    const cfToken = process.env.CLOUDFLARE_API_TOKEN;
-
-    if (!zone || !record || !domain || !cfToken) {
-        console.error("Missing required Cloudflare environment variables.");
-        throw new Error("Cloudflare configuration error.");
-    }
-
+    // 5. Update Cloudflare DNS A record
     console.log(`Updating Cloudflare DNS record ${record} in zone ${zone} for domain ${domain} to IP ${publicIp}`);
     const cfUrl = `https://api.cloudflare.com/client/v4/zones/${zone}/dns_records/${record}`;
     const cfPayload = {
@@ -120,7 +161,7 @@ export const handler = async (event) => {
       throw fetchError; // Re-throw to be caught by the outer try-catch
     }
 
-    // 4. Send Confirmation Email via SES (using SDK v3)
+    // 6. Send Confirmation Email via SES (using SDK v3)
     console.log(`Sending confirmation email to ${toAddr}`);
     const emailParams = {
       Source: fromAddr,
