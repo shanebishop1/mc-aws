@@ -5,6 +5,13 @@ After=network.target
 [Service]
 User=minecraft
 WorkingDirectory=/opt/minecraft/server
+
+# 1) Sync only your repo files (won’t delete world/)
+ExecStartPre=/usr/bin/rsync -a /opt/setup/server/ /opt/minecraft/server/
+
+# 2) Ensure correct ownership
+ExecStartPre=/bin/chown -R minecraft:minecraft /opt/minecraft/server/
+
 ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3072M -Xmx3072M -jar paper.jar nogui
 ExecStop=/bin/kill -SIGINT $MAINPID
 Restart=on-failure
