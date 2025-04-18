@@ -1,1 +1,4 @@
 *.test
+/opt/minecraft/server/
+/var/log/minecraft/
+/**/*.jar
