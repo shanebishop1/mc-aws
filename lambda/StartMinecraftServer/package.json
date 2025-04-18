@@ -2,8 +2,8 @@
   "name": "StartMinecraftServer",
   "version": "1.0.0",
   "dependencies": {
-    "@aws-sdk/client-ec2": "^3.x",
-    "aws-sdk": "^2.x",
-    "node-fetch": "^3.x"
+    "@aws-sdk/client-ec2": "^3.569.0",
+    "@aws-sdk/client-ses": "^3.569.0",
+    "node-fetch": "^3.3.2"
   }
 }
