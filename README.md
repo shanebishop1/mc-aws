@@ -4,3 +4,4 @@
 * see status: `sudo systemctl status minecraft.service`
 * see live output from mc server: `sudo journalctl -u minecraft.service -f`
 * see logs from shell init:  `vi /var/log/cloud-init-output.log`
+* interact console mc: `sudo -u minecraft screen -r mc-server`
