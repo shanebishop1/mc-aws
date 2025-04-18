@@ -38,9 +38,9 @@ sudo -u minecraft bash -c '
   echo "eula=true" > eula.txt
 '
 
-# 7.1 Copy your custom server.properties
-cp /opt/setup/server/server.properties /opt/minecraft/server/server.properties
-chown minecraft:minecraft /opt/minecraft/server/server.properties
+# 7.1 Copy custom server files
+rsync -a /opt/setup/server/ /opt/minecraft/server/
+chown -R minecraft:minecraft /opt/minecraft/server/
 
 # 8. Deploy service unit and shutdown script
 cp /opt/setup/ec2/minecraft.service /etc/systemd/system/
