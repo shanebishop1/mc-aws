@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # 1. Update & install prerequisites
 yum update -y
+# 2. Add the Corretto 21 repo
 rpm --import https://yum.corretto.aws/corretto.key
 cat <<EOF > /etc/yum.repos.d/corretto.repo
-[corretto-17]
-name=Amazon Corretto 17 repo
-baseurl=https://yum.corretto.aws/amazon-corretto-17.repo
+[corretto-21]
+name=Amazon Corretto 21 repo
+baseurl=https://yum.corretto.aws/amazon-corretto-21.repo
 gpgcheck=1
 gpgkey=https://yum.corretto.aws/corretto.key
 EOF
-yum install -y java-17-amazon-corretto-devel unzip git
+
+# 3. Install Java 21, unzip, git
+yum install -y java-21-amazon-corretto-devel unzip git
 
 # 2. Install AWS CLI v2
 curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
