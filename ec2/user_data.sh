@@ -47,10 +47,14 @@ cp /opt/setup/ec2/minecraft.service /etc/systemd/system/
 cp /opt/setup/ec2/stop-ec2.sh /usr/local/bin/
 chown root:root /usr/local/bin/stop-ec2.sh && chmod +x /usr/local/bin/stop-ec2.sh
 
-# 9. Deploy plugin config
-mkdir -p /opt/minecraft/server/plugins/EmptyServerStop
-cp /opt/setup/plugin/EmptyServerStop/config.yml /opt/minecraft/server/plugins/EmptyServerStop/
-chown -R minecraft:minecraft /opt/minecraft/server/plugins
+# 9 Copy idle-check script and schedule cron
+cp /opt/setup/ec2/check-mc-idle.sh /usr/local/bin/check-mc-idle.sh
+chmod +x /usr/local/bin/check-mc-idle.sh
+
+cat <<'CRON' > /etc/cron.d/minecraft-idle
+*/5 * * * * root /usr/local/bin/check-mc-idle.sh >/dev/null 2>&1
+CRON
+chmod 644 /etc/cron.d/minecraft-idle
 
 # 10. Enable & start the Minecraft service
 systemctl daemon-reload
