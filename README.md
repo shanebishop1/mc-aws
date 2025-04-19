@@ -100,11 +100,11 @@ This project provides a fully automated, cost-efficient Minecraft hosting soluti
                 Name=tag:Backup,Values=weekly \
       --query "Snapshots[*].[SnapshotId,StartTime]" --output table
     ```
-2.  **Create a new volume from the snapshot:** Replace `<snap-id>` with the chosen Snapshot ID and ensure the `--availability-zone` matches your EC2 instance's AZ (e.g., `us-west-1a`).
+2.  **Create a new volume from the snapshot:** Replace `<snap-id>` with the chosen Snapshot ID and ensure the `--availability-zone` matches your EC2 instance's AZ (e.g., `us-west-1c`).
     ```bash
     aws ec2 create-volume \
       --snapshot-id <snap-id> \
-      --availability-zone us-west-1a \
+      --availability-zone us-west-1c \
       --volume-type gp3 # Or gp2, depending on your preference
     ```
     *(Note the `VolumeId` from the output, e.g., `vol-0123456789abcdef0`)*
