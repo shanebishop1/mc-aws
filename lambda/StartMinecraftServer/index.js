@@ -6,8 +6,8 @@ import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 const ec2 = new EC2Client({});
 const ses = new SESClient({});
 
-const MAX_POLL_ATTEMPTS = 150; // Max attempts to get IP (e.g., 60 attempts * 5s = 5 minutes)
-const POLL_INTERVAL_MS = 2000; // Wait 5 seconds between polls
+const MAX_POLL_ATTEMPTS = 300; // Max attempts to get IP (e.g., 60 attempts * 5s = 5 minutes)
+const POLL_INTERVAL_MS = 1000; // Wait 5 seconds between polls
 
 export const handler = async (event) => {
   // 1. Extract SNS payload and parse email data
@@ -67,6 +67,28 @@ export const handler = async (event) => {
   }
 
   console.log(`'start' keyword found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
+  // 0. Send Notification Email via SES (using SDK v3)
+  const emailParams = {
+    Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@yourdomain.com"
+    Destination: {
+      ToAddresses: [ "you@yourdomain.com" ]  // must be verified if in sandbox
+    },
+    Message: {
+      Subject: { Data: "Minecraft Startup" },
+      Body: {
+        Text: { Data: "Minecraft EC2 startup triggered by: "+toAddr }
+      }
+    }
+  };
+
+    try {
+      await ses.send(new SendEmailCommand(emailParams));
+      console.log("Successfully sent confirmation email.");
+    } catch (emailError) {
+      console.error("Error sending email via SES:", emailError);
+      // Log the error but don't necessarily fail the whole function,
+      // as the server is up and DNS is updated. Maybe send alert to admin?
+    }
 
   try {
     // 4. Start EC2 Instance
@@ -135,7 +157,7 @@ export const handler = async (event) => {
       type: "A",
       name: domain,
       content: publicIp,
-      ttl: 300, // Consider making TTL configurable via env var
+      ttl: 60, // Consider making TTL configurable via env var
       proxied: false
     };
 
@@ -161,31 +183,8 @@ export const handler = async (event) => {
       throw fetchError; // Re-throw to be caught by the outer try-catch
     }
 
-    // 6. Send Confirmation Email via SES (using SDK v3)
-    console.log(`Sending confirmation email to ${toAddr}`);
-    const emailParams = {
-      Source: fromAddr,
-      Destination: { ToAddresses: [toAddr] },
-      Content: {
-        Simple: {
-          Subject: { Data: "Your Minecraft Server IP", Charset: "UTF-8" },
-          Body: { Text: { Data: `Server is starting up at ${domain} (${publicIp}). It might take a minute or two to be ready.`, Charset: "UTF-8" } }
-        }
-      }
-      // Use FromEmailAddress if using SESv2Client instead of SESClient
-      // FromEmailAddress: fromAddr,
-    };
-
-    try {
-      await ses.send(new SendEmailCommand(emailParams));
-      console.log("Successfully sent confirmation email.");
-    } catch (emailError) {
-      console.error("Error sending email via SES:", emailError);
-      // Log the error but don't necessarily fail the whole function,
-      // as the server is up and DNS is updated. Maybe send alert to admin?
-    }
-
-    return { statusCode: 200, body: `Instance ${instanceId} started, DNS updated to ${publicIp}, email sent to ${toAddr}.` };
+    
+    return { statusCode: 200, body: `Instance ${instanceId} started, DNS updated to ${publicIp}, email sent.` };
 
   } catch (error) {
     console.error("Unhandled error in handler:", error);
