@@ -3,21 +3,32 @@ Description=Minecraft Server
 After=network.target
 
 [Service]
+Type=forking
 User=minecraft
 
 WorkingDirectory=/opt/minecraft/server
+PermissionsStartOnly=true
 
-TimeoutStopSec=300
-
-# 1) Sync only your repo files (won’t delete world/)
+# Sync only your repo files (won’t delete world/)
 ExecStartPre=/usr/bin/rsync -a /opt/setup/server/ /opt/minecraft/server/
 
-# 2) Ensure correct ownership
+# Ensure correct ownership
 ExecStartPre=/bin/chown -R minecraft:minecraft /opt/minecraft/server/
 
+# Start inside a detached screen session
 ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3276M -Xmx3276M -jar paper.jar nogui
 
-ExecStop=/bin/kill -SIGINT $MAINPID
+# Gracefully ask Minecraft to stop
+ExecStop=/usr/bin/screen -S mc-server -p 0 -X stuff "stop$(printf \\r)"
+
+# Then kill off the screen session itself
+ExecStopPost=/usr/bin/screen -S mc-server -X quit
+
+# Ensure systemd kills any remaining children of this unit
+KillMode=control-group
+
+# Give Minecraft up to 30s to shut down cleanly
+TimeoutStopSec=60
 
 Restart=on-failure
 
