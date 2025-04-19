@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
-echo "$(date +'%Y-%m-%d %H:%M:%S'): check-mc-idle.sh invoked" >> /var/log/mc-idle.log
+SHOULD_LOG="true"
+if [[ "$SHOULD_LOG" == "true" ]]; then
+  echo "$(date +'%Y-%m-%d %H:%M:%S'): check-mc-idle.sh invoked" >> /var/log/mc-idle.log
+fi
 set -euo pipefail
 
 IDLE_MARKER=/tmp/mc-idle.marker
@@ -18,30 +21,40 @@ if [[ $MC_EXIT_CODE -eq 0 ]]; then
   if [[ -n "$PLAYERS_LINE" ]]; then
     # 2) Extract the “0” from “0/20 …”
     PLAYERS=$(echo "$PLAYERS_LINE" | awk '{ print $2 }' | cut -d'/' -f1)
-    echo "$(date): $PLAYERS players are online" \
-      >> /var/log/mc-idle.log
+    if [[ "$SHOULD_LOG" == "true" ]]; then
+      echo "$(date): $PLAYERS players are online" \
+        >> /var/log/mc-idle.log
+    fi
   else
-    echo "$(date): Warning – no players line in mcstatus output: $MC_OUTPUT" \
-      >> /var/log/mc-idle.log
+    if [[ "$SHOULD_LOG" == "true" ]]; then
+      echo "$(date): Warning – no players line in mcstatus output: $MC_OUTPUT" \
+        >> /var/log/mc-idle.log
+    fi
     PLAYERS=0
   fi
 
   # 3) Validate it really is a number
   if ! [[ "$PLAYERS" =~ ^[0-9]+$ ]]; then
-    echo "$(date): Warning – failed to parse player count from mcstatus output: $MC_OUTPUT" \
-      >> /var/log/mc-idle.log
+    if [[ "$SHOULD_LOG" == "true" ]]; then
+      echo "$(date): Warning – failed to parse player count from mcstatus output: $MC_OUTPUT" \
+        >> /var/log/mc-idle.log
+    fi
     PLAYERS=0
   fi
 else
   # For any other mcstatus error, log it and exit to avoid incorrect shutdown
-  echo "$(date): Error - mcstatus failed with unexpected error (Exit Code: $MC_EXIT_CODE): $MC_OUTPUT" >> /var/log/mc-idle.log
+  if [[ "$SHOULD_LOG" == "true" ]]; then
+    echo "$(date): Error - mcstatus failed with unexpected error (Exit Code: $MC_EXIT_CODE): $MC_OUTPUT" >> /var/log/mc-idle.log
+  fi
   exit 1 # Exit the script to prevent potentially incorrect shutdown
 fi
 
 
 # 2. If any players are online, remove marker and exit
 if (( PLAYERS > 0 )); then
-  echo "$(date +'%Y-%m-%d %H:%M:%S'): Removing idle marker since players are online" >> /var/log/mc-idle.log
+  if [[ "$SHOULD_LOG" == "true" ]]; then
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): Removing idle marker since players are online" >> /var/log/mc-idle.log
+  fi
   rm -f "$IDLE_MARKER"
   exit 0
 fi
@@ -49,7 +62,9 @@ fi
 # 3. No players online:
 #    a) If marker doesn't exist, create it and exit
 if [[ ! -f "$IDLE_MARKER" ]]; then
-  echo "$(date +'%Y-%m-%d %H:%M:%S'): No players are online and no idle marker exists, so creating one" >> /var/log/mc-idle.log
+  if [[ "$SHOULD_LOG" == "true" ]]; then
+    echo "$(date +'%Y-%m-%d %H:%M:%S'): No players are online and no idle marker exists, so creating one" >> /var/log/mc-idle.log
+  fi
   touch "$IDLE_MARKER"
   exit 0
 fi
@@ -60,7 +75,9 @@ IDLE_TS=$(stat -c %Y "$IDLE_MARKER")
 ELAPSED=$(( NOW - IDLE_TS ))
 
 if (( ELAPSED > THRESHOLD )); then
-  echo "$(date): No players for $(( THRESHOLD/60 ))m, shutting down…" >> /var/log/mc-idle.log
+  if [[ "$SHOULD_LOG" == "true" ]]; then
+    echo "$(date): No players for $(( THRESHOLD/60 ))m, shutting down…" >> /var/log/mc-idle.log
+  fi
 
   # Gracefully stop Minecraft
   systemctl stop minecraft.service
@@ -75,7 +92,9 @@ if (( ELAPSED > THRESHOLD )); then
 
   rm -f "$IDLE_MARKER"
 
-  echo "$(date): Minecraft stopped; halting EC2 instance" >> /var/log/mc-idle.log
+  if [[ "$SHOULD_LOG" == "true" ]]; then
+    echo "$(date): Minecraft stopped; halting EC2 instance" >> /var/log/mc-idle.log
+  fi
 
   # Stop the EC2 instance
   INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
