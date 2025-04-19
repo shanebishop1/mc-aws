@@ -6,8 +6,9 @@ dnf update -y
 rpm --import https://yum.corretto.aws/corretto.key
 curl -L -o /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
 
-# 3. Install Java 21, unzip, git, Python3 & pip
-dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip
+# 3. Install Java 21, unzip, git, Python3 & pip3, and cron
+dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip cronie
+systemctl enable --now crond
 
 # 4. Install AWS CLI v2 (ARM64)
 curl "https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip" -o /tmp/awscliv2.zip
@@ -54,8 +55,8 @@ chown root:root /usr/local/bin/stop-ec2.sh && chmod +x /usr/local/bin/stop-ec2.s
 cp /opt/setup/ec2/check-mc-idle.sh /usr/local/bin/check-mc-idle.sh
 chmod +x /usr/local/bin/check-mc-idle.sh
 
-cat <<'CRON' > /etc/cron.d/minecraft-idle
-*/5 * * * * root /usr/local/bin/check-mc-idle.sh >/dev/null 2>&1
+tee /etc/cron.d/minecraft-idle << 'CRON'
+*/1 * * * * root /usr/local/bin/check-mc-idle.sh >/dev/null 2>&1
 CRON
 chmod 644 /etc/cron.d/minecraft-idle
 
