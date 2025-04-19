@@ -15,7 +15,7 @@ ExecStartPre=/usr/bin/rsync -a /opt/setup/server/ /opt/minecraft/server/
 # 2) Ensure correct ownership
 ExecStartPre=/bin/chown -R minecraft:minecraft /opt/minecraft/server/
 
-ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3072M -Xmx3072M -jar paper.jar nogui
+ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3276M -Xmx3276M -jar paper.jar nogui
 
 ExecStop=/bin/kill -SIGINT $MAINPID
 
