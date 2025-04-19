@@ -1,0 +1,17 @@
+{
+  "PolicyType": "EBS_SNAPSHOT_MANAGEMENT",
+  "ResourceTypes": ["VOLUME"],
+  "ResourceLocations": ["CLOUD"],
+  "TargetTags": [{ "Key": "Backup", "Value": "weekly" }],
+  "Schedules": [
+    {
+      "Name": "WeeklySnapshots",
+      "CopyTags": false,
+      "CreateRule": {
+        "CronExpression": "cron(0 3 ? * MON *)",
+        "Location": "CLOUD"
+      },
+      "RetainRule": { "Count": 4 }
+    }
+  ]
+}
