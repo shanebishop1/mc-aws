@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-SHOULD_LOG="true"
+SHOULD_LOG="false"
 if [[ "$SHOULD_LOG" == "true" ]]; then
   echo "$(date +'%Y-%m-%d %H:%M:%S'): check-mc-idle.sh invoked" >> /var/log/mc-idle.log
 fi
