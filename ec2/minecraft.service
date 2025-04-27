@@ -27,7 +27,7 @@ ExecStopPost=/usr/bin/screen -S mc-server -X quit
 # Ensure systemd kills any remaining children of this unit
 KillMode=control-group
 
-# Give Minecraft up to 30s to shut down cleanly
+# Give Minecraft up to 60s to shut down cleanly
 TimeoutStopSec=60
 
 Restart=on-failure
