@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+# Centralized version variables
+MC_VERSION="1.21.1"
+PAPER_BUILD="133"
+PAPER_URL="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${MC_VERSION}-${PAPER_BUILD}.jar"
+
 # 1. Update & install prerequisites
 dnf update -y
 
@@ -19,7 +24,9 @@ unzip /tmp/awscliv2.zip -d /tmp
 pip3 install mcstatus
 
 # 6. Create minecraft user & dirs
-useradd -m -r minecraft
+if ! id "minecraft" &>/dev/null; then
+  useradd -m -r minecraft
+fi
 mkdir -p /opt/minecraft/server
 mkdir -p /opt/setup
 chown -R minecraft:minecraft /opt/minecraft
@@ -31,36 +38,50 @@ GITHUB_TOKEN=$(aws ssm get-parameter \
   --with-decryption \
   --query Parameter.Value --output text)
 
-sudo -u minecraft git clone \
-  https://shanebishop1:${GITHUB_TOKEN}@github.com/shanebishop1/mc_aws.git \
-  /opt/setup
+if [[ ! -d "/opt/setup/.git" ]]; then
+  sudo -u minecraft git clone \
+    https://shanebishop1:${GITHUB_TOKEN}@github.com/shanebishop1/mc_aws.git \
+    /opt/setup
+fi
 
 # 8. Download Paper jar & accept EULA
-sudo -u minecraft bash -c '
-  cd /opt/minecraft/server
-  wget https://api.papermc.io/v2/projects/paper/versions/1.21.1/builds/133/downloads/paper-1.21.1-133.jar -O paper.jar
-  echo "eula=true" > eula.txt
-'
+if [[ ! -f "/opt/minecraft/server/paper.jar" ]]; then
+  sudo -u minecraft bash -c "
+    cd /opt/minecraft/server
+    wget ${PAPER_URL} -O paper.jar
+  "
+fi
+if [[ ! -f "/opt/minecraft/server/eula.txt" ]]; then
+  sudo -u minecraft bash -c 'echo "eula=true" > /opt/minecraft/server/eula.txt'
+fi
 
 # 9 Copy custom server files
 rsync -a /opt/setup/server/ /opt/minecraft/server/
 chown -R minecraft:minecraft /opt/minecraft/server/
 
 # 10. Deploy service unit and shutdown script
-cp /opt/setup/ec2/minecraft.service /etc/systemd/system/
-cp /opt/setup/ec2/stop-ec2.sh /usr/local/bin/
-chown root:root /usr/local/bin/stop-ec2.sh && chmod +x /usr/local/bin/stop-ec2.sh
+if [[ ! -f "/etc/systemd/system/minecraft.service" ]]; then
+  cp /opt/setup/ec2/minecraft.service /etc/systemd/system/
+fi
+if [[ ! -f "/usr/local/bin/stop-ec2.sh" ]]; then
+  cp /opt/setup/ec2/stop-ec2.sh /usr/local/bin/
+  chown root:root /usr/local/bin/stop-ec2.sh && chmod +x /usr/local/bin/stop-ec2.sh
+fi
 
 # 11 Copy idle-check script and schedule cron
 cp /opt/setup/ec2/check-mc-idle.sh /usr/local/bin/check-mc-idle.sh
 chmod +x /usr/local/bin/check-mc-idle.sh
 
-tee /etc/cron.d/minecraft-idle << 'CRON'
-*/1 * * * * root /usr/local/bin/check-mc-idle.sh >/dev/null 2>&1
+if ! grep -q "check-mc-idle.sh" /etc/cron.d/minecraft-idle 2>/dev/null; then
+  tee /etc/cron.d/minecraft-idle << 'CRON'
+*/1 * * * * root /usr/local/bin/check-mc-idle.sh
 CRON
-chmod 644 /etc/cron.d/minecraft-idle
+  chmod 644 /etc/cron.d/minecraft-idle
+fi
 
 # 12. Enable & start the Minecraft service
 systemctl daemon-reload
 systemctl enable minecraft.service
-systemctl start minecraft.service
+if ! systemctl is-active --quiet minecraft.service; then
+  systemctl start minecraft.service
+fi

@@ -32,5 +32,10 @@ TimeoutStopSec=60
 
 Restart=on-failure
 
+# Security hardening
+ProtectSystem=full
+ProtectHome=true
+ReadWritePaths=/opt/minecraft
+
 [Install]
 WantedBy=multi-user.target
