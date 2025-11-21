@@ -4,7 +4,6 @@
   "type": "module",
   "dependencies": {
     "@aws-sdk/client-ec2": "^3.569.0",
-    "@aws-sdk/client-ses": "^3.569.0",
-    "node-fetch": "^3.3.2"
+    "@aws-sdk/client-ses": "^3.569.0"
   }
 }

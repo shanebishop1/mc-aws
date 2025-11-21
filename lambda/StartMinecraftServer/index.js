@@ -1,4 +1,3 @@
-import fetch from "node-fetch";
 import { EC2Client, StartInstancesCommand, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 
@@ -6,8 +5,139 @@ import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 const ec2 = new EC2Client({});
 const ses = new SESClient({});
 
-const MAX_POLL_ATTEMPTS = 300; // Max attempts to get IP (e.g., 60 attempts * 5s = 5 minutes)
-const POLL_INTERVAL_MS = 1000; // Wait 5 seconds between polls
+// Constants
+const MAX_POLL_ATTEMPTS = 300; // Max attempts to get IP (e.g., 300 attempts * 1s = 5 minutes)
+const POLL_INTERVAL_MS = 1000; // Wait 1 second between polls
+
+/**
+ * Get the public IP address of an EC2 instance
+ * @param {string} instanceId - The EC2 instance ID
+ * @returns {Promise<string>} The public IP address
+ */
+async function getPublicIp(instanceId) {
+  let publicIp = null;
+  let attempts = 0;
+  
+  console.log(`Polling for public IP address for instance: ${instanceId}`);
+  while (!publicIp && attempts < MAX_POLL_ATTEMPTS) {
+    attempts++;
+    console.log(`Polling attempt ${attempts}/${MAX_POLL_ATTEMPTS}...`);
+    try {
+      const { Reservations } = await ec2.send(
+        new DescribeInstancesCommand({ InstanceIds: [instanceId] })
+      );
+      // Basic validation: Check if Reservations and Instances exist
+      if (Reservations && Reservations.length > 0 && Reservations[0].Instances && Reservations[0].Instances.length > 0) {
+        const inst = Reservations[0].Instances[0];
+        publicIp = inst.PublicIpAddress;
+        const instanceState = inst.State?.Name;
+        console.log(`Instance state: ${instanceState}, Public IP: ${publicIp}`);
+        if (publicIp) {
+          console.log(`Public IP found: ${publicIp}`);
+          return publicIp; // Exit function if IP is found
+        }
+        // Optional: Check if instance entered a failed state (stopping, stopped, terminated)
+        if (['stopping', 'stopped', 'terminated', 'shutting-down'].includes(instanceState)) {
+           console.error(`Instance ${instanceId} entered unexpected state ${instanceState} while waiting for IP. Aborting.`);
+           throw new Error(`Instance entered unexpected state: ${instanceState}`);
+        }
+      } else {
+        console.warn(`DescribeInstances response structure unexpected or empty for instance ${instanceId}.`);
+      }
+    } catch (describeError) {
+      console.error(`Error describing instance ${instanceId} on attempt ${attempts}:`, describeError);
+      // Decide if the error is fatal or if polling should continue
+      if (attempts >= MAX_POLL_ATTEMPTS) {
+        throw new Error(`Failed to describe instance after ${attempts} attempts: ${describeError.message}`);
+      }
+      // Continue polling after logging the error for transient issues
+    }
+
+    if (!publicIp) {
+      // Wait before the next poll attempt
+      await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
+    }
+  }
+  
+  if (!publicIp) {
+    console.error(`Failed to obtain public IP for instance ${instanceId} after ${attempts} attempts.`);
+    throw new Error("Timed out waiting for public IP address.");
+  }
+}
+
+/**
+ * Update Cloudflare DNS A record with the provided IP address
+ * @param {string} zone - Cloudflare zone ID
+ * @param {string} record - Cloudflare record ID
+ * @param {string} ip - The IP address to set
+ * @param {string} domain - The domain name
+ * @param {string} cfToken - Cloudflare API token
+ * @returns {Promise<void>}
+ */
+async function updateCloudflareDns(zone, record, ip, domain, cfToken) {
+  console.log(`Updating Cloudflare DNS record ${record} in zone ${zone} for domain ${domain} to IP ${ip}`);
+  const cfUrl = `https://api.cloudflare.com/client/v4/zones/${zone}/dns_records/${record}`;
+  const cfPayload = {
+    type: "A",
+    name: domain,
+    content: ip,
+    ttl: 60, // Consider making TTL configurable via env var
+    proxied: false
+  };
+
+  try {
+    const response = await fetch(cfUrl, {
+      method: "PUT",
+      headers: {
+        "Authorization": `Bearer ${cfToken}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(cfPayload)
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text();
+      console.error(`Cloudflare API error: ${response.status} ${response.statusText}`, errorBody);
+      throw new Error(`Failed to update Cloudflare DNS record. Status: ${response.status}`);
+    }
+    console.log("Successfully updated Cloudflare DNS record.");
+
+  } catch (fetchError) {
+    console.error("Error updating Cloudflare DNS:", fetchError);
+    throw fetchError; // Re-throw to be caught by the outer try-catch
+  }
+}
+
+/**
+ * Send notification email via SES
+ * @param {string} to - Recipient email address
+ * @param {string} subject - Email subject
+ * @param {string} body - Email body
+ * @returns {Promise<void>}
+ */
+async function sendNotification(to, subject, body) {
+  const emailParams = {
+    Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@yourdomain.com"
+    Destination: {
+      ToAddresses: [to]  // must be verified if in sandbox
+    },
+    Message: {
+      Subject: { Data: subject },
+      Body: {
+        Text: { Data: body }
+      }
+    }
+  };
+
+  try {
+    await ses.send(new SendEmailCommand(emailParams));
+    console.log("Successfully sent notification email.");
+  } catch (emailError) {
+    console.error("Error sending email via SES:", emailError);
+    // Log the error but don't necessarily fail the whole function,
+    // as the server is up and DNS is updated. Maybe send alert to admin?
+  }
+}
 
 export const handler = async (event) => {
   // 1. Extract SNS payload and parse email data
@@ -67,122 +197,25 @@ export const handler = async (event) => {
   }
 
   console.log(`'start' keyword found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
-  // 0. Send Notification Email via SES (using SDK v3)
-  const emailParams = {
-    Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@yourdomain.com"
-    Destination: {
-      ToAddresses: [ "you@yourdomain.com" ]  // must be verified if in sandbox
-    },
-    Message: {
-      Subject: { Data: "Minecraft Startup" },
-      Body: {
-        Text: { Data: "Minecraft EC2 startup triggered by: "+toAddr }
-      }
-    }
-  };
-
-    try {
-      await ses.send(new SendEmailCommand(emailParams));
-      console.log("Successfully sent confirmation email.");
-    } catch (emailError) {
-      console.error("Error sending email via SES:", emailError);
-      // Log the error but don't necessarily fail the whole function,
-      // as the server is up and DNS is updated. Maybe send alert to admin?
-    }
+  
+  // Send notification email about the startup
+  await sendNotification(
+    "you@yourdomain.com",  // hardcoded notification recipient
+    "Minecraft Startup",
+    `Minecraft EC2 startup triggered by: ${toAddr}`
+  );
 
   try {
-    // 4. Start EC2 Instance
+    // Start EC2 Instance
     console.log(`Attempting to start EC2 instance: ${instanceId}`);
     await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
     console.log(`Successfully sent start command for instance: ${instanceId}`);
 
-    // 2. Wait for Public IP Address
-    let publicIp = null;
-    let attempts = 0;
-    console.log(`Polling for public IP address for instance: ${instanceId}`);
-    while (!publicIp && attempts < MAX_POLL_ATTEMPTS) {
-      attempts++;
-      console.log(`Polling attempt ${attempts}/${MAX_POLL_ATTEMPTS}...`);
-      try {
-        const { Reservations } = await ec2.send(
-          new DescribeInstancesCommand({ InstanceIds: [instanceId] })
-        );
-        // Basic validation: Check if Reservations and Instances exist
-        if (Reservations && Reservations.length > 0 && Reservations[0].Instances && Reservations[0].Instances.length > 0) {
-          const inst = Reservations[0].Instances[0];
-          publicIp = inst.PublicIpAddress;
-          const instanceState = inst.State?.Name;
-          console.log(`Instance state: ${instanceState}, Public IP: ${publicIp}`);
-          if (publicIp) {
-            console.log(`Public IP found: ${publicIp}`);
-            break; // Exit loop if IP is found
-          }
-          // Optional: Check if instance entered a failed state (stopping, stopped, terminated)
-          if (['stopping', 'stopped', 'terminated', 'shutting-down'].includes(instanceState)) {
-             console.error(`Instance ${instanceId} entered unexpected state ${instanceState} while waiting for IP. Aborting.`);
-             throw new Error(`Instance entered unexpected state: ${instanceState}`);
-          }
-        } else {
-          console.warn(`DescribeInstances response structure unexpected or empty for instance ${instanceId}.`);
-        }
-      } catch (describeError) {
-        console.error(`Error describing instance ${instanceId} on attempt ${attempts}:`, describeError);
-        // Decide if the error is fatal or if polling should continue
-        if (attempts >= MAX_POLL_ATTEMPTS) {
-          throw new Error(`Failed to describe instance after ${attempts} attempts: ${describeError.message}`);
-        }
-        // Continue polling after logging the error for transient issues
-      }
+    // Wait for Public IP Address using helper function
+    const publicIp = await getPublicIp(instanceId);
 
-      if (!publicIp) {
-        // Wait before the next poll attempt
-        await new Promise(resolve => setTimeout(resolve, POLL_INTERVAL_MS));
-      }
-    } // End while loop
-
-    if (!publicIp) {
-      console.error(`Failed to obtain public IP for instance ${instanceId} after ${attempts} attempts.`);
-      throw new Error("Timed out waiting for public IP address.");
-    } // End while loop
-
-    if (!publicIp) {
-      console.error(`Failed to obtain public IP for instance ${instanceId} after ${attempts} attempts.`);
-      throw new Error("Timed out waiting for public IP address.");
-    }
-
-    // 5. Update Cloudflare DNS A record
-    console.log(`Updating Cloudflare DNS record ${record} in zone ${zone} for domain ${domain} to IP ${publicIp}`);
-    const cfUrl = `https://api.cloudflare.com/client/v4/zones/${zone}/dns_records/${record}`;
-    const cfPayload = {
-      type: "A",
-      name: domain,
-      content: publicIp,
-      ttl: 60, // Consider making TTL configurable via env var
-      proxied: false
-    };
-
-    try {
-      const response = await fetch(cfUrl, {
-        method: "PUT",
-        headers: {
-          "Authorization": `Bearer ${cfToken}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(cfPayload)
-      });
-
-      if (!response.ok) {
-        const errorBody = await response.text();
-        console.error(`Cloudflare API error: ${response.status} ${response.statusText}`, errorBody);
-        throw new Error(`Failed to update Cloudflare DNS record. Status: ${response.status}`);
-      }
-      console.log("Successfully updated Cloudflare DNS record.");
-
-    } catch (fetchError) {
-      console.error("Error updating Cloudflare DNS:", fetchError);
-      throw fetchError; // Re-throw to be caught by the outer try-catch
-    }
-
+    // Update Cloudflare DNS using helper function
+    await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
     
     return { statusCode: 200, body: `Instance ${instanceId} started, DNS updated to ${publicIp}, email sent.` };
 

@@ -1,0 +1,12 @@
+# Minecraft log rotation configuration
+# Deploy to: /etc/logrotate.d/minecraft
+
+/var/log/mc-idle.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 minecraft minecraft
+}

@@ -7,7 +7,7 @@
 			"Action": [
 				"ssm:GetParameter"
 			],
-			"Resource": "arn:aws:ssm:us-west-1:123456789012:parameter/minecraft/github-pat"
+			"Resource": "arn:aws:ssm:us-west-1:*:parameter/minecraft/github-pat"
 		},
 		{
 			"Sid": "AllowDecryptSSMKey",

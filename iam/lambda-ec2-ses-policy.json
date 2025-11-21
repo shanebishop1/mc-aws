@@ -8,7 +8,7 @@
         "ec2:DescribeInstances",
         "ses:SendEmail"
       ],
-      "Resource":"*"
+      "Resource":"arn:aws:ec2:us-west-1:123456789012:instance/<EC2_INSTANCE_ID>"
     }
   ]
 }
