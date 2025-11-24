@@ -1,13 +1,14 @@
 import { EC2Client, StartInstancesCommand, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 
-// Instantiate clients without hardcoding region - SDK will infer from environment
+// Instantiate clients without hardcoding region (SDK will infer based on the env)
 const ec2 = new EC2Client({});
 const ses = new SESClient({});
 
-// Constants
-const MAX_POLL_ATTEMPTS = 300; // Max attempts to get IP (e.g., 300 attempts * 1s = 5 minutes)
-const POLL_INTERVAL_MS = 1000; // Wait 1 second between polls
+// Max attempts to get IP (e.g., 300 attempts * 1s = 5 minutes)
+const MAX_POLL_ATTEMPTS = 300;
+// Wait 1 second between polls
+const POLL_INTERVAL_MS = 1000;
 
 /**
  * Get the public IP address of an EC2 instance
