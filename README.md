@@ -1,6 +1,6 @@
 # Automated AWS Minecraft Server
 
-Most MC server hosting solutions cost ~$10 a month. If you are only playing only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but then the host must always keep the server online, which can be a pain.
+Most MC server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but then the host must always keep the server online, which can be a pain.
 
 This project hosts a Minecraft server on AWS that **only runs when someone actually wants to play**. It starts up via an email trigger, syncs its configuration from this repository, and shuts itself down automatically when nobody is online.
 
@@ -49,7 +49,26 @@ Fork this repo. You'll edit the files in `config/` whenever you want to change g
 
 - Update `ec2/user_data.sh` to clone **your** fork instead of mine.
 
-### 2. AWS Infrastructure
+### 2. AWS Account Setup
+
+**Use an IAM User, Not Root:**
+Never use the root account for daily operations. Create an IAM user with administrative privileges for setup:
+
+1. Go to IAM → Users → Create user
+2. Attach `AdministratorAccess` policy (for setup only)
+3. Enable multi-factor authentication (MFA)
+4. Use this IAM user for all setup tasks
+
+**Set Up Billing Alarms:**
+Prevent surprise bills with a simple billing alarm:
+
+1. Go to CloudWatch → Alarms → Create alarm
+2. Select "Billing" metric → "TotalEstimatedCharge"
+3. Set threshold to $5 (or your preferred amount)
+4. Configure email notification
+5. This alerts you before costs get out of control
+
+### 3. AWS Infrastructure
 
 - **EC2:** Launch a `t4g.medium` instance (Amazon Linux 2023).
   - Add a tag `Backup=weekly` to the storage volume so the automated backups catch it.
@@ -58,7 +77,7 @@ Fork this repo. You'll edit the files in `config/` whenever you want to change g
   - Run `StopInstances` on itself.
 - **Secrets:** Put your GitHub Token in AWS Systems Manager (Parameter Store) as `/minecraft/github-pat`.
 
-### 3. The Trigger (Lambda + SES)
+### 4. The Trigger (Lambda + SES)
 
 - **Lambda:** Zip up the `lambda/` folder and deploy it. It needs Environment Variables for your Instance ID and Cloudflare API details.
 - **SES:** Verify your domain. Set up a "Receipt Rule" that says "When an email hits `start@...`, trigger the Lambda."
