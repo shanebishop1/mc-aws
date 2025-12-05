@@ -1,3 +1,0 @@
-idleMinutes: 15
-onIdleCommand:
-  - "/usr/local/bin/stop-ec2.sh"

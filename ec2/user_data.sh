@@ -57,8 +57,8 @@ if [[ ! -f "/opt/minecraft/server/eula.txt" ]]; then
   sudo -u minecraft bash -c 'echo "eula=true" > /opt/minecraft/server/eula.txt'
 fi
 
-# 9 Copy custom server files
-rsync -a /opt/setup/server/ /opt/minecraft/server/
+# 9 Copy custom server and plugin config files
+rsync -a /opt/setup/config/ /opt/minecraft/server/
 chown -R minecraft:minecraft /opt/minecraft/server/
 
 # 10. Deploy service unit and shutdown script
