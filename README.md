@@ -1,4 +1,4 @@
-# Automated AWS Minecraft Server
+# On-Demand Minecraft Server on AWS
 <p align="center"><img width="320" height="320" alt="lol" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
 Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:  
