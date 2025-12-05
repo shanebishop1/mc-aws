@@ -83,7 +83,7 @@ If you want to set this up this yourself, here is the rough outline.
 
 Fork this repo. You can edit `config/` whenever you want to change game settings or add people to the allowlist.
 
-- Update `GITHUB_USERNAME` and `REPO_NAME` at the top of `ec2/user_data.sh` so it clones **your** fork from your account.
+- The `ec2/user_data.sh` script fetches your GitHub username and repository name from AWS Systems Manager Parameter Store (configured in step 3 below).
 
 ### 2. AWS Account Setup
 
