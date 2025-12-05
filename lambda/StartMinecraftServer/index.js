@@ -200,11 +200,16 @@ export const handler = async (event) => {
   console.log(`'start' keyword found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
   
   // Send notification email about the startup
-  await sendNotification(
-    "you@yourdomain.com",  // hardcoded notification recipient
-    "Minecraft Startup",
-    `Minecraft EC2 startup triggered by: ${toAddr}`
-  );
+  const notificationEmail = process.env.NOTIFICATION_EMAIL;
+  if (notificationEmail) {
+    await sendNotification(
+      notificationEmail,
+      "Minecraft Startup",
+      `Minecraft EC2 startup triggered by: ${toAddr}`
+    );
+  } else {
+    console.log("NOTIFICATION_EMAIL env var not set; skipping startup email.");
+  }
 
   try {
     // Start EC2 Instance
