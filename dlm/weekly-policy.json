@@ -11,7 +11,7 @@
         "CronExpression": "cron(0 3 ? * MON *)",
         "Location": "CLOUD"
       },
-      "RetainRule": { "Count": 2 }
+      "RetainRule": { "Count": 4 }
     }
   ]
 }
