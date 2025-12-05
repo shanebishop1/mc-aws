@@ -10,7 +10,7 @@ WorkingDirectory=/opt/minecraft/server
 PermissionsStartOnly=true
 
 # Sync only your repo files (won’t delete world/)
-ExecStartPre=/usr/bin/rsync -a /opt/setup/server/ /opt/minecraft/server/
+ExecStartPre=/usr/bin/rsync -a /opt/setup/config/ /opt/minecraft/server/
 
 # Ensure correct ownership
 ExecStartPre=/bin/chown -R minecraft:minecraft /opt/minecraft/server/
