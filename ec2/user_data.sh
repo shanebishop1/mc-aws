@@ -33,6 +33,8 @@ chown -R minecraft:minecraft /opt/minecraft
 chown minecraft:minecraft /opt/setup
 
 # 7. Clone this repo (using a GitHub PAT stored in SSM Parameter Store)
+GITHUB_USERNAME=$(aws ssm get-parameter --name /minecraft/github-user --query Parameter.Value --output text)
+REPO_NAME=$(aws ssm get-parameter --name /minecraft/github-repo --query Parameter.Value --output text)
 GITHUB_TOKEN=$(aws ssm get-parameter \
   --name /minecraft/github-pat \
   --with-decryption \
@@ -40,7 +42,7 @@ GITHUB_TOKEN=$(aws ssm get-parameter \
 
 if [[ ! -d "/opt/setup/.git" ]]; then
   sudo -u minecraft git clone \
-    https://shanebishop1:${GITHUB_TOKEN}@github.com/shanebishop1/mc_aws.git \
+    "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${GITHUB_USERNAME}/${REPO_NAME}.git" \
     /opt/setup
 fi
 
