@@ -72,7 +72,10 @@ It's a good practice to set up a simple billing alarm, just in case something go
 - **Networking & Security Groups:** Pick an existing VPC + public subnet with an Internet Gateway, or create one. Make a security group that allows inbound TCP `25565` from the IP ranges that should access your server (and optionally SSH `22` from your IP for maintenance). Allow all outbound traffic. Attach this security group to the Minecraft instance at launch.
 - **EC2:** Launch a `t4g.medium` instance (Amazon Linux 2023) in that subnet. Attach the security group above and the instance profile from the next bullet. Add the tag `Backup=weekly` to the root volume so DLM finds it.
 - **IAM Role / Instance Profile:** Create a role for EC2 that uses `iam/trust-policy.json` and attach `iam/AllowReadGithubPAT.json` + `iam/EC2StopInstance.json`. That gives the box permission to pull the GitHub PAT from SSM (including the `kms:Decrypt` it needs) and to call `ec2:StopInstances` on itself when idle.
-- **Secrets:** Store your GitHub PAT as a SecureString parameter `/minecraft/github-pat` in AWS Systems Manager Parameter Store (same region as the instance) and set the key/permissions so only that role can read it.
+- **Secrets & Config:** Store the following in AWS Systems Manager Parameter Store (Standard parameters are fine, except for the PAT which should be SecureString):
+    - `/minecraft/github-pat` (SecureString): Your GitHub Personal Access Token.
+    - `/minecraft/github-user` (String): Your GitHub username.
+    - `/minecraft/github-repo` (String): The name of your forked repository (e.g., `mc_aws`).
 
 ### 4. The Trigger (Lambda + SES + SNS + Cloudflare)
 
@@ -87,6 +90,7 @@ It's a good practice to set up a simple billing alarm, just in case something go
    - Configure the following environment variables:
      - `INSTANCE_ID`
      - `VERIFIED_SENDER` (address you verified in SES)
+     - `NOTIFICATION_EMAIL` (optional, the email to receive startup notifications)
      - `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`, `CLOUDFLARE_MC_DOMAIN`, `CLOUDFLARE_API_TOKEN`
 3. **SES + SNS Flow:**
    - SES Inbound requires an active Receipt Rule Set. Verify the domain that will receive `start@...` and create a rule that matches that recipient.
@@ -109,9 +113,10 @@ Send an email with the subject "start" to your trigger address. Wait ~60 seconds
 **Updating Settings:**
 Don't SSH into the server to change the whitelist or properties. Instead:
 
-1.  Edit `config/whitelist.json` in this repo.
-2.  Commit and push.
-3.  The next time the server starts (or restarts), it pulls your changes automatically.
+1.  **Find UUIDs:** Use a tool like [mcuuid.net](https://mcuuid.net/) to find the UUID for each player you want to allow.
+2.  **Edit Config:** Update `config/whitelist.json` in this repo with the new names and UUIDs.
+3.  **Push:** Commit and push your changes.
+4.  **Sync:** The next time the server starts (or restarts), it pulls your changes automatically.
 
 **Backups:**
 AWS DLM handles the weekly snapshots (see Step 5). It takes a snapshot every Monday at 03:00 UTC and retains the last four copies automatically.
