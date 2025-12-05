@@ -1,43 +1,55 @@
 # Automated AWS Minecraft Server
+
 <p align="center"><img width="320" height="320" alt="lol" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
-Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:  
+Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:
+
 - **A.** keep the server online 24/7, or
-- **B.** manually spin it up/down whenever somebody wants to hop on  
+- **B.** manually spin it up/down whenever somebody wants to hop on
 
-Both options are inconvenient. 
+Both options are inconvenient.
 
-The goal of this repo is to show you how to host a Minecraft server on AWS that **only runs when someone actually wants to play**. It starts up via an email trigger, syncs its config/allowlist from this repository, and shuts itself down automatically when nobody is online.  
+The goal of this repo is to show you how to host a Minecraft server on AWS that **only runs when someone actually wants to play**. It starts up via an email trigger, syncs its config/allowlist from this repository, and shuts itself down automatically when nobody is online.
 
-I found a few similar, pre-existing recipes online, but none of them included auto-shutdown, the option for backups, or email integration, which allows any (non-technical) user to spin up the server. So here we are- I'm hoping this will save you a few bucks and serve as a fun project!  
-  
+I found a few similar, pre-existing recipes online, but none of them included auto-shutdown, the option for backups, or email integration, which allows any (non-technical) user to spin up the server. So here we are- I'm hoping this will save you a few bucks and serve as a fun project!
+
 **NOTE: As I detail below, there are most likely better options elsewhere (on-demand hosting providers) for your use case. If you aren't technical (and don't want to learn), or aren't excited to jump through a few hoops, you should look elsewhere.**
 
+## Table of Contents
+
+- [Background](#background)
+- [How it works](#how-it-works)
+- [Repo Structure](#repo-structure)
+- [Setup Guide](#setup-guide)
+- [How to Manage It](#how-to-manage-it)
+
 ## Background
+
 ### Cost
 
 Traditional hosting providers charge a flat monthly fee. By moving to AWS and using a **`t4g.medium`** instance, you only pay for the seconds the server is running (plus ~$0.75 per month for storage).
 
-|                 | **This Setup**                         | **Realms / Hosting**       |
-| :-------------- | :--------------------------------------- | :------------------------- |
-| **Performance** | 4GB RAM / 2 vCPU (Dedicated)             | Hit or miss                |
-| **Idle Cost**   | **~$0.75 / month\*** (just storage, no backups)        | Full Price                 |
-| **Active Cost** | **~$0.03 / hour**                        | N/A                        |
-| **Total Cost**  | **~\$0.75-\$1.50 / month** (~0-20 hrs of play) | **\$8.00 - \$15.00 / month** |
-  
-\*_If you want to backup your data, that will cost an additional ~$0.20 per month._  
-  
-**Basically, unless you are playing 24/7, this setup is significantly cheaper than using a traditional, dedicated provider.**  
+|                 | **This Setup**                                  | **Realms / Hosting**         |
+| :-------------- | :---------------------------------------------- | :--------------------------- |
+| **Performance** | 4GB RAM / 2 vCPU (Dedicated)                    | Hit or miss                  |
+| **Idle Cost**   | **~$0.75 / month\*** (just storage, no backups) | Full Price                   |
+| **Active Cost** | **~$0.03 / hour**                               | N/A                          |
+| **Total Cost**  | **~\$0.75-\$1.50 / month** (~0-20 hrs of play)  | **\$8.00 - \$15.00 / month** |
+
+\*_If you want to backup your data, that will cost an additional ~$0.20 per month._
+
+**Basically, unless you are playing 24/7, this setup is significantly cheaper than using a traditional, dedicated provider.**
 
 ### Rationale
-There do exist on-demand hosting providers such as Exarotron\* and ServerWave\*\*. These options are definitely cheaper for many use cases. Not to mention, they'll give you a bunch of extra features and are infinitely easier to set up and use. However, if you want complete flexibility, this setup is the best because:  
-  
+
+There do exist on-demand hosting providers such as Exarotron\* and ServerWave\*\*. These options are definitely cheaper for many use cases. Not to mention, they'll give you a bunch of extra features and are infinitely easier to set up and use. However, if you want complete flexibility, this setup is the best because:
+
 1. You have complete control (just like if you were self-hosting on your own machine). If you don't want to pay the ~$0.75 per month for storage and aren't going to play for a while, you can download your GP3 volume and store it locally, bringing your monthly idle cost to $0.00. Then, when the [annual two-week Minecraft phase](https://knowyourmeme.com/memes/2-week-minecraft-phase) kicks off, you can just attach a new EBS volume to your EC2 instance, SSH in, and rsync your world back.
 2. If you want to extend this project, you can. Some ideas include: storing the world on some kind of free provider (e.g. Google Drive) and syncing it to the EC2 instance on boot and back to the provider on shutdown. This would give you very, very, slow start times, but $0.00 idle cost. Just be wary of the 100gb monthly egress limit that AWS has in place.
 3. Anyone who knows your start keyword and email address can easily spin the server up by sending an email. This means that anybody can play, whether you're available or not. With self-hosting, you would have to be there to turn on the server. With a traditional on-demand provider, you would have to log in to a control panel to spin the server up.
 
 \*_Exarotron specifically does offer a Discord bot that you could grant access to in order to start the server, but setting up Discord is another step for your non-technical/non-gamer friends to handle. Conversely, everybody has email. Exarotron also requires that you buy credits in ~$3.00 increments, which limits spending flexibility. If you want to play for a couple months and then stop, anything left over from your last ~$3.00 increment will be wasted. Also, technically, using a t3.medium EC2 instance with 4GB of RAM costs $0.04 per hour, which is ever-so-slightly cheaper than the €0.04 per hour for a similar 4G server on Exarotron._
-  
+
 \*\*_ServerWave requires that you pay **per-hour** of usage, not per-second._
 
 At this point, we're talking about pennies. In some cases, you'll save a few pennies with this setup, and in other cases, you'll lose a few. However, this setup exists not just to save money, but to enable independence from any third-party services (besides our almighty cloud providers, of course, upon which the rest of the observable software universe is but a wrapper). And because it's fun to build/scaffold/tinker/control.
@@ -98,9 +110,9 @@ It's a good practice to set up a simple billing alarm, just in case something go
 - **EC2:** Launch a `t4g.medium` instance (Amazon Linux 2023) in that subnet. Attach the security group above and the instance profile from the next bullet. If you want backups, add the tag `Backup=weekly` to the root volume so DLM finds it.
 - **IAM Role / Instance Profile:** Create a role for EC2 that uses `iam/trust-policy.json` and attach `iam/AllowReadGithubPAT.json` + `iam/EC2StopInstance.json`. That gives the instance permission to pull the GitHub PAT from SSM (including the `kms:Decrypt` it needs) and to call `ec2:StopInstances` on itself when idle.
 - **Secrets & Config:** Store the following in AWS Systems Manager Parameter Store (Standard parameters are fine, except for the PAT which should be SecureString):
-    - `/minecraft/github-pat` (SecureString): Your GitHub Personal Access Token.
-    - `/minecraft/github-user` (String): Your GitHub username.
-    - `/minecraft/github-repo` (String): The name of your forked repository (e.g., `mc_aws`).
+  - `/minecraft/github-pat` (SecureString): Your GitHub Personal Access Token.
+  - `/minecraft/github-user` (String): Your GitHub username.
+  - `/minecraft/github-repo` (String): The name of your forked repository (e.g., `mc_aws`).
 
 ### 4. The Trigger (Lambda + SES + SNS + Cloudflare)
 
@@ -147,7 +159,3 @@ Don't SSH into the server to change the whitelist or properties. Instead:
 
 **Backups:**
 AWS DLM handles the weekly snapshots (see Step 5). It takes a snapshot every Monday at 03:00 UTC and retains the last four copies automatically.
-
-## 📄 License
-
-MIT. Use this code however you want.
