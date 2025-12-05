@@ -177,9 +177,11 @@ export const handler = async (event) => {
     return { statusCode: 400, body: "Error processing incoming message." };
   }
 
-  // 2. Check for keyword "start"
-  if (!subject.includes("start") && !body.includes("start")) {
-    console.log(`No 'start' keyword found in subject ('${subject}') or body for email from ${toAddr}; skipping.`);
+  // 2. Check for keyword (default "start")
+  const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
+  
+  if (!subject.includes(startKeyword) && !body.includes(startKeyword)) {
+    console.log(`No start keyword ('${startKeyword}') found in subject ('${subject}') or body for email from ${toAddr}; skipping.`);
     return { statusCode: 200, body: "Keyword not found, no action taken." };
   }
 
@@ -197,7 +199,7 @@ export const handler = async (event) => {
     return { statusCode: 500, body: "Configuration error." }; // Use 500 for server-side config issues
   }
 
-  console.log(`'start' keyword found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
+  console.log(`Start keyword ('${startKeyword}') found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
   
   // Send notification email about the startup
   const notificationEmail = process.env.NOTIFICATION_EMAIL;
