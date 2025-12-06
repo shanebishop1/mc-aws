@@ -9,12 +9,58 @@ import * as ses from 'aws-cdk-lib/aws-ses';
 import * as sesActions from 'aws-cdk-lib/aws-ses-actions';
 import * as fs from 'fs';
 import * as path from 'path';
+import * as cr from 'aws-cdk-lib/custom-resources';
+
+import * as ssm from 'aws-cdk-lib/aws-ssm';
 
 export class MinecraftStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    // 1. VPC (Use default to save cost/complexity, or create new)
+    // 0. SSM Parameters (GitHub Credentials)
+    new ssm.StringParameter(this, 'GithubUserParam', {
+      parameterName: '/minecraft/github-user',
+      stringValue: process.env.GITHUB_USER || 'error-missing-user',
+    });
+
+    new ssm.StringParameter(this, 'GithubRepoParam', {
+      parameterName: '/minecraft/github-repo',
+      stringValue: process.env.GITHUB_REPO || 'error-missing-repo',
+    });
+
+    // Read GitHub Token (Passed as a deployment parameter to keep it out of the template)
+    const githubTokenParam = new cdk.CfnParameter(this, 'GithubTokenParam', {
+      type: 'String',
+      description: 'GitHub Personal Access Token (PAT)',
+      noEcho: true, // Critical: Prevents the value from being stored in the template
+    });
+
+    // Use Custom Resource to put the parameter into SSM securely
+    new cr.AwsCustomResource(this, 'GithubTokenSecureParam', {
+      onUpdate: {
+        service: 'SSM',
+        action: 'putParameter',
+        parameters: {
+          Name: '/minecraft/github-pat',
+          Value: githubTokenParam.valueAsString,
+          Type: 'SecureString',
+          Overwrite: true,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('GithubTokenSecureParam'),
+      },
+      onDelete: {
+        service: 'SSM',
+        action: 'deleteParameter',
+        parameters: {
+          Name: '/minecraft/github-pat',
+        },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+      }),
+    });
+
+    // 1. VPC
     const vpc = ec2.Vpc.fromLookup(this, 'DefaultVpc', {
       isDefault: true,
     });
@@ -68,6 +114,7 @@ export class MinecraftStack extends cdk.Stack {
       }),
       securityGroup,
       role: ec2Role,
+      keyName: process.env.KEY_PAIR_NAME ? process.env.KEY_PAIR_NAME : undefined,
       userData: ec2.UserData.custom(userDataScript),
       blockDevices: [
         {
@@ -127,17 +174,32 @@ export class MinecraftStack extends cdk.Stack {
     // Note: You must manually verify the domain/email in SES Console first!
     const ruleSet = ses.ReceiptRuleSet.fromReceiptRuleSetName(this, 'RuleSet', 'default-rule-set');
     
-    // We can't easily import an existing rule set by name to add rules to it in CDK without looking it up.
-    // For simplicity in this standalone stack, we'll assume we're creating a new rule 
-    // or the user will add this rule to their existing set manually if they prefer.
-    // However, CDK's `ReceiptRule` construct tries to create a RuleSet if one isn't provided.
     
-    // Strategy: Create a new Rule Set for this stack to avoid conflict, 
-    // OR ask user to activate it. 
-    // Better: Just define the rule and let CDK manage a RuleSet named 'MinecraftRuleSet'.
-    
+    // Create a new SES Receipt Rule Set 
     const mcRuleSet = new ses.ReceiptRuleSet(this, 'MinecraftRuleSet', {
         receiptRuleSetName: 'MinecraftRuleSet',
+    });
+
+    // Automatically activate the Rule Set using a Custom Resource
+    new cr.AwsCustomResource(this, 'ActivateRuleSet', {
+      onUpdate: {
+        service: 'SES',
+        action: 'setActiveReceiptRuleSet',
+        parameters: {
+          RuleSetName: mcRuleSet.receiptRuleSetName,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of('ActivateRuleSet'),
+      },
+      onDelete: {
+        service: 'SES',
+        action: 'setActiveReceiptRuleSet',
+        parameters: {
+          RuleSetName: null, // Deactivate on destroy
+        },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
+        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
+      }),
     });
 
     mcRuleSet.addRule('StartServerRule', {
