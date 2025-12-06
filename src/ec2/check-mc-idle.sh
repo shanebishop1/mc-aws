@@ -18,11 +18,15 @@ MC_EXIT_CODE=$?
 set -e # Re-enable exit on error
 
 PLAYERS=0 # Default to 0 players
+FAILURE_MARKER=/tmp/mc-failure.marker
+
 if [[ $MC_EXIT_CODE -eq 0 ]]; then
+  # mcstatus succeeded - server is responding
+  rm -f "$FAILURE_MARKER" # Clear any failure marker
   PLAYERS_LINE=$(echo "$MC_OUTPUT" | grep -i '^players:' || true)
 
   if [[ -n "$PLAYERS_LINE" ]]; then
-    # 2) Extract the “0” from “0/20 …”
+    # 2) Extract the "0" from "0/20 …"
     PLAYERS=$(echo "$PLAYERS_LINE" | awk '{ print $2 }' | cut -d'/' -f1)
     log "$PLAYERS players are online"
   else
@@ -36,9 +40,31 @@ if [[ $MC_EXIT_CODE -eq 0 ]]; then
     PLAYERS=0
   fi
 else
-  # For any other mcstatus error, log it and exit to avoid incorrect shutdown
-  log "Error - mcstatus failed with unexpected error (Exit Code: $MC_EXIT_CODE): $MC_OUTPUT"
-  exit 1 # Exit the script to prevent potentially incorrect shutdown
+  # mcstatus failed - server is not responding
+  log "mcstatus failed (Exit Code: $MC_EXIT_CODE): $MC_OUTPUT"
+  
+  # Check if this is a persistent failure
+  if [[ ! -f "$FAILURE_MARKER" ]]; then
+    log "Server not responding, creating failure marker"
+    touch "$FAILURE_MARKER"
+    exit 0
+  fi
+  
+  # Check how long we've been failing
+  NOW=$(date +%s)
+  FAIL_TS=$(stat -c %Y "$FAILURE_MARKER")
+  FAIL_ELAPSED=$(( NOW - FAIL_TS ))
+  
+  if (( FAIL_ELAPSED > THRESHOLD )); then
+    log "Server has been failing for $(( THRESHOLD/60 ))m, shutting down..."
+    rm -f "$FAILURE_MARKER"
+    
+    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+    aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
+  else
+    log "Server failing for $(( FAIL_ELAPSED / 60 ))m, waiting..."
+  fi
+  exit 0
 fi
 
 

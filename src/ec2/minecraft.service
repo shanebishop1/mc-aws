@@ -9,6 +9,9 @@ User=minecraft
 WorkingDirectory=/opt/minecraft/server
 PermissionsStartOnly=true
 
+# Mark /opt/setup as safe (git ownership check workaround)
+ExecStartPre=/usr/bin/git config --global --add safe.directory /opt/setup
+
 # Update the repo to get the latest config
 ExecStartPre=/usr/bin/git -C /opt/setup pull
 
