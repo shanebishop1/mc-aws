@@ -118,7 +118,7 @@ async function updateCloudflareDns(zone, record, ip, domain, cfToken) {
  */
 async function sendNotification(to, subject, body) {
   const emailParams = {
-    Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@yourdomain.com"
+    Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@mydomain.org"
     Destination: {
       ToAddresses: [to]  // must be verified if in sandbox
     },

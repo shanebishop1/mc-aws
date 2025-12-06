@@ -64,10 +64,10 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 ## Repo Structure
 
 - `config/` - The actual Minecraft config files (whitelist, properties).
-- `ec2/` - Scripts that run on the server (startup, idle check, systemd service).
-- `lambda/` - The Node.js code that handles the startup logic.
-- `iam/` - AWS permission policies.
-- `dlm/` - Backup schedule (snapshots).
+- `src/ec2/` - Scripts that run on the server (startup, idle check, systemd service).
+- `src/lambda/` - The Node.js code that handles the startup logic.
+- `setup/iam/` - AWS permission policies.
+- `setup/dlm/` - Backup schedule (snapshots).
 
 ## Setup Guide
 
@@ -83,7 +83,7 @@ If you want to set this up this yourself, here is the rough outline.
 
 Fork this repo. You can edit `config/` whenever you want to change game settings or add people to the allowlist.
 
-- The `ec2/user_data.sh` script fetches your GitHub username and repository name from AWS Systems Manager Parameter Store (configured in step 3 below).
+- The `src/ec2/user_data.sh` script fetches your GitHub username and repository name from AWS Systems Manager Parameter Store (configured in step 3 below).
 
 ### 2. AWS Account Setup
 
@@ -107,7 +107,7 @@ It's a good practice to set up a simple billing alarm, just in case something go
 
 - **Networking & Security Groups:** Pick an existing VPC + public subnet with an Internet Gateway, or create one. Make a security group that allows inbound TCP `25565` from the IP ranges that should access your server (and optionally SSH `22` from your IP for maintenance). Allow all outbound traffic. Attach this security group to the Minecraft instance at launch.
 - **EC2:** Launch a `t4g.medium` instance (Amazon Linux 2023) in that subnet. Attach the security group above and the instance profile from the next bullet. If you want backups, add the tag `Backup=weekly` to the root volume so DLM finds it.
-- **IAM Role / Instance Profile:** Create a role for EC2 that uses `iam/trust-policy.json` and attach `iam/AllowReadGithubPAT.json` + `iam/EC2StopInstance.json`. That gives the instance permission to pull the GitHub PAT from SSM (including the `kms:Decrypt` it needs) and to call `ec2:StopInstances` on itself when idle.
+- **IAM Role / Instance Profile:** Create a role for EC2 that uses `setup/iam/trust-policy.json` and attach `setup/iam/allow-read-github-pat-policy.json` + `setup/iam/ec2-stop-instance-policy.json`. That gives the instance permission to pull the GitHub PAT from SSM (including the `kms:Decrypt` it needs) and to call `ec2:StopInstances` on itself when idle.
 - **Secrets & Config:** Store the following in AWS Systems Manager Parameter Store (Standard parameters are fine, except for the PAT which should be SecureString):
   - `/minecraft/github-pat` (SecureString): Your GitHub Personal Access Token.
   - `/minecraft/github-user` (String): Your GitHub username.
@@ -120,9 +120,9 @@ It's a good practice to set up a simple billing alarm, just in case something go
    - Create a Cloudflare API Token with scopes `Zone:Read` + `DNS:Edit` limited to that zone.
    - You will feed these into the Lambda environment as `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`, `CLOUDFLARE_MC_DOMAIN`, and `CLOUDFLARE_API_TOKEN`.
 2. **Package the Lambda:**
-   - `cd lambda/StartMinecraftServer && npm install` (or `npm ci`).
+   - `cd src/lambda/StartMinecraftServer && npm install` (or `npm ci`).
    - Zip **index.js + node_modules/** together, upload to a new Lambda function (Node.js 20 runtime), and set the handler to `index.handler`.
-   - Attach an execution role that uses `iam/trust-policy.json` + `iam/lambda-ec2-ses-policy.json` (remember to replace `<EC2_INSTANCE_ID>` before creating the policy).
+   - Attach an execution role that uses `setup/iam/trust-policy.json` + `setup/iam/ec2-start-describe-policy.json` + `setup/iam/ses-send-email-policy.json` (remember to replace `<EC2_INSTANCE_ID>` before creating the EC2 policy).
    - Configure the following environment variables:
      - `INSTANCE_ID`
      - `VERIFIED_SENDER` (address you verified in SES)
@@ -138,7 +138,7 @@ It's a good practice to set up a simple billing alarm, just in case something go
 ### 5. Backups (Optional)
 
 - Tag each EBS volume that holds Minecraft data with `Backup=weekly` (already on the root volume from step 3).
-- From this repo run `aws dlm create-lifecycle-policy --region <region> --cli-input-json file://dlm/weekly-policy.json` to create the weekly snapshot policy included in `dlm/weekly-policy.json` (runs Mondays 03:00 UTC, keeps 4 snapshots).
+- From this repo run `aws dlm create-lifecycle-policy --region <region> --cli-input-json file://setup/dlm/weekly-policy.json` to create the weekly snapshot policy included in `setup/dlm/weekly-policy.json` (runs Mondays 03:00 UTC, keeps 4 snapshots).
 - Console path: **Lifecycle Manager → Create policy → EBS Snapshot → Policy type "EBS snapshot management"**. Target resources by tag `Backup=weekly`, cron `cron(0 3 ? * MON *)`, retention count `4`.
 - Open the same Lifecycle Manager page in the console afterward and confirm the policy shows `Enabled` (clear any errors if it doesn't).
 - DLM needs an IAM role with `dlm:*` permissions by default; if you limit permissions make sure it can describe volumes and create/delete snapshots in the region you are using.
