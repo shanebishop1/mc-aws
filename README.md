@@ -69,92 +69,220 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 - `setup/iam/` - AWS permission policies.
 - `setup/dlm/` - Backup schedule (snapshots).
 
-## Setup Guide
-
-If you want to set this up this yourself, here is the rough outline.
+## Manual Setup Guide
 
 ### Prerequisites
 
-- An AWS Account.
-- A domain managed by Cloudflare (needed for the API DNS updates).
-- Familiarity with AWS Console.
+- An AWS Account
+- A domain managed by **Cloudflare**. This is necessary for the API DNS updates (and is very easy to set up).
+- **Node.js** installed locally (to package the Lambda function).
+- **AWS CLI** installed and configured locally (optional, but helpful).
 
 ### 1. The Code
 
-Fork this repo. You can edit `config/` whenever you want to change game settings or add people to the allowlist.
+1.  **Fork this repo** to your own GitHub account.
+2.  Clone your fork to your local machine.
 
-- The `src/ec2/user_data.sh` script fetches your GitHub username and repository name from AWS Systems Manager Parameter Store (configured in step 3 below).
+### 2. Cloudflare Setup
 
-### 2. AWS Account Setup
+You could use any DNS provider, but you have to be able to dynamically update the DNS record. There is a modest cost (<$1 per month) for a domain, but you can re-use it for any and all of your projects. If you already have one, even better.  
+  
+You'll need three things from Cloudflare: your `Zone ID`, an `API Token`, and the `Record ID` of the DNS record you will create.
 
-**Use an IAM User, Not Root:**
-It's not smart to use the root account in AWS for normal activity. If you haven't already, create an IAM user with admin privileges:
+1.  **Zone ID:**
+    - Log in to Cloudflare and select your domain.
+    - Open the "Overview" section and scroll down to the "API" section on the right sidebar.
+    - Take note of the **Zone ID**.
 
-1. Go to IAM → Users → Create user
-2. Attach `AdministratorAccess` policy (for setup only)
-3. Enable multi-factor authentication (MFA)
-4. Use this IAM user for all setup tasks
+2.  **API Token:**
+    - Go to **Manage account** > **Account API tokens**
+    - Choose the **Edit Zone DNS** template
+    - Select **Create Custom Token**.
+    - **Permissions:**
+      - Zone > DNS > Edit
+    - **Zone Resources:**
+      - Include > Specific zone > Your Domain
+    - Click **Continue to Summary** -> **Create Token**.
+    - **Take note of the token immediately** (you won't see it again).
 
-**Set Up Billing Alarms:**
-It's a good practice to set up a simple billing alarm, just in case something goes wrong:
+3.  **Record ID:**
+    - Go to **DNS** > **Records** on the left sidebar.
+    - Create an **A** record for your Minecraft subdomain (e.g., `mc`). Point it to `1.1.1.1` (this is a placeholder, it will be updated automatically).
+    - To get the `Record ID`, you need to use the API (it isn't shown in the dashboard). Open your terminal and run:
+      ```bash
+      # Replace <ZONE_ID> and <API_TOKEN> with the values from steps 1 and 2
+      curl -X GET "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \
+           -H "Authorization: Bearer <YOUR_API_TOKEN>" \
+           -H "Content-Type: application/json"
+      ```
+    - Look for the DNS record you just created (i.e. `mc.yourdomain.com`) in the JSON output and copy its `id`.
 
-1. Go to CloudWatch → Alarms → Create alarm
-2. Select "Billing" metric → "TotalEstimatedCharge"
-3. Set threshold to $5 (or whatever you would consider abnormal for your expected usgae)
-4. Configure email notifications
 
-### 3. AWS Infrastructure
+### 3. AWS IAM Setup
 
-- **Networking & Security Groups:** Pick an existing VPC + public subnet with an Internet Gateway, or create one. Make a security group that allows inbound TCP `25565` from the IP ranges that should access your server (and optionally SSH `22` from your IP for maintenance). Allow all outbound traffic. Attach this security group to the Minecraft instance at launch.
-- **EC2:** Launch a `t4g.medium` instance (Amazon Linux 2023) in that subnet. Attach the security group above and the instance profile from the next bullet. If you want backups, add the tag `Backup=weekly` to the root volume so DLM finds it.
-- **IAM Role / Instance Profile:** Create a role for EC2 that uses `setup/iam/trust-policy.json` and attach `setup/iam/allow-read-github-pat-policy.json` + `setup/iam/ec2-stop-instance-policy.json`. That gives the instance permission to pull the GitHub PAT from SSM (including the `kms:Decrypt` it needs) and to call `ec2:StopInstances` on itself when idle.
-- **Secrets & Config:** Store the following in AWS Systems Manager Parameter Store (Standard parameters are fine, except for the PAT which should be SecureString):
-  - `/minecraft/github-pat` (SecureString): Your GitHub Personal Access Token.
-  - `/minecraft/github-user` (String): Your GitHub username.
-  - `/minecraft/github-repo` (String): The name of your forked repository (e.g., `mc_aws`).
+You need to create two roles: one for the EC2 instance and one for the Lambda function.
 
-### 4. The Trigger (Lambda + SES + SNS + Cloudflare)
+**A. EC2 Role (`MinecraftServerRole`)**
+1.  Go to **IAM** > **Roles** > **Create role**.
+2.  Select **AWS service** and choose **EC2**.
+3.  Click **Next**.
+4.  **Permissions:**
+    - Click **Create policy**.
+    - Switch to **JSON** tab.
+    - Copy content from `setup/iam/allow-read-github-pat-policy.json`.
+    - Name it `MinecraftReadSecrets`.
+    - Create another policy with content from `setup/iam/ec2-stop-instance-policy.json`.
+    - Name it `MinecraftSelfStop`.
+    - Back in the "Create role" tab, refresh and select `MinecraftReadSecrets`, `MinecraftSelfStop`, and `AmazonSSMManagedInstanceCore` (for Session Manager access).
+5.  Name the role `MinecraftServerRole` and create it.
 
-1. **Collect Cloudflare Info:**
-   - In Cloudflare, grab the Zone ID for your domain and the Record ID of the DNS record you want to overwrite (or create an `A` record placeholder and note its ID).
-   - Create a Cloudflare API Token with scopes `Zone:Read` + `DNS:Edit` limited to that zone.
-   - You will feed these into the Lambda environment as `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`, `CLOUDFLARE_MC_DOMAIN`, and `CLOUDFLARE_API_TOKEN`.
-2. **Package the Lambda:**
-   - `cd src/lambda/StartMinecraftServer && npm install` (or `npm ci`).
-   - Zip **index.js + node_modules/** together, upload to a new Lambda function (Node.js 20 runtime), and set the handler to `index.handler`.
-   - Attach an execution role that uses `setup/iam/trust-policy.json` + `setup/iam/ec2-start-describe-policy.json` + `setup/iam/ses-send-email-policy.json` (remember to replace `<EC2_INSTANCE_ID>` before creating the EC2 policy).
-   - Configure the following environment variables:
-     - `INSTANCE_ID`
-     - `VERIFIED_SENDER` (address you verified in SES)
-     - `START_KEYWORD` (optional, defaults to "start")
-     - `NOTIFICATION_EMAIL` (optional, the email to receive startup notifications)
-     - `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`, `CLOUDFLARE_MC_DOMAIN`, `CLOUDFLARE_API_TOKEN`
-3. **SES + SNS Flow:**
-   - SES Inbound requires an active Receipt Rule Set. Verify the domain that will receive `start@...` and create a rule that matches that recipient.
-   - Add an action “SNS Topic” and have the rule publish to a new SNS topic, then subscribe your Lambda to that topic. (The handler expects `event.Records[0].Sns`.)
-   - Finally, add a Lambda action or enable the SNS subscription so Lambda is invoked whenever the email arrives.
-4. **SES Sandbox Warnings:** While your account is in the SES sandbox you must verify both the sender (the address in `VERIFIED_SENDER`) and every player address that will send the “start” email. Request production access if you want anyone to trigger the server without verification.
+**B. Lambda Role (`MinecraftLauncherRole`)**
+1.  Go to **IAM** > **Roles** > **Create role**.
+2.  Select **AWS service** and choose **Lambda**.
+3.  Click **Next**.
+4.  **Permissions:**
+    - Create a policy with content from `setup/iam/ec2-start-describe-policy.json`.
+    - **IMPORTANT:** Edit the JSON to replace `<EC2_INSTANCE_ID>` with `*` (since you don't have the ID yet) or come back and update it once you have your EC2 instance ID..
+    - Name it `MinecraftStartEC2`.
+    - Create a policy with content from `setup/iam/ses-send-email-policy.json`.
+    - Name it `MinecraftSendEmail`.
+    - Select `MinecraftStartEC2`, `MinecraftSendEmail`, and `AWSLambdaBasicExecutionRole`.
+5.  Name the role `MinecraftLauncherRole` and create it.
 
-### 5. Backups (Optional)
+### 4. AWS Secrets (SSM Parameter Store)
 
-- Tag each EBS volume that holds Minecraft data with `Backup=weekly` (already on the root volume from step 3).
-- From this repo run `aws dlm create-lifecycle-policy --region <region> --cli-input-json file://setup/dlm/weekly-policy.json` to create the weekly snapshot policy included in `setup/dlm/weekly-policy.json` (runs Mondays 03:00 UTC, keeps 4 snapshots).
-- Console path: **Lifecycle Manager → Create policy → EBS Snapshot → Policy type "EBS snapshot management"**. Target resources by tag `Backup=weekly`, cron `cron(0 3 ? * MON *)`, retention count `4`.
-- Open the same Lifecycle Manager page in the console afterward and confirm the policy shows `Enabled` (clear any errors if it doesn't).
-- DLM needs an IAM role with `dlm:*` permissions by default; if you limit permissions make sure it can describe volumes and create/delete snapshots in the region you are using.
+The server needs your GitHub credentials to pull the config.
+
+1.  Go to **Systems Manager** > **Parameter Store**.
+2.  Click **Create parameter**.
+3.  **GitHub User:**
+    - Name: `/minecraft/github-user`
+    - Type: `String`
+    - Value: `YourGitHubUsername`
+4.  **GitHub Repo:**
+    - Name: `/minecraft/github-repo`
+    - Type: `String`
+    - Value: `YourRepoName` (e.g., `mc-aws`)
+5.  **GitHub PAT (Personal Access Token):**
+    - Generate a Classic PAT in GitHub (Settings > Developer settings > Personal access tokens > Tokens (classic)) with `repo` scope.
+    - Name: `/minecraft/github-pat`
+    - Type: **`SecureString`**
+    - Value: `ghp_...`
+
+### 5. The Trigger (Lambda)
+
+1.  **Prepare the Code:**
+    - On your local machine, navigate to `src/lambda/StartMinecraftServer`.
+    - Run `npm install`.
+    - Zip the contents: `zip -r function.zip .` (make sure `index.js` is at the root of the zip, not inside a folder).
+
+2.  **Create Function:**
+    - Go to **Lambda** > **Create function**.
+    - Name: `StartMinecraftServer`.
+    - Runtime: **Node.js 20.x**.
+    - Execution role: **Use an existing role** -> `MinecraftLauncherRole`.
+    - Click **Create function**.
+
+3.  **Upload Code:**
+    - In the **Code** tab, click **Upload from** > **.zip file**.
+    - Upload your `function.zip`.
+
+4.  **Configuration:**
+    - Go to **Configuration** > **Environment variables**.
+    - Add the following:
+      - `CLOUDFLARE_API_TOKEN`: (From Step 2)
+      - `CLOUDFLARE_MC_DOMAIN`: `mc.yourdomain.com`
+      - `CLOUDFLARE_RECORD_ID`: (From Step 2)
+      - `CLOUDFLARE_ZONE_ID`: (From Step 2)
+      - `INSTANCE_ID`: (Leave placeholder `pending` for now)
+      - `NOTIFICATION_EMAIL`: (Optional, your email)
+      - `START_KEYWORD`: choose a start keyword that anybody can email to the address in SES to start the server (e.g., `start`)
+      - `VERIFIED_SENDER`: `start@yourdomain.com` (The email address you will set up in SES)
+
+### 6. SES & SNS Setup
+
+1.  **Verify Identity:**
+    - Go to **Amazon SES** > **Identities**.
+    - Click **Create identity**.
+    - Select **Domain**
+    - Follow the verification steps (add DNS records for domain, or click link for email).
+    - **Note:** If in Sandbox mode, you must also verify the email address you will be *sending from* (your personal email).
+
+2.  **Create SNS Topic:**
+    - Go to **Amazon SNS** > **Topics** > **Create topic**.
+    - Type: **Standard**.
+    - Name: `MinecraftStartTopic`.
+    - Create it.
+    - Click **Create subscription**.
+    - Protocol: **AWS Lambda**.
+    - Endpoint: `StartMinecraftServer`.
+
+3.  **Create Receipt Rule:**
+    - Go to **Amazon SES** > **Email receiving**.
+    - Create a **Rule Set** (if none exists).
+    - Create a **Rule**.
+    - **Recipient conditions:** `start@yourdomain.com` (or just your domain).
+    - **Actions:** Add **SNS** action.
+    - Topic: `MinecraftStartTopic`.
+    - Finish and create.
+
+### 7. Launch the Server (EC2)
+
+1.  Go to **EC2** > **Instances** > **Launch instances**.
+2.  **Name:** `Minecraft Server`.
+3.  **OS:** Amazon Linux 2023 AMI (Architecture: **64-bit (Arm)**).
+4.  **Instance Type:** `t4g.medium`.
+5.  **Key pair:** Select one or create one (for SSH access).
+6.  **Network settings:**
+    - Select your VPC/Subnet.
+    - **Auto-assign public IP:** Enable.
+    - **Security group:** Create new. Allow **TCP 25565** (Minecraft) and **TCP 22** (SSH).
+7.  **Configure storage:** 10 GiB gp3 is usually enough.
+8.  **Advanced details:**
+    - **IAM instance profile:** `MinecraftServerRole`.
+    - **User data:** Copy and paste the contents of `src/ec2/user_data.sh` from this repo.
+9.  **Launch instance**.
+10. **Get Instance ID:**
+    - Copy the new Instance ID (e.g., `i-0123456789abcdef0`).
+    - Go back to your **Lambda** function > **Configuration** > **Environment variables**.
+    - Update `INSTANCE_ID` with the real ID.
+    - (Optional) Update your IAM Policy `MinecraftStartEC2` to restrict permissions to this specific ID.
+
+## Backups (Optional)
+
+To enable weekly backups:
+1. Go to EC2 > Volumes. Select your server's volume.
+2. Add a tag: Key=`Backup`, Value=`weekly`.
+3. Run the following command (requires AWS CLI) to create the lifecycle policy:
+   ```bash
+   aws dlm create-lifecycle-policy --region us-west-1 --cli-input-json file://setup/dlm/weekly-policy.json
+   ```
+   (Make sure to update the region in the command if needed. Also, you should verify in the console that the policy was created successfully.)
 
 ## How to Manage It
 
 **Playing:**
 Send an email with the subject (or body) containing your start keyword (default "start") to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
 
-**Updating Settings:**
-Don't SSH into the server to change the whitelist or properties. Instead:
-
+**Managing Players:**
 1.  **Find UUIDs:** Use a tool like [mcuuid.net](https://mcuuid.net/) to find the UUID for each player you want to allow.
-2.  **Edit Config:** Update `config/whitelist.json` in this repo with the new names and UUIDs.
-3.  **Push:** Commit and push your changes.
-4.  **Sync:** The next time the server starts (or restarts), it pulls your changes automatically.
+2.  **Edit Config:** Update `config/whitelist.json` in this repo. It should look like this:
+    ```json
+    [
+      {
+        "uuid": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
+        "name": "PlayerOne"
+      },
+      {
+        "uuid": "f1e2d3c4-b5a6-9780-4321-098765fedcba",
+        "name": "PlayerTwo"
+      }
+    ]
+    ```
+3.  **Push:** Commit and push your changes to GitHub.
+4.  **Sync:** The next time the server starts, it will automatically pull the latest changes.
 
-**Backups:**
-AWS DLM handles the weekly snapshots (see Step 5). It takes a snapshot every Monday at 03:00 UTC and retains the last four copies automatically.
+**Updating Properties:**
+1.  Edit `config/server.properties` in your local repo.
+2.  Commit and push to GitHub.
+3.  Restart the server (or wait for next boot) to apply changes.

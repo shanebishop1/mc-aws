@@ -9,6 +9,9 @@ User=minecraft
 WorkingDirectory=/opt/minecraft/server
 PermissionsStartOnly=true
 
+# Update the repo to get the latest config
+ExecStartPre=/usr/bin/git -C /opt/setup pull
+
 # Sync only your repo files (won’t delete world/)
 ExecStartPre=/usr/bin/rsync -a /opt/setup/config/ /opt/minecraft/server/
 
