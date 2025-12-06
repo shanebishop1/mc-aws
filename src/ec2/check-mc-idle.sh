@@ -11,105 +11,71 @@ log "check-mc-idle.sh invoked"
 IDLE_MARKER=/tmp/mc-idle.marker
 THRESHOLD=$((15 * 60))   # 15 mins
 
-# 1. Query player count, handling connection errors
-set +e # Disable exit on error temporarily
-MC_OUTPUT=$(/usr/local/bin/mcstatus localhost status 2>&1) # Capture stdout and stderr
+# Helper function to get instance ID (IMDSv2)
+get_instance_id() {
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+  curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id
+}
+
+# 1. Query player count
+set +e
+MC_OUTPUT=$(/usr/local/bin/mcstatus localhost status 2>&1)
 MC_EXIT_CODE=$?
-set -e # Re-enable exit on error
+set -e
 
-PLAYERS=0 # Default to 0 players
-FAILURE_MARKER=/tmp/mc-failure.marker
-
+PLAYERS=0
 if [[ $MC_EXIT_CODE -eq 0 ]]; then
-  # mcstatus succeeded - server is responding
-  rm -f "$FAILURE_MARKER" # Clear any failure marker
   PLAYERS_LINE=$(echo "$MC_OUTPUT" | grep -i '^players:' || true)
-
   if [[ -n "$PLAYERS_LINE" ]]; then
-    # 2) Extract the "0" from "0/20 …"
     PLAYERS=$(echo "$PLAYERS_LINE" | awk '{ print $2 }' | cut -d'/' -f1)
-    log "$PLAYERS players are online"
-  else
-    log "Warning – no players line in mcstatus output: $MC_OUTPUT"
-    PLAYERS=0
-  fi
-
-  # 3) Validate it really is a number
-  if ! [[ "$PLAYERS" =~ ^[0-9]+$ ]]; then
-    log "Warning – failed to parse player count from mcstatus output: $MC_OUTPUT"
-    PLAYERS=0
+    if ! [[ "$PLAYERS" =~ ^[0-9]+$ ]]; then
+      log "Warning: failed to parse player count, treating as 0"
+      PLAYERS=0
+    fi
   fi
 else
-  # mcstatus failed - server is not responding
-  log "mcstatus failed (Exit Code: $MC_EXIT_CODE): $MC_OUTPUT"
-  
-  # Check if this is a persistent failure
-  if [[ ! -f "$FAILURE_MARKER" ]]; then
-    log "Server not responding, creating failure marker"
-    touch "$FAILURE_MARKER"
-    exit 0
-  fi
-  
-  # Check how long we've been failing
-  NOW=$(date +%s)
-  FAIL_TS=$(stat -c %Y "$FAILURE_MARKER")
-  FAIL_ELAPSED=$(( NOW - FAIL_TS ))
-  
-  if (( FAIL_ELAPSED > THRESHOLD )); then
-    log "Server has been failing for $(( THRESHOLD/60 ))m, shutting down..."
-    rm -f "$FAILURE_MARKER"
-    
-    # Get instance ID using IMDSv2
-    TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
-    aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
-  else
-    log "Server failing for $(( FAIL_ELAPSED / 60 ))m, waiting..."
-  fi
-  exit 0
+  log "mcstatus failed (treating as 0 players): $MC_OUTPUT"
+  PLAYERS=0
 fi
 
+log "$PLAYERS players online"
 
-# 2. If any players are online, remove marker and exit
+# 2. If players are online, clear marker and exit
 if (( PLAYERS > 0 )); then
-  log "Removing idle marker since players are online"
+  log "Players online, clearing idle marker"
   rm -f "$IDLE_MARKER"
   exit 0
 fi
 
-# 3. No players online:
-#    a) If marker doesn't exist, create it and exit
+# 3. No players (or server down) - start/check idle timer
 if [[ ! -f "$IDLE_MARKER" ]]; then
-  log "No players are online and no idle marker exists, so creating one"
+  log "No players, starting idle timer"
   touch "$IDLE_MARKER"
   exit 0
 fi
 
-#    b) Marker exists—check its age
+# 4. Check how long we've been idle
 NOW=$(date +%s)
 IDLE_TS=$(stat -c %Y "$IDLE_MARKER")
 ELAPSED=$(( NOW - IDLE_TS ))
 
+log "Idle for $(( ELAPSED / 60 ))m"
+
 if (( ELAPSED > THRESHOLD )); then
-  log "No players for $(( THRESHOLD/60 ))m, shutting down…"
+  log "Idle for $(( THRESHOLD / 60 ))m, shutting down..."
 
-  # Gracefully stop Minecraft
-  systemctl stop minecraft.service
-
-  # Wait up to 2m for it to exit
-  for i in {1..24}; do
-    if ! systemctl is-active --quiet minecraft.service; then
-      break
-    fi
-    sleep 5
-  done
+  # Stop Minecraft gracefully (if running)
+  if systemctl is-active --quiet minecraft.service; then
+    systemctl stop minecraft.service
+    for i in {1..24}; do
+      systemctl is-active --quiet minecraft.service || break
+      sleep 5
+    done
+  fi
 
   rm -f "$IDLE_MARKER"
+  log "Stopping EC2 instance"
 
-  log "Minecraft stopped; halting EC2 instance"
-
-  # Get instance ID using IMDSv2
-  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
-  INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
+  INSTANCE_ID=$(get_instance_id)
   aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 fi
