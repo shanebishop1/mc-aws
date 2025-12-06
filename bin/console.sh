@@ -16,4 +16,4 @@ echo "Connecting to Minecraft Console on $INSTANCE_ID..."
 aws ssm start-session \
   --target "$INSTANCE_ID" \
   --document-name AWS-StartInteractiveCommand \
-  --parameters command="sudo -u minecraft bash -c 'screen -xRR mc-server'"
+  --parameters '{"command":["sudo -u minecraft screen -xRR mc-server"]}'
