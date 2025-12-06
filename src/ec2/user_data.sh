@@ -65,10 +65,6 @@ chown -R minecraft:minecraft /opt/minecraft/server/
 if [[ ! -f "/etc/systemd/system/minecraft.service" ]]; then
   cp /opt/setup/src/ec2/minecraft.service /etc/systemd/system/
 fi
-if [[ ! -f "/usr/local/bin/stop-ec2.sh" ]]; then
-  cp /opt/setup/src/ec2/stop-ec2.sh /usr/local/bin/
-  chown root:root /usr/local/bin/stop-ec2.sh && chmod +x /usr/local/bin/stop-ec2.sh
-fi
 
 # 11 Copy idle-check script and schedule cron
 cp /opt/setup/src/ec2/check-mc-idle.sh /usr/local/bin/check-mc-idle.sh
