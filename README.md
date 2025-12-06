@@ -17,7 +17,7 @@ I found a few similar, pre-existing recipes online, but none of them included au
 ## Table of Contents
 
 - [Background](#background)
-- [How it works](#how-it-works)
+- [How It Works](#how-it-works)
 - [Repo Structure](#repo-structure)
 - [Setup Guide](#setup-guide)
 - [How to Manage It](#how-to-manage-it)
@@ -53,7 +53,7 @@ There do exist on-demand hosting providers such as Exarotron\* and ServerWave\*\
 
 At this point, we're talking about pennies. In some cases, you'll save a few pennies with this setup, and in other cases, you'll lose a few. However, this setup exists not just to save money, but to enable independence from any third-party services (besides our almighty cloud providers, of course, upon which the rest of the observable software universe is but a wrapper). And because it's fun to build/scaffold/tinker/control.
 
-## How it works
+## How It Works
 
 1.  **Startup:** Send an email with the secret keyword (default "start") in the subject or body to the account that you set up with AWS SES (e.g., `start@mydomain.com`).
 2.  **Trigger:** AWS SES catches the email and executes a Lambda function.
@@ -80,6 +80,10 @@ If you want to set everything up with a single command, and don't require any sp
 4.  **Verified Email** in AWS SES (see Manual Guide Step 6).
     *   **Sender:** The email you will send the "start" command *from*.
     *   **Receiver:** The email you want to receive notifications *to* (if different from sender).
+5.  **Session Manager Plugin** (for connecting to the server):
+    ```bash
+    brew install --cask session-manager-plugin
+    ```
 
 ### Steps
 1.  **Install Dependencies:**
@@ -87,28 +91,85 @@ If you want to set everything up with a single command, and don't require any sp
     npm install
     ```
 
-2.  **Configure Environment:**
+2.  **Configure AWS CLI:**
+    ```bash
+    aws configure
+    ```
+    Enter your AWS Access Key ID, Secret Access Key, default region (e.g., `us-west-1`), and default output format (`json`).
+
+3.  **Bootstrap CDK:** (Only needed once per AWS account/region)
+    ```bash
+    npx cdk bootstrap
+    ```
+
+4.  **Configure Environment:**
     Copy the provided `.env.template` file to `.env` and fill in your details:
     ```bash
     cp .env.template .env
     ```
     Then edit `.env` with your specific values for:
     - Cloudflare API token and domain configuration
+    - GitHub credentials (for server to pull config)
     - AWS SES email addresses
+      - `VERIFIED_SENDER`: The email that receives trigger emails *and* sends notifications (e.g., `start@yourdomain.com`)
+      - `NOTIFICATION_EMAIL`: Where you want to receive "server started" alerts (optional)
     - AWS account ID and preferred region
 
-3.  **Deploy:**
+5.  **Deploy:**
     ```bash
-    npx cdk deploy
+    npm run deploy
     ```
-    This will create the EC2 instance, Lambda, Roles, and SES Rules for you.
-
-4.  **Activate SES Rule:**
-    Go to the AWS SES Console -> Email Receiving. You will see a new Rule Set named `MinecraftRuleSet`. Set it as **Active**.
+    This will create the EC2 instance, Lambda, Roles, and SES Rules for you. It will also **automatically activate** the SES Rule Set.
 
 ---
 
-## Setup Guide (Option 2: Manual / "ClickOps")
+---
+
+## Connecting to the Server
+
+You have two ways to connect to your EC2.
+
+### Method 1: The Modern Way (Recommended)
+This uses AWS Systems Manager (SSM). No SSH keys or open ports required.
+
+-  **Connect to Shell:**
+    ```bash
+    ./bin/connect.sh
+    ```
+    This drops you into a root shell on the server.
+
+-  **Connect to Minecraft Console:**
+    ```bash
+    ./bin/console.sh
+    ```
+    This connects you directly to the running Minecraft screen session.
+
+### Method 2: The Classic Way (SSH Key)
+If you prefer standard SSH (e.g., for SFTP or using your own scripts), follow these steps:
+
+1.  **Create a Key Pair:**
+    Go to EC2 Console -> Key Pairs -> Create Key Pair. Save the `.pem` file (e.g., `~/keypairs/my-pair.pem`).
+
+2.  **Update Configuration:**
+    Add the key name to your `.env` file:
+    ```bash
+    KEY_PAIR_NAME="my-pair"
+    ```
+
+3.  **Redeploy:**
+    ```bash
+    npx cdk deploy
+    ```
+
+4.  **Connect:**
+    ```bash
+    # Get the IP address from the AWS Console or output
+    ssh -i ~/keypairs/my-pair.pem ec2-user@<SERVER_IP>
+    ```
+
+---
+
+## Setup Guide (Option 2: Manual)
 
 If you prefer to build this by hand to learn how the pieces fit together, follow these steps.
 
@@ -236,7 +297,7 @@ The server needs your GitHub credentials to pull the config.
       - `CLOUDFLARE_RECORD_ID`: (From Step 2)
       - `CLOUDFLARE_ZONE_ID`: (From Step 2)
       - `INSTANCE_ID`: (Leave placeholder `pending` for now)
-      - `NOTIFICATION_EMAIL`: (Optional, your email)
+      - `NOTIFICATION_EMAIL`: Email that you want to receive notifications when the EC2 is activated (optional, must be verified in SES)
       - `START_KEYWORD`: choose a start keyword that anybody can email to the address in SES to start the server (e.g., `start`)
       - `VERIFIED_SENDER`: `start@yourdomain.com` (The email address you will set up in SES)
 
