@@ -88,17 +88,14 @@ If you want to set everything up with a single command, and don't require any sp
     ```
 
 2.  **Configure Environment:**
-    Create a `.env` file (or set these in your terminal) with your details:
+    Copy the provided `.env.template` file to `.env` and fill in your details:
     ```bash
-    export CLOUDFLARE_API_TOKEN="your_token"
-    export CLOUDFLARE_ZONE_ID="your_zone_id"
-    export CLOUDFLARE_RECORD_ID="your_record_id"
-    export CLOUDFLARE_MC_DOMAIN="mc.yourdomain.com"
-    export VERIFIED_SENDER="start@yourdomain.com"
-    export NOTIFICATION_EMAIL="you@yourdomain.com"
-    export CDK_DEFAULT_ACCOUNT="123456789012" # Your AWS Account ID
-    export CDK_DEFAULT_REGION="us-east-1"     # Your AWS Region
+    cp .env.template .env
     ```
+    Then edit `.env` with your specific values for:
+    - Cloudflare API token and domain configuration
+    - AWS SES email addresses
+    - AWS account ID and preferred region
 
 3.  **Deploy:**
     ```bash
