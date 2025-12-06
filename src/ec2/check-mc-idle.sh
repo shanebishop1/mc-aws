@@ -59,7 +59,9 @@ else
     log "Server has been failing for $(( THRESHOLD/60 ))m, shutting down..."
     rm -f "$FAILURE_MARKER"
     
-    INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+    # Get instance ID using IMDSv2
+    TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+    INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
     aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
   else
     log "Server failing for $(( FAIL_ELAPSED / 60 ))m, waiting..."
@@ -106,7 +108,8 @@ if (( ELAPSED > THRESHOLD )); then
 
   log "Minecraft stopped; halting EC2 instance"
 
-  # Stop the EC2 instance
-  INSTANCE_ID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)
+  # Get instance ID using IMDSv2
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+  INSTANCE_ID=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id)
   aws ec2 stop-instances --instance-ids "$INSTANCE_ID"
 fi
