@@ -69,7 +69,51 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 - `setup/iam/` - AWS permission policies.
 - `setup/dlm/` - Backup schedule (snapshots).
 
-## Manual Setup Guide
+## Setup Guide (Option 1: Automated with CDK)
+
+If you want to set everything up with a single command, and don't require any special modifications, follow these steps.
+
+### Prerequisites
+1.  **Node.js** installed.
+2.  **AWS CLI** installed and configured (`aws configure`).
+3.  **Cloudflare** API Token and Zone ID (see Manual Guide Step 2).
+4.  **Verified Email** in AWS SES (see Manual Guide Step 6).
+    *   **Sender:** The email you will send the "start" command *from*.
+    *   **Receiver:** The email you want to receive notifications *to* (if different from sender).
+
+### Steps
+1.  **Install Dependencies:**
+    ```bash
+    npm install
+    ```
+
+2.  **Configure Environment:**
+    Create a `.env` file (or set these in your terminal) with your details:
+    ```bash
+    export CLOUDFLARE_API_TOKEN="your_token"
+    export CLOUDFLARE_ZONE_ID="your_zone_id"
+    export CLOUDFLARE_RECORD_ID="your_record_id"
+    export CLOUDFLARE_MC_DOMAIN="mc.yourdomain.com"
+    export VERIFIED_SENDER="start@yourdomain.com"
+    export NOTIFICATION_EMAIL="you@yourdomain.com"
+    export CDK_DEFAULT_ACCOUNT="123456789012" # Your AWS Account ID
+    export CDK_DEFAULT_REGION="us-east-1"     # Your AWS Region
+    ```
+
+3.  **Deploy:**
+    ```bash
+    npx cdk deploy
+    ```
+    This will create the EC2 instance, Lambda, Roles, and SES Rules for you.
+
+4.  **Activate SES Rule:**
+    Go to the AWS SES Console -> Email Receiving. You will see a new Rule Set named `MinecraftRuleSet`. Set it as **Active**.
+
+---
+
+## Setup Guide (Option 2: Manual / "ClickOps")
+
+If you prefer to build this by hand to learn how the pieces fit together, follow these steps.
 
 ### Prerequisites
 
@@ -202,11 +246,12 @@ The server needs your GitHub credentials to pull the config.
 ### 6. SES & SNS Setup
 
 1.  **Verify Identity:**
-    - Go to **Amazon SES** > **Identities**.
+    - Open the AWS Console and go to **Amazon SES** > **Identities**.
     - Click **Create identity**.
     - Select **Domain**
     - Follow the verification steps (add DNS records for domain, or click link for email).
     - **Note:** If in Sandbox mode, you must also verify the email address you will be *sending from* (your personal email).
+    - **Notification Email:** If you want to receive startup notifications, you must also verify that email address (if it's different from the one above).
 
 2.  **Create SNS Topic:**
     - Go to **Amazon SNS** > **Topics** > **Create topic**.
