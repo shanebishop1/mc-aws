@@ -7,14 +7,13 @@ echo "==========================================="
 echo ""
 echo "This will:"
 echo "  1. Stop the Minecraft EC2 instance"
-echo "  2. Create a snapshot of the EBS volume (optional backup)"
-echo "  3. Detach and delete the EBS volume"
+echo "  2. Detach and delete the EBS volume"
 echo ""
 echo "WARNING: Make sure you have downloaded your world data first!"
 echo "         Use ./bin/download-server.sh to backup your world."
 echo ""
 read -p "Continue? (yes/no): " confirm
-if [[ "$confirm" != "yes" ]]; then
+if [[ ! "$confirm" =~ ^[Yy](es)?$ ]]; then
   echo "Aborted."
   exit 0
 fi
@@ -72,22 +71,6 @@ fi
 
 echo "Found volume: $VOLUME_ID"
 
-# Optional: Create a snapshot
-echo ""
-read -p "Create a snapshot before deleting? (yes/no): " create_snapshot
-if [[ "$create_snapshot" == "yes" ]]; then
-  echo "Creating snapshot..."
-  SNAPSHOT_ID=$(aws ec2 create-snapshot \
-    --volume-id "$VOLUME_ID" \
-    --description "Minecraft server hibernation snapshot $(date +%Y-%m-%d)" \
-    --tag-specifications "ResourceType=snapshot,Tags=[{Key=Name,Value=minecraft-hibernate-snapshot},{Key=Created,Value=$(date +%Y-%m-%d)}]" \
-    --query "SnapshotId" \
-    --output text)
-  
-  echo "Snapshot created: $SNAPSHOT_ID"
-  echo "You can restore from this snapshot later if needed."
-fi
-
 # Detach the volume
 echo ""
 echo "Detaching volume..."
@@ -110,7 +93,7 @@ echo "  Hibernation Complete!"
 echo "==========================================="
 echo ""
 echo "Your EC2 instance is now stopped with no EBS volume."
-echo "You are no longer paying for storage (~\$0.75/month saved)."
+echo "You are no longer paying for Minecraft server storage on AWS."
 echo ""
 echo "To resume later, run: ./bin/resume.sh"
 echo ""

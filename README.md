@@ -1,4 +1,5 @@
 # On-Demand Minecraft Server on AWS
+
 <p align="center"><img width="320" height="320" alt="lol" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
 Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:
@@ -74,44 +75,52 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 If you want to set everything up with a single command, and don't require any special modifications, follow these steps.
 
 ### Prerequisites
+
 1.  **Node.js** installed.
 2.  **AWS CLI** installed and configured (`aws configure`).
 3.  **Cloudflare** API Token and Zone ID (see Manual Guide Step 2).
 4.  **Verified Email** in AWS SES (see Manual Guide Step 6).
-    *   **Sender:** The email you will send the "start" command *from*.
-    *   **Receiver:** The email you want to receive notifications *to* (if different from sender).
+    - **Sender:** The email you will send the "start" command _from_.
+    - **Receiver:** The email you want to receive notifications _to_ (if different from sender).
 5.  **Session Manager Plugin** (for connecting to the server):
     ```bash
     brew install --cask session-manager-plugin
     ```
 
 ### Steps
+
 1.  **Install Dependencies:**
+
     ```bash
     npm install
     ```
 
 2.  **Configure AWS CLI:**
+
     ```bash
     aws configure
     ```
+
     Enter your AWS Access Key ID, Secret Access Key, default region (e.g., `us-west-1`), and default output format (`json`).
 
 3.  **Bootstrap CDK:** (Only needed once per AWS account/region)
+
     ```bash
     npx cdk bootstrap
     ```
 
 4.  **Configure Environment:**
     Copy the provided `.env.template` file to `.env` and fill in your details:
+
     ```bash
     cp .env.template .env
     ```
+
     Then edit `.env` with your specific values for:
     - Cloudflare API token and domain configuration
     - GitHub credentials (for server to pull config)
     - AWS SES email addresses
-      - `VERIFIED_SENDER`: The email that receives trigger emails *and* sends notifications (e.g., `start@yourdomain.com`)
+      - `VERIFIED_SENDER`: The email that receives trigger emails _and_ sends notifications (e.g., `start@yourdomain.com`)
       - `NOTIFICATION_EMAIL`: Where you want to receive "server started" alerts (optional)
     - AWS account ID and preferred region
     - (Optional) **Google Drive token** for rclone backups:
@@ -133,24 +142,29 @@ If you want to set everything up with a single command, and don't require any sp
 You have two ways to connect to your EC2.
 
 ### Method 1: The Modern Way (Recommended)
+
 This uses AWS Systems Manager (SSM). No SSH keys or open ports required.
 
--  **Connect to Shell:**
-    ```bash
-    ./bin/connect.sh
-    ```
-    This drops you into a root shell on the server.
+- **Connect to Shell:**
 
--  **Connect to Minecraft Console:**
-    ```bash
-    ./bin/console.sh
-    ```
-    This connects you directly to the running Minecraft screen session.
+  ```bash
+  ./bin/connect.sh
+  ```
+
+  This drops you into a root shell on the server.
+
+- **Connect to Minecraft Console:**
+  ```bash
+  ./bin/console.sh
+  ```
+  This connects you directly to the running Minecraft screen session.
 
 ### Method 2: SSH Key (Required for File Uploads)
+
 SSH access is needed for the `upload-server.sh` script and traditional SFTP/rsync.
 
 **One-Time Setup:**
+
 1.  **Create a Key Pair:**
     Go to [EC2 Console → Key Pairs](https://console.aws.amazon.com/ec2/home#KeyPairs) → Create Key Pair.
     - Name it `mc-aws`
@@ -159,12 +173,14 @@ SSH access is needed for the `upload-server.sh` script and traditional SFTP/rsyn
     - **Important:** You can only download this file once! If you lose it, delete the key pair and create a new one.
 
 2.  **Move the file:**
+
     ```bash
     mv ~/Downloads/mc-aws.pem ~/.ssh/mc-aws.pem
     chmod 400 ~/.ssh/mc-aws.pem
     ```
 
 3.  **Add to your `.env`:**
+
     ```bash
     KEY_PAIR_NAME="mc-aws"
     ```
@@ -175,6 +191,7 @@ SSH access is needed for the `upload-server.sh` script and traditional SFTP/rsyn
     ```
 
 **Usage:**
+
 ```bash
 # SSH manually
 ssh -i ~/.ssh/mc-aws.pem ec2-user@<SERVER_IP>
@@ -190,31 +207,41 @@ ssh -i ~/.ssh/mc-aws.pem ec2-user@<SERVER_IP>
 You can push/pull server data via Google Drive using `rclone` without extra manual setup on the EC2 (tokens are injected by CDK if provided).
 
 ### One-time token capture (local)
-1) Ensure AWS CLI is configured locally (`aws configure`).
-2) Run:
+
+1. Ensure AWS CLI is configured locally (`aws configure`).
+2. Run:
+
 ```bash
 ./bin/setup-drive-token.sh
 ```
+
 It opens a browser for Google OAuth and stores the token in AWS Secrets Manager. It will print a Secret ARN; add this to `.env`:
+
 ```
 GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"
 GDRIVE_REMOTE="gdrive"   # optional override
 GDRIVE_ROOT="mc-backups" # optional override
 ```
-3) Redeploy CDK so the instance gets the token and rclone config.
+
+3. Redeploy CDK so the instance gets the token and rclone config.
 
 ### Using Drive in scripts
+
 - Upload to EC2 via Drive:
+
 ```bash
 ./bin/upload-server.sh --mode drive
 ```
+
 - Download from EC2 to local backups (default local mode):
+
 ```bash
 ./bin/download-server.sh            # local rsync
 ./bin/download-server.sh --mode drive  # tar on EC2 -> Drive (no local copy)
 ```
 
 Notes:
+
 - Drive mode requires the token secret ARN in `.env` and a redeploy.
 - Local mode behavior is unchanged (tar+rsync for upload; rsync for download).
 - Idle-check is disabled during upload and re-enabled afterward.
@@ -237,8 +264,8 @@ If you prefer to build this by hand to learn how the pieces fit together, follow
 
 ### 2. Cloudflare Setup
 
-You could use any DNS provider, but you have to be able to dynamically update the DNS record. There is a modest cost (<$1 per month) for a domain, but you can re-use it for any and all of your projects. If you already have one, even better.  
-  
+You could use any DNS provider, but you have to be able to dynamically update the DNS record. There is a modest cost (<$1 per month) for a domain, but you can re-use it for any and all of your projects. If you already have one, even better.
+
 You'll need three things from Cloudflare: your `Zone ID`, an `API Token`, and the `Record ID` of the DNS record you will create.
 
 1.  **Zone ID:**
@@ -269,12 +296,12 @@ You'll need three things from Cloudflare: your `Zone ID`, an `API Token`, and th
       ```
     - Look for the DNS record you just created (i.e. `mc.yourdomain.com`) in the JSON output and copy its `id`.
 
-
 ### 3. AWS IAM Setup
 
 You need to create two roles: one for the EC2 instance and one for the Lambda function.
 
 **A. EC2 Role (`MinecraftServerRole`)**
+
 1.  Go to **IAM** > **Roles** > **Create role**.
 2.  Select **AWS service** and choose **EC2**.
 3.  Click **Next**.
@@ -289,6 +316,7 @@ You need to create two roles: one for the EC2 instance and one for the Lambda fu
 5.  Name the role `MinecraftServerRole` and create it.
 
 **B. Lambda Role (`MinecraftLauncherRole`)**
+
 1.  Go to **IAM** > **Roles** > **Create role**.
 2.  Select **AWS service** and choose **Lambda**.
 3.  Click **Next**.
@@ -358,7 +386,7 @@ The server needs your GitHub credentials to pull the config.
     - Click **Create identity**.
     - Select **Domain**
     - Follow the verification steps (add DNS records for domain, or click link for email).
-    - **Note:** If in Sandbox mode, you must also verify the email address you will be *sending from* (your personal email).
+    - **Note:** If in Sandbox mode, you must also verify the email address you will be _sending from_ (your personal email).
     - **Notification Email:** If you want to receive startup notifications, you must also verify that email address (if it's different from the one above).
 
 2.  **Create SNS Topic:**
@@ -404,6 +432,7 @@ The server needs your GitHub credentials to pull the config.
 ## Backups (Optional)
 
 To enable weekly backups:
+
 1. Go to EC2 > Volumes. Select your server's volume.
 2. Add a tag: Key=`Backup`, Value=`weekly`.
 3. Run the following command (requires AWS CLI) to create the lifecycle policy:
@@ -417,8 +446,8 @@ To enable weekly backups:
 **Playing:**
 Send an email with the subject (or body) containing your start keyword (default "start") to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
 
-
 **Managing Players:**
+
 1.  **Find UUIDs:** Use a tool like [mcuuid.net](https://mcuuid.net/) to find the UUID for each player you want to allow.
 2.  **Edit Config:** Update `config/whitelist.json` in this repo. It should look like this:
     ```json
@@ -437,6 +466,7 @@ Send an email with the subject (or body) containing your start keyword (default 
 4.  **Sync:** The next time the server starts, it will automatically pull the latest changes.
 
 **Updating Properties:**
+
 1.  Edit `config/server.properties` in your local repo.
 2.  Commit and push to GitHub.
 3.  Restart the server (or wait for next boot) to apply changes.
@@ -450,9 +480,11 @@ If you're not going to play for an extended period (weeks/months), you can compl
 **Prerequisites:** Make sure you have a local backup of your world first!
 
 1.  **Download Your World:**
+
     ```bash
     ./bin/download-server.sh
     ```
+
     This saves your world to a local directory with a timestamp.
 
 2.  **Hibernate (Delete EBS):**
@@ -470,11 +502,13 @@ If you're not going to play for an extended period (weeks/months), you can compl
 When you want to play again:
 
 1.  **Resume (Create Fresh EBS):**
+
     ```bash
     ./bin/resume.sh
     ```
+
     This will:
-    - Create a new 10GB GP3 volume from the latest Amazon Linux 2023 AMI
+    - Create a new 8GB GP3 volume from the latest Amazon Linux 2023 AMI
     - Attach it to your EC2 instance
     - Start the instance
     - Auto-configure the server (via user_data script)
@@ -483,9 +517,11 @@ When you want to play again:
     Wait ~2 minutes for the user_data script to install Java, Paper, and configure everything.
 
 3.  **Restore Your World:**
+
     ```bash
     ./bin/upload-server.sh /path/to/your/downloaded/server
     ```
+
     This uploads your world data back to the server.
 
 4.  **Play!**
@@ -493,18 +529,20 @@ When you want to play again:
 
 ### Cost Comparison
 
-| Scenario | Monthly Cost |
-|----------|--------------|
-| **Normal (Server stopped, EBS attached)** | ~$0.75/month |
-| **Hibernated (Server stopped, EBS deleted)** | **$0.00/month** |
-| **Playing (Server running)** | ~$0.03/hour + storage |
+| Scenario                                     | Monthly Cost          |
+| -------------------------------------------- | --------------------- |
+| **Normal (Server stopped, EBS attached)**    | ~$0.75/month          |
+| **Hibernated (Server stopped, EBS deleted)** | **$0.00/month**       |
+| **Playing (Server running)**                 | ~$0.03/hour + storage |
 
 **When to Hibernate:**
+
 - You won't play for 2+ weeks
 - You want absolute minimum cost
 - You have reliable local backups
 
 **When NOT to Hibernate:**
+
 - You play regularly (weekly)
 - You want instant startup via email trigger
 - You don't want to manage local backups

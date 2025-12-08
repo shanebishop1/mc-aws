@@ -6,7 +6,7 @@ echo "  Minecraft Server Resume Script"
 echo "==========================================="
 echo ""
 echo "This will:"
-echo "  1. Create a new EBS volume (10GB GP3)"
+echo "  1. Create a new EBS volume (8GB GP3)"
 echo "  2. Attach it to your EC2 instance"
 echo "  3. Start the EC2 instance"
 echo ""
@@ -46,8 +46,8 @@ if [ "$EXISTING_VOLUME" != "None" ] && [ -n "$EXISTING_VOLUME" ]; then
   echo ""
   echo "WARNING: Instance already has a volume attached: $EXISTING_VOLUME"
   read -p "Do you want to detach and delete it first? (yes/no): " delete_existing
-  
-  if [[ "$delete_existing" == "yes" ]]; then
+
+  if [[ "$delete_existing" =~ ^[Yy](es)?$ ]]; then
     echo "Stopping instance first..."
     INSTANCE_STATE=$(aws ec2 describe-instances \
       --instance-ids "$INSTANCE_ID" \
@@ -106,12 +106,12 @@ echo "Using snapshot: $SNAPSHOT_ID"
 
 # Create a new volume from the snapshot
 echo ""
-echo "Creating new 10GB GP3 volume from snapshot..."
+echo "Creating new 8GB GP3 volume from snapshot..."
 VOLUME_ID=$(aws ec2 create-volume \
   --availability-zone "$AZ" \
   --snapshot-id "$SNAPSHOT_ID" \
   --volume-type gp3 \
-  --size 10 \
+  --size 8 \
   --encrypted \
   --tag-specifications "ResourceType=volume,Tags=[{Key=Name,Value=MinecraftServerVolume},{Key=Backup,Value=weekly}]" \
   --query "VolumeId" \
