@@ -3,7 +3,8 @@ Description=Minecraft Server
 After=network.target
 
 [Service]
-Type=forking
+# Treat the screen process as the long-running process; don't expect a fork/PID file
+Type=simple
 User=minecraft
 
 WorkingDirectory=/opt/minecraft/server
@@ -28,11 +29,13 @@ ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3276M -Xmx3276M -jar 
 ExecStop=/usr/bin/screen -S mc-server -p 0 -X stuff "stop$(printf \\r)"
 
 # Then kill off the screen session itself
-ExecStopPost=/usr/bin/screen -S mc-server -X quit
+ExecStopPost=/usr/bin/screen -S mc-server -X quit || true
 
 # Ensure systemd kills any remaining children of this unit
 KillMode=control-group
 
+# Give startup extra time; worlds can take a while to load
+TimeoutStartSec=300
 # Give Minecraft up to 60s to shut down cleanly
 TimeoutStopSec=60
 
