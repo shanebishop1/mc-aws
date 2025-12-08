@@ -380,6 +380,8 @@ To enable weekly backups:
 **Playing:**
 Send an email with the subject (or body) containing your start keyword (default "start") to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
 
+**Note:** After running `npm run deploy`, Cloudflare DNS may not immediately point to your EC2's IP because the Lambda function only updates DNS when it starts the instance (during the email trigger). If you want to connect to the already-running EC2, send a start email to update Cloudflare DNS with the current IP address.
+
 **Managing Players:**
 1.  **Find UUIDs:** Use a tool like [mcuuid.net](https://mcuuid.net/) to find the UUID for each player you want to allow.
 2.  **Edit Config:** Update `config/whitelist.json` in this repo. It should look like this:
@@ -402,3 +404,71 @@ Send an email with the subject (or body) containing your start keyword (default 
 1.  Edit `config/server.properties` in your local repo.
 2.  Commit and push to GitHub.
 3.  Restart the server (or wait for next boot) to apply changes.
+
+## Hibernation (Zero Storage Cost)
+
+If you're not going to play for an extended period (weeks/months), you can completely eliminate the ~$0.75/month storage cost by deleting the EBS volume. When you want to play again, you can restore it from your local backup.
+
+### Hibernating Your Server
+
+**Prerequisites:** Make sure you have a local backup of your world first!
+
+1.  **Download Your World:**
+    ```bash
+    ./bin/download-server.sh
+    ```
+    This saves your world to a local directory with a timestamp.
+
+2.  **Hibernate (Delete EBS):**
+    ```bash
+    ./bin/hibernate.sh
+    ```
+    This will:
+    - Stop your EC2 instance
+    - Optionally create an AWS snapshot backup (for extra safety)
+    - Detach and delete the EBS volume
+    - **Result: $0.00/month idle cost** (no storage charges)
+
+### Resuming Your Server
+
+When you want to play again:
+
+1.  **Resume (Create Fresh EBS):**
+    ```bash
+    ./bin/resume.sh
+    ```
+    This will:
+    - Create a new 10GB GP3 volume from the latest Amazon Linux 2023 AMI
+    - Attach it to your EC2 instance
+    - Start the instance
+    - Auto-configure the server (via user_data script)
+
+2.  **Wait for Setup:**
+    Wait ~2 minutes for the user_data script to install Java, Paper, and configure everything.
+
+3.  **Restore Your World:**
+    ```bash
+    ./bin/upload-server.sh /path/to/your/downloaded/server
+    ```
+    This uploads your world data back to the server.
+
+4.  **Play!**
+    Connect to your Minecraft server as usual.
+
+### Cost Comparison
+
+| Scenario | Monthly Cost |
+|----------|--------------|
+| **Normal (Server stopped, EBS attached)** | ~$0.75/month |
+| **Hibernated (Server stopped, EBS deleted)** | **$0.00/month** |
+| **Playing (Server running)** | ~$0.03/hour + storage |
+
+**When to Hibernate:**
+- You won't play for 2+ weeks
+- You want absolute minimum cost
+- You have reliable local backups
+
+**When NOT to Hibernate:**
+- You play regularly (weekly)
+- You want instant startup via email trigger
+- You don't want to manage local backups

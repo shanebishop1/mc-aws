@@ -13,6 +13,22 @@ KEY_PATH="${MC_KEY_PATH:-$HOME/.ssh/mc-aws.pem}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o IPQoS=throughput -o Compression=no"
 SSH_CMD=(ssh -i "$KEY_PATH" $SSH_OPTS)
 
+# Idle-check helpers (no-op until PUBLIC_IP is set)
+disable_idle_check() {
+  echo ""
+  echo "Disabling idle-check (prevents auto-shutdown during transfer)..."
+  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
+    "sudo mv /etc/cron.d/minecraft-idle /etc/cron.d/minecraft-idle.disabled 2>/dev/null || true; sudo rm -f /tmp/mc-idle.marker"
+}
+
+reenable_idle_check() {
+  echo ""
+  echo "Re-enabling idle-check..."
+  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
+    "sudo mv /etc/cron.d/minecraft-idle.disabled /etc/cron.d/minecraft-idle 2>/dev/null || true; sudo rm -f /tmp/mc-idle.marker" \
+    2>/dev/null || true
+}
+
 # Function to find server folders under backups
 find_server_folders() {
   local folders=()
@@ -94,6 +110,9 @@ PUBLIC_IP=$(aws ec2 describe-instances \
   --query "Reservations[0].Instances[0].PublicIpAddress" \
   --output text)
 
+# Ensure idle-check gets re-enabled even on error
+trap 'reenable_idle_check' EXIT
+
 echo ""
 echo "========================================"
 echo "  ⚠️  WARNING: This will OVERWRITE the"
@@ -123,6 +142,8 @@ tar --no-xattrs --no-mac-metadata -czf "$TEMP_TAR" \
 LOCAL_SHA=$(shasum -a 256 "$TEMP_TAR" | awk '{print $1}')
 echo "  Tarball: $TEMP_TAR ($(du -h "$TEMP_TAR" | cut -f1))"
 echo "  SHA256:  $LOCAL_SHA"
+
+disable_idle_check
 
 echo ""
 echo "Stopping Minecraft service on remote..."
