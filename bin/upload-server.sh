@@ -40,11 +40,11 @@ if [[ "$MODE" == "local" && -z "${1-}" ]]; then
   echo "Choose upload mode:"
   echo "  1) local (tar + rsync over SSH) [default]"
   echo "  2) drive (tar -> Drive -> EC2 via rclone)"
-  read -p "Mode [1/2]: " mode_choice
-  case "$mode_choice" in
-    2) MODE="drive" ;;
-    *) MODE="local" ;;
-  esac
+read -p "Mode [1/2]: " mode_choice
+case "$mode_choice" in
+  2) MODE="drive" ;;
+  *) MODE="local" ;;
+esac
 fi
 
 # Function to find server folders under backups
@@ -80,7 +80,7 @@ if [[ -z "${USER_ARG}" ]]; then
       echo "  $((i+1))) ${SERVER_FOLDERS[$i]}"
     done
     echo ""
-    read -p "Which one to upload? [1-${#SERVER_FOLDERS[@]}]: " choice
+read -p "Which one to upload? [1-${#SERVER_FOLDERS[@]}]: " choice
 
     if [[ ! "$choice" =~ ^[0-9]+$ ]] || [[ "$choice" -lt 1 ]] || [[ "$choice" -gt ${#SERVER_FOLDERS[@]} ]]; then
       echo "Invalid choice."
@@ -195,7 +195,7 @@ fi
 echo ""
 read -p "Continue? [y/N]: " confirm
 
-if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+if [[ ! "$confirm" =~ ^[Yy](es)?$ ]]; then
   echo "Aborted."
   exit 0
 fi

@@ -38,11 +38,11 @@ if [[ "$MODE" == "local" ]]; then
   echo "Choose download mode:"
   echo "  1) local (rsync to ./backups) [default]"
   echo "  2) google drive (tar on EC2 -> Google Drive)"
-  read -p "Mode [1/2]: " mode_choice
-  case "$mode_choice" in
-    2) MODE="drive" ;;
-    *) MODE="local" ;;
-  esac
+read -p "Mode [1/2]: " mode_choice
+case "$mode_choice" in
+  2) MODE="drive" ;;
+  *) MODE="local" ;;
+esac
 fi
 
 # Find running instance

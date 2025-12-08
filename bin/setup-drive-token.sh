@@ -52,7 +52,7 @@ echo "GDRIVE_REMOTE=\"gdrive\"        # optional, default shown"
 echo "GDRIVE_ROOT=\"mc-backups\"      # optional, default shown"
 
 read -p "Write these values into .env now? [y/N]: " save_env
-if [[ "$save_env" =~ ^[Yy]$ ]]; then
+if [[ "$save_env" =~ ^[Yy](es)?$ ]]; then
   if [[ -f .env ]]; then
     {
       echo ""
