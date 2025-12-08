@@ -114,12 +114,15 @@ If you want to set everything up with a single command, and don't require any sp
       - `VERIFIED_SENDER`: The email that receives trigger emails *and* sends notifications (e.g., `start@yourdomain.com`)
       - `NOTIFICATION_EMAIL`: Where you want to receive "server started" alerts (optional)
     - AWS account ID and preferred region
+    - (Optional) **Google Drive token** for rclone backups:
+      - After you set up your AWS creds, run `./bin/setup-drive-token.sh` locally. It opens a browser for Google OAuth, then writes the token to AWS Secrets Manager.
+      - Add the printed ARN to `.env` as `GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"`. You can leave `GDRIVE_REMOTE` (default `gdrive`) and `GDRIVE_ROOT` (default `mc-backups`) as-is.
 
 5.  **Deploy:**
     ```bash
     npm run deploy
     ```
-    This will create the EC2 instance, Lambda, Roles, and SES Rules for you. It will also **automatically activate** the SES Rule Set.
+    This will create the EC2 instance, Lambda, Roles, and SES Rules for you. It will also **automatically activate** the SES Rule Set. If you have not set up Google Drive yet, the deploy script will offer to run `./bin/setup-drive-token.sh` for you (you can skip and deploy without Drive support).
 
 ---
 
@@ -181,6 +184,40 @@ ssh -i ~/.ssh/mc-aws.pem ec2-user@<SERVER_IP>
 ```
 
 ---
+
+## Google Drive (Optional) Backups/Transfers
+
+You can push/pull server data via Google Drive using `rclone` without extra manual setup on the EC2 (tokens are injected by CDK if provided).
+
+### One-time token capture (local)
+1) Ensure AWS CLI is configured locally (`aws configure`).
+2) Run:
+```bash
+./bin/setup-drive-token.sh
+```
+It opens a browser for Google OAuth and stores the token in AWS Secrets Manager. It will print a Secret ARN; add this to `.env`:
+```
+GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"
+GDRIVE_REMOTE="gdrive"   # optional override
+GDRIVE_ROOT="mc-backups" # optional override
+```
+3) Redeploy CDK so the instance gets the token and rclone config.
+
+### Using Drive in scripts
+- Upload to EC2 via Drive:
+```bash
+./bin/upload-server.sh --mode drive
+```
+- Download from EC2 to local backups (default local mode):
+```bash
+./bin/download-server.sh            # local rsync
+./bin/download-server.sh --mode drive  # tar on EC2 -> Drive (no local copy)
+```
+
+Notes:
+- Drive mode requires the token secret ARN in `.env` and a redeploy.
+- Local mode behavior is unchanged (tar+rsync for upload; rsync for download).
+- Idle-check is disabled during upload and re-enabled afterward.
 
 ## Setup Guide (Option 2: Manual)
 
@@ -380,7 +417,6 @@ To enable weekly backups:
 **Playing:**
 Send an email with the subject (or body) containing your start keyword (default "start") to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
 
-**Note:** After running `npm run deploy`, Cloudflare DNS may not immediately point to your EC2's IP because the Lambda function only updates DNS when it starts the instance (during the email trigger). If you want to connect to the already-running EC2, send a start email to update Cloudflare DNS with the current IP address.
 
 **Managing Players:**
 1.  **Find UUIDs:** Use a tool like [mcuuid.net](https://mcuuid.net/) to find the UUID for each player you want to allow.

@@ -17,6 +17,11 @@ export class MinecraftStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
+    const driveTokenSecretArn =
+      process.env.GDRIVE_TOKEN_SECRET_ARN || "";
+    const driveRemote = process.env.GDRIVE_REMOTE || "gdrive";
+    const driveRoot = process.env.GDRIVE_ROOT || "mc-backups";
+
     // 0. SSM Parameters (GitHub Credentials)
     new ssm.StringParameter(this, "GithubUserParam", {
       parameterName: "/minecraft/github-user",
@@ -123,10 +128,21 @@ export class MinecraftStack extends cdk.Stack {
     );
 
     // 4. EC2 Instance
-    const userDataScript = fs.readFileSync(
-      path.join(__dirname, "../src/ec2/user_data.sh"),
-      "utf8",
-    );
+    const baseUserData = fs
+      .readFileSync(path.join(__dirname, "../src/ec2/user_data.sh"), "utf8")
+      // Insert exports immediately after the shebang to keep cloud-init happy
+      .replace(
+        /^#!.*\n/,
+        (line) =>
+          `${line}export GDRIVE_TOKEN_SECRET_ARN="${driveTokenSecretArn}"\n` +
+          `export GDRIVE_REMOTE="${driveRemote}"\n` +
+          `export GDRIVE_ROOT="${driveRoot}"\n`,
+      );
+
+    // Fallback if no shebang was found (should not happen, but keeps user-data valid)
+    const userDataScript = baseUserData.startsWith("#!/")
+      ? baseUserData
+      : `#!/usr/bin/env bash\nexport GDRIVE_TOKEN_SECRET_ARN="${driveTokenSecretArn}"\nexport GDRIVE_REMOTE="${driveRemote}"\nexport GDRIVE_ROOT="${driveRoot}"\n${baseUserData}`;
 
     const instance = new ec2.Instance(this, "MinecraftServer", {
       vpc,
@@ -154,6 +170,15 @@ export class MinecraftStack extends cdk.Stack {
         },
       ],
     });
+
+    if (driveTokenSecretArn) {
+      ec2Role.addToPolicy(
+        new iam.PolicyStatement({
+          actions: ["secretsmanager:GetSecretValue"],
+          resources: [driveTokenSecretArn],
+        }),
+      );
+    }
 
     // Tag for backups (DLM)
     cdk.Tags.of(instance).add("Backup", "weekly");
@@ -183,6 +208,39 @@ export class MinecraftStack extends cdk.Stack {
       },
       timeout: cdk.Duration.seconds(60), // Give it time to poll EC2
     });
+
+    // Lambda to update DNS during deploy (no email trigger needed)
+    const updateDnsLambda = new lambda.Function(this, "UpdateDnsLambda", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset(
+        path.join(__dirname, "../src/lambda/UpdateDns"),
+      ),
+      environment: {
+        INSTANCE_ID: instance.instanceId,
+        CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID || "",
+        CLOUDFLARE_RECORD_ID: process.env.CLOUDFLARE_RECORD_ID || "",
+        CLOUDFLARE_MC_DOMAIN: process.env.CLOUDFLARE_MC_DOMAIN || "",
+        CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN || "",
+      },
+      timeout: cdk.Duration.seconds(300),
+    });
+
+    updateDnsLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:DescribeInstances"],
+        resources: ["*"],
+      }),
+    );
+
+    const updateDnsProvider = new cr.Provider(this, "UpdateDnsProvider", {
+      onEventHandler: updateDnsLambda,
+    });
+
+    const updateDnsResource = new cdk.CustomResource(this, "UpdateDnsOnDeploy", {
+      serviceToken: updateDnsProvider.serviceToken,
+    });
+    updateDnsResource.node.addDependency(instance);
 
     // Grant Lambda permissions
     startLambda.addToRolePolicy(

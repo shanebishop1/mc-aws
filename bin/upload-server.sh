@@ -1,33 +1,51 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Upload local server folder to EC2 via tarball + resumable transfer
-# Usage: ./bin/upload-server.sh [path-to-local-server-folder]
+# Upload local server folder to EC2, with optional Google Drive intermediary.
+# Usage: ./bin/upload-server.sh [--mode local|drive] [path-to-local-server-folder]
 #
-# Requires: SSH key pair configured (see README)
+# Modes:
+#   local (default): tar + rsync over SSH
+#   drive: tar -> rclone upload to Drive -> rclone download on EC2 -> apply
+#
+# Requires: SSH key pair (MC_KEY_PATH or ~/.ssh/mc-aws.pem). For drive mode, a Drive
+# token secret in AWS (GDRIVE_TOKEN_SECRET_ARN) and rclone installed locally.
 
 KEY_PATH="${MC_KEY_PATH:-$HOME/.ssh/mc-aws.pem}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o IPQoS=throughput -o Compression=no"
 SSH_CMD=(ssh -i "$KEY_PATH" $SSH_OPTS)
+GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
+GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
+GDRIVE_TOKEN_SECRET_ARN="${GDRIVE_TOKEN_SECRET_ARN:-}"
+MODE="local"
 
-# Idle-check helpers (no-op until PUBLIC_IP is set)
-disable_idle_check() {
-  echo ""
-  echo "Disabling idle-check (prevents auto-shutdown during transfer)..."
-  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
-    "sudo mv /etc/cron.d/minecraft-idle /etc/cron.d/minecraft-idle.disabled 2>/dev/null || true; sudo rm -f /tmp/mc-idle.marker"
-}
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --mode)
+      MODE="${2:-local}"
+      shift 2
+      ;;
+    *)
+      POSITIONAL+=("$1")
+      shift
+      ;;
+  esac
+done
+set -- "${POSITIONAL[@]}"
 
-reenable_idle_check() {
+# Prompt for mode if not provided
+if [[ "$MODE" == "local" && -z "${1-}" ]]; then
   echo ""
-  echo "Re-enabling idle-check..."
-  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
-    "sudo mv /etc/cron.d/minecraft-idle.disabled /etc/cron.d/minecraft-idle 2>/dev/null || true; sudo rm -f /tmp/mc-idle.marker" \
-    2>/dev/null || true
-}
+  echo "Choose upload mode:"
+  echo "  1) local (tar + rsync over SSH) [default]"
+  echo "  2) drive (tar -> Drive -> EC2 via rclone)"
+  read -p "Mode [1/2]: " mode_choice
+  case "$mode_choice" in
+    2) MODE="drive" ;;
+    *) MODE="local" ;;
+  esac
+fi
 
 # Function to find server folders under backups
 find_server_folders() {
@@ -51,7 +69,7 @@ if [[ -z "${USER_ARG}" ]]; then
     echo "Error: No server folders found."
     echo "Expected ./backups/server-*/"
     echo ""
-    echo "Usage: ./bin/upload-server.sh [path-to-server-folder]"
+    echo "Usage: ./bin/upload-server.sh [--mode local|drive] [path-to-server-folder]"
     exit 1
   elif [[ ${#SERVER_FOLDERS[@]} -eq 1 ]]; then
     LOCAL_SERVER="${SERVER_FOLDERS[0]}"
@@ -92,6 +110,40 @@ if [[ ! -f "$KEY_PATH" ]]; then
   exit 1
 fi
 
+# Ensure rclone config when using Drive
+TMP_RCLONE_CONF=""
+cleanup_rclone_conf() {
+  if [[ -n "$TMP_RCLONE_CONF" && -f "$TMP_RCLONE_CONF" ]]; then
+    rm -f "$TMP_RCLONE_CONF"
+  fi
+}
+
+setup_rclone_conf() {
+  if [[ "$MODE" != "drive" ]]; then
+    return
+  fi
+  if [[ -n "${RCLONE_CONFIG:-}" ]]; then
+    return
+  fi
+  if [[ -z "$GDRIVE_TOKEN_SECRET_ARN" ]]; then
+    echo "Error: GDRIVE_TOKEN_SECRET_ARN is required for --mode drive."
+    exit 1
+  fi
+  TOKEN_JSON=$(aws secretsmanager get-secret-value --secret-id "$GDRIVE_TOKEN_SECRET_ARN" --query SecretString --output text 2>/dev/null || echo "")
+  if [[ -z "$TOKEN_JSON" ]]; then
+    echo "Error: Unable to fetch Drive token from $GDRIVE_TOKEN_SECRET_ARN"
+    exit 1
+  fi
+  TMP_RCLONE_CONF=$(mktemp)
+  cat > "$TMP_RCLONE_CONF" <<EOF
+[${GDRIVE_REMOTE}]
+type = drive
+token = ${TOKEN_JSON}
+EOF
+  export RCLONE_CONFIG="$TMP_RCLONE_CONF"
+  trap 'cleanup_rclone_conf' EXIT
+}
+
 # Find running instance
 INSTANCE_ID=$(aws ec2 describe-instances \
   --filters "Name=tag:aws:cloudformation:stack-name,Values=MinecraftStack" "Name=instance-state-name,Values=running" \
@@ -110,6 +162,22 @@ PUBLIC_IP=$(aws ec2 describe-instances \
   --query "Reservations[0].Instances[0].PublicIpAddress" \
   --output text)
 
+# Idle-check helpers (no-op until PUBLIC_IP is set)
+disable_idle_check() {
+  echo ""
+  echo "Disabling idle-check (prevents auto-shutdown during transfer)..."
+  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
+    "sudo mv /etc/cron.d/minecraft-idle /etc/cron.d/minecraft-idle.disabled 2>/dev/null || true; sudo rm -f /tmp/mc-idle.marker"
+}
+
+reenable_idle_check() {
+  echo ""
+  echo "Re-enabling idle-check..."
+  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
+    "sudo mv /etc/cron.d/minecraft-idle.disabled /etc/cron.d/minecraft-idle 2>/dev/null || true; sudo rm -f /tmp/mc-idle.marker" \
+    2>/dev/null || true
+}
+
 # Ensure idle-check gets re-enabled even on error
 trap 'reenable_idle_check' EXIT
 
@@ -120,7 +188,10 @@ echo "     server on EC2 with local files!"
 echo "========================================"
 echo ""
 echo "  Source:      $LOCAL_SERVER"
-echo "  Destination: $INSTANCE_ID ($PUBLIC_IP) via tar + rsync"
+echo "  Destination: $INSTANCE_ID ($PUBLIC_IP) via ${MODE}"
+if [[ "$MODE" == "drive" ]]; then
+  echo "  Drive remote: ${GDRIVE_REMOTE:-gdrive}"
+fi
 echo ""
 read -p "Continue? [y/N]: " confirm
 
@@ -133,7 +204,7 @@ fi
 echo ""
 echo "Creating tarball..."
 TEMP_TAR=$(mktemp -t mc-upload-XXXXXX.tar.gz)
-trap 'rm -f "$TEMP_TAR"' EXIT
+trap 'rm -f "$TEMP_TAR"; cleanup_rclone_conf' EXIT
 tar --no-xattrs --no-mac-metadata -czf "$TEMP_TAR" \
   --exclude='cache' \
   --exclude='logs' \
@@ -149,34 +220,53 @@ echo ""
 echo "Stopping Minecraft service on remote..."
 "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "sudo systemctl stop minecraft.service || true"
 
-echo "Copying tarball to remote via rsync (resumable)..."
-RSYNC_FILE_OPTS=(
-  -av --progress
-  --partial --append-verify
-  --timeout=300
-  -e "${SSH_CMD[*]}"
-  "$TEMP_TAR"
-  ec2-user@"$PUBLIC_IP":/home/ec2-user/minecraft-upload.tar.gz
-)
+if [[ "$MODE" == "drive" ]]; then
+  setup_rclone_conf
+  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+  DRIVE_PATH="${GDRIVE_ROOT}/server-${TIMESTAMP}.tar.gz"
+  echo "Uploading tarball to Drive: ${GDRIVE_REMOTE}:${DRIVE_PATH}"
+  rclone copy "$TEMP_TAR" "${GDRIVE_REMOTE}:${DRIVE_PATH}" --progress
+  echo "  ✓ Uploaded to Drive"
 
-MAX_TRIES=8
-TRY=1
-while true; do
-  echo "  Attempt $TRY/$MAX_TRIES..."
-  if rsync "${RSYNC_FILE_OPTS[@]}"; then
-    echo "  ✓ Transfer completed"
-    break
-  fi
-  if [[ "$TRY" -ge "$MAX_TRIES" ]]; then
-    echo "  ✗ Transfer failed after $MAX_TRIES attempts"
-    exit 1
-  fi
-  TRY=$((TRY + 1))
-  echo "  Retrying in 5s..."
-  sleep 5
-done
+  echo "Downloading tarball from Drive on remote..."
+  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
+    "RCLONE_CONFIG=/opt/setup/rclone/rclone.conf rclone copy ${GDRIVE_REMOTE}:${DRIVE_PATH} /home/ec2-user/ --progress"
+  REMOTE_TAR="/home/ec2-user/server-${TIMESTAMP}.tar.gz"
+  REMOTE_SHA=$("${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "sha256sum ${REMOTE_TAR} | awk '{print \$1}'" || true)
+else
+  echo "Copying tarball to remote via rsync (resumable)..."
+  # Ensure old tar is cleared before transfer to avoid append/corruption
+  "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "rm -f /home/ec2-user/minecraft-upload.tar.gz"
+  RSYNC_FILE_OPTS=(
+    -av --progress
+    --partial --inplace
+    --timeout=300
+    -e "${SSH_CMD[*]}"
+    "$TEMP_TAR"
+    ec2-user@"$PUBLIC_IP":/home/ec2-user/minecraft-upload.tar.gz
+  )
 
-REMOTE_SHA=$("${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "sha256sum /home/ec2-user/minecraft-upload.tar.gz | awk '{print \$1}'" || true)
+  MAX_TRIES=8
+  TRY=1
+  while true; do
+    echo "  Attempt $TRY/$MAX_TRIES..."
+    if rsync "${RSYNC_FILE_OPTS[@]}"; then
+      echo "  ✓ Transfer completed"
+      break
+    fi
+    if [[ "$TRY" -ge "$MAX_TRIES" ]]; then
+      echo "  ✗ Rsync failed after $MAX_TRIES attempts"
+      exit 1
+    fi
+    TRY=$((TRY + 1))
+    echo "  Retrying in 5s..."
+    sleep 5
+  done
+
+  REMOTE_TAR="/home/ec2-user/minecraft-upload.tar.gz"
+  REMOTE_SHA=$("${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "sha256sum ${REMOTE_TAR} | awk '{print \$1}'" || true)
+fi
+
 if [[ -z "$REMOTE_SHA" ]] || [[ "$REMOTE_SHA" != "$LOCAL_SHA" ]]; then
   echo "Error: Remote tarball checksum mismatch."
   echo "Local:  $LOCAL_SHA"
@@ -187,27 +277,25 @@ echo "  ✓ Checksums match"
 
 echo ""
 echo "Replacing server on remote..."
-"${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" << 'EOF'
+"${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" << EOF
 set -e
-sudo rm -rf /opt/minecraft/server/*
+sudo find /opt/minecraft/server -mindepth 1 -maxdepth 1 -exec rm -rf {} +
 mkdir -p /home/ec2-user/minecraft-upload-tmp
-tar -xzf /home/ec2-user/minecraft-upload.tar.gz -C /home/ec2-user/minecraft-upload-tmp
-# Determine extracted root: if exactly one top-level dir, use its contents; otherwise move all
+tar -xzf ${REMOTE_TAR} -C /home/ec2-user/minecraft-upload-tmp
 cd /home/ec2-user/minecraft-upload-tmp
-top_items=$(find . -mindepth 1 -maxdepth 1 -type d -printf '%f\n')
-count=$(echo "$top_items" | wc -w)
-if [[ "$count" -eq 1 ]]; then
-  dir="$top_items"
-  sudo mv "/home/ec2-user/minecraft-upload-tmp/$dir"/* /opt/minecraft/server/
+shopt -s dotglob nullglob
+dirs=(*/)
+if [[ \${#dirs[@]} -eq 1 && -d "\${dirs[0]}" ]]; then
+  sudo mv "\${dirs[0]}"* /opt/minecraft/server/
 else
-  sudo mv /home/ec2-user/minecraft-upload-tmp/* /opt/minecraft/server/
+  sudo mv ./* /opt/minecraft/server/
 fi
 sudo chown -R minecraft:minecraft /opt/minecraft/server/
-rm -rf /home/ec2-user/minecraft-upload.tar.gz /home/ec2-user/minecraft-upload-tmp
+rm -rf ${REMOTE_TAR} /home/ec2-user/minecraft-upload-tmp
 EOF
 
 echo "Starting Minecraft service..."
 "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "sudo systemctl start minecraft.service"
 
 echo ""
-echo "Done! Server uploaded via tarball/rsync and restarted."
+echo "Done! Server uploaded via ${MODE} and restarted."
