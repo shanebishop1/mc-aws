@@ -144,28 +144,41 @@ This uses AWS Systems Manager (SSM). No SSH keys or open ports required.
     ```
     This connects you directly to the running Minecraft screen session.
 
-### Method 2: The Classic Way (SSH Key)
-If you prefer standard SSH (e.g., for SFTP or using your own scripts), follow these steps:
+### Method 2: SSH Key (Required for File Uploads)
+SSH access is needed for the `upload-server.sh` script and traditional SFTP/rsync.
 
+**One-Time Setup:**
 1.  **Create a Key Pair:**
-    Go to EC2 Console -> Key Pairs -> Create Key Pair. Save the `.pem` file (e.g., `~/keypairs/my-pair.pem`).
+    Go to [EC2 Console → Key Pairs](https://console.aws.amazon.com/ec2/home#KeyPairs) → Create Key Pair.
+    - Name it `mc-aws`
+    - Format: `.pem`
+    - Click Create — the file downloads automatically
+    - **Important:** You can only download this file once! If you lose it, delete the key pair and create a new one.
 
-2.  **Update Configuration:**
-    Add the key name to your `.env` file:
+2.  **Move the file:**
     ```bash
-    KEY_PAIR_NAME="my-pair"
+    mv ~/Downloads/mc-aws.pem ~/.ssh/mc-aws.pem
+    chmod 400 ~/.ssh/mc-aws.pem
     ```
 
-3.  **Redeploy:**
+3.  **Add to your `.env`:**
     ```bash
-    npx cdk deploy
+    KEY_PAIR_NAME="mc-aws"
     ```
 
-4.  **Connect:**
+4.  **Redeploy:**
     ```bash
-    # Get the IP address from the AWS Console or output
-    ssh -i ~/keypairs/my-pair.pem ec2-user@<SERVER_IP>
+    npm run deploy
     ```
+
+**Usage:**
+```bash
+# SSH manually
+ssh -i ~/.ssh/mc-aws.pem ec2-user@<SERVER_IP>
+
+# Upload local server folder to replace EC2 server folder
+./bin/upload-server.sh ./server/
+```
 
 ---
 
