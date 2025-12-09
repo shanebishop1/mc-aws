@@ -1,0 +1,16 @@
+# CLEANUP MARKER - Step 3 Complete
+
+This directory contained manual-only IAM policy templates that are now obsolete.
+
+All IAM policies are now generated programmatically by the CDK stack (lib/minecraft-stack.ts).
+
+The following files should be deleted via `git rm`:
+- allow-read-github-pat-policy.json
+- ec2-start-describe-policy.json
+- ec2-stop-instance-policy.json
+- ses-send-email-policy.json
+- trust-policy.json
+
+After deletion, this directory can also be removed if empty.
+
+See: steps.md Step 3 - Prune manual-only scripts/configs
