@@ -21,7 +21,11 @@ I found a few similar, pre-existing recipes online, but none of them included au
 - [How It Works](#how-it-works)
 - [Repo Structure](#repo-structure)
 - [Setup Guide](#setup-guide)
+- [Connecting to the Server](#connecting-to-the-server)
+- [Google Drive Backups](#google-drive-optional-backupstransfers)
+- [Weekly EBS Snapshots](#weekly-ebs-snapshots-optional)
 - [How to Manage It](#how-to-manage-it)
+- [Hibernation](#hibernation-zero-storage-cost)
 
 ## Background
 
@@ -70,24 +74,86 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 - `setup/iam/` - AWS permission policies.
 - `setup/dlm/` - Backup schedule (snapshots).
 
-## Setup Guide (Option 1: Automated with CDK)
+## Setup Guide
 
-If you want to set everything up with a single command, and don't require any special modifications, follow these steps.
+This project uses AWS CDK to automate the entire setup process. Follow these steps to deploy your on-demand Minecraft server.
 
 ### Prerequisites
 
-1.  **Node.js** installed.
-2.  **AWS CLI** installed and configured (`aws configure`).
-3.  **Cloudflare** API Token and Zone ID (see Manual Guide Step 2).
-4.  **Verified Email** in AWS SES (see Manual Guide Step 6).
-    - **Sender:** The email you will send the "start" command _from_.
-    - **Receiver:** The email you want to receive notifications _to_ (if different from sender).
-5.  **Session Manager Plugin** (for connecting to the server):
-    ```bash
-    brew install --cask session-manager-plugin
-    ```
+Before you begin, ensure you have the following:
 
-### Steps
+#### 1. Local Tools
+
+- **Node.js** installed (v18+)
+- **AWS CLI** installed and configured:
+  ```bash
+  aws configure
+  ```
+  Enter your AWS Access Key ID, Secret Access Key, default region (e.g., `us-west-1`), and default output format (`json`).
+- **Session Manager Plugin** (for connecting to the server):
+  ```bash
+  brew install --cask session-manager-plugin
+  ```
+
+#### 2. Cloudflare Domain Setup
+
+You need a domain managed by **Cloudflare** for dynamic DNS updates. If you don't have one, register a domain (typically <$1/month) and point it to Cloudflare's nameservers.
+
+You'll need three pieces of information from Cloudflare:
+
+**A. Zone ID:**
+- Log in to Cloudflare and select your domain
+- Open the "Overview" section
+- Scroll down to the "API" section on the right sidebar
+- Copy your **Zone ID**
+
+**B. API Token:**
+- Go to **Manage account** > **Account API tokens**
+- Click **Create Token**
+- Choose the **Edit Zone DNS** template (or create custom with Zone > DNS > Edit permissions)
+- **Zone Resources:** Include > Specific zone > Your Domain
+- Click **Continue to Summary** → **Create Token**
+- **Copy the token immediately** (you won't see it again)
+
+**C. DNS Record ID:**
+- Go to **DNS** > **Records** on the left sidebar
+- Create an **A** record for your Minecraft subdomain (e.g., `mc`). Point it to `1.1.1.1` (placeholder; it will be updated automatically)
+- To get the **Record ID**, use the Cloudflare API:
+  ```bash
+  curl -X GET "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \
+       -H "Authorization: Bearer <YOUR_API_TOKEN>" \
+       -H "Content-Type: application/json"
+  ```
+- Find your DNS record in the JSON output and copy its `id` field
+
+#### 3. AWS SES Email Verification
+
+AWS SES requires email verification before you can send/receive emails.
+
+1. Go to **AWS Console** → **Amazon SES** → **Identities**
+2. Click **Create identity**
+3. Select **Domain** and enter your domain (e.g., `yourdomain.com`)
+4. Follow the verification steps (add DNS records to Cloudflare)
+5. **Important:** If you're in SES Sandbox mode, you must also verify:
+   - The **sender email** (the email you'll send the "start" command from, e.g., `start@yourdomain.com`)
+   - The **notification email** (where you want to receive server alerts, if different from sender)
+
+#### 4. AWS EC2 Key Pair (Optional, but Recommended for File Uploads)
+
+If you want to use SSH for file uploads (the `upload-server.sh` script), create an EC2 key pair:
+
+1. Go to **AWS Console** → **EC2** → **Key Pairs**
+2. Click **Create key pair**
+   - Name: `mc-aws`
+   - Format: `.pem`
+3. Download the file and move it to your local SSH directory:
+   ```bash
+   mv ~/Downloads/mc-aws.pem ~/.ssh/mc-aws.pem
+   chmod 400 ~/.ssh/mc-aws.pem
+   ```
+4. You'll add this key pair name to your `.env` file in the next step
+
+### Deployment Steps
 
 1.  **Install Dependencies:**
 
@@ -95,45 +161,76 @@ If you want to set everything up with a single command, and don't require any sp
     npm install
     ```
 
-2.  **Configure AWS CLI:**
-
-    ```bash
-    aws configure
-    ```
-
-    Enter your AWS Access Key ID, Secret Access Key, default region (e.g., `us-west-1`), and default output format (`json`).
-
-3.  **Bootstrap CDK:** (Only needed once per AWS account/region)
+2.  **Bootstrap CDK:** (Only needed once per AWS account/region)
 
     ```bash
     npx cdk bootstrap
     ```
 
-4.  **Configure Environment:**
-    Copy the provided `.env.template` file to `.env` and fill in your details:
+3.  **Configure Environment:**
+
+    Copy the provided `.env.template` file to `.env`:
 
     ```bash
     cp .env.template .env
     ```
 
-    Then edit `.env` with your specific values for:
-    - Cloudflare API token and domain configuration
-    - GitHub credentials (for server to pull config)
-    - AWS SES email addresses
-      - `VERIFIED_SENDER`: The email that receives trigger emails _and_ sends notifications (e.g., `start@yourdomain.com`)
-      - `NOTIFICATION_EMAIL`: Where you want to receive "server started" alerts (optional)
-    - AWS account ID and preferred region
-    - (Optional) **Google Drive token** for rclone backups:
-      - After you set up your AWS creds, run `./bin/setup-drive-token.sh` locally. It opens a browser for Google OAuth, then writes the token to AWS Secrets Manager.
-      - Add the printed ARN to `.env` as `GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"`. You can leave `GDRIVE_REMOTE` (default `gdrive`) and `GDRIVE_ROOT` (default `mc-backups`) as-is.
+    Then edit `.env` with your specific values:
 
-5.  **Deploy:**
+    ```bash
+    # Cloudflare (from Prerequisites section above)
+    CLOUDFLARE_ZONE_ID="your-zone-id"
+    CLOUDFLARE_API_TOKEN="your-api-token"
+    CLOUDFLARE_RECORD_ID="your-record-id"
+    CLOUDFLARE_MC_DOMAIN="mc.yourdomain.com"
+
+    # AWS SES (verified emails from Prerequisites section above)
+    VERIFIED_SENDER="start@yourdomain.com"           # Email to receive trigger emails
+    NOTIFICATION_EMAIL="you@yourdomain.com"          # (Optional) Where to receive alerts
+
+    # GitHub (for server to pull config)
+    GITHUB_USER="your-github-username"
+    GITHUB_REPO="mc-aws"                             # or your fork name
+    GITHUB_PAT="ghp_..."                             # Personal Access Token with 'repo' scope
+
+    # AWS
+    AWS_ACCOUNT_ID="123456789012"
+    AWS_REGION="us-west-1"
+
+    # EC2 Key Pair (Optional, for SSH file uploads)
+    KEY_PAIR_NAME="mc-aws"                           # Leave blank if not using SSH
+
+    # Google Drive (Optional, for cloud backups)
+    # GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"
+    # GDRIVE_REMOTE="gdrive"
+    # GDRIVE_ROOT="mc-backups"
+    ```
+
+4.  **Deploy:**
+
     ```bash
     npm run deploy
     ```
-    This will create the EC2 instance, Lambda, Roles, and SES Rules for you. It will also **automatically activate** the SES Rule Set. If you have not set up Google Drive yet, the deploy script will offer to run `./bin/setup-drive-token.sh` for you (you can skip and deploy without Drive support). It will also ask if you want to enable weekly EBS snapshots via DLM; choose “y” to create/update the policy automatically.
 
----
+    The deploy script will:
+    - Create the EC2 instance, Lambda function, IAM roles, and SES rules
+    - **Automatically activate** the SES Rule Set
+    - Prompt you to set up Google Drive backups (optional; you can skip)
+    - Ask if you want to enable weekly EBS snapshots via DLM (recommended; choose "y")
+
+    **Note on Google Drive (optional):** If you want cloud backups, the script will offer to run `./bin/setup-drive-token.sh` for you. This opens a browser for Google OAuth and stores the token in AWS Secrets Manager. You can skip this and deploy without Drive support.
+
+5.  **Wait for Setup:**
+
+    The deployment typically takes 3-5 minutes. Once complete, your server is ready to use!
+
+### First-Time Server Startup
+
+To start your server for the first time:
+
+1. Send an email with your start keyword (default: `start`) in the subject or body to your verified sender email (e.g., `start@yourdomain.com`)
+2. Wait ~60 seconds for the server to boot
+3. Connect to your Minecraft server using the domain you configured (e.g., `mc.yourdomain.com`)
 
 ---
 
@@ -246,200 +343,22 @@ Notes:
 - Local mode behavior is unchanged (tar+rsync for upload; rsync for download).
 - Idle-check is disabled during upload and re-enabled afterward.
 
-## Setup Guide (Option 2: Manual)
+## Weekly EBS Snapshots (Optional)
 
-If you prefer to build this by hand to learn how the pieces fit together, follow these steps.
+During deployment, you were asked if you want to enable weekly EBS snapshots via AWS Data Lifecycle Manager (DLM). This is optional but recommended for extra data protection.
 
-### Prerequisites
+**Cost:** ~$0.05 per snapshot (typically 1-2 snapshots retained at a time = ~$0.10/month extra)
 
-- An AWS Account
-- A domain managed by **Cloudflare**. This is necessary for the API DNS updates (and is very easy to set up).
-- **Node.js** installed locally (to package the Lambda function).
-- **AWS CLI** installed and configured locally (optional, but helpful).
+**If you enabled snapshots during deploy:**
+- Your EBS volume is automatically tagged with `Backup: weekly`
+- DLM creates snapshots every Sunday at 2 AM UTC
+- Snapshots are retained for 4 weeks, then automatically deleted
+- You can restore from a snapshot if needed (via AWS Console → EC2 → Snapshots)
 
-### 1. The Code
-
-1.  **Fork this repo** to your own GitHub account.
-2.  Clone your fork to your local machine.
-
-### 2. Cloudflare Setup
-
-You could use any DNS provider, but you have to be able to dynamically update the DNS record. There is a modest cost (<$1 per month) for a domain, but you can re-use it for any and all of your projects. If you already have one, even better.
-
-You'll need three things from Cloudflare: your `Zone ID`, an `API Token`, and the `Record ID` of the DNS record you will create.
-
-1.  **Zone ID:**
-    - Log in to Cloudflare and select your domain.
-    - Open the "Overview" section and scroll down to the "API" section on the right sidebar.
-    - Take note of the **Zone ID**.
-
-2.  **API Token:**
-    - Go to **Manage account** > **Account API tokens**
-    - Choose the **Edit Zone DNS** template
-    - Select **Create Custom Token**.
-    - **Permissions:**
-      - Zone > DNS > Edit
-    - **Zone Resources:**
-      - Include > Specific zone > Your Domain
-    - Click **Continue to Summary** -> **Create Token**.
-    - **Take note of the token immediately** (you won't see it again).
-
-3.  **Record ID:**
-    - Go to **DNS** > **Records** on the left sidebar.
-    - Create an **A** record for your Minecraft subdomain (e.g., `mc`). Point it to `1.1.1.1` (this is a placeholder, it will be updated automatically).
-    - To get the `Record ID`, you need to use the API (it isn't shown in the dashboard). Open your terminal and run:
-      ```bash
-      # Replace <ZONE_ID> and <API_TOKEN> with the values from steps 1 and 2
-      curl -X GET "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \
-           -H "Authorization: Bearer <YOUR_API_TOKEN>" \
-           -H "Content-Type: application/json"
-      ```
-    - Look for the DNS record you just created (i.e. `mc.yourdomain.com`) in the JSON output and copy its `id`.
-
-### 3. AWS IAM Setup
-
-You need to create two roles: one for the EC2 instance and one for the Lambda function.
-
-**A. EC2 Role (`MinecraftServerRole`)**
-
-1.  Go to **IAM** > **Roles** > **Create role**.
-2.  Select **AWS service** and choose **EC2**.
-3.  Click **Next**.
-4.  **Permissions:**
-    - Click **Create policy**.
-    - Switch to **JSON** tab.
-    - Copy content from `setup/iam/allow-read-github-pat-policy.json`.
-    - Name it `MinecraftReadSecrets`.
-    - Create another policy with content from `setup/iam/ec2-stop-instance-policy.json`.
-    - Name it `MinecraftSelfStop`.
-    - Back in the "Create role" tab, refresh and select `MinecraftReadSecrets`, `MinecraftSelfStop`, and `AmazonSSMManagedInstanceCore` (for Session Manager access).
-5.  Name the role `MinecraftServerRole` and create it.
-
-**B. Lambda Role (`MinecraftLauncherRole`)**
-
-1.  Go to **IAM** > **Roles** > **Create role**.
-2.  Select **AWS service** and choose **Lambda**.
-3.  Click **Next**.
-4.  **Permissions:**
-    - Create a policy with content from `setup/iam/ec2-start-describe-policy.json`.
-    - **IMPORTANT:** Edit the JSON to replace `<EC2_INSTANCE_ID>` with `*` (since you don't have the ID yet) or come back and update it once you have your EC2 instance ID..
-    - Name it `MinecraftStartEC2`.
-    - Create a policy with content from `setup/iam/ses-send-email-policy.json`.
-    - Name it `MinecraftSendEmail`.
-    - Select `MinecraftStartEC2`, `MinecraftSendEmail`, and `AWSLambdaBasicExecutionRole`.
-5.  Name the role `MinecraftLauncherRole` and create it.
-
-### 4. AWS Secrets (SSM Parameter Store)
-
-The server needs your GitHub credentials to pull the config.
-
-1.  Go to **Systems Manager** > **Parameter Store**.
-2.  Click **Create parameter**.
-3.  **GitHub User:**
-    - Name: `/minecraft/github-user`
-    - Type: `String`
-    - Value: `YourGitHubUsername`
-4.  **GitHub Repo:**
-    - Name: `/minecraft/github-repo`
-    - Type: `String`
-    - Value: `YourRepoName` (e.g., `mc-aws`)
-5.  **GitHub PAT (Personal Access Token):**
-    - Generate a Classic PAT in GitHub (Settings > Developer settings > Personal access tokens > Tokens (classic)) with `repo` scope.
-    - Name: `/minecraft/github-pat`
-    - Type: **`SecureString`**
-    - Value: `ghp_...`
-
-### 5. The Trigger (Lambda)
-
-1.  **Prepare the Code:**
-    - On your local machine, navigate to `src/lambda/StartMinecraftServer`.
-    - Run `npm install`.
-    - Zip the contents: `zip -r function.zip .` (make sure `index.js` is at the root of the zip, not inside a folder).
-
-2.  **Create Function:**
-    - Go to **Lambda** > **Create function**.
-    - Name: `StartMinecraftServer`.
-    - Runtime: **Node.js 20.x**.
-    - Execution role: **Use an existing role** -> `MinecraftLauncherRole`.
-    - Click **Create function**.
-
-3.  **Upload Code:**
-    - In the **Code** tab, click **Upload from** > **.zip file**.
-    - Upload your `function.zip`.
-
-4.  **Configuration:**
-    - Go to **Configuration** > **Environment variables**.
-    - Add the following:
-      - `CLOUDFLARE_API_TOKEN`: (From Step 2)
-      - `CLOUDFLARE_MC_DOMAIN`: `mc.yourdomain.com`
-      - `CLOUDFLARE_RECORD_ID`: (From Step 2)
-      - `CLOUDFLARE_ZONE_ID`: (From Step 2)
-      - `INSTANCE_ID`: (Leave placeholder `pending` for now)
-      - `NOTIFICATION_EMAIL`: Email that you want to receive notifications when the EC2 is activated (optional, must be verified in SES)
-      - `START_KEYWORD`: choose a start keyword that anybody can email to the address in SES to start the server (e.g., `start`)
-      - `VERIFIED_SENDER`: `start@yourdomain.com` (The email address you will set up in SES)
-
-### 6. SES & SNS Setup
-
-1.  **Verify Identity:**
-    - Open the AWS Console and go to **Amazon SES** > **Identities**.
-    - Click **Create identity**.
-    - Select **Domain**
-    - Follow the verification steps (add DNS records for domain, or click link for email).
-    - **Note:** If in Sandbox mode, you must also verify the email address you will be _sending from_ (your personal email).
-    - **Notification Email:** If you want to receive startup notifications, you must also verify that email address (if it's different from the one above).
-
-2.  **Create SNS Topic:**
-    - Go to **Amazon SNS** > **Topics** > **Create topic**.
-    - Type: **Standard**.
-    - Name: `MinecraftStartTopic`.
-    - Create it.
-    - Click **Create subscription**.
-    - Protocol: **AWS Lambda**.
-    - Endpoint: `StartMinecraftServer`.
-
-3.  **Create Receipt Rule:**
-    - Go to **Amazon SES** > **Email receiving**.
-    - Create a **Rule Set** (if none exists).
-    - Create a **Rule**.
-    - **Recipient conditions:** `start@yourdomain.com` (or just your domain).
-    - **Actions:** Add **SNS** action.
-    - Topic: `MinecraftStartTopic`.
-    - Finish and create.
-
-### 7. Launch the Server (EC2)
-
-1.  Go to **EC2** > **Instances** > **Launch instances**.
-2.  **Name:** `Minecraft Server`.
-3.  **OS:** Amazon Linux 2023 AMI (Architecture: **64-bit (Arm)**).
-4.  **Instance Type:** `t4g.medium`.
-5.  **Key pair:** Select one or create one (for SSH access).
-6.  **Network settings:**
-    - Select your VPC/Subnet.
-    - **Auto-assign public IP:** Enable.
-    - **Security group:** Create new. Allow **TCP 25565** (Minecraft) and **TCP 22** (SSH).
-7.  **Configure storage:** 10 GiB gp3 is usually enough.
-8.  **Advanced details:**
-    - **IAM instance profile:** `MinecraftServerRole`.
-    - **User data:** Copy and paste the contents of `src/ec2/user_data.sh` from this repo.
-9.  **Launch instance**.
-10. **Get Instance ID:**
-    - Copy the new Instance ID (e.g., `i-0123456789abcdef0`).
-    - Go back to your **Lambda** function > **Configuration** > **Environment variables**.
-    - Update `INSTANCE_ID` with the real ID.
-    - (Optional) Update your IAM Policy `MinecraftStartEC2` to restrict permissions to this specific ID.
-
-## Backups (Optional)
-
-To enable weekly backups:
-
-1. Go to EC2 > Volumes. Select your server's volume.
-2. Add a tag: Key=`Backup`, Value=`weekly`.
-3. Run the following command (requires AWS CLI) to create the lifecycle policy:
-   ```bash
-   aws dlm create-lifecycle-policy --region us-west-1 --cli-input-json file://setup/dlm/weekly-policy.json
-   ```
-   (Make sure to update the region in the command if needed. Also, you should verify in the console that the policy was created successfully.)
+**If you want to enable/disable snapshots later:**
+- Go to **EC2** > **Volumes** and select your server's volume
+- Add or remove the tag: Key=`Backup`, Value=`weekly`
+- The DLM policy will automatically pick up the change
 
 ## How to Manage It
 
