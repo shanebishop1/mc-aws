@@ -131,7 +131,7 @@ If you want to set everything up with a single command, and don't require any sp
     ```bash
     npm run deploy
     ```
-    This will create the EC2 instance, Lambda, Roles, and SES Rules for you. It will also **automatically activate** the SES Rule Set. If you have not set up Google Drive yet, the deploy script will offer to run `./bin/setup-drive-token.sh` for you (you can skip and deploy without Drive support).
+    This will create the EC2 instance, Lambda, Roles, and SES Rules for you. It will also **automatically activate** the SES Rule Set. If you have not set up Google Drive yet, the deploy script will offer to run `./bin/setup-drive-token.sh` for you (you can skip and deploy without Drive support). It will also ask if you want to enable weekly EBS snapshots via DLM; choose “y” to create/update the policy automatically.
 
 ---
 
