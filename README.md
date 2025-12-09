@@ -71,7 +71,6 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 - `config/` - The actual Minecraft config files (whitelist, properties).
 - `src/ec2/` - Scripts that run on the server (startup, idle check, systemd service).
 - `src/lambda/` - The Node.js code that handles the startup logic.
-- `setup/iam/` - AWS permission policies.
 - `setup/dlm/` - Backup schedule (snapshots).
 
 ## Setup Guide
@@ -102,12 +101,14 @@ You need a domain managed by **Cloudflare** for dynamic DNS updates. If you don'
 You'll need three pieces of information from Cloudflare:
 
 **A. Zone ID:**
+
 - Log in to Cloudflare and select your domain
 - Open the "Overview" section
 - Scroll down to the "API" section on the right sidebar
 - Copy your **Zone ID**
 
 **B. API Token:**
+
 - Go to **Manage account** > **Account API tokens**
 - Click **Create Token**
 - Choose the **Edit Zone DNS** template (or create custom with Zone > DNS > Edit permissions)
@@ -116,6 +117,7 @@ You'll need three pieces of information from Cloudflare:
 - **Copy the token immediately** (you won't see it again)
 
 **C. DNS Record ID:**
+
 - Go to **DNS** > **Records** on the left sidebar
 - Create an **A** record for your Minecraft subdomain (e.g., `mc`). Point it to `1.1.1.1` (placeholder; it will be updated automatically)
 - To get the **Record ID**, use the Cloudflare API:
@@ -350,12 +352,14 @@ During deployment, you were asked if you want to enable weekly EBS snapshots via
 **Cost:** ~$0.05 per snapshot (typically 1-2 snapshots retained at a time = ~$0.10/month extra)
 
 **If you enabled snapshots during deploy:**
+
 - Your EBS volume is automatically tagged with `Backup: weekly`
 - DLM creates snapshots every Sunday at 2 AM UTC
 - Snapshots are retained for 4 weeks, then automatically deleted
 - You can restore from a snapshot if needed (via AWS Console → EC2 → Snapshots)
 
 **If you want to enable/disable snapshots later:**
+
 - Go to **EC2** > **Volumes** and select your server's volume
 - Add or remove the tag: Key=`Backup`, Value=`weekly`
 - The DLM policy will automatically pick up the change
