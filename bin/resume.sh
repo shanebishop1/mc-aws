@@ -45,9 +45,9 @@ EXISTING_VOLUME=$(aws ec2 describe-instances \
 if [ "$EXISTING_VOLUME" != "None" ] && [ -n "$EXISTING_VOLUME" ]; then
   echo ""
   echo "WARNING: Instance already has a volume attached: $EXISTING_VOLUME"
-  read -p "Do you want to detach and delete it first? (yes/no): " delete_existing
+   read -p "Do you want to detach and delete it first? [y/yes]: " delete_existing
 
-  if [[ "$delete_existing" =~ ^[Yy](es)?$ ]]; then
+   if [[ "$delete_existing" =~ ^[Yy](es)?$ ]]; then
     echo "Stopping instance first..."
     INSTANCE_STATE=$(aws ec2 describe-instances \
       --instance-ids "$INSTANCE_ID" \
