@@ -193,7 +193,7 @@ if [[ "$MODE" == "drive" ]]; then
   echo "  Drive remote: ${GDRIVE_REMOTE:-gdrive}"
 fi
 echo ""
-read -p "Continue? [y/N]: " confirm
+read -p "Continue? [y/yes]: " confirm
 
 if [[ ! "$confirm" =~ ^[Yy](es)?$ ]]; then
   echo "Aborted."

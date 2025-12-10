@@ -12,7 +12,7 @@ echo ""
 echo "WARNING: Make sure you have downloaded your world data first!"
 echo "         Use ./bin/download-server.sh to backup your world."
 echo ""
-read -p "Continue? (yes/no): " confirm
+read -p "Continue? [y/yes]: " confirm
 if [[ ! "$confirm" =~ ^[Yy](es)?$ ]]; then
   echo "Aborted."
   exit 0

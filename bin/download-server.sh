@@ -65,7 +65,7 @@ PUBLIC_IP=$(aws ec2 describe-instances \
 echo "Found server: $INSTANCE_ID at $PUBLIC_IP (mode: $MODE)"
 
 # Locate server directory on remote
-REMOTE_SERVER_DIR=$("${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "if [ -d /opt/minecraft/server ]; then echo /opt/minecraft/server; elif [ -d /opt/minecraft/server-1 ]; then echo /opt/minecraft/server-1; else echo ''; fi")
+REMOTE_SERVER_DIR=$("${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "if [ -d /opt/minecraft/server ]; then echo /opt/minecraft/server; else echo ''; fi")
 if [[ -z "$REMOTE_SERVER_DIR" ]]; then
   echo "Error: Remote server directory not found (expected /opt/minecraft/server)." >&2
   exit 1
