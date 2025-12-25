@@ -1,30 +1,7 @@
 [
   {
-    "uuid": "fe964af8-12ee-4f08-820b-2dfce62de7a4",
-    "name": "akramer4"
-  },
-  {
-    "uuid": "0aacb3b1-17f4-43a7-ba9b-b91a11a93664",
-    "name": "Hoper20"
-  },
-  {
-    "uuid": "be3412bb-fbcc-4645-ba6a-3435d23f6b8c",
-    "name": "dylcai85"
-  },
-  {
-    "uuid": "abe9e4ee-7888-403d-bbab-fbcd7c070ac2",
-    "name": "thericeiswhite"
-  },
-  {
-    "uuid": "73f99fb1-c82a-4d26-b363-1e3fe94064ac",
-    "name": "shaneeb123"
-  },
-  {
-    "uuid": "9546b1fa-a58a-490a-b820-12c339c5b211",
-    "name": "arthurtsang"
-  },
-  {
-    "uuid": "1596070c-b764-46a4-83eb-f1cf9eb0cb9b",
-    "name": "CPFriedman"
+    "uuid": "player1Uid",
+    "name": "player1Name"
   }
 ]
+
