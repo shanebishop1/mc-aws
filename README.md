@@ -7,11 +7,12 @@ Most Minecraft server hosting solutions cost ~$10 a month. If you are only using
 - **A.** keep the server online 24/7, or
 - **B.** manually spin it up/down whenever somebody wants to hop on
 
-This project offers a better alternative: a server set-up using EC2 that costs **$0.00/month** when you aren't using it, and only pennies per hour when you are.
+This project offers a more flexible alternative: an EC2 setup that costs **$0.00/month** when you aren't using it, and only pennies per hour when you are.
 
-It achieves this by **hibernating**—downloading your world data to your local machine (or Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single email or command triggers the server to spin back up, restoring your world automatically.
+It achieves this by **hibernating** (downloading your server data to your local machine/ Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single email or command triggers the server to spin back up, restoring your world automatically.
 
 Key features:
+
 - **Zero Idle Cost:** Hibernate your server when not in use.
 - **On-Demand:** Spin up via email trigger or command line.
 - **Auto-Shutdown:** Server turns itself off when nobody is playing.
@@ -36,23 +37,31 @@ Key features:
 
 Traditional hosting providers charge a flat monthly fee. By moving to AWS and using this project's scripts, you only pay for what you use.
 
-| Cost Component | **Hibernated** (Deep Storage) | **Standby** (Quick Start) | **Active** (Playing) |
-| :--- | :--- | :--- | :--- |
-| **Compute (RAM/CPU)** | $0.00 / month | $0.00 / month | ~$0.03 / hour |
-| **Storage (World Data)** | $0.00 / month * | ~$0.75 / month | (Included) |
-| **Total Cost** | **$0.00 / month** | **~$0.75 / month** | **~$0.03-0.04 / hour** |
+| Cost Component           | **Hibernated** (Deep Storage) | **Standby** (Quick Start) | **Active** (Playing)   |
+| :----------------------- | :---------------------------- | :------------------------ | :--------------------- |
+| **Compute (RAM/CPU)**    | $0.00 / month                 | $0.00 / month             | ~$0.03 / hour          |
+| **Storage (World Data)** | $0.00 / month \*              | ~$0.75 / month            | (Included)             |
+| **Total Cost**           | **$0.00 / month**             | **~$0.75 / month**        | **~$0.03-0.04 / hour** |
 
 \* _Assuming you hibernate to local disk or free cloud storage (e.g. Google Drive)._
 
-**Basically, unless you are playing 24/7, this setup is significantly cheaper than using a traditional, dedicated provider.**
+### Example: Light usage
+
+If you play for **8 hours** in a specific month and hibernate the server for the rest of the time:
+
+- **Compute:** 8 hours \* ~$0.03/hr = **$0.24**
+- **Storage:** $0.00 (Hibernated)
+- **Total:** **$0.24 for the entire month**
+
+**Unless you are playing for many hours, this setup is significantly cheaper than using a traditional, dedicated provider.**
 
 ### Rationale
 
 There do exist on-demand hosting providers such as Exarotron\* and ServerWave\*\*. These options are definitely cheaper for many use cases. Not to mention, they'll give you a bunch of extra features and are infinitely easier to set up and use. However, if you want complete flexibility, this setup is the best because:
 
-1. **True Zero Cost:** With the included `hibernate.sh` and `download-server.sh` scripts, you can seamlessly offload your world data to your local machine or cloud storage. This brings your monthly bill to exactly $0.00 when you aren't playing. When the [annual two-week Minecraft phase](https://knowyourmeme.com/memes/2-week-minecraft-phase) kicks off, `resume.sh` and `upload-server.sh`, you can use the resume and upload scripts to bring the server back to life.
-2. If you want to extend this project, you can. You have complete control of the server and its lifecycle, configuration, etc. You could set up a Discord connection, or a simple webapp that triggers the server startup.
-3. Anyone who knows your start keyword and email address can easily spin the server up by sending an email. This means that anybody can play, whether you're available or not. With self-hosting, you would have to be there to turn on the server. With a traditional on-demand provider, you would have to log in to a control panel to spin the server up.
+1. If you want to extend this project, you can. You have complete control of the server and its lifecycle, configuration, etc. You could set up a Discord connection, or a simple webapp that triggers the server startup.
+2. Anyone who knows your start keyword and email address can easily spin the server up by sending an email. This means that anybody can play, whether you're available or not. With self-hosting, you would have to be there to turn on the server. With a traditional on-demand provider, you would have to log in to a control panel to spin the server up.
+3. You only pay for what you use, at per-second increments (no pre-paying for usage or hourly rounding up).
 
 \*_Exarotron specifically does offer a Discord bot that you could grant access to in order to start the server, but setting up Discord is another step for your non-technical/non-gamer friends to handle. Conversely, everybody has email. Exarotron also requires that you buy credits in ~$3.00 increments, which limits spending flexibility. If you want to play for a couple months and then stop, anything left over from your last ~$3.00 increment will be wasted. Also, technically, using a t3.medium EC2 instance with 4GB of RAM costs $0.04 per hour, which is ever-so-slightly cheaper than the €0.04 per hour for a similar 4G server on Exarotron._
 
@@ -220,7 +229,7 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     - Create the EC2 instance, Lambda function, IAM roles, and SES rules
     - **Automatically activate** the SES Rule Set
     - Prompt you to set up Google Drive backups (optional; you can skip)
-    - Ask if you want to enable weekly EBS snapshots via DLM (recommended; choose "y")
+    - Ask if you want to enable weekly EBS snapshots via DLM
 
     **Note on Google Drive (optional):** If you want cloud backups, the script will offer to run `./bin/setup-drive-token.sh` for you. This opens a browser for Google OAuth and stores the token in AWS Secrets Manager. You can skip this and deploy without Drive support.
 
@@ -349,7 +358,7 @@ Notes:
 
 ## Weekly EBS Snapshots (Optional)
 
-During deployment, you were asked if you want to enable weekly EBS snapshots via AWS Data Lifecycle Manager (DLM). This is optional but recommended for extra data protection.
+During deployment, you were asked if you want to enable weekly EBS snapshots via AWS Data Lifecycle Manager (DLM). This is optional but good practice for additional data protection.
 
 **Cost:** ~$0.05 per snapshot (typically 1-2 snapshots retained at a time = ~$0.10/month extra)
 
@@ -449,8 +458,8 @@ When you want to play again:
 
     This uploads your world data back to the server.
 
-4.  **Play!**
-    Connect to your Minecraft server as usual.
+4.  **Play**
+    Connect to your Minecraft server as usual, using your domain and port.
 
 ### Cost Comparison
 
