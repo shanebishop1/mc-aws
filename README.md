@@ -9,7 +9,7 @@ Most Minecraft server hosting solutions cost ~$10 a month. If you are only using
 
 This project offers a more flexible alternative: an EC2 setup that costs **$0.00/month** when you aren't using it, and only pennies per hour when you are.
 
-It achieves this by **hibernating** (downloading your server data to your local machine/ Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single command spins the infra back up. Then, any of your friends can email the startup email to trigger server startup. The server will automatically close following inactivity.
+It achieves this by **hibernating** (downloading your server data to your local machine/Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single command spins the infra back up. Then, any of your friends can email the startup email to trigger server startup. The server will automatically close following inactivity.
 
 Key features:
 
@@ -168,19 +168,23 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
 
 ### Deployment Steps
 
-1.  **Install Dependencies:**
+1.  **Fork and Clone:**
+    - Fork [shanebishop1/mc-aws](https://github.com/shanebishop1/mc-aws).
+    - Clone your fork and open the repo
+
+2.  **Install Dependencies:**
 
     ```bash
     npm install
     ```
 
-2.  **Bootstrap CDK:** (Only needed once per AWS account/region)
+3.  **Bootstrap CDK:**
 
     ```bash
     npx cdk bootstrap
     ```
 
-3.  **Configure Environment:**
+4.  **Configure Environment:**
 
     Copy the provided `.env.template` file to `.env`:
 
@@ -219,7 +223,7 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     # GDRIVE_ROOT="mc-backups"
     ```
 
-4.  **Deploy:**
+5.  **Deploy:**
 
     ```bash
     npm run deploy
@@ -233,7 +237,7 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
 
     **Note on Google Drive (optional):** If you want cloud backups, the script will offer to run `./bin/setup-drive-token.sh` for you. This opens a browser for Google OAuth and stores the token in AWS Secrets Manager. You can skip this and deploy without Drive support.
 
-5.  **Wait for Setup:**
+6.  **Wait for Setup:**
 
     The deployment typically takes 3-5 minutes. Once complete, your server is ready to use!
 
