@@ -9,7 +9,7 @@ Most Minecraft server hosting solutions cost ~$10 a month. If you are only using
 
 This project offers a more flexible alternative: an EC2 setup that costs **$0.00/month** when you aren't using it, and only pennies per hour when you are.
 
-It achieves this by **hibernating** (downloading your server data to your local machine/ Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single email or command triggers the server to spin back up, restoring your world automatically.
+It achieves this by **hibernating** (downloading your server data to your local machine/ Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single command spins the infra back up. Then, any of your friends can email the startup email to trigger server startup. The server will automatically close following inactivity.
 
 Key features:
 
