@@ -1,19 +1,22 @@
 # On-Demand Minecraft Server on AWS
 
-<p align="center"><img width="320" height="320" alt="lol" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
+<p align="center"><img width="320" height="320" alt="mc-aws-image" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
 Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:
 
 - **A.** keep the server online 24/7, or
 - **B.** manually spin it up/down whenever somebody wants to hop on
 
-Both options are inconvenient.
+This project offers a better alternative: a server set-up using EC2 that costs **$0.00/month** when you aren't using it, and only pennies per hour when you are.
 
-The goal of this repo is to show you how to host a Minecraft server on AWS that **only runs when someone actually wants to play**. It starts up via an email trigger, syncs its config/allowlist from this repository, and shuts itself down automatically when nobody is online.
+It achieves this by **hibernating**—downloading your world data to your local machine (or Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single email or command triggers the server to spin back up, restoring your world automatically.
 
-I found a few similar, pre-existing recipes online, but none of them included auto-shutdown, the option for backups, or email integration, which allows any (non-technical) user to spin up the server. So here we are- I'm hoping this will save you a few bucks and serve as a fun project!
+Key features:
+- **Zero Idle Cost:** Hibernate your server when not in use.
+- **On-Demand:** Spin up via email trigger or command line.
+- **Auto-Shutdown:** Server turns itself off when nobody is playing.
 
-**NOTE: As I detail below, there are most likely better options elsewhere (on-demand hosting providers) for your use case. If you aren't technical (and don't want to learn), or aren't excited to jump through a few hoops, you should look elsewhere.**
+**NOTE: This setup requires some initial configuration (AWS account, Cloudflare), but once set up, it requires very little maintenance.**
 
 ## Table of Contents
 
@@ -31,16 +34,15 @@ I found a few similar, pre-existing recipes online, but none of them included au
 
 ### Cost
 
-Traditional hosting providers charge a flat monthly fee. By moving to AWS and using a **`t4g.medium`** instance, you only pay for the seconds the server is running (plus ~$0.75 per month for storage).
+Traditional hosting providers charge a flat monthly fee. By moving to AWS and using this project's scripts, you only pay for what you use.
 
-|                 | **This Setup**                                  | **Realms / Hosting**         |
-| :-------------- | :---------------------------------------------- | :--------------------------- |
-| **Performance** | 4GB RAM / 2 vCPU (Dedicated)                    | Hit or miss                  |
-| **Idle Cost**   | **~$0.75 / month\*** (just storage, no backups) | Full Price                   |
-| **Active Cost** | **~$0.03 / hour**                               | N/A                          |
-| **Total Cost**  | **~\$0.75-\$1.50 / month** (~0-20 hrs of play)  | **\$8.00 - \$15.00 / month** |
+| Cost Component | **Hibernated** (Deep Storage) | **Standby** (Quick Start) | **Active** (Playing) |
+| :--- | :--- | :--- | :--- |
+| **Compute (RAM/CPU)** | $0.00 / month | $0.00 / month | ~$0.03 / hour |
+| **Storage (World Data)** | $0.00 / month * | ~$0.75 / month | (Included) |
+| **Total Cost** | **$0.00 / month** | **~$0.75 / month** | **~$0.03-0.04 / hour** |
 
-\*_If you want to backup your data, that will cost an additional ~$0.20 per month._
+\* _Assuming you hibernate to local disk or free cloud storage (e.g. Google Drive)._
 
 **Basically, unless you are playing 24/7, this setup is significantly cheaper than using a traditional, dedicated provider.**
 
@@ -48,8 +50,8 @@ Traditional hosting providers charge a flat monthly fee. By moving to AWS and us
 
 There do exist on-demand hosting providers such as Exarotron\* and ServerWave\*\*. These options are definitely cheaper for many use cases. Not to mention, they'll give you a bunch of extra features and are infinitely easier to set up and use. However, if you want complete flexibility, this setup is the best because:
 
-1. You have complete control (just like if you were self-hosting on your own machine). If you don't want to pay the ~$0.75 per month for storage and aren't going to play for a while, you can download your GP3 volume and store it locally, bringing your monthly idle cost to $0.00. Then, when the [annual two-week Minecraft phase](https://knowyourmeme.com/memes/2-week-minecraft-phase) kicks off, you can just attach a new EBS volume to your EC2 instance, SSH in, and rsync your world back.
-2. If you want to extend this project, you can. Some ideas include: storing the world on some kind of free provider (e.g. Google Drive) and syncing it to the EC2 instance on boot and back to the provider on shutdown. This would give you very, very, slow start times, but $0.00 idle cost. Just be wary of the 100gb monthly egress limit that AWS has in place.
+1. **True Zero Cost:** With the included `hibernate.sh` and `download-server.sh` scripts, you can seamlessly offload your world data to your local machine or cloud storage. This brings your monthly bill to exactly $0.00 when you aren't playing. When the [annual two-week Minecraft phase](https://knowyourmeme.com/memes/2-week-minecraft-phase) kicks off, `resume.sh` and `upload-server.sh`, you can use the resume and upload scripts to bring the server back to life.
+2. If you want to extend this project, you can. You have complete control of the server and its lifecycle, configuration, etc. You could set up a Discord connection, or a simple webapp that triggers the server startup.
 3. Anyone who knows your start keyword and email address can easily spin the server up by sending an email. This means that anybody can play, whether you're available or not. With self-hosting, you would have to be there to turn on the server. With a traditional on-demand provider, you would have to log in to a control panel to spin the server up.
 
 \*_Exarotron specifically does offer a Discord bot that you could grant access to in order to start the server, but setting up Discord is another step for your non-technical/non-gamer friends to handle. Conversely, everybody has email. Exarotron also requires that you buy credits in ~$3.00 increments, which limits spending flexibility. If you want to play for a couple months and then stop, anything left over from your last ~$3.00 increment will be wasted. Also, technically, using a t3.medium EC2 instance with 4GB of RAM costs $0.04 per hour, which is ever-so-slightly cheaper than the €0.04 per hour for a similar 4G server on Exarotron._
