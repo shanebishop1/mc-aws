@@ -11,6 +11,13 @@ set -euo pipefail
 # Requires: SSH key pair (MC_KEY_PATH or ~/.ssh/mc-aws.pem). For drive mode, a Drive
 # token secret in AWS (GDRIVE_TOKEN_SECRET_ARN) and rclone installed locally.
 
+# Source .env if it exists
+if [[ -f "$(dirname "$0")/../.env" ]]; then
+  set +o nounset
+  source "$(dirname "$0")/../.env"
+  set -o nounset
+fi
+
 KEY_PATH="${MC_KEY_PATH:-$HOME/.ssh/mc-aws.pem}"
 SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCountMax=10 -o TCPKeepAlive=yes -o IPQoS=throughput -o Compression=no"
 SSH_CMD=(ssh -i "$KEY_PATH" $SSH_OPTS)
