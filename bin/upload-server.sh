@@ -230,15 +230,17 @@ echo "Stopping Minecraft service on remote..."
 if [[ "$MODE" == "drive" ]]; then
   setup_rclone_conf
   TIMESTAMP=$(date +%Y%m%d-%H%M%S)
-  DRIVE_PATH="${GDRIVE_ROOT}/server-${TIMESTAMP}.tar.gz"
-  echo "Uploading tarball to Drive: ${GDRIVE_REMOTE}:${DRIVE_PATH}"
-  rclone copy "$TEMP_TAR" "${GDRIVE_REMOTE}:${DRIVE_PATH}" --progress
+  DRIVE_DIR="${GDRIVE_ROOT}"
+  DRIVE_FILENAME="server-${TIMESTAMP}.tar.gz"
+  DRIVE_FULLPATH="${GDRIVE_REMOTE}:${DRIVE_DIR}/${DRIVE_FILENAME}"
+  echo "Uploading tarball to Drive: ${DRIVE_FULLPATH}"
+  rclone copyto "$TEMP_TAR" "${DRIVE_FULLPATH}" --progress
   echo "  ✓ Uploaded to Drive"
 
   echo "Downloading tarball from Drive on remote..."
   "${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" \
-    "RCLONE_CONFIG=/opt/setup/rclone/rclone.conf rclone copy ${GDRIVE_REMOTE}:${DRIVE_PATH} /home/ec2-user/ --progress"
-  REMOTE_TAR="/home/ec2-user/server-${TIMESTAMP}.tar.gz"
+    "RCLONE_CONFIG=/opt/setup/rclone/rclone.conf rclone copyto ${DRIVE_FULLPATH} /home/ec2-user/${DRIVE_FILENAME} --progress"
+  REMOTE_TAR="/home/ec2-user/${DRIVE_FILENAME}"
   REMOTE_SHA=$("${SSH_CMD[@]}" ec2-user@"$PUBLIC_IP" "sha256sum ${REMOTE_TAR} | awk '{print \$1}'" || true)
 else
   echo "Copying tarball to remote via rsync (resumable)..."
