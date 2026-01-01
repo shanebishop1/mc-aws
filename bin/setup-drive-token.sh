@@ -66,3 +66,55 @@ if [[ "$save_env" =~ ^[Yy](es)?$ ]]; then
     echo ".env not found; please add the values manually."
   fi
 fi
+
+# Configure rclone on the running EC2 instance (if one exists)
+echo ""
+echo "Checking for running Minecraft EC2 instance..."
+INSTANCE_ID=$(aws ec2 describe-instances \
+  --filters "Name=tag:aws:cloudformation:stack-name,Values=MinecraftStack" "Name=instance-state-name,Values=running" \
+  --query "Reservations[0].Instances[0].InstanceId" \
+  --output text 2>/dev/null || echo "None")
+
+if [[ "$INSTANCE_ID" != "None" && -n "$INSTANCE_ID" ]]; then
+  echo "Found running instance: $INSTANCE_ID"
+  read -p "Configure rclone on the EC2 instance now? [y/yes]: " configure_ec2
+  if [[ "$configure_ec2" =~ ^[Yy](es)?$ ]]; then
+    echo "Configuring rclone on EC2..."
+    COMMAND_ID=$(aws ssm send-command \
+      --instance-ids "$INSTANCE_ID" \
+      --document-name "AWS-RunShellScript" \
+      --parameters "commands=[
+        \"GDRIVE_REMOTE=\\\"gdrive\\\"\",
+        \"TOKEN_JSON=\$(aws secretsmanager get-secret-value --secret-id \\\"$ARN\\\" --query SecretString --output text)\",
+        \"mkdir -p /opt/setup/rclone\",
+        \"cat > /opt/setup/rclone/rclone.conf <<EOF\",
+        \"[\\\${GDRIVE_REMOTE}]\",
+        \"type = drive\",
+        \"token = \\\${TOKEN_JSON}\",
+        \"EOF\",
+        \"chown -R minecraft:minecraft /opt/setup/rclone\",
+        \"echo \\\"rclone configured successfully on EC2\\\"\"
+      ]" \
+      --query 'Command.CommandId' \
+      --output text 2>/dev/null)
+    
+    if [[ -n "$COMMAND_ID" ]]; then
+      echo "Waiting for configuration to complete..."
+      sleep 3
+      STATUS=$(aws ssm get-command-invocation \
+        --command-id "$COMMAND_ID" \
+        --instance-id "$INSTANCE_ID" \
+        --query 'Status' \
+        --output text 2>/dev/null || echo "Unknown")
+      if [[ "$STATUS" == "Success" ]]; then
+        echo "EC2 rclone configuration complete!"
+      else
+        echo "Command status: $STATUS (check AWS console if issues persist)"
+      fi
+    else
+      echo "Failed to send command to EC2. You may need to configure manually or redeploy."
+    fi
+  fi
+else
+  echo "No running Minecraft instance found. rclone will be configured on next deploy/instance start."
+fi
