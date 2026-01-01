@@ -207,10 +207,10 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     VERIFIED_SENDER="start@yourdomain.com"           # Email to receive trigger emails
     NOTIFICATION_EMAIL="you@yourdomain.com"          # (Optional) Where to receive alerts
 
-    # GitHub (for server to pull config)
+    # GitHub (for server to pull config on boot)
     GITHUB_USER="your-github-username"
     GITHUB_REPO="mc-aws"                             # or your fork name
-    GITHUB_PAT="ghp_..."                             # Personal Access Token with 'repo' scope
+    GITHUB_TOKEN="ghp_..."                           # See step 5 below
 
     # AWS
     AWS_ACCOUNT_ID="123456789012"
@@ -225,7 +225,25 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     # GDRIVE_ROOT="mc-backups"
     ```
 
-5.  **Deploy:**
+5.  **Create a GitHub Personal Access Token (PAT):**
+
+    The EC2 instance needs to pull config files from your GitHub repo on each boot. To do this securely, you need a GitHub PAT:
+
+    1. Go to [GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)](https://github.com/settings/tokens)
+    2. Click **Generate new token (classic)**
+    3. Give it a descriptive name (e.g., `mc-aws-server`)
+    4. Set an expiration (or "No expiration" if you prefer)
+    5. Select the **`repo`** scope (required for private repos; for public repos, no scopes are needed)
+    6. Click **Generate token**
+    7. **Copy the token immediately** (you won't see it again)
+    8. Add it to your `.env` file:
+       ```bash
+       GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
+       ```
+
+    **How it works:** When you run `npm run deploy`, the deploy script reads `GITHUB_TOKEN` from your `.env` and securely stores it in AWS SSM Parameter Store as an encrypted SecureString. The EC2 instance fetches this token on boot to clone/pull your repo.
+
+6.  **Deploy:**
 
     ```bash
     npm run deploy
@@ -239,7 +257,7 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
 
     **Note on Google Drive (optional):** If you want cloud backups, the script will offer to run `./bin/setup-drive-token.sh` for you. This opens a browser for Google OAuth and stores the token in AWS Secrets Manager. You can skip this and deploy without Drive support.
 
-6.  **Wait for Setup:**
+7.  **Wait for Setup:**
 
     The deployment typically takes 3-5 minutes. Once complete, your server is ready to use!
 
