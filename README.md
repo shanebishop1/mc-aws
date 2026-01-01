@@ -206,6 +206,7 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     # AWS SES (verified emails from Prerequisites section above)
     VERIFIED_SENDER="start@yourdomain.com"           # Email to receive trigger emails
     NOTIFICATION_EMAIL="you@yourdomain.com"          # (Optional) Where to receive alerts
+    START_KEYWORD="start"                            # (Optional) Word that triggers server start
 
     # GitHub (for server to pull config on boot)
     GITHUB_USER="your-github-username"
