@@ -137,7 +137,7 @@ You'll need three pieces of information from Cloudflare:
        -H "Authorization: Bearer <YOUR_API_TOKEN>" \
        -H "Content-Type: application/json"
   ```
-- Find your DNS record in the JSON output and copy its `id` field
+- Find your DNS record in the JSON output and copy its `id` field. You'll need to use this for the `CLOUDFLARE_RECORD_ID` field in `.env`
 
 #### 3. AWS SES Email Verification
 
@@ -147,6 +147,8 @@ AWS SES requires email verification before you can send/receive emails.
 2. Click **Create identity**
 3. Select **Domain** and enter your domain (e.g., `yourdomain.com`)
 4. Follow the verification steps (add DNS records to Cloudflare)
+   - You'll need to copy the 3 DKIM CNAME records to the Cloudflare DNS for your domain
+   - Then, you'll need to add an MX record (with the root domain as the name, and `inbound-smtp.us-west-1.amazonaws.com` for the mail server, if in the West region). You can set priority to `10`.
 5. **Important:** If you're in SES Sandbox mode, you must also verify:
    - The **sender email** (the email you'll send the "start" command from, e.g., `start@yourdomain.com`)
    - The **notification email** (where you want to receive server alerts, if different from sender)
