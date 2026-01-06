@@ -6,3 +6,5 @@ cdk.context.json
 **/env.json
 # Local server files (for migration/testing)
 backups/
+# Email allowlist (optional)
+.allowlist
