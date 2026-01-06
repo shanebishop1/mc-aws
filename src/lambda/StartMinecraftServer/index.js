@@ -1,9 +1,11 @@
 import { EC2Client, StartInstancesCommand, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
+import { SSMClient, GetParameterCommand, PutParameterCommand } from "@aws-sdk/client-ssm";
 
 // Instantiate clients without hardcoding region (SDK will infer based on the env)
 const ec2 = new EC2Client({});
 const ses = new SESClient({});
+const ssm = new SSMClient({});
 
 // Max attempts to get IP (e.g., 300 attempts * 1s = 5 minutes)
 const MAX_POLL_ATTEMPTS = 300;
@@ -140,6 +142,53 @@ async function sendNotification(to, subject, body) {
   }
 }
 
+/**
+ * Get email allowlist from SSM Parameter Store
+ * @returns {Promise<string[]>} Array of allowed email addresses
+ */
+async function getAllowlist() {
+  try {
+    const response = await ssm.send(new GetParameterCommand({
+      Name: "/minecraft/email-allowlist"
+    }));
+    const emails = response.Parameter?.Value || "";
+    return emails.split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  } catch (error) {
+    if (error.name === 'ParameterNotFound') {
+      console.log("No allowlist found in SSM. Returning empty list.");
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update email allowlist in SSM Parameter Store
+ * @param {string[]} emails - Array of email addresses to allow
+ * @returns {Promise<void>}
+ */
+async function updateAllowlist(emails) {
+  const value = emails.join(',');
+  await ssm.send(new PutParameterCommand({
+    Name: "/minecraft/email-allowlist",
+    Value: value,
+    Type: "String",
+    Overwrite: true
+  }));
+  console.log(`Updated allowlist with ${emails.length} emails:`, emails);
+}
+
+/**
+ * Extract email addresses from text
+ * @param {string} text - Text to parse for emails
+ * @returns {string[]} Array of email addresses found
+ */
+function extractEmails(text) {
+  const emailRegex = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
+  const matches = text.match(emailRegex) || [];
+  return matches.map(e => e.trim().toLowerCase()).filter(Boolean);
+}
+
 export const handler = async (event) => {
   // 1. Extract SNS payload and parse email data
   let payload;
@@ -177,31 +226,63 @@ export const handler = async (event) => {
     return { statusCode: 400, body: "Error processing incoming message." };
   }
 
-  // 2. Check allowlist (if configured)
-  const allowlistEnv = process.env.EMAIL_ALLOWLIST || "";
-  if (allowlistEnv.trim()) {
-    // Allowlist is configured, check if sender is in it
-    const allowedEmails = allowlistEnv.split(',').map(email => email.trim().toLowerCase()).filter(Boolean);
-    const senderEmail = toAddr.toLowerCase();
-    
-    if (!allowedEmails.includes(senderEmail)) {
-      console.log(`Email ${toAddr} not in allowlist. Rejecting request.`);
-      return { statusCode: 403, body: "Email not authorized." };
-    }
-    console.log(`Email ${toAddr} found in allowlist. Proceeding.`);
-  } else {
-    console.log("No allowlist configured. Allowing all emails.");
-  }
-
-  // 3. Check for keyword (default "start")
+  // 2. Get admin email and allowlist
+  const adminEmail = (process.env.NOTIFICATION_EMAIL || "").toLowerCase();
+  const senderEmail = toAddr.toLowerCase();
   const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
   
-  if (!subject.includes(startKeyword) && !body.includes(startKeyword)) {
-    console.log(`No start keyword ('${startKeyword}') found in subject ('${subject}') or body for email from ${toAddr}; skipping.`);
-    return { statusCode: 200, body: "Keyword not found, no action taken." };
+  // Check if sender is admin
+  const isAdmin = adminEmail && senderEmail === adminEmail;
+  
+  // If admin email is sending, check for allowlist updates in body
+  if (isAdmin) {
+    const emailsInBody = extractEmails(body);
+    
+    if (emailsInBody.length > 0) {
+      // Admin is updating the allowlist
+      console.log(`Admin ${senderEmail} is updating allowlist with emails:`, emailsInBody);
+      await updateAllowlist(emailsInBody);
+      
+      // Send confirmation
+      await sendNotification(
+        adminEmail,
+        "Minecraft Allowlist Updated",
+        `Allowlist has been updated with the following emails:\n\n${emailsInBody.join('\n')}\n\nOnly these emails can now start the server.`
+      );
+      
+      return { statusCode: 200, body: "Allowlist updated successfully." };
+    }
+    
+    // Admin can always start the server (if keyword is in subject)
+    if (subject.includes(startKeyword)) {
+      console.log(`Admin ${senderEmail} is starting the server.`);
+      // Continue to server start logic below
+    } else {
+      console.log(`Admin email received but no start keyword in subject or emails in body.`);
+      return { statusCode: 200, body: "No action taken." };
+    }
+  } else {
+    // Non-admin sender - check allowlist
+    const allowlist = await getAllowlist();
+    
+    if (allowlist.length === 0) {
+      // No allowlist configured, allow anyone
+      console.log("No allowlist configured. Allowing all emails.");
+    } else if (!allowlist.includes(senderEmail)) {
+      console.log(`Email ${toAddr} not in allowlist. Rejecting request.`);
+      return { statusCode: 403, body: "Email not authorized." };
+    } else {
+      console.log(`Email ${toAddr} found in allowlist. Proceeding.`);
+    }
+    
+    // Check for start keyword in subject only
+    if (!subject.includes(startKeyword)) {
+      console.log(`No start keyword ('${startKeyword}') found in subject for email from ${toAddr}.`);
+      return { statusCode: 200, body: "Keyword not found, no action taken." };
+    }
   }
 
-  // 4. Check for required environment variables
+  // 3. Check for required environment variables
   const instanceId = process.env.INSTANCE_ID;
   const fromAddr = process.env.VERIFIED_SENDER;
   const zone = process.env.CLOUDFLARE_ZONE_ID;

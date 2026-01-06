@@ -71,12 +71,12 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 
 ## How It Works
 
-1.  **Startup:** Send an email with the secret keyword (default "start") in the subject or body to the account that you set up with AWS SES (e.g., `start@mydomain.com`).
+1.  **Startup:** Send an email with the secret keyword (default "start") in the **subject** to your trigger address (e.g., `start@mydomain.com`).
 2.  **Trigger:** AWS SES catches the email and executes a Lambda function.
-3.  **Authorization:** (Optional) The Lambda checks if the sender's email is in the allowlist.
-4.  **Launch:** The Lambda starts the EC2 instance and updates your Cloudflare DNS record so the domain points to the EC2's newly-assigned IP.
-5.  **Config Sync:** On boot, the server automatically pulls the latest `server.properties` and `whitelist.json` from this repo (or your fork).
-6.  **Auto-Shutdown:** A script runs every minute checking for players. If the server is empty for 15 minutes, it stops the Minecraft service and shuts down the EC2 instance to stop billing.
+3.  **Authorization:** The Lambda checks if the sender is authorized (admin email or in the allowlist, if configured).
+4.  **Launch:** The Lambda starts the EC2 instance and updates your Cloudflare DNS record to point to the new IP.
+5.  **Config Sync:** On boot, the server automatically pulls the latest `server.properties` and `whitelist.json` from your GitHub repo.
+6.  **Auto-Shutdown:** A script runs every minute checking for players. After 15 minutes idle, it stops the Minecraft service and shuts down the EC2 instance.
 
 ## Repo Structure
 
@@ -263,33 +263,38 @@ If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create
 
 ### Email Allowlist (Optional)
 
-To restrict who can trigger the server startup, create a `.allowlist` file in the project root:
-
-```bash
-# One email per line
-friend1@example.com
-friend2@example.com
-your-email@example.com
-```
-
-Then redeploy:
-
-```bash
-npm run deploy
-```
+By default, anyone who knows your trigger email can start the server. To restrict this, use the admin email (your `NOTIFICATION_EMAIL`) to manage who can start the server.
 
 **How it works:**
 
-- If `.allowlist` exists and has entries, only those emails can start the server
-- If `.allowlist` doesn't exist or is empty, anyone can start the server
-- The file is not tracked in git (already in `.gitignore`)
-- To update the list, edit `.allowlist` and redeploy (only Lambda is updated, fast)
+- The admin email (set in `NOTIFICATION_EMAIL`) can always start the server with the keyword in the **subject**
+- The admin can authorize other emails by listing them in the email **body**
+- Once an allowlist is set, only those emails (and the admin) can start the server
+- No redeployment needed - updates happen via email
+
+**To set up an allowlist:**
+
+Send an email to your trigger address (e.g., `start@yourdomain.com`) from your admin email with the authorized email addresses in the **body** (one per line):
+
+```
+Subject: (anything, can be empty)
+Body:
+friend1@example.com
+friend2@gmail.com
+teammate@company.com
+```
+
+You'll receive a confirmation email showing the updated allowlist. After this, only those emails (plus your admin email) can start the server by putting the keyword in the **subject**.
+
+**To update the allowlist:**
+
+Send another email from your admin address with the new list in the body. It completely replaces the old one.
 
 ### First-Time Server Startup
 
 To start your server for the first time:
 
-1. Send an email with your start keyword (default: `start`) in the subject or body to your verified sender email (e.g., `start@yourdomain.com`)
+1. Send an email with your start keyword (default: `start`) in the **subject** to your verified sender email (e.g., `start@yourdomain.com`)
 2. Wait ~60 seconds for the server to boot
 3. Connect to your Minecraft server using the domain you configured (e.g., `mc.yourdomain.com`)
 
@@ -433,7 +438,7 @@ During deployment, you were asked if you want to enable weekly EBS snapshots via
 ## How to Manage It
 
 **Playing:**
-Send an email with the subject (or body) containing your start keyword (default "start") to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
+Send an email with your start keyword (default "start") in the **subject** to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
 
 **Managing Players:**
 
