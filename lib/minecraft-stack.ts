@@ -189,20 +189,6 @@ export class MinecraftStack extends cdk.Stack {
     });
 
     // 6. Lambda Function to Start Server
-    // Read email allowlist if it exists
-    const allowlistPath = path.join(__dirname, "../.allowlist");
-    let allowlistContent = "";
-    if (fs.existsSync(allowlistPath)) {
-      allowlistContent = fs.readFileSync(allowlistPath, "utf8")
-        .split('\n')
-        .map(line => line.trim())
-        .filter(line => line && !line.startsWith('#'))
-        .join(',');
-      console.log("Email allowlist found and loaded.");
-    } else {
-      console.log("No .allowlist file found. All emails will be allowed.");
-    }
-
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: "index.handler",
@@ -219,7 +205,6 @@ export class MinecraftStack extends cdk.Stack {
         VERIFIED_SENDER: process.env.VERIFIED_SENDER || "",
         START_KEYWORD: process.env.START_KEYWORD || "start",
         NOTIFICATION_EMAIL: process.env.NOTIFICATION_EMAIL || "",
-        EMAIL_ALLOWLIST: allowlistContent,
       },
       timeout: cdk.Duration.seconds(60), // Give it time to poll EC2
     });
@@ -270,6 +255,16 @@ export class MinecraftStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["ses:SendEmail", "ses:SendRawEmail"],
         resources: ["*"],
+      }),
+    );
+
+    // Grant Lambda permission to read/write email allowlist in SSM
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`,
+        ],
       }),
     );
 
