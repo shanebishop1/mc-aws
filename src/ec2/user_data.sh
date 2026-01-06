@@ -100,18 +100,19 @@ else
 fi
 chown -R minecraft:minecraft /opt/minecraft/server/
 
-# 9.5 Configure rclone for Drive if token provided
-if [[ -n "$GDRIVE_TOKEN_SECRET_ARN" ]]; then
-  TOKEN_JSON=$(aws secretsmanager get-secret-value --secret-id "$GDRIVE_TOKEN_SECRET_ARN" --query SecretString --output text 2>/dev/null || echo "")
-  if [[ -n "$TOKEN_JSON" ]]; then
-    mkdir -p /opt/setup/rclone
-    cat > /opt/setup/rclone/rclone.conf <<EOF
+# 9.5 Configure rclone for Drive if token provided (reads from SSM Parameter Store)
+TOKEN_JSON=$(aws ssm get-parameter --name /minecraft/gdrive-token --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+if [[ -n "$TOKEN_JSON" ]]; then
+  mkdir -p /opt/setup/rclone
+  cat > /opt/setup/rclone/rclone.conf <<EOF
 [${GDRIVE_REMOTE}]
 type = drive
 token = ${TOKEN_JSON}
 EOF
-    chown -R minecraft:minecraft /opt/setup/rclone
-  fi
+  chown -R minecraft:minecraft /opt/setup/rclone
+  log "rclone configured for Google Drive"
+else
+  log "No Google Drive token found in SSM; skipping rclone setup"
 fi
 
 # 10. Deploy service unit and shutdown script

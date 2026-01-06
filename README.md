@@ -73,9 +73,10 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 
 1.  **Startup:** Send an email with the secret keyword (default "start") in the subject or body to the account that you set up with AWS SES (e.g., `start@mydomain.com`).
 2.  **Trigger:** AWS SES catches the email and executes a Lambda function.
-3.  **Launch:** The Lambda starts the EC2 instance and updates your Cloudflare DNS record so the domain points to the EC2's newly-assigned IP.
-4.  **Config Sync:** On boot, the server automatically pulls the latest `server.properties` and `whitelist.json` from this repo (or your fork).
-5.  **Auto-Shutdown:** A script runs every minute checking for players. If the server is empty for 15 minutes, it stops the Minecraft service and shuts down the EC2 instance to stop billing.
+3.  **Authorization:** (Optional) The Lambda checks if the sender's email is in the allowlist.
+4.  **Launch:** The Lambda starts the EC2 instance and updates your Cloudflare DNS record so the domain points to the EC2's newly-assigned IP.
+5.  **Config Sync:** On boot, the server automatically pulls the latest `server.properties` and `whitelist.json` from this repo (or your fork).
+6.  **Auto-Shutdown:** A script runs every minute checking for players. If the server is empty for 15 minutes, it stops the Minecraft service and shuts down the EC2 instance to stop billing.
 
 ## Repo Structure
 
@@ -155,7 +156,7 @@ AWS SES requires email verification before you can send/receive emails.
 
 #### 4. AWS EC2 Key Pair (Optional, but Recommended for File Uploads)
 
-If you want to use SSH for file uploads (the `upload-server.sh` script), create an EC2 key pair:
+If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create an EC2 key pair:
 
 1. Go to **AWS Console** → **EC2** → **Key Pairs**
 2. Click **Create key pair**
@@ -220,16 +221,15 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     # EC2 Key Pair (Optional, for SSH file uploads)
     KEY_PAIR_NAME="mc-aws"                           # Leave blank if not using SSH
 
-    # Google Drive (Optional, for cloud backups)
-    # GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"
-    # GDRIVE_REMOTE="gdrive"
-    # GDRIVE_ROOT="mc-backups"
+     # Google Drive (Optional, for cloud backups/transfers)
+     # Note: Token is auto-setup on first use, stored in SSM Parameter Store (FREE)
+     # GDRIVE_REMOTE="gdrive"
+     # GDRIVE_ROOT="mc-backups"
     ```
 
 5.  **Create a GitHub Personal Access Token (PAT):**
 
     The EC2 instance needs to pull config files from your GitHub repo on each boot. To do this securely, you need a GitHub PAT:
-
     1. Go to [GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)](https://github.com/settings/tokens)
     2. Click **Generate new token (classic)**
     3. Give it a descriptive name (e.g., `mc-aws-server`)
@@ -253,14 +253,37 @@ If you want to use SSH for file uploads (the `upload-server.sh` script), create 
     The deploy script will:
     - Create the EC2 instance, Lambda function, IAM roles, and SES rules
     - **Automatically activate** the SES Rule Set
-    - Prompt you to set up Google Drive backups (optional; you can skip)
     - Ask if you want to enable weekly EBS snapshots via DLM
 
-    **Note on Google Drive (optional):** If you want cloud backups, the script will offer to run `./bin/setup-drive-token.sh` for you. This opens a browser for Google OAuth and stores the token in AWS Secrets Manager. You can skip this and deploy without Drive support.
+    **Note on Google Drive (optional):** Google Drive backups are optional and auto-configured on first use. Just run `./bin/backup-from-ec2.sh --mode drive` or `./bin/restore-to-ec2.sh --mode drive` when you want to use it—the OAuth flow will run automatically.
 
 7.  **Wait for Setup:**
 
     The deployment typically takes 3-5 minutes. Once complete, your server is ready to use!
+
+### Email Allowlist (Optional)
+
+To restrict who can trigger the server startup, create a `.allowlist` file in the project root:
+
+```bash
+# One email per line
+friend1@example.com
+friend2@example.com
+your-email@example.com
+```
+
+Then redeploy:
+
+```bash
+npm run deploy
+```
+
+**How it works:**
+
+- If `.allowlist` exists and has entries, only those emails can start the server
+- If `.allowlist` doesn't exist or is empty, anyone can start the server
+- The file is not tracked in git (already in `.gitignore`)
+- To update the list, edit `.allowlist` and redeploy (only Lambda is updated, fast)
 
 ### First-Time Server Startup
 
@@ -296,7 +319,7 @@ This uses AWS Systems Manager (SSM). No SSH keys or open ports required.
 
 ### Method 2: SSH Key (Required for File Uploads)
 
-SSH access is needed for the `upload-server.sh` script and traditional SFTP/rsync.
+SSH access is needed for the `restore-to-ec2.sh` script and traditional SFTP/rsync.
 
 **One-Time Setup:**
 
@@ -339,47 +362,54 @@ ssh -i ~/.ssh/mc-aws.pem ec2-user@<SERVER_IP>
 
 ## Google Drive (Optional) Backups/Transfers
 
-You can push/pull server data via Google Drive using `rclone` without extra manual setup on the EC2 (tokens are injected by CDK if provided).
+You can backup/transfer server data via Google Drive using `rclone`. The Google Drive token is auto-configured on first use and stored securely in AWS SSM Parameter Store. We use Google Drive to transfer data between your your machine and EC2 because it's more reliable than trying to upload/download directly.
 
-### One-time token capture (local)
+### First-time setup
 
-1. Ensure AWS CLI is configured locally (`aws configure`).
-2. Run:
+Just use Google Drive mode in one of the scripts and authenticate when prompted:
 
 ```bash
-./bin/setup-drive-token.sh
+# First time: Opens browser for Google OAuth, stores token in SSM, then backs up
+./bin/backup-from-ec2.sh --mode drive
+
+# Or for restoring via Drive:
+./bin/restore-to-ec2.sh --mode drive
 ```
 
-It opens a browser for Google OAuth and stores the token in AWS Secrets Manager. It will print a Secret ARN; add this to `.env`:
-
-```
-GDRIVE_TOKEN_SECRET_ARN="arn:...:secret:/minecraft/rclone-drive-token"
-GDRIVE_REMOTE="gdrive"   # optional override
-GDRIVE_ROOT="mc-backups" # optional override
-```
-
-3. Redeploy CDK so the instance gets the token and rclone config.
+The OAuth flow runs automatically on first use. Subsequent runs use the stored token.
 
 ### Using Drive in scripts
 
-- Upload to EC2 via Drive:
+**Backup (EC2 → Google Drive):**
 
 ```bash
-./bin/upload-server.sh --mode drive
+./bin/backup-from-ec2.sh --mode drive
 ```
 
-- Download from EC2 to local backups (default local mode):
+Tars server data on EC2 and uploads to Google Drive (no local download).
+
+**Restore (local/Drive → EC2):**
 
 ```bash
-./bin/download-server.sh            # local rsync
-./bin/download-server.sh --mode drive  # tar on EC2 -> Drive (no local copy)
+./bin/restore-to-ec2.sh --mode drive
 ```
 
-Notes:
+Restores server data from Google Drive to EC2.
 
-- Drive mode requires the token secret ARN in `.env` and a redeploy.
-- Local mode behavior is unchanged (tar+rsync for upload; rsync for download).
-- Idle-check is disabled during upload and re-enabled afterward.
+**Local mode (default):**
+
+```bash
+./bin/backup-from-ec2.sh            # EC2 → local (rsync)
+./bin/restore-to-ec2.sh ./server/   # local → EC2 (rsync)
+```
+
+### Notes
+
+- Google Drive token is stored in AWS SSM Parameter Store (`/minecraft/gdrive-token`) with SecureString encryption—no cost
+- Idle-check is disabled during backup/restore operations and re-enabled afterward
+- Optional environment variables (defaults shown):
+  - `GDRIVE_REMOTE="gdrive"` — rclone remote name
+  - `GDRIVE_ROOT="mc-backups"` — folder name on Google Drive
 
 ## Weekly EBS Snapshots (Optional)
 
@@ -438,10 +468,10 @@ If you're not going to play for an extended period (weeks/months), you can compl
 
 **Prerequisites:** Make sure you have a local backup of your world first!
 
-1.  **Download Your World:**
+1.  **Backup Your World:**
 
     ```bash
-    ./bin/download-server.sh
+    ./bin/backup-from-ec2.sh
     ```
 
     This saves your world to a local directory with a timestamp.
@@ -478,7 +508,7 @@ When you want to play again:
 3.  **Restore Your World:**
 
     ```bash
-    ./bin/upload-server.sh /path/to/your/downloaded/server
+    ./bin/restore-to-ec2.sh /path/to/your/downloaded/server
     ```
 
     This uploads your world data back to the server.

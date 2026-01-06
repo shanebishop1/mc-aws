@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Download server folder from EC2 to local backups, or push a backup to Google Drive.
-# Usage: ./bin/download-server.sh [--mode local|drive]
+# Usage: ./bin/backup-from-ec2.sh [--mode local|drive]
 #
 # Modes:
 #   local (default): rsync /opt/minecraft/server -> ./backups/server-<timestamp>/

@@ -10,7 +10,7 @@ echo "  1. Stop the Minecraft EC2 instance"
 echo "  2. Detach and delete the EBS volume"
 echo ""
 echo "WARNING: Make sure you have downloaded your world data first!"
-echo "         Use ./bin/download-server.sh to backup your world."
+echo "         Use ./bin/backup-from-ec2.sh to backup your world."
 echo ""
 read -p "Continue? [y/yes]: " confirm
 if [[ ! "$confirm" =~ ^[Yy](es)?$ ]]; then

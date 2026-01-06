@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Upload local server folder to EC2, with optional Google Drive intermediary.
-# Usage: ./bin/upload-server.sh [--mode local|drive] [path-to-local-server-folder]
+# Usage: ./bin/restore-to-ec2.sh [--mode local|drive] [path-to-local-server-folder]
 #
 # Modes:
 #   local (default): tar + rsync over SSH
@@ -23,7 +23,7 @@ SSH_OPTS="-o StrictHostKeyChecking=no -o ServerAliveInterval=30 -o ServerAliveCo
 SSH_CMD=(ssh -i "$KEY_PATH" $SSH_OPTS)
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
-GDRIVE_TOKEN_SECRET_ARN="${GDRIVE_TOKEN_SECRET_ARN:-}"
+GDRIVE_TOKEN_PARAM="/minecraft/gdrive-token"
 MODE="local"
 
 POSITIONAL=()
@@ -76,7 +76,7 @@ if [[ -z "${USER_ARG}" ]]; then
     echo "Error: No server folders found."
     echo "Expected ./backups/server-*/"
     echo ""
-    echo "Usage: ./bin/upload-server.sh [--mode local|drive] [path-to-server-folder]"
+    echo "Usage: ./bin/restore-to-ec2.sh [--mode local|drive] [path-to-server-folder]"
     exit 1
   elif [[ ${#SERVER_FOLDERS[@]} -eq 1 ]]; then
     LOCAL_SERVER="${SERVER_FOLDERS[0]}"
@@ -132,15 +132,45 @@ setup_rclone_conf() {
   if [[ -n "${RCLONE_CONFIG:-}" ]]; then
     return
   fi
-  if [[ -z "$GDRIVE_TOKEN_SECRET_ARN" ]]; then
-    echo "Error: GDRIVE_TOKEN_SECRET_ARN is required for --mode drive."
-    exit 1
-  fi
-  TOKEN_JSON=$(aws secretsmanager get-secret-value --secret-id "$GDRIVE_TOKEN_SECRET_ARN" --query SecretString --output text 2>/dev/null || echo "")
+  TOKEN_JSON=$(aws ssm get-parameter --name "$GDRIVE_TOKEN_PARAM" --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
+  
+  # If no token exists, run OAuth flow and store it
   if [[ -z "$TOKEN_JSON" ]]; then
-    echo "Error: Unable to fetch Drive token from $GDRIVE_TOKEN_SECRET_ARN"
-    exit 1
+    echo ""
+    echo "No Google Drive token found. Setting up Google Drive now..."
+    echo ""
+    
+    if ! command -v rclone >/dev/null 2>&1; then
+      echo "Error: rclone is required for Google Drive authentication."
+      echo "Install it (e.g., brew install rclone) and rerun."
+      exit 1
+    fi
+    
+    echo "Starting OAuth flow (browser will open)..."
+    TOKEN_JSON=$(rclone authorize "drive" 2>/dev/null | grep -m1 '{.*}')
+    
+    if [[ -z "$TOKEN_JSON" || "$TOKEN_JSON" != \{* ]]; then
+      echo "Couldn't detect token automatically. Paste the token JSON from rclone:"
+      read -r TOKEN_JSON
+    fi
+    
+    if [[ -z "$TOKEN_JSON" || "$TOKEN_JSON" != \{* ]]; then
+      echo "Failed to obtain token JSON."
+      exit 1
+    fi
+    
+    echo "Storing token in SSM Parameter Store..."
+    aws ssm put-parameter \
+      --name "$GDRIVE_TOKEN_PARAM" \
+      --value "$TOKEN_JSON" \
+      --type "SecureString" \
+      --overwrite \
+      --no-cli-pager >/dev/null
+    
+    echo "✓ Google Drive configured successfully"
+    echo ""
   fi
+  
   TMP_RCLONE_CONF=$(mktemp)
   cat > "$TMP_RCLONE_CONF" <<EOF
 [${GDRIVE_REMOTE}]
