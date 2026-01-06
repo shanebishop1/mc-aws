@@ -177,7 +177,23 @@ export const handler = async (event) => {
     return { statusCode: 400, body: "Error processing incoming message." };
   }
 
-  // 2. Check for keyword (default "start")
+  // 2. Check allowlist (if configured)
+  const allowlistEnv = process.env.EMAIL_ALLOWLIST || "";
+  if (allowlistEnv.trim()) {
+    // Allowlist is configured, check if sender is in it
+    const allowedEmails = allowlistEnv.split(',').map(email => email.trim().toLowerCase()).filter(Boolean);
+    const senderEmail = toAddr.toLowerCase();
+    
+    if (!allowedEmails.includes(senderEmail)) {
+      console.log(`Email ${toAddr} not in allowlist. Rejecting request.`);
+      return { statusCode: 403, body: "Email not authorized." };
+    }
+    console.log(`Email ${toAddr} found in allowlist. Proceeding.`);
+  } else {
+    console.log("No allowlist configured. Allowing all emails.");
+  }
+
+  // 3. Check for keyword (default "start")
   const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
   
   if (!subject.includes(startKeyword) && !body.includes(startKeyword)) {
@@ -185,7 +201,7 @@ export const handler = async (event) => {
     return { statusCode: 200, body: "Keyword not found, no action taken." };
   }
 
-  // 3. Check for required environment variables
+  // 4. Check for required environment variables
   const instanceId = process.env.INSTANCE_ID;
   const fromAddr = process.env.VERIFIED_SENDER;
   const zone = process.env.CLOUDFLARE_ZONE_ID;
