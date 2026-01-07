@@ -3,6 +3,7 @@ import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import { SSMClient, GetParameterCommand, PutParameterCommand, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 
 // Instantiate clients without hardcoding region (SDK will infer based on the env)
+// v2 - email parsing fix
 const ec2 = new EC2Client({});
 const ses = new SESClient({});
 const ssm = new SSMClient({});
@@ -185,6 +186,24 @@ async function updateCloudflareDns(zone, record, ip, domain, cfToken) {
 }
 
 /**
+ * Generate a sanitized error message for email notification
+ * @param {string} commandName - The command that failed (e.g., "start", "backup", "restore")
+ * @returns {string} Sanitized error message
+ */
+function getSanitizedErrorMessage(commandName) {
+  const errorMessages = {
+    "start": "Server startup failed. Check CloudWatch logs for details.",
+    "backup": "Backup command failed. Check CloudWatch logs for details.",
+    "restore": "Restore command failed. Check CloudWatch logs for details.",
+    "hibernate": "Hibernation command failed. Check CloudWatch logs for details.",
+    "resume": "Resume command failed. Check CloudWatch logs for details.",
+    "unknown": "Command execution failed. Check CloudWatch logs for details."
+  };
+  
+  return errorMessages[commandName] || errorMessages["unknown"];
+}
+
+/**
  * Send notification email via SES
  * @param {string} to - Recipient email address
  * @param {string} subject - Email subject
@@ -192,27 +211,27 @@ async function updateCloudflareDns(zone, record, ip, domain, cfToken) {
  * @returns {Promise<void>}
  */
 async function sendNotification(to, subject, body) {
-  const emailParams = {
-    Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@mydomain.org"
-    Destination: {
-      ToAddresses: [to]  // must be verified if in sandbox
-    },
-    Message: {
-      Subject: { Data: subject },
-      Body: {
-        Text: { Data: body }
-      }
-    }
-  };
+   const emailParams = {
+     Source: process.env.VERIFIED_SENDER,  // e.g. "noreply@mydomain.org"
+     Destination: {
+       ToAddresses: [to]  // must be verified if in sandbox
+     },
+     Message: {
+       Subject: { Data: subject },
+       Body: {
+         Text: { Data: body }
+       }
+     }
+   };
 
-  try {
-    await ses.send(new SendEmailCommand(emailParams));
-    console.log("Successfully sent notification email.");
-  } catch (emailError) {
-    console.error("Error sending email via SES:", emailError);
-    // Log the error but don't necessarily fail the whole function,
-    // as the server is up and DNS is updated. Maybe send alert to admin?
-  }
+   try {
+     await ses.send(new SendEmailCommand(emailParams));
+     console.log("Successfully sent notification email.");
+   } catch (emailError) {
+     console.error("Error sending email via SES:", emailError);
+     // Log the error but don't necessarily fail the whole function,
+     // as the server is up and DNS is updated. Maybe send alert to admin?
+   }
 }
 
 /**
@@ -314,7 +333,7 @@ function parseCommand(subject, startKeyword) {
  */
 async function executeSSMCommand(instanceId, commands) {
   console.log(`Executing SSM command on instance ${instanceId}: ${commands.join(' ')}`);
-  console.log("Full command being sent:", JSON.stringify({ InstanceIds: [instanceId], DocumentName: "AWS-RunShellScript", Parameters: { command: commands } }));
+  console.log("Full command being sent:", JSON.stringify({ InstanceIds: [instanceId], DocumentName: "AWS-RunShellScript", Parameters: { commands: commands } }));
   
   try {
     // Send the command
@@ -322,7 +341,7 @@ async function executeSSMCommand(instanceId, commands) {
       InstanceIds: [instanceId],
       DocumentName: "AWS-RunShellScript",
       Parameters: {
-        command: commands
+        commands: commands
       }
     }));
     
@@ -425,21 +444,21 @@ async function handleBackup(instanceId, args, adminEmail) {
     }
     
     return message;
-  } catch (error) {
-    console.error("ERROR in handleBackup:", error.message, error.stack);
-    
-    const errorMessage = `Backup failed: ${error.message}`;
-    if (adminEmail) {
-      console.log("Sending error notification...");
-      await sendNotification(
-        adminEmail,
-        "Minecraft Backup Failed",
-        errorMessage
-      );
-    }
-    
-    throw error;
-  }
+   } catch (error) {
+     console.error("ERROR in handleBackup:", error.message, error.stack);
+     
+     if (adminEmail) {
+       console.log("Sending error notification...");
+       const sanitizedMessage = getSanitizedErrorMessage("backup");
+       await sendNotification(
+         adminEmail,
+         "Minecraft Backup Failed",
+         sanitizedMessage
+       );
+     }
+     
+     throw error;
+   }
 }
 
 /**
@@ -483,21 +502,21 @@ async function handleRestore(instanceId, args, adminEmail) {
     }
     
     return message;
-  } catch (error) {
-    console.error("ERROR in handleRestore:", error.message, error.stack);
-    
-    const errorMessage = `Restore failed: ${error.message}`;
-    if (adminEmail) {
-      console.log("Sending error notification...");
-      await sendNotification(
-        adminEmail,
-        "Minecraft Restore Failed",
-        errorMessage
-      );
-    }
-    
-    throw error;
-  }
+   } catch (error) {
+     console.error("ERROR in handleRestore:", error.message, error.stack);
+     
+     if (adminEmail) {
+       console.log("Sending error notification...");
+       const sanitizedMessage = getSanitizedErrorMessage("restore");
+       await sendNotification(
+         adminEmail,
+         "Minecraft Restore Failed",
+         sanitizedMessage
+       );
+     }
+     
+     throw error;
+   }
 }
 
 /**
@@ -632,22 +651,22 @@ async function handleHibernate(instanceId, args, adminEmail) {
       );
     }
     
-    return message;
-  } catch (error) {
-    console.error("ERROR in handleHibernate:", error.message, error.stack);
-    
-    const errorMessage = `Hibernation failed: ${error.message}`;
-    if (adminEmail) {
-      console.log("Sending hibernation error notification...");
-      await sendNotification(
-        adminEmail,
-        "Minecraft Hibernation Failed",
-        errorMessage
-      );
-    }
-    
-    throw error;
-  }
+     return message;
+   } catch (error) {
+     console.error("ERROR in handleHibernate:", error.message, error.stack);
+     
+     if (adminEmail) {
+       console.log("Sending hibernation error notification...");
+       const sanitizedMessage = getSanitizedErrorMessage("hibernate");
+       await sendNotification(
+         adminEmail,
+         "Minecraft Hibernation Failed",
+         sanitizedMessage
+       );
+     }
+     
+     throw error;
+   }
 }
 
 /**
@@ -838,14 +857,18 @@ export const handler = async (event) => {
     const snsRecord = event.Records[0].Sns;
     payload = JSON.parse(snsRecord.Message);
 
-    // Safely access sender address
-    toAddr = payload.mail?.commonHeaders?.from?.[0];
-    if (!toAddr) {
-        console.error("Sender address not found in email headers.");
-        return { statusCode: 400, body: "Sender address missing." };
-    }
+     // Safely access sender address
+     toAddr = payload.mail?.commonHeaders?.from?.[0];
+     if (!toAddr) {
+         console.error("Sender address not found in email headers.");
+         return { statusCode: 400, body: "Sender address missing." };
+     }
 
-     // Get subject
+     // Extract just the email address from the From header (handles "Name <email@domain.com>" format)
+     const emailMatch = toAddr.match(/<([^>]+)>/) || [null, toAddr];
+     toAddr = (emailMatch[1] || toAddr).trim().toLowerCase();
+
+      // Get subject
      subject = (payload.mail?.commonHeaders?.subject || "").toLowerCase();
 
      // Decode the full raw email and get its body text, if content exists
@@ -863,10 +886,10 @@ export const handler = async (event) => {
      return { statusCode: 400, body: "Error processing incoming message." };
    }
 
-    // 2. Get admin email and allowlist
-    const adminEmail = (process.env.NOTIFICATION_EMAIL || "").toLowerCase();
-    const senderEmail = toAddr.toLowerCase();
-    const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
+     // 2. Get admin email and allowlist
+     const adminEmail = (process.env.NOTIFICATION_EMAIL || "").toLowerCase();
+     const senderEmail = toAddr; // Already normalized in extraction step above
+     const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
     
     // Check if sender is admin
     const isAdmin = adminEmail && senderEmail === adminEmail;
@@ -1081,21 +1104,23 @@ export const handler = async (event) => {
         }
       }
 
-    } catch (error) {
-      console.error("ERROR in handler (command execution):", error.message, error.stack);
-      
-      // Send error notification
-      const notificationEmail = process.env.NOTIFICATION_EMAIL;
-      if (notificationEmail) {
-        await sendNotification(
-          notificationEmail,
-          "Minecraft Command Failed",
-          `Error executing ${parsedCommand?.command || 'unknown'} command: ${error.message}\n\nStack: ${error.stack}`
-        );
-      }
-      
-      response = { statusCode: 500, body: `Failed to process request: ${error.message}` };
-    }
+     } catch (error) {
+       console.error("ERROR in handler (command execution):", error.message, error.stack);
+       
+       // Send error notification with sanitized message
+       const notificationEmail = process.env.NOTIFICATION_EMAIL;
+       if (notificationEmail) {
+         const commandName = parsedCommand?.command || "unknown";
+         const sanitizedMessage = getSanitizedErrorMessage(commandName);
+         await sendNotification(
+           notificationEmail,
+           "Minecraft Command Failed",
+           sanitizedMessage
+         );
+       }
+       
+       response = { statusCode: 500, body: `Failed to process request: ${error.message}` };
+     }
     
     console.log("=== LAMBDA COMPLETE ===", JSON.stringify(response));
     return response;
