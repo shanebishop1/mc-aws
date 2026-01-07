@@ -290,6 +290,55 @@ You'll receive a confirmation email showing the updated allowlist. After this, o
 
 Send another email from your admin address with the new list in the body. It completely replaces the old one.
 
+### Server Management Commands (Admin Only)
+
+The admin email (set in `NOTIFICATION_EMAIL`) can manage the server by sending emails with specific commands in the **subject line**. Only the admin email can use backup, restore, hibernate, and resume commands.
+
+**Available Commands:**
+
+- **`start`** - Start the server
+  - Subject: `start`
+  - Anyone on the allowlist can use this
+
+- **`backup`** - Backup server to Google Drive with auto-generated name
+  - Subject: `backup`
+  - Admin only
+
+- **`backup <name>`** - Backup with custom name
+  - Subject: `backup my-world-jan-2026`
+  - Admin only
+
+- **`restore <name>`** - Restore from Google Drive backup
+  - Subject: `restore my-world-jan-2026`
+  - Admin only
+  - Restores the server to a previous backup
+
+- **`hibernate`** - Backup to Drive, stop EC2, delete EBS to save costs
+  - Subject: `hibernate`
+  - Admin only
+  - Deletes the EBS volume for zero storage cost (~$0.75/month saved)
+  - Requires a backup to be created first
+
+- **`resume`** - Start EC2, restore latest backup
+  - Subject: `resume`
+  - Admin only
+  - Creates a new EBS volume and restores the most recent backup
+
+- **`resume <name>`** - Start EC2, restore specific backup
+  - Subject: `resume my-world-jan-2026`
+  - Admin only
+  - Creates a new EBS volume and restores a specific backup
+
+**How It Works:**
+
+- Commands go in the **email subject line** (body is ignored)
+- Confirmation emails are sent for all operations
+- All backups are stored in **Google Drive** (requires Google Drive setup from the deployment section)
+- **Hibernate** deletes the EBS volume, reducing idle costs to $0.00/month
+- **Resume** creates a new EBS volume and restores from your backup
+- Only the admin email (`NOTIFICATION_EMAIL`) can use backup, restore, hibernate, and resume commands
+- The `start` command can be used by anyone on the allowlist
+
 ### First-Time Server Startup
 
 To start your server for the first time:
