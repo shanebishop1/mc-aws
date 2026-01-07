@@ -283,6 +283,23 @@ export class MinecraftStack extends cdk.Stack {
        }),
      );
 
+    // Grant Lambda permission to run SSM commands on EC2 (for backup/restore/hibernate)
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:SendCommand"],
+        resources: [
+          `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
+          `arn:aws:ec2:${this.region}:${this.account}:instance/*`,
+        ],
+      }),
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetCommandInvocation"],
+        resources: ["*"],
+      }),
+    );
+
 
 
     // Subscribe Lambda to SNS
@@ -336,7 +353,6 @@ export class MinecraftStack extends cdk.Stack {
 
     // Outputs
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
-    new cdk.CfnOutput(this, "PublicIp", { value: instance.instancePublicIp });
     new cdk.CfnOutput(this, "LambdaFunctionName", {
       value: startLambda.functionName,
     });
