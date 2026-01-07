@@ -142,7 +142,16 @@ CRON
   fi
 fi
 
-# 12. Enable & start the Minecraft service
+# 12. Deploy management scripts (backup, restore, hibernate, resume)
+for script in mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh; do
+  if [[ -f /opt/setup/src/ec2/$script ]]; then
+    cp /opt/setup/src/ec2/$script /usr/local/bin/$script
+    chmod +x /usr/local/bin/$script
+    log "Deployed $script"
+  fi
+done
+
+# 13. Enable & start the Minecraft service
 systemctl daemon-reload
 systemctl enable minecraft.service
 if ! systemctl is-active --quiet minecraft.service; then
