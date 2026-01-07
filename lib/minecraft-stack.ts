@@ -171,8 +171,8 @@ export class MinecraftStack extends cdk.Stack {
       }),
       securityGroup,
       role: ec2Role,
-      keyName: process.env.KEY_PAIR_NAME
-        ? process.env.KEY_PAIR_NAME
+      keyPair: process.env.KEY_PAIR_NAME
+        ? ec2.KeyPair.fromKeyPairName(this, "KeyPair", process.env.KEY_PAIR_NAME)
         : undefined,
       userData: ec2.UserData.custom(userDataScript),
       blockDevices: [
