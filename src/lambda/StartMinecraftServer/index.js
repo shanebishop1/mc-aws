@@ -1,6 +1,6 @@
-import { EC2Client, StartInstancesCommand, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
+import { EC2Client, StartInstancesCommand, StopInstancesCommand, DescribeInstancesCommand, DescribeImagesCommand, CreateVolumeCommand, AttachVolumeCommand, DescribeVolumesCommand, DetachVolumeCommand, DeleteVolumeCommand } from "@aws-sdk/client-ec2";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
-import { SSMClient, GetParameterCommand, PutParameterCommand } from "@aws-sdk/client-ssm";
+import { SSMClient, GetParameterCommand, PutParameterCommand, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
 
 // Instantiate clients without hardcoding region (SDK will infer based on the env)
 const ec2 = new EC2Client({});
@@ -189,6 +189,524 @@ function extractEmails(text) {
   return matches.map(e => e.trim().toLowerCase()).filter(Boolean);
 }
 
+/**
+ * Parse command from email subject
+ * @param {string} subject - Email subject line
+ * @param {string} startKeyword - The start keyword to check for
+ * @returns {Object|null} { command, args } or null if no valid command
+ */
+function parseCommand(subject, startKeyword) {
+    const lowerSubject = subject.toLowerCase();
+    
+    // Check for start command
+    if (lowerSubject.includes(startKeyword.toLowerCase())) {
+      return { command: "start", args: [] };
+    }
+    
+    // Check for backup command (optional: backup name)
+    if (lowerSubject.includes("backup")) {
+      const match = lowerSubject.match(/backup\s+(\S+)?/);
+      const args = match && match[1] ? [match[1]] : [];
+      return { command: "backup", args };
+    }
+    
+    // Check for restore command (required: restore name)
+    if (lowerSubject.includes("restore")) {
+      const match = lowerSubject.match(/restore\s+(\S+)/);
+      if (!match || !match[1]) {
+        console.warn("Restore command requires a backup name argument");
+        return null;
+      }
+      return { command: "restore", args: [match[1]] };
+    }
+    
+    // Check for hibernate command
+    if (lowerSubject.includes("hibernate")) {
+      return { command: "hibernate", args: [] };
+    }
+    
+    // Check for resume command
+    if (lowerSubject.includes("resume")) {
+      return { command: "resume", args: [] };
+    }
+    
+    return null;
+  }
+
+/**
+ * Execute an SSM command on an EC2 instance and wait for completion
+ * @param {string} instanceId - The EC2 instance ID
+ * @param {string[]} commands - Array of commands to execute
+ * @returns {Promise<string>} The command output
+ */
+async function executeSSMCommand(instanceId, commands) {
+  console.log(`Executing SSM command on instance ${instanceId}: ${commands.join(' ')}`);
+  
+  try {
+    // Send the command
+    const sendResponse = await ssm.send(new SendCommandCommand({
+      InstanceIds: [instanceId],
+      DocumentName: "AWS-RunShellScript",
+      Parameters: {
+        command: commands
+      }
+    }));
+    
+    const commandId = sendResponse.Command?.CommandId;
+    if (!commandId) {
+      throw new Error("Failed to get command ID from SSM response");
+    }
+    
+    console.log(`SSM command sent with ID: ${commandId}`);
+    
+    // Wait for command completion (poll every 2 seconds, max 60 attempts = 2 minutes)
+    let completed = false;
+    let attempts = 0;
+    const maxAttempts = 60;
+    let output = "";
+    
+    while (!completed && attempts < maxAttempts) {
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+      
+      try {
+        const invocationResponse = await ssm.send(new GetCommandInvocationCommand({
+          CommandId: commandId,
+          InstanceId: instanceId
+        }));
+        
+        const status = invocationResponse.Status;
+        console.log(`Command status (attempt ${attempts}/${maxAttempts}): ${status}`);
+        
+        if (status === "Success" || status === "Failed") {
+          completed = true;
+          output = invocationResponse.StandardOutputContent || "";
+          
+          if (status === "Failed") {
+            const errorOutput = invocationResponse.StandardErrorContent || "";
+            console.error(`SSM command failed. Error: ${errorOutput}`);
+            throw new Error(`SSM command failed: ${errorOutput}`);
+          }
+        }
+      } catch (error) {
+        if (error.name === "InvocationDoesNotExist") {
+          // Command still processing, continue polling
+          console.log("Command still processing...");
+        } else {
+          throw error;
+        }
+      }
+    }
+    
+    if (!completed) {
+      throw new Error(`SSM command did not complete within ${maxAttempts * 2} seconds`);
+    }
+    
+    console.log(`SSM command completed successfully. Output: ${output}`);
+    return output;
+  } catch (error) {
+    console.error("Error executing SSM command:", error);
+    throw error;
+  }
+}
+
+/**
+ * Handle backup command - runs backup script via SSM
+ * @param {string} instanceId - The EC2 instance ID
+ * @param {string[]} args - Command arguments (optional backup name)
+ * @param {string} adminEmail - Admin email for notifications
+ * @returns {Promise<string>} The backup result message
+ */
+async function handleBackup(instanceId, args, adminEmail) {
+  console.log(`Handling backup command for instance ${instanceId}`);
+  
+  try {
+    const backupName = args && args[0] ? args[0] : "";
+    const command = backupName 
+      ? `/usr/local/bin/mc-backup.sh ${backupName}`
+      : `/usr/local/bin/mc-backup.sh`;
+    
+    const output = await executeSSMCommand(instanceId, [command]);
+    
+    const message = `Backup completed successfully${backupName ? ` (${backupName})` : ""}.\n\nOutput:\n${output}`;
+    
+    if (adminEmail) {
+      await sendNotification(
+        adminEmail,
+        "Minecraft Backup Completed",
+        message
+      );
+    }
+    
+    return message;
+  } catch (error) {
+    console.error("Error in handleBackup:", error);
+    
+    const errorMessage = `Backup failed: ${error.message}`;
+    if (adminEmail) {
+      await sendNotification(
+        adminEmail,
+        "Minecraft Backup Failed",
+        errorMessage
+      );
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Handle restore command - runs restore script via SSM
+ * @param {string} instanceId - The EC2 instance ID
+ * @param {string[]} args - Command arguments (required backup name)
+ * @param {string} adminEmail - Admin email for notifications
+ * @returns {Promise<string>} The restore result message
+ */
+async function handleRestore(instanceId, args, adminEmail) {
+  console.log(`Handling restore command for instance ${instanceId}`);
+  
+  if (!args || !args[0]) {
+    throw new Error("Restore command requires a backup name argument");
+  }
+  
+  try {
+    const backupName = args[0];
+    const command = `/usr/local/bin/mc-restore.sh ${backupName}`;
+    
+    const output = await executeSSMCommand(instanceId, [command]);
+    
+    const message = `Restore completed successfully (${backupName}).\n\nOutput:\n${output}`;
+    
+    if (adminEmail) {
+      await sendNotification(
+        adminEmail,
+        "Minecraft Restore Completed",
+        message
+      );
+    }
+    
+    return message;
+  } catch (error) {
+    console.error("Error in handleRestore:", error);
+    
+    const errorMessage = `Restore failed: ${error.message}`;
+    if (adminEmail) {
+      await sendNotification(
+        adminEmail,
+        "Minecraft Restore Failed",
+        errorMessage
+      );
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Handle hibernate command - runs backup, stops instance, detaches/deletes volume
+ * @param {string} instanceId - The EC2 instance ID
+ * @param {string[]} args - Command arguments (unused)
+ * @param {string} adminEmail - Admin email for notifications
+ * @returns {Promise<string>} The hibernate result message
+ */
+async function handleHibernate(instanceId, args, adminEmail) {
+  console.log(`Handling hibernate command for instance ${instanceId}`);
+  
+  try {
+    // Step 1: Run backup script
+    console.log("Running backup before hibernation...");
+    const backupOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-backup.sh"]);
+    console.log(`Backup output: ${backupOutput}`);
+    
+    // Step 2: Stop the instance
+    console.log(`Stopping instance ${instanceId}...`);
+    await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
+    
+    // Wait for instance to stop
+    let stopped = false;
+    let attempts = 0;
+    const maxAttempts = 60; // 60 * 5 seconds = 5 minutes
+    
+    while (!stopped && attempts < maxAttempts) {
+      attempts++;
+      await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+      
+      try {
+        const { Reservations } = await ec2.send(
+          new DescribeInstancesCommand({ InstanceIds: [instanceId] })
+        );
+        
+        const instance = Reservations?.[0]?.Instances?.[0];
+        const state = instance?.State?.Name;
+        
+        console.log(`Instance state: ${state} (attempt ${attempts}/${maxAttempts})`);
+        
+        if (state === "stopped") {
+          stopped = true;
+          console.log(`Instance ${instanceId} is now stopped`);
+        }
+      } catch (error) {
+        console.error(`Error checking instance state on attempt ${attempts}:`, error);
+      }
+    }
+    
+    if (!stopped) {
+      throw new Error(`Instance ${instanceId} did not stop within timeout`);
+    }
+    
+    // Step 3: Detach and delete volumes
+    console.log(`Detaching and deleting volumes for instance ${instanceId}...`);
+    
+    const { Reservations } = await ec2.send(
+      new DescribeInstancesCommand({ InstanceIds: [instanceId] })
+    );
+    
+    const instance = Reservations?.[0]?.Instances?.[0];
+    const blockDeviceMappings = instance?.BlockDeviceMappings || [];
+    
+    for (const mapping of blockDeviceMappings) {
+      const volumeId = mapping.Ebs?.VolumeId;
+      if (!volumeId) continue;
+      
+      try {
+        // Detach volume
+        console.log(`Detaching volume ${volumeId}...`);
+        await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId }));
+        
+        // Wait for detachment
+        let detached = false;
+        let detachAttempts = 0;
+        const detachMaxAttempts = 30; // 30 * 2 seconds = 1 minute
+        
+        while (!detached && detachAttempts < detachMaxAttempts) {
+          detachAttempts++;
+          await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+          
+          try {
+            const volumeResponse = await ec2.send(
+              new DescribeVolumesCommand({ VolumeIds: [volumeId] })
+            );
+            
+            const volume = volumeResponse.Volumes?.[0];
+            const attachmentState = volume?.Attachments?.[0]?.State;
+            
+            if (!attachmentState || attachmentState === "detached") {
+              detached = true;
+              console.log(`Volume ${volumeId} is now detached`);
+            }
+          } catch (error) {
+            console.error(`Error checking volume attachment state:`, error);
+          }
+        }
+        
+        // Delete volume
+        console.log(`Deleting volume ${volumeId}...`);
+        await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
+        console.log(`Volume ${volumeId} deleted successfully`);
+      } catch (error) {
+        console.error(`Error detaching/deleting volume ${volumeId}:`, error);
+        throw error;
+      }
+    }
+    
+    const message = `Hibernation completed successfully.\n\nBackup output:\n${backupOutput}`;
+    
+    if (adminEmail) {
+      await sendNotification(
+        adminEmail,
+        "Minecraft Server Hibernated",
+        message
+      );
+    }
+    
+    return message;
+  } catch (error) {
+    console.error("Error in handleHibernate:", error);
+    
+    const errorMessage = `Hibernation failed: ${error.message}`;
+    if (adminEmail) {
+      await sendNotification(
+        adminEmail,
+        "Minecraft Hibernation Failed",
+        errorMessage
+      );
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Handle resuming a hibernated instance by creating and attaching a root volume
+ * @param {string} instanceId - The EC2 instance ID
+ * @returns {Promise<void>}
+ */
+async function handleResume(instanceId) {
+  console.log(`Checking if instance ${instanceId} needs volume restoration...`);
+  
+  // Check if instance has no volumes (hibernated state)
+  const { Reservations } = await ec2.send(
+    new DescribeInstancesCommand({ InstanceIds: [instanceId] })
+  );
+  
+  if (!Reservations || Reservations.length === 0 || !Reservations[0].Instances) {
+    throw new Error(`Instance ${instanceId} not found`);
+  }
+  
+  const instance = Reservations[0].Instances[0];
+  const blockDeviceMappings = instance.BlockDeviceMappings || [];
+  
+  // If instance already has volumes, no need to resume
+  if (blockDeviceMappings.length > 0) {
+    console.log(`Instance ${instanceId} already has ${blockDeviceMappings.length} volume(s). Skipping resume.`);
+    return;
+  }
+  
+  console.log(`Instance ${instanceId} has no volumes. Proceeding with hibernation recovery...`);
+  
+  // Get instance availability zone
+  const az = instance.Placement?.AvailabilityZone;
+  if (!az) {
+    throw new Error(`Could not determine availability zone for instance ${instanceId}`);
+  }
+  console.log(`Instance is in availability zone: ${az}`);
+  
+  // Find latest Amazon Linux 2023 ARM64 AMI
+  console.log("Looking up Amazon Linux 2023 ARM64 AMI...");
+  const imagesResponse = await ec2.send(
+    new DescribeImagesCommand({
+      Owners: ["amazon"],
+      Filters: [
+        { Name: "name", Values: ["al2023-ami-2023*-arm64"] },
+        { Name: "state", Values: ["available"] }
+      ]
+    })
+  );
+  
+  if (!imagesResponse.Images || imagesResponse.Images.length === 0) {
+    throw new Error("Could not find Amazon Linux 2023 ARM64 AMI");
+  }
+  
+  // Sort by creation date and get the latest
+  const sortedImages = imagesResponse.Images.sort((a, b) => {
+    const dateA = new Date(a.CreationDate).getTime();
+    const dateB = new Date(b.CreationDate).getTime();
+    return dateB - dateA; // Descending order (newest first)
+  });
+  
+  const amiId = sortedImages[0].ImageId;
+  console.log(`Found latest AMI: ${amiId}`);
+  
+  // Get snapshot ID from AMI's BlockDeviceMappings
+  const blockDeviceMapping = sortedImages[0].BlockDeviceMappings?.[0];
+  if (!blockDeviceMapping || !blockDeviceMapping.Ebs?.SnapshotId) {
+    throw new Error(`Could not find snapshot for AMI ${amiId}`);
+  }
+  
+  const snapshotId = blockDeviceMapping.Ebs.SnapshotId;
+  console.log(`Using snapshot: ${snapshotId}`);
+  
+  // Create volume from snapshot
+  console.log("Creating new 8GB GP3 volume from snapshot...");
+  const createVolumeResponse = await ec2.send(
+    new CreateVolumeCommand({
+      AvailabilityZone: az,
+      SnapshotId: snapshotId,
+      VolumeType: "gp3",
+      Size: 8,
+      Encrypted: true,
+      TagSpecifications: [
+        {
+          ResourceType: "volume",
+          Tags: [
+            { Key: "Name", Value: "MinecraftServerVolume" },
+            { Key: "Backup", Value: "weekly" }
+          ]
+        }
+      ]
+    })
+  );
+  
+  const volumeId = createVolumeResponse.VolumeId;
+  if (!volumeId) {
+    throw new Error("Failed to create volume");
+  }
+  console.log(`Volume created: ${volumeId}`);
+  
+  // Wait for volume to become available
+  console.log("Waiting for volume to become available...");
+  let volumeAvailable = false;
+  let attempts = 0;
+  const maxAttempts = 60; // 60 * 5 seconds = 5 minutes
+  
+  while (!volumeAvailable && attempts < maxAttempts) {
+    attempts++;
+    try {
+      const volumeResponse = await ec2.send(
+        new DescribeVolumesCommand({ VolumeIds: [volumeId] })
+      );
+      
+      const volume = volumeResponse.Volumes?.[0];
+      if (volume?.State === "available") {
+        volumeAvailable = true;
+        console.log(`Volume ${volumeId} is now available`);
+      } else {
+        console.log(`Volume state: ${volume?.State}. Waiting... (attempt ${attempts}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds
+      }
+    } catch (error) {
+      console.error(`Error checking volume status on attempt ${attempts}:`, error);
+      await new Promise(resolve => setTimeout(resolve, 5000));
+    }
+  }
+  
+  if (!volumeAvailable) {
+    throw new Error(`Volume ${volumeId} did not become available within timeout`);
+  }
+  
+  // Attach volume to instance at /dev/xvda (root device)
+  console.log(`Attaching volume ${volumeId} to instance ${instanceId} at /dev/xvda...`);
+  await ec2.send(
+    new AttachVolumeCommand({
+      VolumeId: volumeId,
+      InstanceId: instanceId,
+      Device: "/dev/xvda"
+    })
+  );
+  
+  // Wait for attachment to complete
+  console.log("Waiting for volume attachment to complete...");
+  let attachmentComplete = false;
+  attempts = 0;
+  
+  while (!attachmentComplete && attempts < maxAttempts) {
+    attempts++;
+    try {
+      const volumeResponse = await ec2.send(
+        new DescribeVolumesCommand({ VolumeIds: [volumeId] })
+      );
+      
+      const attachment = volumeResponse.Volumes?.[0]?.Attachments?.[0];
+      if (attachment?.State === "attached") {
+        attachmentComplete = true;
+        console.log(`Volume ${volumeId} is now attached to instance ${instanceId}`);
+      } else {
+        console.log(`Attachment state: ${attachment?.State}. Waiting... (attempt ${attempts}/${maxAttempts})`);
+        await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+      }
+    } catch (error) {
+      console.error(`Error checking attachment status on attempt ${attempts}:`, error);
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+  }
+  
+  if (!attachmentComplete) {
+    throw new Error(`Volume ${volumeId} attachment did not complete within timeout`);
+  }
+  
+  console.log(`Successfully restored volume for instance ${instanceId}`);
+}
+
 export const handler = async (event) => {
   // 1. Extract SNS payload and parse email data
   let payload;
@@ -226,108 +744,225 @@ export const handler = async (event) => {
     return { statusCode: 400, body: "Error processing incoming message." };
   }
 
-  // 2. Get admin email and allowlist
-  const adminEmail = (process.env.NOTIFICATION_EMAIL || "").toLowerCase();
-  const senderEmail = toAddr.toLowerCase();
-  const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
-  
-  // Check if sender is admin
-  const isAdmin = adminEmail && senderEmail === adminEmail;
-  
-  // If admin email is sending, check for allowlist updates in body
-  if (isAdmin) {
-    const emailsInBody = extractEmails(body);
+    // 2. Get admin email and allowlist
+    const adminEmail = (process.env.NOTIFICATION_EMAIL || "").toLowerCase();
+    const senderEmail = toAddr.toLowerCase();
+    const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
     
-    if (emailsInBody.length > 0) {
-      // Admin is updating the allowlist
-      console.log(`Admin ${senderEmail} is updating allowlist with emails:`, emailsInBody);
-      await updateAllowlist(emailsInBody);
+    // Check if sender is admin
+    const isAdmin = adminEmail && senderEmail === adminEmail;
+    
+    // If admin email is sending, check for allowlist updates in body
+    if (isAdmin) {
+      const emailsInBody = extractEmails(body);
       
-      // Send confirmation
-      await sendNotification(
-        adminEmail,
-        "Minecraft Allowlist Updated",
-        `Allowlist has been updated with the following emails:\n\n${emailsInBody.join('\n')}\n\nOnly these emails can now start the server.`
-      );
-      
-      return { statusCode: 200, body: "Allowlist updated successfully." };
+      if (emailsInBody.length > 0) {
+        // Admin is updating the allowlist
+        console.log(`Admin ${senderEmail} is updating allowlist with emails:`, emailsInBody);
+        await updateAllowlist(emailsInBody);
+        
+        // Send confirmation
+        await sendNotification(
+          adminEmail,
+          "Minecraft Allowlist Updated",
+          `Allowlist has been updated with the following emails:\n\n${emailsInBody.join('\n')}\n\nOnly these emails can now start the server.`
+        );
+        
+        return { statusCode: 200, body: "Allowlist updated successfully." };
+      }
     }
-    
-    // Admin can always start the server (if keyword is in subject)
-    if (subject.includes(startKeyword)) {
-      console.log(`Admin ${senderEmail} is starting the server.`);
-      // Continue to server start logic below
-    } else {
-      console.log(`Admin email received but no start keyword in subject or emails in body.`);
-      return { statusCode: 200, body: "No action taken." };
-    }
-  } else {
-    // Non-admin sender - check allowlist
-    const allowlist = await getAllowlist();
-    
-    if (allowlist.length === 0) {
-      // No allowlist configured, allow anyone
-      console.log("No allowlist configured. Allowing all emails.");
-    } else if (!allowlist.includes(senderEmail)) {
-      console.log(`Email ${toAddr} not in allowlist. Rejecting request.`);
-      return { statusCode: 403, body: "Email not authorized." };
-    } else {
-      console.log(`Email ${toAddr} found in allowlist. Proceeding.`);
-    }
-    
-    // Check for start keyword in subject only
-    if (!subject.includes(startKeyword)) {
-      console.log(`No start keyword ('${startKeyword}') found in subject for email from ${toAddr}.`);
-      return { statusCode: 200, body: "Keyword not found, no action taken." };
-    }
-  }
 
-  // 3. Check for required environment variables
-  const instanceId = process.env.INSTANCE_ID;
-  const fromAddr = process.env.VERIFIED_SENDER;
-  const zone = process.env.CLOUDFLARE_ZONE_ID;
-  const record = process.env.CLOUDFLARE_RECORD_ID;
-  const domain = process.env.CLOUDFLARE_MC_DOMAIN;
-  const cfToken = process.env.CLOUDFLARE_API_TOKEN;
+   // 3. Check for required environment variables
+   const instanceId = process.env.INSTANCE_ID;
+   const fromAddr = process.env.VERIFIED_SENDER;
+   const zone = process.env.CLOUDFLARE_ZONE_ID;
+   const record = process.env.CLOUDFLARE_RECORD_ID;
+   const domain = process.env.CLOUDFLARE_MC_DOMAIN;
+   const cfToken = process.env.CLOUDFLARE_API_TOKEN;
 
-  if (!instanceId || !fromAddr || !zone || !record || !domain || !cfToken) {
-    console.error("Missing required environment variables (INSTANCE_ID, VERIFIED_SENDER, Cloudflare details).");
-    // Optionally send an error email to an admin address here
-    return { statusCode: 500, body: "Configuration error." }; // Use 500 for server-side config issues
-  }
+   if (!instanceId || !fromAddr || !zone || !record || !domain || !cfToken) {
+     console.error("Missing required environment variables (INSTANCE_ID, VERIFIED_SENDER, Cloudflare details).");
+     // Optionally send an error email to an admin address here
+     return { statusCode: 500, body: "Configuration error." }; // Use 500 for server-side config issues
+   }
 
-  console.log(`Start keyword ('${startKeyword}') found. Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
-  
-  // Send notification email about the startup
-  const notificationEmail = process.env.NOTIFICATION_EMAIL;
-  if (notificationEmail) {
-    await sendNotification(
-      notificationEmail,
-      "Minecraft Startup",
-      `Minecraft EC2 startup triggered by: ${toAddr}`
-    );
-  } else {
-    console.log("NOTIFICATION_EMAIL env var not set; skipping startup email.");
-  }
+   // 4. Parse command - use already-parsed command for admin, or parse for non-admin
+   let parsedCommand = null;
+   
+   if (isAdmin) {
+     // Admin can run any command (parse from subject)
+     parsedCommand = parseCommand(subject, startKeyword);
+     if (!parsedCommand) {
+       console.log(`Admin email received but no valid command in subject.`);
+       return { statusCode: 200, body: "No valid command found." };
+     }
+     console.log(`Admin ${senderEmail} is executing command: ${parsedCommand.command} with args: ${parsedCommand.args.join(' ')}`);
+   } else {
+     // Non-admin sender - check allowlist and only allow "start"
+     const allowlist = await getAllowlist();
+     
+     if (allowlist.length === 0) {
+       // No allowlist configured, allow anyone
+       console.log("No allowlist configured. Allowing all emails.");
+     } else if (!allowlist.includes(senderEmail)) {
+       console.log(`Email ${toAddr} not in allowlist. Rejecting request.`);
+       return { statusCode: 403, body: "Email not authorized." };
+     } else {
+       console.log(`Email ${toAddr} found in allowlist. Proceeding.`);
+     }
+     
+     // Non-admin: only allow start keyword
+     if (!subject.includes(startKeyword)) {
+       console.log(`No start keyword ('${startKeyword}') found in subject for email from ${toAddr}.`);
+       return { statusCode: 200, body: "Keyword not found, no action taken." };
+     }
+     
+     // Non-admin can only run "start"
+     parsedCommand = { command: "start", args: [] };
+   }
+   
+   if (!parsedCommand) {
+     console.log("No valid command found in subject");
+     return { statusCode: 200, body: "No valid command found." };
+   }
 
-  try {
-    // Start EC2 Instance
-    console.log(`Attempting to start EC2 instance: ${instanceId}`);
-    await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
-    console.log(`Successfully sent start command for instance: ${instanceId}`);
+   console.log(`Executing command: ${parsedCommand.command}`);
 
-    // Wait for Public IP Address using helper function
-    const publicIp = await getPublicIp(instanceId);
+   try {
+     const notificationEmail = process.env.NOTIFICATION_EMAIL;
+     
+     // Route to appropriate command handler
+     switch (parsedCommand.command) {
+       case "start": {
+         console.log(`Received request to start instance ${instanceId} triggered by email from ${toAddr}`);
+         
+         // Send notification email about the startup
+         if (notificationEmail) {
+           await sendNotification(
+             notificationEmail,
+             "Minecraft Startup",
+             `Minecraft EC2 startup triggered by: ${toAddr}`
+           );
+         } else {
+           console.log("NOTIFICATION_EMAIL env var not set; skipping startup email.");
+         }
 
-    // Update Cloudflare DNS using helper function
-    await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
-    
-    return { statusCode: 200, body: `Instance ${instanceId} started, DNS updated to ${publicIp}, email sent.` };
+         // Handle hibernation recovery (create and attach volume if needed)
+         await handleResume(instanceId);
 
-  } catch (error) {
-    console.error("Unhandled error in handler:", error);
-    // Consider sending an error notification email to an admin address here
-    // Make sure not to reveal sensitive details in the response body if it's exposed
-    return { statusCode: 500, body: `Failed to process request: ${error.message}` };
-  }
+         // Start EC2 Instance
+         console.log(`Attempting to start EC2 instance: ${instanceId}`);
+         await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+         console.log(`Successfully sent start command for instance: ${instanceId}`);
+
+         // Wait for Public IP Address using helper function
+         const publicIp = await getPublicIp(instanceId);
+
+         // Update Cloudflare DNS using helper function
+         await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
+         
+         // Send success notification
+         if (notificationEmail) {
+           await sendNotification(
+             notificationEmail,
+             "Minecraft Server Started",
+             `Server started successfully and DNS updated to ${publicIp}`
+           );
+         }
+         
+         return { statusCode: 200, body: `Instance ${instanceId} started, DNS updated to ${publicIp}, email sent.` };
+       }
+       
+       case "backup": {
+         if (!isAdmin) {
+           return { statusCode: 403, body: "Only admins can run backup command." };
+         }
+         
+         const result = await handleBackup(instanceId, parsedCommand.args, notificationEmail);
+         return { statusCode: 200, body: result };
+       }
+       
+       case "restore": {
+         if (!isAdmin) {
+           return { statusCode: 403, body: "Only admins can run restore command." };
+         }
+         
+         const result = await handleRestore(instanceId, parsedCommand.args, notificationEmail);
+         return { statusCode: 200, body: result };
+       }
+       
+       case "hibernate": {
+         if (!isAdmin) {
+           return { statusCode: 403, body: "Only admins can run hibernate command." };
+         }
+         
+         const result = await handleHibernate(instanceId, parsedCommand.args, notificationEmail);
+         return { statusCode: 200, body: result };
+       }
+       
+       case "resume": {
+         if (!isAdmin) {
+           return { statusCode: 403, body: "Only admins can run resume command." };
+         }
+         
+         console.log(`Received request to resume instance ${instanceId} triggered by email from ${toAddr}`);
+         
+         // Send notification email about the resume
+         if (notificationEmail) {
+           await sendNotification(
+             notificationEmail,
+             "Minecraft Resume",
+             `Minecraft EC2 resume triggered by: ${toAddr}`
+           );
+         }
+
+         // Handle hibernation recovery (create and attach volume if needed)
+         await handleResume(instanceId);
+
+         // Start EC2 Instance
+         console.log(`Attempting to start EC2 instance: ${instanceId}`);
+         await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+         console.log(`Successfully sent start command for instance: ${instanceId}`);
+
+         // Wait for Public IP Address
+         const publicIp = await getPublicIp(instanceId);
+
+         // Run resume script via SSM
+         const resumeOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-resume.sh"]);
+         
+         // Update Cloudflare DNS
+         await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
+         
+         // Send success notification
+         if (notificationEmail) {
+           await sendNotification(
+             notificationEmail,
+             "Minecraft Server Resumed",
+             `Server resumed successfully and DNS updated to ${publicIp}\n\nResume script output:\n${resumeOutput}`
+           );
+         }
+         
+         return { statusCode: 200, body: `Instance ${instanceId} resumed, DNS updated to ${publicIp}, email sent.` };
+       }
+       
+       default: {
+         return { statusCode: 400, body: `Unknown command: ${parsedCommand.command}` };
+       }
+     }
+
+   } catch (error) {
+     console.error("Unhandled error in handler:", error);
+     
+     // Send error notification
+     const notificationEmail = process.env.NOTIFICATION_EMAIL;
+     if (notificationEmail) {
+       await sendNotification(
+         notificationEmail,
+         "Minecraft Command Failed",
+         `Error executing ${parsedCommand.command} command: ${error.message}`
+       );
+     }
+     
+     return { statusCode: 500, body: `Failed to process request: ${error.message}` };
+   }
 };

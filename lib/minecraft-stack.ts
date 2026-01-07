@@ -98,13 +98,28 @@ export class MinecraftStack extends cdk.Stack {
       }),
     );
 
-    // Add permission to stop itself
-    ec2Role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ["ec2:StopInstances"],
-        resources: ["*"], // We can't easily restrict to "self" in IAM without tags, but the script uses instance metadata to find its own ID
-      }),
-    );
+     // Add permission to stop itself
+     ec2Role.addToPolicy(
+       new iam.PolicyStatement({
+         actions: ["ec2:StopInstances"],
+         resources: ["*"], // We can't easily restrict to "self" in IAM without tags, but the script uses instance metadata to find its own ID
+       }),
+     );
+
+     // Add permissions to manage volumes (for hibernate/resume)
+     ec2Role.addToPolicy(
+       new iam.PolicyStatement({
+         actions: [
+           "ec2:DescribeVolumes",
+           "ec2:DescribeInstances",
+           "ec2:DetachVolume",
+           "ec2:DeleteVolume",
+           "ec2:CreateVolume",
+           "ec2:AttachVolume"
+         ],
+         resources: ["*"],
+       }),
+     );
 
     // 3. Security Group
     const securityGroup = new ec2.SecurityGroup(
@@ -206,7 +221,7 @@ export class MinecraftStack extends cdk.Stack {
         START_KEYWORD: process.env.START_KEYWORD || "start",
         NOTIFICATION_EMAIL: process.env.NOTIFICATION_EMAIL || "",
       },
-      timeout: cdk.Duration.seconds(60), // Give it time to poll EC2
+      timeout: cdk.Duration.seconds(60), // 60 seconds for start operation
     });
 
     // Lambda to update DNS during deploy (no email trigger needed)
@@ -258,15 +273,17 @@ export class MinecraftStack extends cdk.Stack {
       }),
     );
 
-    // Grant Lambda permission to read/write email allowlist in SSM
-    startLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["ssm:GetParameter", "ssm:PutParameter"],
-        resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`,
-        ],
-      }),
-    );
+     // Grant Lambda permission to read/write email allowlist in SSM
+     startLambda.addToRolePolicy(
+       new iam.PolicyStatement({
+         actions: ["ssm:GetParameter", "ssm:PutParameter"],
+         resources: [
+           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`,
+         ],
+       }),
+     );
+
+
 
     // Subscribe Lambda to SNS
     startTopic.addSubscription(
