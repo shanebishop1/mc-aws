@@ -7,6 +7,13 @@ set -euo pipefail
 
 log() { echo "[$(date -Is)] $*"; }
 
+export RCLONE_CONFIG="/opt/setup/rclone/rclone.conf"
+
+# Create maintenance lock to prevent idle shutdown during resume
+MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
+touch "$MAINTENANCE_LOCK"
+trap "rm -f $MAINTENANCE_LOCK" EXIT
+
 BACKUP_NAME="${1:-}"
 
 log "Starting resume process"

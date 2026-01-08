@@ -8,6 +8,11 @@ log() { echo "[$(date -Is)] $*"; }
 
 export RCLONE_CONFIG="/opt/setup/rclone/rclone.conf"
 
+# Create maintenance lock to prevent idle shutdown during restore
+MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
+touch "$MAINTENANCE_LOCK"
+trap "rm -f $MAINTENANCE_LOCK" EXIT
+
 BACKUP_NAME="$1"
 if [[ -z "$BACKUP_NAME" ]]; then
   log "ERROR: Backup name required"
