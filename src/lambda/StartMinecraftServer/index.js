@@ -462,13 +462,14 @@ async function handleBackup(instanceId, args, adminEmail) {
 }
 
 /**
- * Handle restore command - runs restore script via SSM
+ * Handle restore command - runs restore script via SSM and updates DNS
  * @param {string} instanceId - The EC2 instance ID
  * @param {string[]} args - Command arguments (required backup name)
  * @param {string} adminEmail - Admin email for notifications
+ * @param {Object} cloudflareConfig - Cloudflare configuration { zone, record, domain, cfToken }
  * @returns {Promise<string>} The restore result message
  */
-async function handleRestore(instanceId, args, adminEmail) {
+async function handleRestore(instanceId, args, adminEmail, cloudflareConfig) {
   console.log(`Handling restore command for instance ${instanceId} with args:`, JSON.stringify(args), "adminEmail:", adminEmail);
   
   if (!args || !args[0]) {
@@ -489,16 +490,31 @@ async function handleRestore(instanceId, args, adminEmail) {
     const output = await executeSSMCommand(instanceId, [command]);
     console.log("Step 2 complete: Restore command executed");
     
-    const message = `Restore completed successfully (${backupName}).\n\nOutput:\n${output}`;
+    // Step 3: Update DNS (in case IP changed or wasn't set)
+    let publicIp = null;
+    if (cloudflareConfig) {
+      console.log("Step 3: Updating Cloudflare DNS...");
+      publicIp = await getPublicIp(instanceId);
+      await updateCloudflareDns(
+        cloudflareConfig.zone,
+        cloudflareConfig.record,
+        publicIp,
+        cloudflareConfig.domain,
+        cloudflareConfig.cfToken
+      );
+      console.log("Step 3 complete: DNS updated to", publicIp);
+    }
+    
+    const message = `Restore completed successfully (${backupName}).${publicIp ? `\nDNS updated to ${publicIp}` : ""}\n\nOutput:\n${output}`;
     
     if (adminEmail) {
-      console.log("Step 3: Sending notification email...");
+      console.log("Step 4: Sending notification email...");
       await sendNotification(
         adminEmail,
         "Minecraft Restore Completed",
         message
       );
-      console.log("Step 3 complete: Notification sent");
+      console.log("Step 4 complete: Notification sent");
     }
     
     return message;
@@ -1039,7 +1055,12 @@ export const handler = async (event) => {
             break;
           }
           
-          const result = await handleRestore(instanceId, parsedCommand.args, notificationEmail);
+          const result = await handleRestore(instanceId, parsedCommand.args, notificationEmail, {
+            zone,
+            record,
+            domain,
+            cfToken
+          });
           response = { statusCode: 200, body: result };
           break;
         }
