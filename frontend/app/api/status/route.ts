@@ -3,22 +3,30 @@
  * Returns the current server state and details
  */
 
-import { NextRequest, NextResponse } from "next/server";
-import { getInstanceState, getInstanceDetails, getPublicIp } from "@/lib/aws-client";
+import { type NextRequest, NextResponse } from "next/server";
+import { getInstanceState, getInstanceDetails, getPublicIp, findInstanceId } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { ServerStatusResponse, ApiResponse } from "@/lib/types";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
   try {
-    console.log("[STATUS] Getting server status for instance:", env.INSTANCE_ID);
+    // Status implies discovery/verification, so we always verify
+    // unless pased explicitly via query for speed (optional optimization)
+    const url = new URL(request.url);
+    const queryId = url.searchParams.get("instanceId");
 
-    const state = await getInstanceState(env.INSTANCE_ID);
+    // If we have a query ID, use it, otherwise discover
+    // But actually, status check IS the discovery mechanism, so it should probably always verify existence via AWS
+    const instanceId = queryId || (await findInstanceId());
+    console.log("[STATUS] Getting server status for instance:", instanceId);
+
+    const state = await getInstanceState(instanceId);
     let publicIp: string | undefined;
 
     // Only try to get public IP if running
     if (state === "running") {
       try {
-        publicIp = await getPublicIp(env.INSTANCE_ID);
+        publicIp = await getPublicIp(instanceId);
       } catch (error) {
         console.warn("[STATUS] Could not get public IP:", error);
         // Continue without IP - it might still be assigning
@@ -29,7 +37,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       success: true,
       data: {
         state,
-        instanceId: env.INSTANCE_ID,
+        instanceId,
         publicIp,
         lastUpdated: new Date().toISOString(),
       },

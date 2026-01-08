@@ -3,19 +3,21 @@
  * Execute restore via SSM with selected backup name
  */
 
-import { NextRequest, NextResponse } from "next/server";
-import { executeSSMCommand, getInstanceState, getPublicIp } from "@/lib/aws-client";
+import { type NextRequest, NextResponse } from "next/server";
+import { executeSSMCommand, getInstanceState, getPublicIp, findInstanceId } from "@/lib/aws-client";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { RestoreResponse, ApiResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
   try {
-    console.log("[RESTORE] Starting restore operation");
-
     // Parse request body
     const body = await request.json();
     const backupName = body?.name;
+    const instanceId = body?.instanceId;
+
+    const resolvedId = instanceId || (await findInstanceId());
+    console.log("[RESTORE] Starting restore operation for instance:", resolvedId);
 
     if (!backupName) {
       return NextResponse.json(
@@ -29,7 +31,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Check current state - must be running
-    const currentState = await getInstanceState(env.INSTANCE_ID);
+    const currentState = await getInstanceState(resolvedId);
     console.log("[RESTORE] Current state:", currentState);
 
     if (currentState !== "running") {
@@ -46,13 +48,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     // Execute restore command
     const command = `/usr/local/bin/mc-restore.sh ${backupName}`;
     console.log("[RESTORE] Executing command:", command);
-    const output = await executeSSMCommand(env.INSTANCE_ID, [command]);
+    const output = await executeSSMCommand(resolvedId, [command]);
 
     // Update DNS (in case IP changed or wasn't set)
     let publicIp: string | undefined;
     try {
       console.log("[RESTORE] Getting public IP...");
-      publicIp = await getPublicIp(env.INSTANCE_ID);
+      publicIp = await getPublicIp(resolvedId);
       console.log("[RESTORE] Updating Cloudflare DNS...");
       await updateCloudflareDns(publicIp);
     } catch (error) {
