@@ -3,13 +3,14 @@
  * Starts the server, handling hibernation recovery if needed
  */
 
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import {
   handleResume,
   startInstance,
   waitForInstanceRunning,
   getPublicIp,
   getInstanceState,
+  findInstanceId,
 } from "@/lib/aws-client";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
@@ -17,20 +18,32 @@ import type { StartServerResponse, ApiResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
   try {
-    console.log("[START] Starting server instance:", env.INSTANCE_ID);
+    // Try to get ID from body to avoid discovery overhead
+    let instanceId: string | undefined;
+    try {
+      const body = await request.clone().json(); // clone because we might read it again? No, usually nextjs consumes stream.
+      // Wait, if I read body here, I can't read it later?
+      // Actually Start route doesn't use body for anything else.
+      instanceId = body?.instanceId;
+    } catch {
+      // Body parsing failed or empty
+    }
+
+    const resolvedId = instanceId || (await findInstanceId());
+    console.log("[START] Starting server instance:", resolvedId);
 
     // Check current state
-    const currentState = await getInstanceState(env.INSTANCE_ID);
+    const currentState = await getInstanceState(resolvedId);
     console.log("[START] Current state:", currentState);
 
     // If running, just return current IP
     if (currentState === "running") {
       try {
-        const publicIp = await getPublicIp(env.INSTANCE_ID);
+        const publicIp = await getPublicIp(resolvedId);
         return NextResponse.json({
           success: true,
           data: {
-            instanceId: env.INSTANCE_ID,
+            instanceId: resolvedId,
             publicIp,
             domain: env.CLOUDFLARE_MC_DOMAIN,
             message: "Server is already running",
@@ -44,19 +57,19 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // Handle hibernation recovery (creates volume if needed)
     console.log("[START] Handling hibernation recovery...");
-    await handleResume(env.INSTANCE_ID);
+    await handleResume(resolvedId);
 
     // Start the instance
     console.log("[START] Sending start command...");
-    await startInstance(env.INSTANCE_ID);
+    await startInstance(resolvedId);
 
     // Wait for running state
     console.log("[START] Waiting for instance to reach running state...");
-    await waitForInstanceRunning(env.INSTANCE_ID);
+    await waitForInstanceRunning(resolvedId);
 
     // Get public IP
     console.log("[START] Waiting for public IP assignment...");
-    const publicIp = await getPublicIp(env.INSTANCE_ID);
+    const publicIp = await getPublicIp(resolvedId);
 
     // Update Cloudflare DNS
     console.log("[START] Updating Cloudflare DNS...");
@@ -65,7 +78,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const response: ApiResponse<StartServerResponse> = {
       success: true,
       data: {
-        instanceId: env.INSTANCE_ID,
+        instanceId: resolvedId,
         publicIp,
         domain: env.CLOUDFLARE_MC_DOMAIN,
         message: `Server started successfully. DNS updated to ${publicIp}`,

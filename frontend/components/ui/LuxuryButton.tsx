@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, HTMLMotionProps } from "framer-motion";
+import { motion, type HTMLMotionProps } from "framer-motion";
 import { cn } from "@/lib/utils";
 
 interface LuxuryButtonProps extends HTMLMotionProps<"button"> {
@@ -9,19 +9,14 @@ interface LuxuryButtonProps extends HTMLMotionProps<"button"> {
   variant?: "outline" | "text";
 }
 
-export function LuxuryButton({ 
-  children, 
-  className, 
-  variant = "outline",
-  ...props 
-}: LuxuryButtonProps) {
+export function LuxuryButton({ children, className, variant = "outline", ...props }: LuxuryButtonProps) {
   if (variant === "text") {
     return (
       <motion.button
         whileHover={{ scale: 1.05 }}
         whileTap={{ scale: 0.95 }}
         className={cn(
-          "font-sans text-xs tracking-[0.2em] text-luxury-black/60 hover:text-luxury-green uppercase transition-colors duration-300",
+          "font-sans text-xs tracking-[0.2em] text-luxury-black/60 hover:text-luxury-green uppercase transition-colors duration-300 disabled:cursor-not-allowed disabled:text-luxury-gray",
           className
         )}
         {...props}
@@ -43,9 +38,7 @@ export function LuxuryButton({
       )}
       {...props}
     >
-      <span className="relative z-10 group-hover:text-white transition-colors duration-300">
-        {children}
-      </span>
+      <span className="relative z-10 group-hover:text-white transition-colors duration-300">{children}</span>
       <motion.div
         className="absolute inset-0 bg-luxury-green"
         initial={{ scaleX: 0, originX: 0 }}
