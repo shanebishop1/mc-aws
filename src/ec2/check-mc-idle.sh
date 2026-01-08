@@ -8,6 +8,13 @@ log() {
 
 log "check-mc-idle.sh invoked"
 
+# Skip if maintenance is in progress (backup/restore)
+MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
+if [[ -f "$MAINTENANCE_LOCK" ]]; then
+  log "Maintenance in progress, skipping idle check"
+  exit 0
+fi
+
 IDLE_MARKER=/tmp/mc-idle.marker
 THRESHOLD=$((15 * 60))   # 15 mins
 

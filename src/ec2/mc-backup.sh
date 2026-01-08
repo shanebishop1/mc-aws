@@ -9,6 +9,11 @@ log() { echo "[$(date -Is)] $*"; }
 
 export RCLONE_CONFIG="/opt/setup/rclone/rclone.conf"
 
+# Create maintenance lock to prevent idle shutdown during backup
+MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
+touch "$MAINTENANCE_LOCK"
+trap "rm -f $MAINTENANCE_LOCK" EXIT
+
 BACKUP_NAME="${1:-server-$(date +%Y%m%d-%H%M%S)}"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
