@@ -6,6 +6,9 @@ import type { NextConfig } from "next";
 config({ path: resolve(__dirname, "../.env") });
 
 const nextConfig: NextConfig = {
+  // Fix warning about multiple lockfiles in monorepo structure
+  outputFileTracingRoot: resolve(__dirname, ".."),
+
   // Expose specific environment variables to the client
   env: {
     AWS_REGION: process.env.AWS_REGION,
@@ -16,6 +19,7 @@ const nextConfig: NextConfig = {
     CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
     GDRIVE_REMOTE: process.env.GDRIVE_REMOTE,
     GDRIVE_ROOT: process.env.GDRIVE_ROOT,
+    INSTANCE_ID: process.env.INSTANCE_ID,
   },
 };
 

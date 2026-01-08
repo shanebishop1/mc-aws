@@ -14,6 +14,7 @@ export default {
         "luxury-cream": "#F9F7F2",
         "luxury-black": "#1A1A1A",
         "luxury-green": "#1A4222",
+        "luxury-gray": "#808080",
       },
       fontFamily: {
         sans: ["var(--font-inter)"],
