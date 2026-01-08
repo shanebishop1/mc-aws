@@ -3,24 +3,42 @@
  * Full hibernation: backup, stop EC2, delete EBS volume (zero cost mode)
  */
 
-import { NextRequest, NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 import {
   executeSSMCommand,
   stopInstance,
   waitForInstanceStopped,
   detachAndDeleteVolumes,
   getInstanceState,
+  findInstanceId,
 } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { HibernateResponse, ApiResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
   try {
-    console.log("[HIBERNATE] Starting hibernation operation");
+    let instanceId: string | undefined;
+    try {
+      const body = await request.clone().json();
+      instanceId = body?.instanceId;
+    } catch {}
 
-    // Check current state - must be running
-    const currentState = await getInstanceState(env.INSTANCE_ID);
+    const resolvedId = instanceId || (await findInstanceId());
+    // Check current state
+    const currentState = await getInstanceState(resolvedId);
     console.log("[HIBERNATE] Current state:", currentState);
+
+    if (currentState === "hibernated") {
+      return NextResponse.json({
+        success: true,
+        data: {
+          message: "Server is already hibernated (stopped with no volumes)",
+          instanceId: resolvedId,
+          backupOutput: "Skipped - already hibernated",
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
 
     if (currentState !== "running") {
       return NextResponse.json(
@@ -35,26 +53,27 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // Step 1: Run backup script
     console.log("[HIBERNATE] Step 1: Running backup before hibernation...");
-    const backupCommand = `/usr/local/bin/mc-backup.sh`;
-    const backupOutput = await executeSSMCommand(env.INSTANCE_ID, [backupCommand]);
+    const backupCommand = "/usr/local/bin/mc-backup.sh";
+    const backupOutput = await executeSSMCommand(resolvedId, [backupCommand]);
     console.log("[HIBERNATE] Step 1 complete: Backup finished");
 
     // Step 2: Stop the instance
-    console.log("[HIBERNATE] Step 2: Stopping instance...");
-    await stopInstance(env.INSTANCE_ID);
-    console.log("[HIBERNATE] Waiting for instance to stop...");
-    await waitForInstanceStopped(env.INSTANCE_ID);
+    console.log("[HIBERNATE] Stopping server...");
+    await stopInstance(resolvedId);
+    console.log("[HIBERNATE] Waiting for server to stop...");
+    await waitForInstanceStopped(resolvedId);
     console.log("[HIBERNATE] Step 2 complete: Instance stopped");
 
     // Step 3: Detach and delete volumes
     console.log("[HIBERNATE] Step 3: Detaching and deleting volumes...");
-    await detachAndDeleteVolumes(env.INSTANCE_ID);
+    await detachAndDeleteVolumes(resolvedId);
     console.log("[HIBERNATE] Step 3 complete: Volumes deleted");
 
     const response: ApiResponse<HibernateResponse> = {
       success: true,
       data: {
-        message: "Hibernation completed successfully. Server backed up, stopped, and volume deleted.",
+        message: "Server hibernated successfully (volumes deleted)",
+        instanceId: resolvedId,
         backupOutput,
       },
       timestamp: new Date().toISOString(),

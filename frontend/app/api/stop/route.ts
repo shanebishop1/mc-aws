@@ -3,17 +3,24 @@
  * Stops the server (keeps EBS attached - not hibernation)
  */
 
-import { NextRequest, NextResponse } from "next/server";
-import { stopInstance, getInstanceState } from "@/lib/aws-client";
+import { type NextRequest, NextResponse } from "next/server";
+import { stopInstance, getInstanceState, findInstanceId } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { StopServerResponse, ApiResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
   try {
-    console.log("[STOP] Stopping server instance:", env.INSTANCE_ID);
+    let instanceId: string | undefined;
+    try {
+      const body = await request.clone().json();
+      instanceId = body?.instanceId;
+    } catch {}
+
+    const resolvedId = instanceId || (await findInstanceId());
+    console.log("[STOP] Stopping server instance:", resolvedId);
 
     // Check current state
-    const currentState = await getInstanceState(env.INSTANCE_ID);
+    const currentState = await getInstanceState(resolvedId);
     console.log("[STOP] Current state:", currentState);
 
     // If already stopped, just return success
@@ -21,7 +28,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return NextResponse.json({
         success: true,
         data: {
-          instanceId: env.INSTANCE_ID,
+          instanceId: resolvedId,
           message: "Server is already stopped",
         },
         timestamp: new Date().toISOString(),
@@ -41,12 +48,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // Send stop command
     console.log("[STOP] Sending stop command...");
-    await stopInstance(env.INSTANCE_ID);
+    await stopInstance(resolvedId);
 
     const response: ApiResponse<StopServerResponse> = {
       success: true,
       data: {
-        instanceId: env.INSTANCE_ID,
+        instanceId: resolvedId,
         message: "Server stop command sent successfully",
       },
       timestamp: new Date().toISOString(),

@@ -3,26 +3,29 @@
  * Execute backup via SSM with optional custom name
  */
 
-import { NextRequest, NextResponse } from "next/server";
-import { executeSSMCommand, getInstanceState } from "@/lib/aws-client";
+import { type NextRequest, NextResponse } from "next/server";
+import { executeSSMCommand, getInstanceState, findInstanceId } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { BackupResponse, ApiResponse } from "@/lib/types";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<BackupResponse>>> {
   try {
-    console.log("[BACKUP] Starting backup operation");
-
-    // Parse request body
+    let instanceId: string | undefined;
     let backupName: string | undefined;
+
     try {
       const body = await request.json();
       backupName = body?.name;
+      instanceId = body?.instanceId;
     } catch {
-      // Empty or invalid body is fine
+      // Empty or invalid body is fine, provided they are undefined
     }
 
+    const resolvedId = instanceId || (await findInstanceId());
+    console.log("[BACKUP] Starting backup operation for instance:", resolvedId);
+
     // Check current state - must be running
-    const currentState = await getInstanceState(env.INSTANCE_ID);
+    const currentState = await getInstanceState(resolvedId);
     console.log("[BACKUP] Current state:", currentState);
 
     if (currentState !== "running") {
@@ -37,12 +40,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Build backup command
-    const command = backupName 
-      ? `/usr/local/bin/mc-backup.sh ${backupName}`
-      : `/usr/local/bin/mc-backup.sh`;
+    const command = backupName ? `/usr/local/bin/mc-backup.sh ${backupName}` : "/usr/local/bin/mc-backup.sh";
 
     console.log("[BACKUP] Executing command:", command);
-    const output = await executeSSMCommand(env.INSTANCE_ID, [command]);
+    const output = await executeSSMCommand(resolvedId, [command]);
 
     const response: ApiResponse<BackupResponse> = {
       success: true,
