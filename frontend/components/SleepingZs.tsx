@@ -1,6 +1,6 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 interface ZParticle {
@@ -54,7 +54,7 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
   }, [particles]);
 
   return (
-    <div className="absolute inset-0 pointer-events-none overflow-hidden">
+    <div data-testid="sleeping-zs" className="absolute inset-0 pointer-events-none overflow-hidden">
       <AnimatePresence>
         {particles.map((particle) => (
           <motion.span

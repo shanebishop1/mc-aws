@@ -1,10 +1,10 @@
+import { IOSViewportFix } from "@/components/IOSViewportFix";
 import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
-import { IOSViewportFix } from "@/components/IOSViewportFix";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "MC-AWS Control Panel",
+  title: "mc-aws",
   description: "Minecraft Server Management Interface",
 };
 
@@ -28,12 +28,11 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
+        data-testid="root-layout"
         className={`${inter.variable} ${playfair.variable} antialiased bg-cream text-charcoal font-sans`}
       >
         <IOSViewportFix />
-        <div id="app-root">
-          {children}
-        </div>
+        <div id="app-root">{children}</div>
       </body>
     </html>
   );

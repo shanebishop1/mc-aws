@@ -1,12 +1,13 @@
 "use client";
 
-import { PageHeader } from "@/components/PageHeader";
-import { ServerStatus } from "@/components/ServerStatus";
+import { ArtDecoBorder } from "@/components/ArtDecoBorder";
 import { ControlsSection } from "@/components/ControlsSection";
-import { LuxuryButton } from "@/components/ui/Button";
-import { ResumeModal } from "@/components/ResumeModal";
-import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { CostDashboard } from "@/components/CostDashboard";
+import { EmailManagementPanel } from "@/components/EmailManagementPanel";
+import { PageHeader } from "@/components/PageHeader";
+import { ResumeModal } from "@/components/ResumeModal";
+import { ServerStatus } from "@/components/ServerStatus";
+import { LuxuryButton } from "@/components/ui/Button";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { motion } from "framer-motion";
@@ -74,7 +75,11 @@ export default function Home() {
 
   return (
     <>
-      <main className="h-full flex flex-col px-4 md:pb-0 bg-cream selection:bg-green selection:text-white">
+      <main
+        data-testid="home-page"
+        className="h-full flex flex-col px-4 md:pb-0 bg-cream selection:bg-green selection:text-white"
+      >
+        <ArtDecoBorder />
         {/* Header */}
         <PageHeader onOpenCosts={() => setIsCostDashboardOpen(true)} onOpenEmails={() => setIsEmailPanelOpen(true)} />
 

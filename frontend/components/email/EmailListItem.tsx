@@ -11,6 +11,7 @@ interface EmailListItemProps {
 export const EmailListItem = ({ email, onRemove, disabled }: EmailListItemProps) => {
   return (
     <motion.div
+      data-testid="email-list-item"
       initial={{ opacity: 0, x: -10 }}
       animate={{ opacity: 1, x: 0 }}
       exit={{ opacity: 0, x: 10 }}
@@ -29,4 +30,4 @@ export const EmailListItem = ({ email, onRemove, disabled }: EmailListItemProps)
       </button>
     </motion.div>
   );
-}
+};
