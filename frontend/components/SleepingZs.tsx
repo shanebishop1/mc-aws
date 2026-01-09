@@ -12,11 +12,21 @@ interface ZParticle {
   delay: number;
 }
 
-export function SleepingZs() {
+interface SleepingZsProps {
+  show?: boolean;
+}
+
+export const SleepingZs = ({ show = true }: SleepingZsProps) => {
   const [particles, setParticles] = useState<ZParticle[]>([]);
   const [counter, setCounter] = useState(0);
 
   useEffect(() => {
+    // Only create particles when shown
+    if (!show) {
+      setParticles([]);
+      return;
+    }
+
     // Create new Z particles periodically
     const interval = setInterval(() => {
       setCounter((c) => c + 1);
@@ -34,7 +44,7 @@ export function SleepingZs() {
     }, 800); // New Z every 800ms
 
     return () => clearInterval(interval);
-  }, []);
+  }, [show]);
 
   // Remove particles after animation completes
   useEffect(() => {

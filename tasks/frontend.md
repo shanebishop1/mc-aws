@@ -2,23 +2,21 @@
 
 ## In Progress
 
-- [ ] [Phase 4] Design and implement main control panel page following frontend-design.md guidelines. Single-page layout with server status and all actions. Agent: engineer. Refs: frontend-design.md, goals/frontend-prd-2026-01-07.md
+- [ ] [Bug Fix] Verify button visibility logic works correctly across all server states (hibernated, stopped, running, pending, stopping). Manual testing. Agent: engineer
 
 ## To Do
 
-- [ ] [Bug Fix] Verify button visibility logic works correctly across all server states (hibernated, stopped, running, pending, stopping). Manual testing. Agent: engineer
-- [ ] [Phase 4] Implement server status display component - show state (running/stopped/hibernated), IP address when running. Agent: engineer. Refs: PRD FR1
-- [ ] [Phase 4] Implement action components for Start, Stop, Backup, Restore, Hibernate, Resume with appropriate inputs (backup name, backup selection). Agent: engineer. Refs: PRD FR2-FR7
-- [ ] [Phase 4] Implement backup list display component with refresh capability. Agent: engineer. Refs: PRD FR8
-- [ ] [Phase 4] Implement loading states and progress indication for long-running operations. Agent: engineer. Refs: PRD FR10
-- [ ] [Phase 4] Implement notification/feedback system for success, error, and warning states. Agent: engineer. Refs: PRD FR9
-- [ ] [Phase 5] Connect all frontend components to API routes - integrate status polling, action triggers, and backup listing. Agent: engineer
-- [ ] [Phase 5] Implement confirmation dialogs for destructive actions (hibernate). Agent: engineer. Refs: PRD FR6
 - [ ] [Phase 5] Test all operations end-to-end - verify start, stop, backup, restore, hibernate, resume flows work correctly. Agent: engineer
 - [ ] [Phase 5] Handle edge cases - network errors, timeouts, concurrent operations, server in transitioning states. Agent: engineer. Refs: PRD FR9
 
 ## Backlog
 
+- [ ] [engineer] Create `src/lambda/StartMinecraftServer/lib/email-utils.js` - Extract email parsing functions from index.js. Move: `extractEmails`, `parseCommand`, `getSanitizedErrorMessage`. Export as named exports.
+- [ ] [engineer] Create `src/lambda/StartMinecraftServer/lib/ec2-operations.js` - Extract EC2 operations from index.js. Move: `ensureInstanceRunning`, `getPublicIp`, `updateCloudflareDns`. Import EC2Client from @aws-sdk/client-ec2.
+- [ ] [engineer] Create `src/lambda/StartMinecraftServer/lib/volume-operations.js` - Extract volume operations from index.js. Move: `handleResume` function and volume waiting logic. Import EC2Client commands.
+- [ ] [engineer] Create `src/lambda/StartMinecraftServer/lib/ssm-operations.js` - Extract SSM operations from index.js. Move: `executeSSMCommand`, `getAllowlist`, `updateAllowlist`. Import SSMClient from @aws-sdk/client-ssm.
+- [ ] [engineer] Create `src/lambda/StartMinecraftServer/lib/notification.js` - Extract notification functions from index.js. Move: `sendNotification`. Import SESClient from @aws-sdk/client-ses.
+- [ ] [engineer] Refactor `src/lambda/StartMinecraftServer/index.js` - Import from lib modules. Keep only: handler function, handleBackup, handleRestore, handleHibernate, and command routing switch. File should become ~400 lines.
 
 ## Done
 
@@ -59,6 +57,34 @@
 - [x] [engineer] Fix cost breakdown horizontal scroll flash - The service breakdown list shows a brief horizontal scrollbar while animating in. Fix or remove the animation causing this flash.
 - [x] [engineer] Email panel caching with background refresh - Implement stale-while-revalidate pattern: (1) Cache email data permanently like costs, (2) When modal opens, instantly show cached data, (3) Fetch fresh data in background, (4) Show small loading indicator while refetching, (5) Update UI when fresh data arrives, (6) Add a manual refresh button
 - [x] [engineer] Hibernation Zs animation - When server is hibernated, animate floating "Z" letters emerging from the Decagon, drifting up and to the right, and fading out. Should be subtle and clean, not distracting.
+- [x] [engineer] Create `frontend/lib/aws/ec2-client.ts` - Extract EC2 operations from `frontend/lib/aws-client.ts`. Move: `findInstanceId`, `getInstanceState`, `getInstanceDetails`, `waitForInstanceRunning`, `waitForInstanceStopped`, `getPublicIp`, `startInstance`, `stopInstance`. Include ec2 client initialization and constants (MAX_POLL_ATTEMPTS, POLL_INTERVAL_MS). Export the ec2 client instance.
+- [x] [engineer] Create `frontend/lib/aws/ssm-client.ts` - Extract SSM operations from `frontend/lib/aws-client.ts`. Move: `checkCommandStatus`, `pollCommandCompletion`, `executeSSMCommand`, `listBackups`, `getEmailAllowlist`, `updateEmailAllowlist`, `getPlayerCount`. Include ssm client initialization. Import env from `../env`. Import ServerState type if needed.
+- [x] [engineer] Create `frontend/lib/aws/cost-client.ts` - Extract Cost Explorer operations from `frontend/lib/aws-client.ts`. Move: `CostBreakdown` interface, `CostData` interface, `getCosts` function. This module handles dynamic import of @aws-sdk/client-cost-explorer.
+- [x] [engineer] Create `frontend/lib/aws/volume-client.ts` - Extract EBS volume operations from `frontend/lib/aws-client.ts`. Move: `waitForVolumeDetached`, `detachAndDeleteVolumes`, `waitForVolumeAvailable`, `waitForVolumeAttached`, `handleResume`. Import ec2 client from `./ec2-client`. Import `getInstanceDetails` from `./ec2-client`.
+- [x] [engineer] Create `frontend/lib/aws/index.ts` - Create barrel file that re-exports all functions and types from ec2-client, ssm-client, cost-client, and volume-client. Export both named exports and the client instances (ec2, ssm).
+- [x] [engineer] Update `frontend/lib/aws-client.ts` - Replace file contents with re-exports from `./aws/index`. This maintains backward compatibility. File should become ~5 lines that just re-exports everything from the aws folder.
+- [x] [engineer] Create `frontend/components/page/PageHeader.tsx` - Extract from page.tsx. Create header component with title and icon buttons (GitHub, Costs, Email). Props: onCostClick: () => void, onEmailClick: () => void. Includes responsive layout (icons below title on mobile, absolute on desktop).
+- [x] [engineer] Create `frontend/components/page/ControlsSection.tsx` - Extract from page.tsx. Create the 3-column grid with server action buttons. Props: status, showResume, showStart, showStop, showHibernate, showBackupRestore, actionsEnabled, onAction, onResumeClick. Handles all button rendering logic.
+- [x] [engineer] Create `frontend/hooks/useServerStatus.ts` - Extract status polling logic from page.tsx. Hook returns: { status, hasVolume, ip, instanceId, playerCount, isInitialLoad, fetchStatus }. Encapsulates GET /api/status polling every 5 seconds and player count fetching.
+- [x] [engineer] Create `frontend/components/email/EmailListItem.tsx` - Extract from EmailManagementPanel.tsx. Create component that renders a single email in the allowlist with remove button. Props: email: string, onRemove: (email: string) => void, disabled: boolean. Uses motion.div with animation.
+- [x] [engineer] Create `frontend/components/email/AddEmailForm.tsx` - Extract from EmailManagementPanel.tsx. Create component with email input field and Add button. Props: onAdd: (email: string) => void, disabled: boolean. Handles local validation (EMAIL_REGEX) and Enter key submission.
+- [x] [engineer] Create `frontend/hooks/useEmailData.ts` - Extract email fetching and state management from EmailManagementPanel.tsx. Hook returns: { adminEmail, allowlist, setAllowlist, isLoading, error, refetch, saveAllowlist, isSaving, hasChanges }. Encapsulates fetch from /api/emails and PUT to /api/emails/allowlist.
+- [x] [engineer] Refactor `frontend/components/EmailManagementPanel.tsx` - Use extracted components (EmailListItem, AddEmailForm) and useEmailData hook. Remove duplicated logic. Component should become ~150 lines focused on layout and modal structure.
+- [x] [engineer] Create `frontend/components/cost/CostBreakdownTable.tsx` - Extract from CostDashboard.tsx. Create component that renders the service breakdown table. Props: breakdown: CostBreakdown[], animate: boolean. Renders the scrollable table with alternating row colors.
+- [x] [engineer] Create `frontend/hooks/useCostData.ts` - Extract cost fetching logic from CostDashboard.tsx. Hook returns: { costData, cachedAt, isLoading, error, isStale, fetchCosts, refreshCosts, hasRefreshed }. Encapsulates GET /api/costs and refresh logic.
+- [x] [engineer] Refactor `frontend/components/CostDashboard.tsx` - Use extracted CostBreakdownTable component and useCostData hook. Remove duplicated logic. Component should become ~180 lines focused on modal structure and confirmation flow.
+- [x] [engineer] Create `frontend/components/resume/BackupSelectionList.tsx` - Extract from ResumeModal.tsx. Create component that renders the list of backups with selection state. Props: backups: BackupInfo[], selectedBackup: string | null, onSelect: (name: string) => void. Includes empty state message.
+- [x] [engineer] Refactor `frontend/components/ResumeModal.tsx` - Use extracted BackupSelectionList component. File is 262 lines, should become ~200 lines after extraction. Focus on modal structure and view switching logic.
+- [x] [engineer] Refactor `frontend/app/page.tsx` - Use extracted PageHeader, ControlsSection components and useServerStatus hook. Remove duplicated logic. Page should become ~150 lines focused on layout and modal state management.
+- [x] [Phase 4] Design and implement main control panel page following frontend-design.md guidelines. Single-page layout with server status and all actions. Agent: engineer. Refs: frontend-design.md, goals/frontend-prd-2026-01-07.md
+- [x] [Phase 4] Implement server status display component - show state (running/stopped/hibernated), IP address when running. Agent: engineer. Refs: PRD FR1
+- [x] [Phase 4] Implement action components for Start, Stop, Backup, Restore, Hibernate, Resume with appropriate inputs (backup name, backup selection). Agent: engineer. Refs: PRD FR2-FR7
+- [x] [Phase 4] Implement backup list display component with refresh capability. Agent: engineer. Refs: PRD FR8
+- [x] [Phase 4] Implement loading states and progress indication for long-running operations. Agent: engineer. Refs: PRD FR10
+- [x] [Phase 4] Implement notification/feedback system for success, error, and warning states. Agent: engineer. Refs: PRD FR9
+- [x] [Phase 5] Connect all frontend components to API routes - integrate status polling, action triggers, and backup listing. Agent: engineer
+- [x] [Phase 5] Implement confirmation dialogs for destructive actions (hibernate). Agent: engineer. Refs: PRD FR6
+- [x] [engineer] Update API route imports after aws-client refactor - Update all files in `frontend/app/api/` that import from `@/lib/aws-client`. Verify imports still work since aws-client.ts now re-exports from aws/index.ts. Files to check: status/route.ts, start/route.ts, stop/route.ts, hibernate/route.ts, resume/route.ts, backup/route.ts, restore/route.ts, backups/route.ts, emails/route.ts, costs/route.ts, players/route.ts.
 
 ## Deleted
 

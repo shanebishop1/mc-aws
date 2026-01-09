@@ -9,7 +9,7 @@ interface EmailManagementPanelProps {
   onClose: () => void;
 }
 
-export function EmailManagementPanel({ isOpen, onClose }: EmailManagementPanelProps) {
+export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelProps) => {
   const {
     adminEmail,
     allowlist,
@@ -91,27 +91,6 @@ export function EmailManagementPanel({ isOpen, onClose }: EmailManagementPanelPr
                     Configure email access and notifications
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={refetch}
-                  disabled={isLoading || isRefetching}
-                  className="ml-4 text-luxury-black/40 hover:text-luxury-green transition-colors disabled:opacity-50"
-                  title="Refresh"
-                >
-                  <svg
-                    className={`w-5 h-5 ${isRefetching ? "animate-spin" : ""}`}
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                  >
-                    <path
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                      strokeWidth={2}
-                      d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-                    />
-                  </svg>
-                </button>
               </div>
 
               {isLoading ? (
@@ -149,8 +128,31 @@ export function EmailManagementPanel({ isOpen, onClose }: EmailManagementPanelPr
                   </div>
 
                   <div className="mb-8">
-                    <div className="block font-sans text-xs tracking-widest text-luxury-black/60 uppercase mb-3">
-                      Allowed Emails
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="block font-sans text-xs tracking-widest text-luxury-black/60 uppercase">
+                        Allowed Emails
+                      </span>
+                      <button
+                        type="button"
+                        onClick={refetch}
+                        disabled={isLoading || isRefetching}
+                        className="text-luxury-black/40 hover:text-luxury-green transition-colors disabled:opacity-50"
+                        title="Refresh"
+                      >
+                        <svg
+                          className={`w-4 h-4 ${isRefetching ? "animate-spin" : ""}`}
+                          fill="none"
+                          stroke="currentColor"
+                          viewBox="0 0 24 24"
+                        >
+                          <path
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            strokeWidth={2}
+                            d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                          />
+                        </svg>
+                      </button>
                     </div>
 
                     {allowlist.length === 0 && (

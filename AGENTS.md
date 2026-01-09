@@ -169,13 +169,13 @@ interface Props {
   initialState: ServerState;
 }
 
-export function ServerStatus({ initialState }: Props) {
+export const ServerStatus = ({ initialState }: Props) => {
   const [state, setState] = useState<ServerState>(initialState);
   // ...
-}
+};
 ```
 
-- Prefer function components with hooks
+- Use **const arrow functions** (`const Component = (...) => {}`) for all components
 - Use TypeScript for all props
 - Extract reusable UI to `components/ui/`
 

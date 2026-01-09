@@ -11,7 +11,7 @@ interface CostDashboardProps {
   onClose: () => void;
 }
 
-export function CostDashboard({ isOpen, onClose }: CostDashboardProps) {
+export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
   const { costData, cachedAt, isLoading, error, isStale, setError, fetchCosts, refresh } = useCostData();
   const [showConfirmation, setShowConfirmation] = useState(true);
 

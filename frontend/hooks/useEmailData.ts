@@ -55,15 +55,27 @@ export function useEmailData(): UseEmailDataReturn {
 
   const refetch = useCallback(async () => {
     setIsRefetching(true);
+
+    const minDelayPromise = new Promise<void>((resolve) => {
+      window.setTimeout(resolve, 500);
+    });
+
     try {
       const response = await fetch("/api/emails?refresh=true");
       const data = await response.json();
+
       if (data.success && data.data) {
         setAdminEmail(data.data.adminEmail);
         setAllowlist(data.data.allowlist);
         setOriginalAllowlist(data.data.allowlist);
+        setError(null);
+      } else {
+        setError(data.error || "Failed to refresh emails");
       }
+    } catch {
+      setError("Failed to refresh emails");
     } finally {
+      await minDelayPromise;
       setIsRefetching(false);
     }
   }, []);

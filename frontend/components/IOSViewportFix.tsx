@@ -2,7 +2,7 @@
 
 import { useEffect } from "react";
 
-export function IOSViewportFix() {
+export const IOSViewportFix = () => {
   useEffect(() => {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     
