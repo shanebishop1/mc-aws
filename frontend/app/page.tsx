@@ -74,7 +74,7 @@ export default function Home() {
 
   return (
     <>
-      <main className="h-full flex flex-col px-4 md:pb-0 bg-luxury-cream selection:bg-luxury-green selection:text-white">
+      <main className="h-full flex flex-col px-4 md:pb-0 bg-cream selection:bg-green selection:text-white">
         {/* Header */}
         <PageHeader onOpenCosts={() => setIsCostDashboardOpen(true)} onOpenEmails={() => setIsEmailPanelOpen(true)} />
 
@@ -108,13 +108,13 @@ export default function Home() {
               className={`font-sans text-xs tracking-widest uppercase ${
                 message.includes("Error") || message.includes("Failed") || status === "unknown"
                   ? "text-red-800"
-                  : "text-luxury-green"
+                  : "text-green"
               }`}
             >
               {message}
             </motion.p>
           )}
-          <p className="font-sans uppercase text-[10px] text-luxury-black/30 tracking-[0.2em]">
+          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">
             Shane Bishop | 2026 {/* PHASE IV */}
           </p>
         </footer>

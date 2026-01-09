@@ -76,7 +76,7 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
               duration: particle.duration,
               ease: "easeOut",
             }}
-            className="absolute font-serif font-semibold italic text-luxury-black/40"
+            className="absolute font-serif font-semibold italic text-charcoal/40"
             style={{
               fontSize: particle.size,
               left: "55%",

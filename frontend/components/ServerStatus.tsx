@@ -28,9 +28,9 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
 
   // Determine color: Neutral for loading, Red for unknown/error, Green for running, Black for others
   const renderColor = () => {
-    if (isLoading) return "text-luxury-black/50 animate-pulse";
+    if (isLoading) return "text-charcoal/50 animate-pulse";
     if (state === "unknown") return "text-red-800";
-    return "text-luxury-green";
+    return "text-green";
   };
 
   return (
@@ -43,15 +43,15 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
 
       {/* Status Text - Huge Serif Italic */}
       <div className="text-center space-y-4">
-        <h2 className="text-luxury-black font-serif text-5xl md:text-6xl tracking-tight">
-          Server <span className={`italic ${renderColor()}`}>{label}</span>
+        <h2 className="text-charcoal font-serif text-5xl md:text-6xl tracking-tight">
+          Server<br className="sm:hidden" /> <span className={`italic ${renderColor()}`}>{label}</span>
         </h2>
 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
           {/* IP address - always reserve space to prevent layout shift */}
           <div className="h-6 flex items-center justify-center">
             {!isLoading && ip ? (
-              <span className="font-sans text-xs tracking-[0.2em] text-luxury-black/50 uppercase">{ip}</span>
+              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/50 uppercase">{ip}</span>
             ) : (
               <span className="font-sans text-xs tracking-[0.2em] text-transparent uppercase">0.0.0.0</span>
             )}
@@ -59,7 +59,7 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
           {/* Player count - always reserve space to prevent layout shift */}
           <div className="h-5 flex items-center justify-center">
             {!isLoading && state === "running" && playerCount !== undefined ? (
-              <span className="font-sans text-xs tracking-[0.15em] text-luxury-black/40 uppercase">
+              <span className="font-sans text-xs tracking-[0.15em] text-charcoal/40 uppercase">
                 {playerCount === 1 ? "1 player online" : `${playerCount} players online`}
               </span>
             ) : (
@@ -70,4 +70,4 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
       </div>
     </div>
   );
-}
+};
