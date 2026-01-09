@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { updateEmailAllowlist } from "@/lib/aws-client";
 
 declare global {
-  // eslint-disable-next-line no-var
   var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;
 }
 
