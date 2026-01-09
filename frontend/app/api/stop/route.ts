@@ -24,16 +24,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const currentState = await getInstanceState(resolvedId);
     console.log("[STOP] Current state:", currentState);
 
-    // If already stopped, just return success
+    // If already stopped, return error (per requirement)
     if (currentState === ServerState.Stopped || currentState === ServerState.Hibernating) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          instanceId: resolvedId,
-          message: "Server is already stopped",
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Server is already stopped",
+          timestamp: new Date().toISOString(),
         },
-        timestamp: new Date().toISOString(),
-      });
+        { status: 400 }
+      );
     }
 
     if (currentState !== ServerState.Running && currentState !== ServerState.Pending) {

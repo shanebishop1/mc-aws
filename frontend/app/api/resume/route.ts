@@ -21,23 +21,15 @@ import type { ApiResponse, ResumeResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-async function handleAlreadyRunning(resolvedId: string): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
-  try {
-    const publicIp = await getPublicIp(resolvedId);
-    return NextResponse.json({
-      success: true,
-      data: {
-        instanceId: resolvedId,
-        publicIp,
-        domain: env.CLOUDFLARE_MC_DOMAIN,
-        message: "Server is already running",
-      },
+async function handleAlreadyRunning(): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
+  return NextResponse.json(
+    {
+      success: false,
+      error: "Server is already running",
       timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.warn("[RESUME] Could not get public IP for running instance:", error);
-    return null;
-  }
+    },
+    { status: 400 }
+  );
 }
 
 async function validateInstanceState(currentState: string): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
@@ -97,7 +89,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     console.log("[RESUME] Current state:", currentState);
 
     if (currentState === ServerState.Running) {
-      const response = await handleAlreadyRunning(resolvedId);
+      const response = await handleAlreadyRunning();
       if (response) return response;
     }
 

@@ -36,23 +36,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const currentState = await getInstanceState(resolvedId);
     console.log("[START] Current state:", currentState);
 
-    // If running, just return current IP
+    // If running, return error (per requirement)
     if (currentState === "running") {
-      try {
-        const publicIp = await getPublicIp(resolvedId);
-        return NextResponse.json({
-          success: true,
-          data: {
-            instanceId: resolvedId,
-            publicIp,
-            domain: env.CLOUDFLARE_MC_DOMAIN,
-            message: "Server is already running",
-          },
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Server is already running",
           timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.warn("[START] Could not get public IP for running instance:", error);
-      }
+        },
+        { status: 400 }
+      );
     }
 
     // Handle hibernation recovery (creates volume if needed)
