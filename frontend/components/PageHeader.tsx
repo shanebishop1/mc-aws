@@ -5,9 +5,10 @@ import { motion } from "framer-motion";
 interface PageHeaderProps {
   onOpenCosts: () => void;
   onOpenEmails: () => void;
+  awsConsoleUrl?: string;
 }
 
-export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
+export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHeaderProps) => {
   return (
     <motion.header
       data-testid="page-header"
@@ -79,6 +80,27 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
             />
           </svg>
         </motion.button>
+
+        {/* AWS Console Button - always show, fallback to generic AWS signin */}
+        <motion.a
+          href={awsConsoleUrl || "https://console.aws.amazon.com"}
+          target="_blank"
+          rel="noopener noreferrer"
+          whileHover={{ scale: 1.1 }}
+          transition={{ duration: 0.1 }}
+          whileTap={{ scale: 0.95 }}
+          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
+          title="Open in AWS Console"
+        >
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={1.5}
+              d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"
+            />
+          </svg>
+        </motion.a>
       </div>
     </motion.header>
   );

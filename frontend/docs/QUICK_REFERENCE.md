@@ -34,7 +34,7 @@
 ### Server Status Detection
 - ✅ Running
 - ✅ Stopped (with volume)
-- ✅ Hibernated (no volume)
+- ✅ Hibernating (no volume)
 - ✅ Pending
 - ✅ Stopping
 - ✅ Terminated
@@ -129,14 +129,14 @@ Returns current state without changing it.
 
 ### Start Endpoint
 ```
-any state → hibernated check → volume creation (if needed)
+any state → hibernating check → volume creation (if needed)
          → start command → running → get IP → update DNS → success
 ```
 
 ### Stop Endpoint
 ```
 running/pending → stop command → success
-stopped/hibernated → already stopped → success
+stopped/hibernating → already stopped → success
 other states → error
 ```
 
@@ -197,7 +197,7 @@ These are pinned to specific versions for stability. Update to latest if needed.
 - [ ] Test status: `curl http://localhost:3000/api/status`
 - [ ] Test with running server
 - [ ] Test with stopped server
-- [ ] Test with hibernated server (if available)
+- [ ] Test with hibernating server (if available)
 - [ ] Verify Cloudflare DNS updates on start
 - [ ] Check CloudWatch logs for errors
 

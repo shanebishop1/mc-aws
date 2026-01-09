@@ -53,7 +53,7 @@ GET /api/status
 **State Values:**
 - `running` - Instance is running and server is operational
 - `stopped` - Instance is stopped but EBS volume is attached (quick restart)
-- `hibernated` - Instance is stopped and no EBS volumes attached (hibernation state)
+- `hibernating` - Instance is stopped and no EBS volumes attached (hibernation state)
 - `pending` - Instance is starting up
 - `stopping` - Instance is shutting down
 - `terminated` - Instance has been terminated
@@ -76,7 +76,7 @@ GET /api/status
 
 **Behavior:**
 1. Checks current instance state
-2. If hibernated (no EBS volumes):
+  2. If hibernating (no EBS volumes):
    - Looks up latest Amazon Linux 2023 ARM64 AMI
    - Creates 8GB GP3 volume from AMI snapshot
    - Waits for volume to be available
@@ -175,7 +175,7 @@ POST /api/stop
   - `waitForInstanceRunning()` - Polls until running state
   - `getPublicIp()` - Polls for public IP assignment (up to 5 minutes)
   - `startInstance()` / `stopInstance()` - Send commands
-  - `handleResume()` - Creates and attaches volume if hibernated
+  - `handleResume()` - Creates and attaches volume if hibernating
   - `executeSSMCommand()` - Runs commands on EC2 (for future use)
 - All polling has timeout protection to prevent infinite waits
 
