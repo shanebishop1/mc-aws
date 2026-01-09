@@ -1,8 +1,8 @@
 "use client";
 
-import { motion, AnimatePresence } from "framer-motion";
-import { EmailListItem, AddEmailForm } from "@/components/email";
+import { AddEmailForm, EmailListItem } from "@/components/email";
 import { useEmailData } from "@/hooks/useEmailData";
+import { AnimatePresence, motion } from "framer-motion";
 
 interface EmailManagementPanelProps {
   isOpen: boolean;
@@ -50,6 +50,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          data-testid="email-management-panel"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
@@ -84,9 +85,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
             >
               <div className="flex items-center justify-between mb-8">
                 <div className="text-center flex-1">
-                  <h2 className="font-serif text-2xl italic text-charcoal mb-2">
-                    Email Management
-                  </h2>
+                  <h2 className="font-serif text-2xl italic text-charcoal mb-2">Email Management</h2>
                   <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                     Configure email access and notifications
                   </p>
@@ -118,12 +117,8 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                       Admin Email
                     </div>
                     <div className="p-4 bg-charcoal/5 border border-charcoal/10 rounded-sm">
-                      <p className="font-sans text-sm text-charcoal mb-2">
-                        {adminEmail || "—"}
-                      </p>
-                      <p className="font-sans text-xs text-charcoal/50">
-                        Set at deploy time. Redeploy to change.
-                      </p>
+                      <p className="font-sans text-sm text-charcoal mb-2">{adminEmail || "—"}</p>
+                      <p className="font-sans text-xs text-charcoal/50">Set at deploy time. Redeploy to change.</p>
                     </div>
                   </div>
 
@@ -179,12 +174,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                     {allowlist.length > 0 && (
                       <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
                         {allowlist.map((email) => (
-                          <EmailListItem
-                            key={email}
-                            email={email}
-                            onRemove={handleRemove}
-                            disabled={isSaving}
-                          />
+                          <EmailListItem key={email} email={email} onRemove={handleRemove} disabled={isSaving} />
                         ))}
                       </div>
                     )}
@@ -219,4 +209,4 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
       )}
     </AnimatePresence>
   );
-}
+};

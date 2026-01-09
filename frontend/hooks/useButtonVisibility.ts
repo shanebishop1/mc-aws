@@ -13,10 +13,7 @@ interface ButtonVisibilityState {
   actionsEnabled: boolean;
 }
 
-export function useButtonVisibility(
-  status: ServerState,
-  hasVolume?: boolean
-): ButtonVisibilityState {
+export function useButtonVisibility(status: ServerState, hasVolume?: boolean): ButtonVisibilityState {
   const isHibernated = status === "hibernated" || (status === "stopped" && !hasVolume);
   const isStopped = status === "stopped" && !!hasVolume;
   const isRunning = status === "running";

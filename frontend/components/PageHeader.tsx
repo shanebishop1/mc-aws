@@ -10,6 +10,7 @@ interface PageHeaderProps {
 export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
   return (
     <motion.header
+      data-testid="page-header"
       initial={{ y: -20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.8, ease: "easeOut" }}

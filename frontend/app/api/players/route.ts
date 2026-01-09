@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { getPlayerCount } from "@/lib/aws-client";
+import { NextResponse } from "next/server";
 
 export async function GET() {
   try {
@@ -7,9 +7,6 @@ export async function GET() {
     return NextResponse.json({ success: true, data });
   } catch (error) {
     console.error("Failed to get player count:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch player count" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Failed to fetch player count" }, { status: 500 });
   }
 }

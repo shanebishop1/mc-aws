@@ -114,4 +114,3 @@ export interface PlayersResponse {
   data?: PlayerCountData;
   error?: string;
 }
-

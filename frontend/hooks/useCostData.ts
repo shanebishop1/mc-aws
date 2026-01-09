@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useCallback } from "react";
 import type { CostData, CostsResponse } from "@/lib/types";
+import { useCallback, useState } from "react";
 
 interface UseCostDataReturn {
   costData: CostData | null;

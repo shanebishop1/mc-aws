@@ -2,12 +2,7 @@
  * AWS EC2 client initialization and utilities
  */
 
-import {
-  DescribeInstancesCommand,
-  EC2Client,
-  StartInstancesCommand,
-  StopInstancesCommand,
-} from "@aws-sdk/client-ec2";
+import { DescribeInstancesCommand, EC2Client, StartInstancesCommand, StopInstancesCommand } from "@aws-sdk/client-ec2";
 import { env } from "../env";
 import type { ServerState } from "../types";
 

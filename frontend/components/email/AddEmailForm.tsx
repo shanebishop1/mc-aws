@@ -35,7 +35,7 @@ export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
   };
 
   return (
-    <div className="space-y-2">
+    <div data-testid="add-email-form" className="space-y-2">
       <div className="flex gap-2">
         <input
           type="email"
@@ -58,9 +58,7 @@ export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
           Add
         </button>
       </div>
-      {error && (
-        <p className="font-sans text-xs text-red-500">{error}</p>
-      )}
+      {error && <p className="font-sans text-xs text-red-500">{error}</p>}
     </div>
   );
-}
+};

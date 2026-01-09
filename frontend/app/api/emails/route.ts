@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { getEmailAllowlist } from "@/lib/aws-client";
+import { NextResponse } from "next/server";
 
 // Permanent in-memory cache
 let cachedEmails: {
@@ -38,9 +38,6 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error("Failed to get emails:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch email configuration" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Failed to fetch email configuration" }, { status: 500 });
   }
 }

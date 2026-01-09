@@ -1,10 +1,10 @@
 "use client";
 
-import { LuxuryButton } from "@/components/ui/Button";
-import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useState } from "react";
 import { CostBreakdownTable } from "@/components/cost";
+import { LuxuryButton } from "@/components/ui/Button";
 import { useCostData } from "@/hooks/useCostData";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useState } from "react";
 
 interface CostDashboardProps {
   isOpen: boolean;
@@ -47,6 +47,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          data-testid="cost-dashboard"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}
