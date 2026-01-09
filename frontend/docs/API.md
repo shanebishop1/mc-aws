@@ -1,42 +1,50 @@
-# MC-AWS Backend API Routes
+# Minecraft Server Control API Reference
 
-This document describes the implemented backend API routes for the Minecraft server control panel.
+This document provides a comprehensive reference for all API endpoints available in the mc-aws server management system.
 
-## Overview
+## Base URL
 
-The backend API provides three core endpoints for managing the EC2-based Minecraft server:
+All endpoints are relative to the server base URL:
+- Development: `http://localhost:3000`
+- Production: `https://your-domain.com`
 
-1. **GET /api/status** - Check server status
-2. **POST /api/start** - Start the server (with hibernation recovery)
-3. **POST /api/stop** - Stop the server
+## Response Format
 
-## Environment Configuration
+All responses follow a consistent JSON structure:
 
-The API routes require the following environment variables to be set in the parent `.env` file (automatically loaded by Next.js):
-
-### AWS Configuration
-- `AWS_REGION` - AWS region where your resources are located
-- `AWS_ACCOUNT_ID` - Your AWS account ID
-- `INSTANCE_ID` - EC2 instance ID for the Minecraft server
-
-### Cloudflare Configuration
-- `CLOUDFLARE_ZONE_ID` - Cloudflare zone ID
-- `CLOUDFLARE_RECORD_ID` - Cloudflare DNS record ID
-- `CLOUDFLARE_MC_DOMAIN` - Domain name for your Minecraft server
-- `CLOUDFLARE_API_TOKEN` - Cloudflare API token with DNS edit permissions
-
-## API Endpoints
-
-### 1. GET /api/status
-
-**Description:** Returns the current server state and metadata.
-
-**Request:**
-```bash
-GET /api/status
+```json
+{
+  "success": true,
+  "data": { ... },
+  "timestamp": "2026-01-09T..."
+}
 ```
 
-**Response (Success - 200):**
+**Error Response:**
+```json
+{
+  "success": false,
+  "error": "Human-readable error message",
+  "timestamp": "2026-01-09T..."
+}
+```
+
+---
+
+## Server Management
+
+### Get Server Status
+
+**Method:** GET  
+**Path:** `/api/status`  
+**Description:** Returns the current server state, instance details, and public IP address. The endpoint verifies the instance state via AWS API.
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| instanceId | string | No | Instance ID to check (defaults to auto-discovery) |
+
+**Response:**
 ```json
 {
   "success": true,
@@ -44,54 +52,51 @@ GET /api/status
     "state": "running",
     "instanceId": "i-1234567890abcdef0",
     "publicIp": "203.0.113.42",
-    "lastUpdated": "2026-01-07T15:30:00.000Z"
+    "hasVolume": true,
+    "lastUpdated": "2026-01-09T10:30:00.000Z"
   },
-  "timestamp": "2026-01-07T15:30:00.000Z"
+  "timestamp": "2026-01-09T10:30:00.000Z"
 }
 ```
 
 **State Values:**
-- `running` - Instance is running and server is operational
-- `stopped` - Instance is stopped but EBS volume is attached (quick restart)
-- `hibernating` - Instance is stopped and no EBS volumes attached (hibernation state)
-- `pending` - Instance is starting up
-- `stopping` - Instance is shutting down
-- `terminated` - Instance has been terminated
-- `unknown` - Could not determine state
+| State | Description |
+|-------|-------------|
+| `running` | Instance is running and server is operational |
+| `stopped` | Instance is stopped but EBS volume is attached (quick restart) |
+| `hibernating` | Instance is stopped with no EBS volumes attached |
+| `pending` | Instance is starting up |
+| `stopping` | Instance is shutting down |
+| `terminated` | Instance has been terminated |
+| `unknown` | Could not determine state |
 
-**Response (Error - 500):**
-```json
-{
-  "success": false,
-  "error": "Instance i-1234567890abcdef0 not found",
-  "timestamp": "2026-01-07T15:30:00.000Z"
-}
+**Example:**
+```bash
+curl http://localhost:3000/api/status
 ```
 
 ---
 
-### 2. POST /api/start
+### Start Server
 
-**Description:** Starts the server. Handles both normal start and hibernation recovery.
+**Method:** POST  
+**Path:** `/api/start`  
+**Description:** Starts the server instance. Handles hibernation recovery automatically by creating and attaching an EBS volume if needed. Updates Cloudflare DNS after the server is running.
+
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| instanceId | string | No | Instance ID to start (defaults to auto-discovery) |
 
 **Behavior:**
 1. Checks current instance state
-  2. If hibernating (no EBS volumes):
-   - Looks up latest Amazon Linux 2023 ARM64 AMI
-   - Creates 8GB GP3 volume from AMI snapshot
-   - Waits for volume to be available
-   - Attaches volume to instance at `/dev/xvda`
+2. If hibernating (no EBS volumes), creates and attaches a new volume
 3. Sends EC2 start command
 4. Waits for instance to reach "running" state
 5. Polls for public IP assignment
 6. Updates Cloudflare DNS A record
 
-**Request:**
-```bash
-POST /api/start
-```
-
-**Response (Success - 200):**
+**Response:**
 ```json
 {
   "success": true,
@@ -101,36 +106,29 @@ POST /api/start
     "domain": "minecraft.example.com",
     "message": "Server started successfully. DNS updated to 203.0.113.42"
   },
-  "timestamp": "2026-01-07T15:30:00.000Z"
+  "timestamp": "2026-01-09T10:30:00.000Z"
 }
 ```
 
-**Response (Error - 500):**
-```json
-{
-  "success": false,
-  "error": "Timed out waiting for public IP address.",
-  "timestamp": "2026-01-07T15:30:00.000Z"
-}
+**Example:**
+```bash
+curl -X POST http://localhost:3000/api/start
 ```
-
-**Timeouts:**
-- Instance startup: 300 seconds
-- Public IP assignment: 300 seconds (with 1s polling)
-- Volume operations: 5 minutes each
 
 ---
 
-### 3. POST /api/stop
+### Stop Server
 
-**Description:** Stops the EC2 instance. The EBS volume remains attached for quick restart (unlike hibernation which deletes the volume).
+**Method:** POST  
+**Path:** `/api/stop`  
+**Description:** Stops the EC2 instance while keeping the EBS volume attached. Unlike hibernation, this allows for quick restarts without volume recreation.
 
-**Request:**
-```bash
-POST /api/stop
-```
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| instanceId | string | No | Instance ID to stop (defaults to auto-discovery) |
 
-**Response (Success - 200):**
+**Response:**
 ```json
 {
   "success": true,
@@ -138,200 +136,413 @@ POST /api/stop
     "instanceId": "i-1234567890abcdef0",
     "message": "Server stop command sent successfully"
   },
-  "timestamp": "2026-01-07T15:30:00.000Z"
+  "timestamp": "2026-01-09T10:30:00.000Z"
 }
 ```
 
-**Response (Error - 400/500):**
-```json
-{
-  "success": false,
-  "error": "Cannot stop server in state: terminated",
-  "timestamp": "2026-01-07T15:30:00.000Z"
-}
+**Example:**
+```bash
+curl -X POST http://localhost:3000/api/stop
 ```
 
 ---
 
-## Implementation Details
+### Hibernate Server
 
-### Library Files
+**Method:** POST  
+**Path:** `/api/hibernate`  
+**Description:** Puts the server into full hibernation mode. This performs a backup, stops the EC2 instance, and deletes all EBS volumes to eliminate ongoing storage costs. The server cannot be resumed without a backup.
 
-#### `/lib/env.ts`
-- Validates and exports all required environment variables
-- Throws error on startup if required vars are missing
-- Supports optional variables for future features
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| instanceId | string | No | Instance ID to hibernate (defaults to auto-discovery) |
 
-#### `/lib/types.ts`
-- TypeScript types for all API responses
-- Server state type definition
-- Generic `ApiResponse<T>` wrapper for consistency
+**Process:**
+1. Runs backup script (`mc-backup.sh`) on the server
+2. Sends EC2 stop command
+3. Waits for instance to stop
+4. Detaches and deletes all EBS volumes
 
-#### `/lib/aws-client.ts`
-- EC2 and SSM client initialization
-- Core AWS operations:
-  - `getInstanceState()` - Detects hibernation state (stopped + no volumes)
-  - `getInstanceDetails()` - Gets full instance metadata
-  - `waitForInstanceRunning()` - Polls until running state
-  - `getPublicIp()` - Polls for public IP assignment (up to 5 minutes)
-  - `startInstance()` / `stopInstance()` - Send commands
-  - `handleResume()` - Creates and attaches volume if hibernating
-  - `executeSSMCommand()` - Runs commands on EC2 (for future use)
-- All polling has timeout protection to prevent infinite waits
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "message": "Server hibernating successfully (volumes deleted)",
+    "instanceId": "i-1234567890abcdef0",
+    "backupOutput": "Backup completed successfully"
+  },
+  "timestamp": "2026-01-09T10:30:00.000Z"
+}
+```
 
-#### `/lib/cloudflare.ts`
-- `updateCloudflareDns()` - Updates Cloudflare DNS A record via API
-- Requires CLOUDFLARE_API_TOKEN with DNS edit permissions
+**Example:**
+```bash
+curl -X POST http://localhost:3000/api/hibernate
+```
 
-### API Routes
+---
 
-#### `/app/api/status/route.ts`
-- Reads instance state from EC2 API
-- Returns public IP only if running
-- Handles errors gracefully
+### Resume Server
 
-#### `/app/api/start/route.ts`
-- Orchestrates full startup sequence
-- Detects hibernation and triggers volume recovery
-- Waits for all prerequisites before starting
-- Updates DNS on success
-- Comprehensive error handling
+**Method:** POST  
+**Path:** `/api/resume`  
+**Description:** Resumes the server from hibernation. Creates a new EBS volume, starts the instance, and optionally restores from a backup. Combines start logic with restore functionality.
 
-#### `/app/api/stop/route.ts`
-- Simple stop with state validation
-- Won't stop if already stopped
-- Won't stop if in incompatible state (terminated, etc.)
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| instanceId | string | No | Instance ID to resume (defaults to auto-discovery) |
+| backupName | string | No | Optional backup name to restore after resume |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "instanceId": "i-1234567890abcdef0",
+    "publicIp": "203.0.113.42",
+    "domain": "minecraft.example.com",
+    "message": "Server resumed successfully. DNS updated to 203.0.113.42 and restored from backup backup-2026-01-08"
+  },
+  "timestamp": "2026-01-09T10:30:00.000Z"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:3000/api/resume \
+  -H "Content-Type: application/json" \
+  -d '{"backupName": "backup-2026-01-08"}'
+```
+
+---
+
+## Backup & Restore
+
+### Trigger Backup
+
+**Method:** POST  
+**Path:** `/api/backup`  
+**Description:** Triggers a backup of the server to Google Drive via the `mc-backup.sh` script running on the EC2 instance.
+
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| name | string | No | Optional custom name for the backup |
+| instanceId | string | No | Instance ID (defaults to auto-discovery) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "backupName": "backup-2026-01-09",
+    "message": "Backup completed successfully (backup-2026-01-09)",
+    "output": "Backup script output..."
+  },
+  "timestamp": "2026-01-09T10:30:00.000Z"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:3000/api/backup \
+  -H "Content-Type: application/json" \
+  -d '{"name": "backup-2026-01-09"}'
+```
+
+---
+
+### Restore from Backup
+
+**Method:** POST  
+**Path:** `/api/restore`  
+**Description:** Restores the server from a Google Drive backup. The server must be running before executing this endpoint.
+
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| backupName | string | No | Name of the backup to restore (defaults to latest) |
+| name | string | No | Alias for backupName (for backward compatibility) |
+| instanceId | string | No | Instance ID (defaults to auto-discovery) |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "backupName": "backup-2026-01-08",
+    "publicIp": "203.0.113.42",
+    "message": "Restore completed successfully (backup-2026-01-08)\nDNS updated to 203.0.113.42",
+    "output": "Restore script output..."
+  },
+  "timestamp": "2026-01-09T10:30:00.000Z"
+}
+```
+
+**Example:**
+```bash
+curl -X POST http://localhost:3000/api/restore \
+  -H "Content-Type: application/json" \
+  -d '{"backupName": "backup-2026-01-08"}'
+```
+
+---
+
+### List Backups
+
+**Method:** GET  
+**Path:** `/api/backups`  
+**Description:** Lists all available backups from Google Drive. Requires the server to be running to execute the rclone command via SSM.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "backups": [
+      { "name": "backup-2026-01-09", "date": "2026-01-09T10:00:00.000Z", "size": "2.3GB" },
+      { "name": "backup-2026-01-08", "date": "2026-01-08T10:00:00.000Z", "size": "2.2GB" }
+    ],
+    "count": 2
+  },
+  "timestamp": "2026-01-09T10:30:00.000Z"
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:3000/api/backups
+```
+
+---
+
+## Monitoring
+
+### Get Player Count
+
+**Method:** GET  
+**Path:** `/api/players`  
+**Description:** Returns the current player count on the Minecraft server. Uses the `list-mc-players.sh` script on the EC2 instance.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "count": 5,
+    "lastUpdated": "2026-01-09T10:30:00.000Z"
+  }
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:3000/api/players
+```
+
+---
+
+### Get Cost Data
+
+**Method:** GET  
+**Path:** `/api/costs`  
+**Description:** Returns AWS cost breakdown for the current billing period. Results are cached in memory for 5 minutes.
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| refresh | boolean | No | Set to "true" to bypass cache and fetch fresh data |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "period": { "start": "2026-01-01", "end": "2026-01-31" },
+    "totalCost": "12.50",
+    "currency": "USD",
+    "breakdown": [
+      { "service": "EC2", "cost": "8.00" },
+      { "service": "EBS", "cost": "3.50" },
+      { "service": "Data Transfer", "cost": "1.00" }
+    ],
+    "fetchedAt": "2026-01-09T10:30:00.000Z"
+  },
+  "cachedAt": 1704805800000
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:3000/api/costs
+curl http://localhost:3000/api/costs?refresh=true
+```
+
+---
+
+## Configuration
+
+### Get AWS Configuration
+
+**Method:** GET  
+**Path:** `/api/aws-config`  
+**Description:** Returns AWS configuration for constructing console URLs. Useful for generating links to the AWS management console.
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "region": "us-east-1",
+    "instanceId": "i-1234567890abcdef0",
+    "ec2ConsoleUrl": "https://us-east-1.console.aws.amazon.com/ec2/home?region=us-east-1#InstanceDetails:instanceId=i-1234567890abcdef0"
+  },
+  "timestamp": "2026-01-09T10:30:00.000Z"
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:3000/api/aws-config
+```
+
+---
+
+## Email Management
+
+### Get Email Configuration
+
+**Method:** GET  
+**Path:** `/api/emails`  
+**Description:** Returns the current email configuration including admin email and allowlist. Results are cached in memory.
+
+**Query Parameters:**
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| refresh | boolean | No | Set to "true" to bypass cache and fetch fresh data |
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "adminEmail": "admin@example.com",
+    "allowlist": ["player1@example.com", "player2@example.com"]
+  },
+  "cachedAt": 1704805800000
+}
+```
+
+**Example:**
+```bash
+curl http://localhost:3000/api/emails
+curl http://localhost:3000/api/emails?refresh=true
+```
+
+---
+
+### Update Email Allowlist
+
+**Method:** PUT  
+**Path:** `/api/emails/allowlist`  
+**Description:** Updates the email allowlist for server access notifications.
+
+**Request Body:**
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| emails | string[] | Yes | Array of email addresses to allowlist |
+
+**Request:**
+```json
+{
+  "emails": ["player1@example.com", "player2@example.com", "player3@example.com"]
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "allowlist": ["player1@example.com", "player2@example.com", "player3@example.com"]
+  }
+}
+```
+
+**Example:**
+```bash
+curl -X PUT http://localhost:3000/api/emails/allowlist \
+  -H "Content-Type: application/json" \
+  -d '{"emails": ["player1@example.com", "player2@example.com"]}'
+```
 
 ---
 
 ## Error Handling
 
-All endpoints follow a consistent error pattern:
+All endpoints follow a consistent error handling pattern. HTTP status codes indicate the type of error:
 
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Success |
+| 400 | Bad Request - Invalid state for operation |
+| 500 | Server Error - Operation failed |
+
+**Error Response Structure:**
 ```json
 {
   "success": false,
   "error": "Human-readable error message",
-  "timestamp": "ISO timestamp"
+  "timestamp": "2026-01-09T10:30:00.000Z"
 }
 ```
 
-Common error scenarios:
-- **Missing environment variables** - Thrown during module load (500)
-- **Instance not found** - Returned from AWS API (500)
-- **Timeout waiting for state change** - After max polling attempts (500)
-- **Cloudflare API failure** - Returns API error details (500)
-- **Invalid state for operation** - Before operation attempt (400)
+**Common Errors:**
+| Error | Description |
+|-------|-------------|
+| `Cannot hibernate when server is stopped` | Server must be running to hibernate |
+| `Cannot restore when server is terminated` | Server must be running to restore |
+| `Cannot backup when server is stopped` | Server must be running to backup |
+| `Invalid email format: invalid-email` | Email validation failed |
 
 ---
 
-## Polling Behavior
+## Environment Variables
 
-### Public IP Polling
-- Polls up to 300 times
-- 1 second between attempts
-- Maximum wait: ~5 minutes
-- Aborts early if instance enters stopped/terminated state
+The API requires the following environment variables:
 
-### Volume Creation/Attachment
-- 60 attempts for availability (5 seconds between attempts)
-- 60 attempts for attachment (2 seconds between attempts)
-- Each operation has independent timeout
-
-### Instance Startup
-- Polls every 2 seconds
-- Maximum 300 second timeout
-- Aborts if instance enters terminated state
-
----
-
-## Security Notes
-
-1. **No authentication** - As per PRD, this is single-admin only
-2. **AWS credentials** - Uses local AWS credentials (same as CLI scripts)
-3. **Cloudflare token** - Should be treated as secret (not in version control)
-4. **Input validation** - Currently minimal as routes have no user input
-5. **HTTPS enforcement** - Recommended for production (not in scope)
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `AWS_REGION` | Yes | AWS region (e.g., `us-east-1`) |
+| `AWS_ACCOUNT_ID` | Yes | AWS account ID |
+| `INSTANCE_ID` | No* | EC2 instance ID (*auto-discovers if not set) |
+| `CLOUDFLARE_ZONE_ID` | Yes | Cloudflare zone ID |
+| `CLOUDFLARE_RECORD_ID` | Yes | Cloudflare DNS record ID |
+| `CLOUDFLARE_MC_DOMAIN` | Yes | Minecraft server domain |
+| `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token |
+| `NOTIFICATION_EMAIL` | Yes | Admin notification email |
+| `GDRIVE_REMOTE` | Yes | rclone remote name for Google Drive |
+| `GDRIVE_ROOT` | Yes | Google Drive folder path |
 
 ---
 
-## Future Enhancements
+## Quick Reference
 
-The framework supports these planned features:
-
-### Backup/Restore API
-- `/api/backup` - Trigger backup via SSM command
-- `/api/restore` - Trigger restore via SSM command
-- `/api/backups` - List available backups from Google Drive
-
-### Hibernation API
-- `/api/hibernate` - Full hibernation (backup + stop + delete volume)
-
-### Resume API
-- `/api/resume` - Resume from hibernation with selected backup
-
-The infrastructure for these is partially implemented:
-- `executeSSMCommand()` utility is ready to call on-server scripts
-- State detection handles hibernation state correctly
-
----
-
-## Testing
-
-### Manual Testing
-
-1. **Check status:**
-   ```bash
-   curl http://localhost:3000/api/status
-   ```
-
-2. **Start server:**
-   ```bash
-   curl -X POST http://localhost:3000/api/start
-   ```
-
-3. **Stop server:**
-   ```bash
-   curl -X POST http://localhost:3000/api/stop
-   ```
-
-### Required Setup
-
-Before testing, ensure:
-1. `.env` file is in the repo root with all required variables
-2. AWS credentials are configured locally
-3. Cloudflare API token has DNS edit permissions
-4. EC2 instance exists and has the correct security group
-5. Run `pnpm install` to install AWS SDK packages
-
----
-
-## Configuration Example
-
-Create a `.env` file in the project root:
-
-```env
-# AWS Configuration
-AWS_REGION=us-east-1
-AWS_ACCOUNT_ID=123456789012
-INSTANCE_ID=i-1234567890abcdef0
-
-# Cloudflare Configuration
-CLOUDFLARE_ZONE_ID=abc123xyz789
-CLOUDFLARE_RECORD_ID=record123xyz
-CLOUDFLARE_MC_DOMAIN=minecraft.example.com
-CLOUDFLARE_API_TOKEN=your-api-token-here
-
-# Google Drive (optional for future use)
-GDRIVE_REMOTE=gdrive
-GDRIVE_ROOT=/Minecraft-Backups
-```
-
----
-
-## References
-
-Implementation follows patterns from:
-- `/src/lambda/StartMinecraftServer/index.js` - Core AWS logic
-- AWS SDK v3 client documentation
-- Next.js API route patterns
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/status` | GET | Get server status |
+| `/api/start` | POST | Start server |
+| `/api/stop` | POST | Stop server |
+| `/api/hibernate` | POST | Hibernate (backup + stop + delete volume) |
+| `/api/resume` | POST | Resume from hibernation |
+| `/api/backup` | POST | Trigger backup |
+| `/api/restore` | POST | Restore from backup |
+| `/api/backups` | GET | List backups |
+| `/api/players` | GET | Get player count |
+| `/api/costs` | GET | Get cost data |
+| `/api/aws-config` | GET | Get AWS configuration |
+| `/api/emails` | GET | Get email configuration |
+| `/api/emails/allowlist` | PUT | Update email allowlist |
