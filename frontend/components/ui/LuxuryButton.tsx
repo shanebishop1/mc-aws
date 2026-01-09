@@ -9,7 +9,7 @@ interface LuxuryButtonProps extends HTMLMotionProps<"button"> {
   variant?: "outline" | "text";
 }
 
-export function LuxuryButton({ children, className, variant = "outline", ...props }: LuxuryButtonProps) {
+export const LuxuryButton = ({ children, className, variant = "outline", ...props }: LuxuryButtonProps) => {
   if (variant === "text") {
     return (
       <motion.button
