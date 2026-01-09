@@ -79,6 +79,13 @@ pnpm check              # Run both lint and format with auto-fix
 - Avoid `any` - use `unknown` and narrow types when needed
 - Non-null assertions (`!`) are allowed but use sparingly
 
+### Linting Rules
+
+- **We use Biome, not ESLint** - Never add `eslint-disable` comments
+- Always fix linting issues properly rather than suppressing them
+- If Biome reports an error, refactor the code to comply
+- No lazy workarounds or rule suppressions
+
 ### Imports
 
 ```typescript
