@@ -6,8 +6,20 @@
 import { putParameter } from "@/lib/aws/ssm-client";
 import { env } from "@/lib/env";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
+  // Check admin authorization
+  try {
+    const user = requireAdmin(request);
+    console.log("[GDRIVE-CALLBACK] Admin action by:", user.email);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse;
+    }
+    throw error;
+  }
+
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const error = searchParams.get("error");

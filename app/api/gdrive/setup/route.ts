@@ -5,10 +5,22 @@
 
 import { env } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
-export async function GET(): Promise<NextResponse<ApiResponse<{ authUrl: string }>>> {
+export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ authUrl: string }>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request as NextRequest);
+      console.log("[GDRIVE-SETUP] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<{ authUrl: string }>>;
+      }
+      throw error;
+    }
+
     console.log("[GDRIVE-SETUP] Generating Google OAuth URL");
 
     const clientId = env.GOOGLE_CLIENT_ID;

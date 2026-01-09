@@ -20,6 +20,7 @@ import { env } from "@/lib/env";
 import type { ApiResponse, ResumeResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 async function handleAlreadyRunning(): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
   return NextResponse.json(
@@ -71,6 +72,17 @@ async function restoreFromBackup(
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<ResumeResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[RESUME] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<ResumeResponse>>;
+      }
+      throw error;
+    }
+
     let instanceId: string | undefined;
     let backupName: string | undefined;
 

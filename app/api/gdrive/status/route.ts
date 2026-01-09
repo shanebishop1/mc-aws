@@ -6,9 +6,21 @@
 import { getParameter } from "@/lib/aws/ssm-client";
 import type { ApiResponse, GDriveStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<GDriveStatusResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(_request);
+      console.log("[GDRIVE-STATUS] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<GDriveStatusResponse>>;
+      }
+      throw error;
+    }
+
     console.log("[GDRIVE-STATUS] Checking Google Drive configuration");
     const token = await getParameter("/minecraft/gdrive-token");
 

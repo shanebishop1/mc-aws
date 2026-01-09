@@ -9,11 +9,24 @@ import { promisify } from "node:util";
 import { checkStackExists } from "@/lib/aws/cloudformation-client";
 import type { ApiResponse, DestroyResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 const execAsync = promisify(exec);
 
 export async function POST(_request: NextRequest): Promise<NextResponse<ApiResponse<DestroyResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(_request);
+      console.log("[DESTROY] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<DestroyResponse>>;
+      }
+      throw error;
+    }
+
+    console.log("[DESTROY] Starting destruction...");
     console.log("[DESTROY] Starting destruction...");
 
     // Safety check: stack must exist to be destroyed

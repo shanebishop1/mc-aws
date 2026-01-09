@@ -11,6 +11,9 @@ export function getEnv(name: string, optional = false): string {
   return value || "";
 }
 
+// Development mode check
+export const isDev = process.env.NODE_ENV !== "production";
+
 export const env = {
   // AWS Configuration
   AWS_REGION: getEnv("AWS_REGION", true) || process.env.CDK_DEFAULT_REGION || "",
@@ -27,8 +30,32 @@ export const env = {
   GDRIVE_REMOTE: getEnv("GDRIVE_REMOTE", true),
   GDRIVE_ROOT: getEnv("GDRIVE_ROOT", true),
 
-  // Google OAuth (optional, for setup)
-  GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", true),
-  GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", true),
+  // Authentication Configuration
+  AUTH_SECRET: getEnv("AUTH_SECRET", isDev),
+  ADMIN_EMAIL: getEnv("ADMIN_EMAIL", isDev),
+  ALLOWED_EMAILS: getEnv("ALLOWED_EMAILS", true),
+
+  // Google OAuth (optional in dev, required in prod if auth is enabled)
+  GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", isDev),
+  GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", isDev),
   NEXT_PUBLIC_APP_URL: getEnv("NEXT_PUBLIC_APP_URL", true) || "http://localhost:3000",
 };
+
+/**
+ * Check if authentication is enabled
+ * Auth is enabled if Google Client ID is configured and we're not in development mode
+ */
+export function isAuthEnabled(): boolean {
+  return Boolean(env.GOOGLE_CLIENT_ID && !isDev);
+}
+
+/**
+ * Parse ALLOWED_EMAILS into an array
+ * Returns an empty array if ALLOWED_EMAILS is not set
+ */
+export function getAllowedEmails(): string[] {
+  if (!env.ALLOWED_EMAILS) {
+    return [];
+  }
+  return env.ALLOWED_EMAILS.split(",").map((email) => email.trim());
+}

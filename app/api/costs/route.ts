@@ -1,12 +1,24 @@
 import { getCosts } from "@/lib/aws-client";
 import type { ApiResponse, CostData } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 // Permanent in-memory cache (until server restart or manual refresh)
 let cachedCosts: { data: CostData; timestamp: number } | null = null;
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<CostData & { cachedAt?: number }>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[COSTS] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<CostData & { cachedAt?: number }>>;
+      }
+      throw error;
+    }
+
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "true";
 
