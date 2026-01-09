@@ -1,8 +1,8 @@
 "use client";
 
-import { LuxuryButton } from "@/components/ui/Button";
 import { BackupSelectionList } from "@/components/backup";
-import { motion, AnimatePresence } from "framer-motion";
+import { LuxuryButton } from "@/components/ui/Button";
+import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 interface BackupInfo {
@@ -83,6 +83,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
     <AnimatePresence>
       {isOpen && (
         <motion.div
+          data-testid="resume-modal"
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           exit={{ opacity: 0 }}

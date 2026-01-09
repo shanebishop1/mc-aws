@@ -26,7 +26,7 @@ export const ControlsSection = ({
   onOpenResume,
 }: ControlsSectionProps) => {
   return (
-    <div className="shrink-0 h-24 md:h-48 flex items-center justify-center w-full">
+    <div data-testid="controls-section" className="shrink-0 h-24 md:h-48 flex items-center justify-center w-full">
       {/* Controls Grid - Only renders buttons inside container */}
       {status !== "unknown" && (
         <section className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-8 items-center justify-items-center">

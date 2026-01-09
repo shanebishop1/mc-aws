@@ -13,6 +13,7 @@ export const LuxuryButton = ({ children, className, variant = "outline", ...prop
   if (variant === "text") {
     return (
       <motion.button
+        data-testid="luxury-button-text"
         whileHover={{ scale: 1.05 }}
         transition={{ duration: 0.1 }}
         whileTap={{ scale: 0.95 }}
@@ -31,6 +32,7 @@ export const LuxuryButton = ({ children, className, variant = "outline", ...prop
 
   return (
     <motion.button
+      data-testid="luxury-button"
       whileHover={{ y: -2 }}
       transition={{ duration: 0.1 }}
       whileTap={{ y: 1 }}
@@ -52,4 +54,4 @@ export const LuxuryButton = ({ children, className, variant = "outline", ...prop
       />
     </motion.button>
   );
-}
+};

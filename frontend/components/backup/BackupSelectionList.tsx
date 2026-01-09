@@ -9,12 +9,7 @@ interface BackupSelectionListProps {
   isLoading: boolean;
 }
 
-export const BackupSelectionList = ({
-  backups,
-  selectedBackup,
-  onSelect,
-  isLoading,
-}: BackupSelectionListProps) => {
+export const BackupSelectionList = ({ backups, selectedBackup, onSelect, isLoading }: BackupSelectionListProps) => {
   if (isLoading) {
     return (
       <div className="flex justify-center py-8">
@@ -24,15 +19,11 @@ export const BackupSelectionList = ({
   }
 
   if (backups.length === 0) {
-    return (
-      <p className="font-sans text-sm text-charcoal/60 text-center py-4">
-        No backups available.
-      </p>
-    );
+    return <p className="font-sans text-sm text-charcoal/60 text-center py-4">No backups available.</p>;
   }
 
   return (
-    <div className="space-y-2 max-h-64 overflow-y-auto">
+    <div data-testid="backup-selection-list" className="space-y-2 max-h-64 overflow-y-auto">
       {backups.map((backup, index) => (
         <motion.button
           key={backup}
@@ -42,9 +33,7 @@ export const BackupSelectionList = ({
           transition={{ delay: index * 0.02 }}
           onClick={() => onSelect(backup)}
           className={`w-full text-left p-3 rounded-sm border transition-colors cursor-pointer ${
-            selectedBackup === backup
-              ? "border-green bg-green/10"
-              : "border-charcoal/10 hover:border-green/50"
+            selectedBackup === backup ? "border-green bg-green/10" : "border-charcoal/10 hover:border-green/50"
           }`}
         >
           <span className="font-sans text-sm text-charcoal">{backup}</span>
@@ -52,4 +41,4 @@ export const BackupSelectionList = ({
       ))}
     </div>
   );
-}
+};

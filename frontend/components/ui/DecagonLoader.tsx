@@ -49,7 +49,7 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
           : "stroke-charcoal";
 
   return (
-    <div className={cn("relative flex items-center justify-center w-24 h-24", className)}>
+    <div data-testid="decagon-loader" className={cn("relative flex items-center justify-center w-24 h-24", className)}>
       <motion.div animate={rotateAnimation} className="absolute inset-0 flex items-center justify-center">
         <motion.svg
           viewBox="0 0 100 100"
@@ -82,4 +82,4 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
       </motion.div>
     </div>
   );
-}
+};

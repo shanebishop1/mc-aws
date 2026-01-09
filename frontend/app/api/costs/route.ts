@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { getCosts } from "@/lib/aws-client";
+import { NextResponse } from "next/server";
 
 // Permanent in-memory cache (until server restart or manual refresh)
 let cachedCosts: { data: Awaited<ReturnType<typeof getCosts>>; timestamp: number } | null = null;
@@ -31,9 +31,6 @@ export async function GET(request: Request) {
     });
   } catch (error) {
     console.error("Failed to get costs:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to fetch cost data" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Failed to fetch cost data" }, { status: 500 });
   }
 }

@@ -11,10 +11,10 @@ export default {
       colors: {
         background: "var(--background)",
         foreground: "var(--foreground)",
-        "cream": "#F9F7F2",
-        "charcoal": "#1A1A1A",
-        "green": "#1A4222",
-        "gray": "#808080",
+        cream: "#F9F7F2",
+        charcoal: "#1A1A1A",
+        green: "#1A4222",
+        gray: "#808080",
       },
       fontFamily: {
         sans: ["var(--font-inter)"],

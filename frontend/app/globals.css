@@ -15,7 +15,8 @@
 }
 
 /* Lock body to prevent iOS scroll bounce */
-html, body {
+html,
+body {
   margin: 0;
   padding: 0;
   width: 100%;
@@ -30,7 +31,9 @@ body {
 }
 
 /* Prevent iOS zoom on input focus */
-input, textarea, select {
+input,
+textarea,
+select {
   font-size: 16px;
 }
 

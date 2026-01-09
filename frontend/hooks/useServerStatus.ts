@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
 import type { ServerState } from "@/lib/types";
+import { useCallback, useEffect, useState } from "react";
 
 interface UseServerStatusReturn {
   status: ServerState;
