@@ -10,7 +10,7 @@ interface CostBreakdownTableProps {
 export const CostBreakdownTable = ({ breakdown, currency }: CostBreakdownTableProps) => {
   if (breakdown.length === 0) {
     return (
-      <p className="font-sans text-sm text-luxury-black/60 text-center py-4">
+      <p className="font-sans text-sm text-charcoal/60 text-center py-4">
         No cost data available for this period.
       </p>
     );
@@ -24,12 +24,12 @@ export const CostBreakdownTable = ({ breakdown, currency }: CostBreakdownTablePr
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: index * 0.03 }}
-          className="flex justify-between items-center py-2 border-b border-luxury-black/10 last:border-0"
+          className="flex justify-between items-center py-2 border-b border-charcoal/10 last:border-0"
         >
-          <span className="font-sans text-sm text-luxury-black/80 truncate pr-4">
+          <span className="font-sans text-sm text-charcoal/80 truncate pr-4">
             {item.service}
           </span>
-          <span className="font-sans text-sm font-medium text-luxury-black whitespace-nowrap">
+          <span className="font-sans text-sm font-medium text-charcoal whitespace-nowrap">
             {currency === "USD" ? "$" : currency} {item.cost}
           </span>
         </motion.div>

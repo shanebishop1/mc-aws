@@ -17,9 +17,9 @@ export const LuxuryButton = ({ children, className, variant = "outline", ...prop
         transition={{ duration: 0.1 }}
         whileTap={{ scale: 0.95 }}
         className={cn(
-          "cursor-pointer font-sans text-xs tracking-[0.2em] text-luxury-black/60",
-          "hover:text-luxury-green uppercase transition-colors duration-300",
-          "disabled:cursor-not-allowed disabled:text-luxury-gray",
+          "cursor-pointer font-sans text-xs tracking-[0.2em] text-charcoal/60",
+          "hover:text-green uppercase transition-colors duration-300",
+          "disabled:cursor-not-allowed disabled:text-gray",
           className
         )}
         {...props}
@@ -35,9 +35,9 @@ export const LuxuryButton = ({ children, className, variant = "outline", ...prop
       transition={{ duration: 0.1 }}
       whileTap={{ y: 1 }}
       className={cn(
-        "cursor-pointer relative px-8 py-3 overflow-hidden group border border-luxury-black transition-all duration-300",
-        "font-sans text-xs tracking-[0.2em] font-medium uppercase text-luxury-black",
-        "hover:border-luxury-green hover:text-white hover:bg-luxury-green",
+        "cursor-pointer relative px-8 py-3 overflow-hidden group border border-charcoal transition-all duration-300",
+        "font-sans text-xs tracking-[0.2em] font-medium uppercase text-charcoal",
+        "hover:border-green hover:text-white hover:bg-green",
         "disabled:cursor-not-allowed",
         className
       )}
@@ -45,7 +45,7 @@ export const LuxuryButton = ({ children, className, variant = "outline", ...prop
     >
       <span className="relative z-10 group-hover:text-white transition-colors duration-300">{children}</span>
       <motion.div
-        className="absolute inset-0 bg-luxury-green"
+        className="absolute inset-0 bg-green"
         initial={{ scaleX: 0, originX: 0 }}
         whileHover={{ scaleX: 1 }}
         transition={{ duration: 0.3, ease: "easeOut" }}
