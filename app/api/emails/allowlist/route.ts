@@ -1,6 +1,7 @@
 import { updateEmailAllowlist } from "@/lib/aws-client";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 declare global {
   var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;
@@ -8,6 +9,17 @@ declare global {
 
 export async function PUT(request: NextRequest): Promise<NextResponse<ApiResponse<{ allowlist: string[] }>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[EMAILS] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<{ allowlist: string[] }>>;
+      }
+      throw error;
+    }
+
     const body = await request.json();
     const { emails } = body;
 

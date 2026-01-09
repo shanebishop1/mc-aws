@@ -8,9 +8,21 @@ import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[RESTORE] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<RestoreResponse>>;
+      }
+      throw error;
+    }
+
     // Parse request body
     const body: RestoreRequest = await request.json();
     const backupName = body.backupName || body.name;

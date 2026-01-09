@@ -7,9 +7,21 @@ import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws-c
 import { env } from "@/lib/env";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<BackupResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[BACKUP] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<BackupResponse>>;
+      }
+      throw error;
+    }
+
     let instanceId: string | undefined;
     let backupName: string | undefined;
 

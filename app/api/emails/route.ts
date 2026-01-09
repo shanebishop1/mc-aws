@@ -1,6 +1,7 @@
 import { getEmailAllowlist } from "@/lib/aws-client";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 // Permanent in-memory cache
 let cachedEmails: {
@@ -13,6 +14,17 @@ export async function GET(
   request: NextRequest
 ): Promise<NextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[EMAILS] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>;
+      }
+      throw error;
+    }
+
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "true";
 
