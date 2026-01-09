@@ -45,6 +45,12 @@ export interface BackupResponse {
   output: string;
 }
 
+export interface RestoreRequest {
+  backupName?: string;
+  name?: string; // For backward compatibility
+  instanceId?: string;
+}
+
 export interface RestoreResponse {
   backupName: string;
   message: string;
@@ -68,6 +74,7 @@ export interface ResumeResponse {
 export interface BackupInfo {
   name: string;
   date?: string;
+  size?: string;
 }
 
 export interface ListBackupsResponse {
@@ -75,22 +82,18 @@ export interface ListBackupsResponse {
   count: number;
 }
 
-export interface EmailsResponse {
-  success: boolean;
-  data?: {
-    adminEmail: string;
-    allowlist: string[];
-  };
-  error?: string;
+export interface EmailData {
+  adminEmail: string;
+  allowlist: string[];
 }
 
-export interface AllowlistUpdateResponse {
-  success: boolean;
-  data?: {
-    allowlist: string[];
-  };
-  error?: string;
+export type EmailsResponse = ApiResponse<EmailData & { cachedAt?: number }>;
+
+export interface AllowlistUpdateData {
+  allowlist: string[];
 }
+
+export type AllowlistUpdateResponse = ApiResponse<AllowlistUpdateData>;
 
 export interface CostBreakdown {
   service: string;
@@ -105,20 +108,11 @@ export interface CostData {
   fetchedAt: string;
 }
 
-export interface CostsResponse {
-  success: boolean;
-  data?: CostData;
-  cachedAt?: number;
-  error?: string;
-}
+export type CostsResponse = ApiResponse<CostData & { cachedAt?: number }>;
 
 export interface PlayerCountData {
   count: number;
   lastUpdated: string;
 }
 
-export interface PlayersResponse {
-  success: boolean;
-  data?: PlayerCountData;
-  error?: string;
-}
+export type PlayersResponse = ApiResponse<PlayerCountData>;
