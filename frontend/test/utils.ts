@@ -7,6 +7,7 @@ import { mockDescribeInstances } from "./mocks/aws";
  */
 export function createMockNextRequest(url: string, options: RequestInit = {}) {
   // Cast to any to avoid signal incompatibility in tests
+  // biome-ignore lint/suspicious/noExplicitAny: Necessary for test request compatibility
   return new NextRequest(new URL(url, "http://localhost"), options as any);
 }
 
