@@ -8,7 +8,7 @@ interface EmailListItemProps {
   disabled: boolean;
 }
 
-export function EmailListItem({ email, onRemove, disabled }: EmailListItemProps) {
+export const EmailListItem = ({ email, onRemove, disabled }: EmailListItemProps) => {
   return (
     <motion.div
       initial={{ opacity: 0, x: -10 }}

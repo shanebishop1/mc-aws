@@ -9,7 +9,7 @@ interface AddEmailFormProps {
   disabled: boolean;
 }
 
-export function AddEmailForm({ onAdd, disabled }: AddEmailFormProps) {
+export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
   const [newEmail, setNewEmail] = useState("");
   const [error, setError] = useState<string | null>(null);
 

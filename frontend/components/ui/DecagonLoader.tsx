@@ -10,7 +10,7 @@ interface DecagonLoaderProps {
   className?: string;
 }
 
-export function DecagonLoader({ status, isLoading, className }: DecagonLoaderProps) {
+export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderProps) => {
   const [isHovered, setIsHovered] = useState(false);
 
   // Breathing animation configuration
