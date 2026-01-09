@@ -10,6 +10,7 @@ import {
   SendCommandCommand,
 } from "@aws-sdk/client-ssm";
 import { env } from "../env";
+import type { BackupInfo } from "../types";
 
 // Initialize SSM client
 const region = env.AWS_REGION || "us-east-1";
@@ -104,7 +105,7 @@ export async function executeSSMCommand(instanceId: string | undefined, commands
 /**
  * List available backups from Google Drive via rclone on EC2
  */
-export async function listBackups(instanceId?: string): Promise<string[]> {
+export async function listBackups(instanceId?: string): Promise<BackupInfo[]> {
   if (!env.GDRIVE_REMOTE || !env.GDRIVE_ROOT) {
     console.warn("Google Drive config not set (GDRIVE_REMOTE or GDRIVE_ROOT missing)");
     return [];
@@ -116,16 +117,24 @@ export async function listBackups(instanceId?: string): Promise<string[]> {
   try {
     console.log(`Listing backups from Google Drive on instance ${resolvedId}...`);
 
-    const command = `rclone lsf ${env.GDRIVE_REMOTE}:${env.GDRIVE_ROOT}/ --format "p"`;
+    // p - path, s - size, t - modification time
+    const command = `rclone lsf ${env.GDRIVE_REMOTE}:${env.GDRIVE_ROOT}/ --format "pst" --separator "|"`;
     const output = await executeSSMCommand(resolvedId, [command]);
 
-    // Parse output - each line is a backup name
+    // Parse output - each line is name|size|date
     const backups = output
       .split("\n")
       .map((line) => line.trim())
       .filter((line) => line.length > 0)
-      .sort()
-      .reverse(); // Most recent first
+      .map((line) => {
+        const [name, size, date] = line.split("|");
+        return {
+          name,
+          size: size || "unknown",
+          date: date || "unknown",
+        };
+      })
+      .sort((a, b) => (b.date || "").localeCompare(a.date || "")); // Most recent first
 
     console.log(`Found ${backups.length} backups`);
     return backups;
