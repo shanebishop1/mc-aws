@@ -9,6 +9,9 @@ const nextConfig: NextConfig = {
   // Fix warning about multiple lockfiles in monorepo structure
   outputFileTracingRoot: resolve(__dirname, ".."),
 
+  // Hide dev toolbar
+  devIndicators: false,
+
   // Expose specific environment variables to the client
   env: {
     AWS_REGION: process.env.AWS_REGION || process.env.CDK_DEFAULT_REGION,

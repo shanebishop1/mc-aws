@@ -96,13 +96,13 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-lg mx-4 bg-luxury-cream rounded-sm shadow-xl border border-luxury-black/10"
+            className="relative w-full max-w-lg mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={onClose}
-              className="absolute top-6 right-6 text-luxury-black/40 hover:text-luxury-black transition-colors z-10"
+              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
@@ -119,8 +119,8 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
                 className="p-8"
               >
                 <div className="text-center mb-8">
-                  <h2 className="font-serif text-2xl italic text-luxury-black mb-2">Resume World</h2>
-                  <p className="font-sans text-xs tracking-widest text-luxury-black/60 uppercase">
+                  <h2 className="font-serif text-2xl italic text-charcoal mb-2">Resume World</h2>
+                  <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                     Choose how to resume your server
                   </p>
                 </div>
@@ -149,8 +149,8 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
                 className="p-8"
               >
                 <div className="text-center mb-8">
-                  <h2 className="font-serif text-2xl italic text-luxury-black mb-2">Select Backup</h2>
-                  <p className="font-sans text-xs tracking-widest text-luxury-black/60 uppercase">
+                  <h2 className="font-serif text-2xl italic text-charcoal mb-2">Select Backup</h2>
+                  <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                     Choose a backup to restore
                   </p>
                 </div>

@@ -57,14 +57,48 @@ export function useServerStatus(): UseServerStatusReturn {
     }
   }, []);
 
-  // Poll status every 5 seconds
+  // Poll status every 5 seconds, only when tab is visible
   useEffect(() => {
     const handleFetchStatus = async () => {
       await fetchStatus();
     };
+
     handleFetchStatus();
-    const interval = setInterval(handleFetchStatus, 5000);
-    return () => clearInterval(interval);
+
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const startPolling = () => {
+      if (intervalId === null) {
+        intervalId = setInterval(handleFetchStatus, 5000);
+      }
+    };
+
+    const stopPolling = () => {
+      if (intervalId !== null) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        handleFetchStatus(); // Refresh immediately when tab becomes visible
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+
+    // Start polling initially
+    startPolling();
+
+    // Listen for visibility changes
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+
+    return () => {
+      stopPolling();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
   }, [fetchStatus]);
 
   return {

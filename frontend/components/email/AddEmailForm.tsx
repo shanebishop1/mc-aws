@@ -47,13 +47,13 @@ export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
           onKeyDown={handleKeyDown}
           placeholder="email@example.com"
           disabled={disabled}
-          className="flex-1 px-3 py-2 font-sans text-sm bg-white border border-luxury-black/20 rounded-sm focus:outline-none focus:border-luxury-green disabled:opacity-50"
+          className="flex-1 px-3 py-2 font-sans text-sm bg-white border border-charcoal/20 rounded-sm focus:outline-none focus:border-green disabled:opacity-50"
         />
         <button
           type="button"
           onClick={handleAdd}
           disabled={disabled || !newEmail.trim()}
-          className="px-4 py-2 font-sans text-sm text-white bg-luxury-green rounded-sm hover:bg-luxury-green/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+          className="px-4 py-2 font-sans text-sm text-white bg-green rounded-sm hover:bg-green/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
         >
           Add
         </button>
