@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
+import { IOSViewportFix } from "@/components/IOSViewportFix";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -29,7 +30,10 @@ export default function RootLayout({
       <body
         className={`${inter.variable} ${playfair.variable} antialiased bg-luxury-cream text-luxury-black font-sans`}
       >
-        {children}
+        <IOSViewportFix />
+        <div id="app-root">
+          {children}
+        </div>
       </body>
     </html>
   );
