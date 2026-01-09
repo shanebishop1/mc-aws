@@ -7,7 +7,7 @@ interface PageHeaderProps {
   onOpenEmails: () => void;
 }
 
-export function PageHeader({ onOpenCosts, onOpenEmails }: PageHeaderProps) {
+export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
   return (
     <motion.header
       initial={{ y: -20, opacity: 0 }}

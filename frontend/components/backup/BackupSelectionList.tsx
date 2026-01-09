@@ -9,12 +9,12 @@ interface BackupSelectionListProps {
   isLoading: boolean;
 }
 
-export function BackupSelectionList({
+export const BackupSelectionList = ({
   backups,
   selectedBackup,
   onSelect,
   isLoading,
-}: BackupSelectionListProps) {
+}: BackupSelectionListProps) => {
   if (isLoading) {
     return (
       <div className="flex justify-center py-8">

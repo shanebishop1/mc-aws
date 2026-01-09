@@ -14,7 +14,7 @@ interface ControlsSectionProps {
   onOpenResume: () => void;
 }
 
-export function ControlsSection({
+export const ControlsSection = ({
   status,
   showStart,
   showStop,
@@ -24,7 +24,7 @@ export function ControlsSection({
   actionsEnabled,
   onAction,
   onOpenResume,
-}: ControlsSectionProps) {
+}: ControlsSectionProps) => {
   return (
     <div className="shrink-0 h-24 md:h-48 flex items-center justify-center w-full">
       {/* Controls Grid - Only renders buttons inside container */}

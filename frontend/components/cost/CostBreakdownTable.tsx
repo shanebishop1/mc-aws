@@ -7,7 +7,7 @@ interface CostBreakdownTableProps {
   currency: string;
 }
 
-export function CostBreakdownTable({ breakdown, currency }: CostBreakdownTableProps) {
+export const CostBreakdownTable = ({ breakdown, currency }: CostBreakdownTableProps) => {
   if (breakdown.length === 0) {
     return (
       <p className="font-sans text-sm text-luxury-black/60 text-center py-4">
