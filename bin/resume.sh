@@ -1,4 +1,18 @@
 #!/usr/bin/env bash
+# ============================================================================
+# DEPRECATION NOTICE
+# ============================================================================
+# This script is DEPRECATED in favor of the API-first architecture.
+#
+# Recommended alternatives:
+#   - Web UI: http://localhost:3000
+#   - CLI: pnpm server:resume (from frontend/ directory)
+#   - API: POST /api/resume
+#
+# This script remains functional for legacy use but is no longer maintained
+# as the primary interface.
+# ============================================================================
+
 set -e
 
 echo "==========================================="

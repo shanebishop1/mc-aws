@@ -1,4 +1,14 @@
 #!/usr/bin/env bash
+# ============================================================================
+# UTILITY SCRIPT
+# ============================================================================
+# This script provides interactive terminal access and has no API equivalent.
+# It is NOT deprecated and remains the recommended way to access the Minecraft
+# server console via screen.
+#
+# Usage: ./bin/console.sh
+# ============================================================================
+
 set -e
 
 # Find the running Minecraft instance
