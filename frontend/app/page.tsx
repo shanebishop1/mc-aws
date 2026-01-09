@@ -3,7 +3,7 @@
 import { PageHeader } from "@/components/PageHeader";
 import { ServerStatus } from "@/components/ServerStatus";
 import { ControlsSection } from "@/components/ControlsSection";
-import { LuxuryButton } from "@/components/ui/LuxuryButton";
+import { LuxuryButton } from "@/components/ui/Button";
 import { ResumeModal } from "@/components/ResumeModal";
 import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { CostDashboard } from "@/components/CostDashboard";

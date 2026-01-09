@@ -1,6 +1,6 @@
 "use client";
 
-import { LuxuryButton } from "@/components/ui/LuxuryButton";
+import { LuxuryButton } from "@/components/ui/Button";
 import { BackupSelectionList } from "@/components/backup";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useState } from "react";
@@ -191,4 +191,4 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
       )}
     </AnimatePresence>
   );
-}
+};

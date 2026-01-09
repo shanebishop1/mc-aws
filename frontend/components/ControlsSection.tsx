@@ -1,6 +1,6 @@
 "use client";
 
-import { LuxuryButton } from "@/components/ui/LuxuryButton";
+import { LuxuryButton } from "@/components/ui/Button";
 
 interface ControlsSectionProps {
   status: string;
@@ -51,9 +51,7 @@ export const ControlsSection = ({
               </LuxuryButton>
             ) : showStart || showResume ? (
               <LuxuryButton
-                onClick={() =>
-                  showResume ? onOpenResume() : onAction("Start", "/api/start")
-                }
+                onClick={() => (showResume ? onOpenResume() : onAction("Start", "/api/start"))}
                 disabled={!actionsEnabled}
               >
                 {showResume ? "Resume" : "Start Server"}
@@ -86,4 +84,4 @@ export const ControlsSection = ({
       )}
     </div>
   );
-}
+};
