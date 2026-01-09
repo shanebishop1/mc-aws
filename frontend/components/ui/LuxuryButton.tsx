@@ -14,9 +14,10 @@ export function LuxuryButton({ children, className, variant = "outline", ...prop
     return (
       <motion.button
         whileHover={{ scale: 1.05 }}
+        transition={{ duration: 0.1 }}
         whileTap={{ scale: 0.95 }}
         className={cn(
-          "font-sans text-xs tracking-[0.2em] text-luxury-black/60",
+          "cursor-pointer font-sans text-xs tracking-[0.2em] text-luxury-black/60",
           "hover:text-luxury-green uppercase transition-colors duration-300",
           "disabled:cursor-not-allowed disabled:text-luxury-gray",
           className
@@ -31,11 +32,13 @@ export function LuxuryButton({ children, className, variant = "outline", ...prop
   return (
     <motion.button
       whileHover={{ y: -2 }}
+      transition={{ duration: 0.1 }}
       whileTap={{ y: 1 }}
       className={cn(
-        "relative px-8 py-3 overflow-hidden group border border-luxury-black transition-all duration-300",
+        "cursor-pointer relative px-8 py-3 overflow-hidden group border border-luxury-black transition-all duration-300",
         "font-sans text-xs tracking-[0.2em] font-medium uppercase text-luxury-black",
         "hover:border-luxury-green hover:text-white hover:bg-luxury-green",
+        "disabled:cursor-not-allowed",
         className
       )}
       {...props}
