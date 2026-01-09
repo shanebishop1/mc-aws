@@ -3,18 +3,22 @@
 import { ArtDecoBorder } from "@/components/ArtDecoBorder";
 import { ControlsSection } from "@/components/ControlsSection";
 import { CostDashboard } from "@/components/CostDashboard";
+import { DeployButton } from "@/components/DeployButton";
+import { DestroyButton } from "@/components/DestroyButton";
 import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { ResumeModal } from "@/components/ResumeModal";
 import { ServerStatus } from "@/components/ServerStatus";
-import { LuxuryButton } from "@/components/ui/Button";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
 import { useServerStatus } from "@/hooks/useServerStatus";
+import { useStackStatus } from "@/hooks/useStackStatus";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 export default function Home() {
   const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus } = useServerStatus();
+  const { stackExists, isLoading: stackLoading, error: stackError, refetch: refetchStack } = useStackStatus();
+
   const [instanceId] = useState<string | undefined>(undefined);
   const [_isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -22,6 +26,21 @@ export default function Home() {
   const [isEmailPanelOpen, setIsEmailPanelOpen] = useState(false);
   const [isCostDashboardOpen, setIsCostDashboardOpen] = useState(false);
   const [awsConsoleUrl, setAwsConsoleUrl] = useState<string | undefined>(undefined);
+
+  // Handle Google Drive OAuth callback (when this page is loaded in a popup)
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const gdriveStatus = params.get("gdrive");
+
+    if (gdriveStatus && window.opener) {
+      if (gdriveStatus === "success") {
+        window.opener.postMessage({ type: "GDRIVE_OAUTH_SUCCESS" }, window.location.origin);
+      } else if (gdriveStatus === "error") {
+        const errorMsg = params.get("message") || "OAuth failed";
+        window.opener.postMessage({ type: "GDRIVE_OAUTH_ERROR", error: errorMsg }, window.location.origin);
+      }
+    }
+  }, []);
 
   // Fetch AWS config for console URL
   useEffect(() => {
@@ -88,6 +107,111 @@ export default function Home() {
     handleAction("Resume", "/api/resume", backupName);
   };
 
+  const handleDeployComplete = () => {
+    setMessage("Server deployed successfully!");
+    setTimeout(() => setMessage(null), 5000);
+    refetchStack();
+  };
+
+  const handleDeployError = (error: string) => {
+    setMessage(`Deployment failed: ${error}`);
+    setTimeout(() => setMessage(null), 5000);
+  };
+
+  const handleDestroyComplete = () => {
+    setMessage("Server destroyed successfully!");
+    setTimeout(() => setMessage(null), 5000);
+    refetchStack();
+  };
+
+  const handleDestroyError = (error: string) => {
+    setMessage(`Destruction failed: ${error}`);
+    setTimeout(() => setMessage(null), 5000);
+  };
+
+  // Loading state - stack status check
+  if (stackLoading) {
+    return (
+      <main className="h-full flex flex-col items-center justify-center px-4 bg-cream">
+        <ArtDecoBorder />
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-green/20 border-t-green rounded-full animate-spin" />
+          <p className="font-sans text-sm tracking-widest text-charcoal/60">Checking deployment status...</p>
+        </div>
+      </main>
+    );
+  }
+
+  // Error state - AWS connection failed
+  if (stackError) {
+    return (
+      <main className="h-full flex flex-col items-center justify-center px-4 bg-cream">
+        <ArtDecoBorder />
+        <div className="flex flex-col items-center gap-4 max-w-md text-center">
+          <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
+            <svg className="w-8 h-8 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="font-serif text-xl italic mb-2 text-red-600">Connection Error</h2>
+            <p className="font-sans text-sm text-charcoal/70">{stackError}</p>
+          </div>
+          <p className="font-sans text-xs text-charcoal/50">Please check your AWS credentials and try again</p>
+        </div>
+      </main>
+    );
+  }
+
+  // No stack exists - show deploy button
+  if (!stackExists) {
+    return (
+      <main
+        data-testid="home-page"
+        className="h-full flex flex-col px-4 md:pb-0 bg-cream selection:bg-green selection:text-white"
+      >
+        <ArtDecoBorder />
+        {/* Header */}
+        <PageHeader
+          onOpenCosts={() => setIsCostDashboardOpen(true)}
+          onOpenEmails={() => setIsEmailPanelOpen(true)}
+          awsConsoleUrl={awsConsoleUrl}
+        />
+
+        {/* Middle Section - Deploy Button */}
+        <div className="flex-1 flex flex-col justify-center items-center w-full px-4">
+          <div className="flex flex-col items-center gap-8 max-w-lg text-center">
+            <div>
+              <h2 className="font-serif text-3xl italic mb-4 text-charcoal">No Server Deployed</h2>
+              <p className="font-sans text-sm text-charcoal/70 leading-relaxed max-w-md">
+                Your Minecraft server hasn&apos;t been deployed yet. Click the button below to create a new server on AWS
+                with all required infrastructure.
+              </p>
+            </div>
+            <DeployButton onDeployComplete={handleDeployComplete} onError={handleDeployError} />
+          </div>
+        </div>
+
+        {/* Footer - Fixed Small Height */}
+        <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center">
+          {message && (
+            <motion.p
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              className={`font-sans text-xs tracking-widest uppercase ${
+                message.includes("Error") || message.includes("Failed") ? "text-red-800" : "text-green"
+              }`}
+            >
+              {message}
+            </motion.p>
+          )}
+          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
+        </footer>
+      </main>
+    );
+  }
+
+  // Stack exists - show server controls
   return (
     <>
       <main
@@ -123,8 +247,8 @@ export default function Home() {
           onOpenResume={handleResumeClick}
         />
 
-        {/* Footer - Fixed Small Height */}
-        <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center">
+        {/* Footer - Fixed Small Height with Destroy Button */}
+        <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center gap-2">
           {message && (
             <motion.p
               initial={{ opacity: 0, y: 10 }}
@@ -138,7 +262,10 @@ export default function Home() {
               {message}
             </motion.p>
           )}
-          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
+          <div className="flex items-center gap-4">
+            <DestroyButton onDestroyComplete={handleDestroyComplete} onError={handleDestroyError} />
+            <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
+          </div>
         </footer>
       </main>
 
