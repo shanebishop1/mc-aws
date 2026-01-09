@@ -1,8 +1,12 @@
 import { getPlayerCount } from "@/lib/aws-client";
+import { getAuthUser } from "@/lib/api-auth";
 import type { ApiResponse, PlayersResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<PlayersResponse["data"]>>> {
+export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<PlayersResponse["data"]>>> {
+  const user = getAuthUser(request);
+  console.log("[PLAYERS] Access by:", user?.email ?? "anonymous");
+
   try {
     console.log("[PLAYERS] Fetching player count");
     const data = await getPlayerCount();

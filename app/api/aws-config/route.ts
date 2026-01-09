@@ -7,6 +7,7 @@ import { findInstanceId } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 interface AwsConfigResponse {
   region: string | null;
@@ -16,6 +17,17 @@ interface AwsConfigResponse {
 
 export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<AwsConfigResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(_request);
+      console.log("[CONFIG] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<AwsConfigResponse>>;
+      }
+      throw error;
+    }
+
     const { AWS_REGION } = env;
     console.log("[CONFIG] Fetching AWS configuration");
 

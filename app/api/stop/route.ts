@@ -4,12 +4,23 @@
  */
 
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws-client";
+import { requireAllowed } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
+  try {
+    const user = await requireAllowed(request);
+    console.log("[STOP] Action by:", user.email, "role:", user.role);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse<ApiResponse<StopServerResponse>>;
+    }
+    throw error;
+  }
+
   try {
     let instanceId: string | undefined;
     try {

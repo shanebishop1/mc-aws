@@ -15,9 +15,21 @@ import { env } from "@/lib/env";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(request);
+      console.log("[HIBERNATE] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<HibernateResponse>>;
+      }
+      throw error;
+    }
+
     let instanceId: string | undefined;
     try {
       const body = await request.clone().json();

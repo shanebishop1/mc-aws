@@ -5,10 +5,14 @@
 
 import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws-client";
 import { env } from "@/lib/env";
+import { getAuthUser } from "@/lib/api-auth";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
+  const user = getAuthUser(request);
+  console.log("[STATUS] Access by:", user?.email ?? "anonymous");
+
   try {
     // Status implies discovery/verification, so we always verify
     // unless pased explicitly via query for speed (optional optimization)

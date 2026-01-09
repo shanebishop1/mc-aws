@@ -11,12 +11,23 @@ import {
   startInstance,
   waitForInstanceRunning,
 } from "@/lib/aws-client";
+import { requireAllowed } from "@/lib/api-auth";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
+  try {
+    const user = await requireAllowed(request);
+    console.log("[START] Action by:", user.email, "role:", user.role);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse<ApiResponse<StartServerResponse>>;
+    }
+    throw error;
+  }
+
   try {
     // Try to get ID from body to avoid discovery overhead
     let instanceId: string | undefined;
