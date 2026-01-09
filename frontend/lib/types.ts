@@ -8,6 +8,7 @@ export interface ServerStatusResponse {
   state: ServerState;
   instanceId: string;
   publicIp?: string;
+  hasVolume?: boolean;
   lastUpdated: string;
 }
 
@@ -65,3 +66,52 @@ export interface ListBackupsResponse {
   backups: BackupInfo[];
   count: number;
 }
+
+export interface EmailsResponse {
+  success: boolean;
+  data?: {
+    adminEmail: string;
+    allowlist: string[];
+  };
+  error?: string;
+}
+
+export interface AllowlistUpdateResponse {
+  success: boolean;
+  data?: {
+    allowlist: string[];
+  };
+  error?: string;
+}
+
+export interface CostBreakdown {
+  service: string;
+  cost: string;
+}
+
+export interface CostData {
+  period: { start: string; end: string };
+  totalCost: string;
+  currency: string;
+  breakdown: CostBreakdown[];
+  fetchedAt: string;
+}
+
+export interface CostsResponse {
+  success: boolean;
+  data?: CostData;
+  cachedAt?: number;
+  error?: string;
+}
+
+export interface PlayerCountData {
+  count: number;
+  lastUpdated: string;
+}
+
+export interface PlayersResponse {
+  success: boolean;
+  data?: PlayerCountData;
+  error?: string;
+}
+
