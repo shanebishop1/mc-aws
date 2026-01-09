@@ -1,0 +1,32 @@
+"use client";
+
+import { motion } from "framer-motion";
+
+interface EmailListItemProps {
+  email: string;
+  onRemove: (email: string) => void;
+  disabled: boolean;
+}
+
+export function EmailListItem({ email, onRemove, disabled }: EmailListItemProps) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: -10 }}
+      animate={{ opacity: 1, x: 0 }}
+      exit={{ opacity: 0, x: 10 }}
+      className="flex items-center justify-between p-3 bg-luxury-cream/50 border border-luxury-black/10 rounded-sm"
+    >
+      <span className="font-sans text-sm text-luxury-black">{email}</span>
+      <button
+        type="button"
+        onClick={() => onRemove(email)}
+        disabled={disabled}
+        className="text-luxury-black/40 hover:text-red-500 transition-colors disabled:opacity-50"
+      >
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
+        </svg>
+      </button>
+    </motion.div>
+  );
+}
