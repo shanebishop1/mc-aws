@@ -44,14 +44,13 @@ You can interact with your Minecraft server through three interfaces:
 The web interface provides a dashboard for server status, cost tracking, and management operations.
 
 ```bash
-cd frontend
 pnpm dev
 # Open http://localhost:3000
 ```
 
 ### CLI Commands
 
-Run these commands from the `frontend/` directory:
+Run these commands from the project root:
 
 | Command | Description |
 | :------- | :---------- |
@@ -83,10 +82,10 @@ All API endpoints are prefixed with `/api/`. Base URL is your deployed frontend 
 
 ## Legacy Scripts
 
-Shell scripts in `bin/` are deprecated in favor of the web UI, CLI, and REST API. The following utilities remain available for specific use cases:
+Shell scripts in `legacy/bin/` are deprecated in favor of the web UI, CLI, and REST API. The following utilities remain available for specific use cases:
 
-- **`bin/connect.sh`** — Interactive SSH access to the EC2 instance via AWS Systems Manager
-- **`bin/console.sh`** — Direct access to the Minecraft console screen session
+- **`legacy/bin/connect.sh`** — Interactive SSH access to the EC2 instance via AWS Systems Manager
+- **`legacy/bin/console.sh`** — Direct access to the Minecraft console screen session
 
 All other shell scripts for backup, restore, hibernate, and resume are superseded by the CLI commands and API endpoints.
 
@@ -139,10 +138,23 @@ At this point, we're talking about pennies. In some cases, you'll save a few pen
 
 ## Repo Structure
 
-- `config/` - The actual Minecraft config files (whitelist, properties).
-- `src/ec2/` - Scripts that run on the server (startup, idle check, systemd service).
-- `src/lambda/` - The Node.js code that handles the startup logic.
-- `setup/dlm/` - Backup schedule (snapshots).
+```
+mc-aws/
+├── app/                    # Next.js App Router (pages & API routes)
+├── components/             # React components
+├── lib/                    # Shared utilities, AWS clients, types
+├── hooks/                  # React hooks
+├── scripts/                # CLI scripts (server-cli.ts)
+├── tests/                  # Unit and E2E tests
+├── infra/                  # AWS CDK infrastructure
+│   ├── bin/                # CDK entry point
+│   ├── lib/                # CDK stack definitions
+│   └── src/                # EC2 and Lambda code
+├── config/                 # Minecraft server config
+├── legacy/                 # Deprecated shell scripts
+│   └── bin/                # Old CLI scripts
+└── docs/                   # Documentation and PRDs
+```
 
 ## Setup Guide
 
