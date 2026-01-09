@@ -1,6 +1,6 @@
 "use client";
 
-import type { ServerState } from "@/lib/types";
+import { ServerState } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 
 interface UseServerStatusReturn {
@@ -27,7 +27,7 @@ const fetchPlayerCount = async (setPlayerCount: (count: number | undefined) => v
 };
 
 export function useServerStatus(): UseServerStatusReturn {
-  const [status, setStatus] = useState<ServerState>("unknown");
+  const [status, setStatus] = useState<ServerState>(ServerState.Unknown);
   const [hasVolume, setHasVolume] = useState<boolean>(false);
   const [ip, setIp] = useState<string | undefined>(undefined);
   const [playerCount, setPlayerCount] = useState<number | undefined>(undefined);
@@ -41,10 +41,9 @@ export function useServerStatus(): UseServerStatusReturn {
         setStatus(data.data.state);
         setHasVolume(data.data.hasVolume ?? false);
         // Only update IP if running
-        setIp(data.data.state === "running" ? data.data.publicIp : undefined);
+        setIp(data.data.state === ServerState.Running ? data.data.publicIp : undefined);
 
-        // Fetch player count if server is running
-        if (data.data.state === "running") {
+        if (data.data.state === ServerState.Running) {
           await fetchPlayerCount(setPlayerCount);
         } else {
           setPlayerCount(undefined);

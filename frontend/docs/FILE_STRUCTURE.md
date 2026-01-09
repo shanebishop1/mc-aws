@@ -72,7 +72,7 @@ export const env: {
 
 ### `lib/types.ts`
 ```typescript
-export type ServerState = "running" | "stopped" | "hibernated" | "pending" | "stopping" | "terminated" | "unknown"
+export type ServerState = "running" | "stopped" | "hibernating" | "pending" | "stopping" | "terminated" | "unknown"
 export interface ServerStatusResponse { state, instanceId, publicIp?, lastUpdated }
 export interface ApiResponse<T> { success, data?, error?, timestamp }
 export interface StartServerResponse { instanceId, publicIp, domain, message }

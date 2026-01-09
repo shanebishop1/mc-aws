@@ -1,7 +1,7 @@
-import type { ServerState } from "@/lib/types";
+import { ServerState } from "@/lib/types";
 
 interface ButtonVisibilityState {
-  isHibernated: boolean;
+  isHibernating: boolean;
   isStopped: boolean;
   isRunning: boolean;
   isTransitioning: boolean;
@@ -14,21 +14,21 @@ interface ButtonVisibilityState {
 }
 
 export function useButtonVisibility(status: ServerState, hasVolume?: boolean): ButtonVisibilityState {
-  const isHibernated = status === "hibernated" || (status === "stopped" && !hasVolume);
-  const isStopped = status === "stopped" && !!hasVolume;
-  const isRunning = status === "running";
-  const isTransitioning = status === "pending" || status === "stopping";
+  const isHibernating = status === ServerState.Hibernating || (status === ServerState.Stopped && !hasVolume);
+  const isStopped = status === ServerState.Stopped && !!hasVolume;
+  const isRunning = status === ServerState.Running;
+  const isTransitioning = status === ServerState.Pending || status === ServerState.Stopping;
 
-  const showResume = isHibernated;
+  const showResume = isHibernating;
   const showStart = isStopped || isTransitioning;
   const showStop = isRunning;
-  const showHibernate = (isRunning || isStopped) && !isHibernated;
+  const showHibernate = (isRunning || isStopped) && !isHibernating;
   const showBackupRestore = isRunning;
 
   const actionsEnabled = !isTransitioning;
 
   return {
-    isHibernated,
+    isHibernating,
     isStopped,
     isRunning,
     isTransitioning,

@@ -4,7 +4,7 @@
 
 import { DescribeInstancesCommand, EC2Client, StartInstancesCommand, StopInstancesCommand } from "@aws-sdk/client-ec2";
 import { env } from "../env";
-import type { ServerState } from "../types";
+import { ServerState } from "../types";
 
 // Initialize AWS client
 const region = env.AWS_REGION || "us-east-1";
@@ -66,38 +66,36 @@ export async function getInstanceState(instanceId?: string): Promise<ServerState
     const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [resolvedId] }));
 
     if (!Reservations || Reservations.length === 0 || !Reservations[0].Instances) {
-      return "unknown";
+      return ServerState.Unknown;
     }
 
     const instance = Reservations[0].Instances[0];
     const currentState = instance.State?.Name;
     const blockDeviceMappings = instance.BlockDeviceMappings || [];
 
-    // Determine the state
     if (currentState === "running") {
-      return "running";
+      return ServerState.Running;
     }
     if (currentState === "stopped" && blockDeviceMappings.length === 0) {
-      // Stopped with no volumes = hibernated
-      return "hibernated";
+      return ServerState.Hibernating;
     }
     if (currentState === "stopped") {
-      return "stopped";
+      return ServerState.Stopped;
     }
     if (currentState === "pending") {
-      return "pending";
+      return ServerState.Pending;
     }
     if (currentState === "stopping") {
-      return "stopping";
+      return ServerState.Stopping;
     }
     if (currentState === "terminated") {
-      return "terminated";
+      return ServerState.Terminated;
     }
 
-    return "unknown";
+    return ServerState.Unknown;
   } catch (error) {
     console.error("Error getting instance state:", error);
-    return "unknown";
+    return ServerState.Unknown;
   }
 }
 
