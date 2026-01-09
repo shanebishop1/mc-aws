@@ -25,6 +25,7 @@ export {
   getEmailAllowlist,
   updateEmailAllowlist,
   getPlayerCount,
+  getParameter,
 } from "./ssm-client";
 
 // Volume operations
@@ -36,3 +37,10 @@ export {
 // Cost Explorer operations
 export type { CostBreakdown, CostData } from "./cost-client";
 export { getCosts } from "./cost-client";
+
+// CloudFormation operations
+export {
+  cloudformation,
+  getStackStatus,
+  checkStackExists,
+} from "./cloudformation-client";
