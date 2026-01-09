@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# ============================================================================
+# PARTIAL DEPRECATION NOTICE
+# ============================================================================
+# This script is PARTIALLY DEPRECATED in favor of the API-first architecture.
+#
+# Drive backup mode is deprecated:
+#   - Web UI: http://localhost:3000 (backup tab)
+#   - CLI: pnpm server:backup (from frontend/ directory)
+#   - API: POST /api/backup
+#
+# Local backup mode remains available for developer use:
+#   - Downloads server data to ./backups/ via rsync
+#   - No API equivalent exists for this use case
+#
+# This script remains functional but is no longer maintained as the primary
+# interface for Google Drive operations.
+# ============================================================================
+
 set -euo pipefail
 
 # Download server folder from EC2 to local backups, or push a backup to Google Drive.
