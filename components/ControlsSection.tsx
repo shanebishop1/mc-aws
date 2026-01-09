@@ -4,6 +4,7 @@ import { useState } from "react";
 import { LuxuryButton } from "@/components/ui/Button";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
+import { useAuth } from "@/components/auth/auth-provider";
 
 interface ControlsSectionProps {
   status: string;
@@ -28,6 +29,8 @@ export const ControlsSection = ({
   onAction,
   onOpenResume,
 }: ControlsSectionProps) => {
+  const { isAdmin, isAllowed } = useAuth();
+
   const [showHibernateConfirm, setShowHibernateConfirm] = useState(false);
   const [showBackupConfirm, setShowBackupConfirm] = useState(false);
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
@@ -106,7 +109,8 @@ export const ControlsSection = ({
               <LuxuryButton
                 variant="text"
                 onClick={() => setShowHibernateConfirm(true)}
-                disabled={!actionsEnabled}
+                disabled={!actionsEnabled || !isAdmin}
+                title={!isAdmin ? "Admin privileges required" : undefined}
               >
                 Hibernate
               </LuxuryButton>
@@ -116,13 +120,18 @@ export const ControlsSection = ({
           {/* Center - Primary Action */}
           <div className="order-first md:order-none">
             {showStop ? (
-              <LuxuryButton onClick={() => onAction("Stop", "/api/stop")} disabled={!actionsEnabled}>
+              <LuxuryButton
+                onClick={() => onAction("Stop", "/api/stop")}
+                disabled={!actionsEnabled || !isAllowed}
+                title={!isAllowed ? "Allowed or admin privileges required" : undefined}
+              >
                 Stop Server
               </LuxuryButton>
             ) : showStart || showResume ? (
               <LuxuryButton
                 onClick={() => (showResume ? onOpenResume() : onAction("Start", "/api/start"))}
-                disabled={!actionsEnabled}
+                disabled={!actionsEnabled || !isAllowed}
+                title={!isAllowed ? "Allowed or admin privileges required" : undefined}
               >
                 {showResume ? "Resume" : "Start Server"}
               </LuxuryButton>
@@ -133,10 +142,20 @@ export const ControlsSection = ({
           <div className="flex flex-col gap-6 w-full max-w-[200px] text-center md:text-left">
             {showBackupRestore && (
               <>
-                <LuxuryButton variant="text" onClick={handleRestoreClick} disabled={!actionsEnabled}>
+                <LuxuryButton
+                  variant="text"
+                  onClick={handleRestoreClick}
+                  disabled={!actionsEnabled || !isAdmin}
+                  title={!isAdmin ? "Admin privileges required" : undefined}
+                >
                   Restore
                 </LuxuryButton>
-                <LuxuryButton variant="text" onClick={handleBackupClick} disabled={!actionsEnabled}>
+                <LuxuryButton
+                  variant="text"
+                  onClick={handleBackupClick}
+                  disabled={!actionsEnabled || !isAdmin}
+                  title={!isAdmin ? "Admin privileges required" : undefined}
+                >
                   Backup
                 </LuxuryButton>
               </>

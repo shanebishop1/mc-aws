@@ -1,4 +1,5 @@
 import { IOSViewportFix } from "@/components/IOSViewportFix";
+import { AuthProvider } from "@/components/auth/auth-provider";
 import type { Metadata } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
@@ -32,7 +33,9 @@ export default function RootLayout({
         className={`${inter.variable} ${playfair.variable} antialiased bg-cream text-charcoal font-sans`}
       >
         <IOSViewportFix />
-        <div id="app-root">{children}</div>
+        <div id="app-root">
+          <AuthProvider>{children}</AuthProvider>
+        </div>
       </body>
     </html>
   );
