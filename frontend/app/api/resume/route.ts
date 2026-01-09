@@ -6,19 +6,19 @@
  * The existing /api/start route already handles volume creation for hibernated instances.
  */
 
-import { type NextRequest, NextResponse } from "next/server";
 import {
+  executeSSMCommand,
+  findInstanceId,
+  getInstanceState,
+  getPublicIp,
   handleResume,
   startInstance,
   waitForInstanceRunning,
-  getPublicIp,
-  getInstanceState,
-  executeSSMCommand,
-  findInstanceId,
 } from "@/lib/aws-client";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
-import type { ResumeResponse, ApiResponse } from "@/lib/types";
+import type { ApiResponse, ResumeResponse } from "@/lib/types";
+import { type NextRequest, NextResponse } from "next/server";
 
 async function handleAlreadyRunning(resolvedId: string): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
   try {

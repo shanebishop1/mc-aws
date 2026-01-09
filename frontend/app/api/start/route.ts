@@ -3,18 +3,18 @@
  * Starts the server, handling hibernation recovery if needed
  */
 
-import { type NextRequest, NextResponse } from "next/server";
 import {
+  findInstanceId,
+  getInstanceState,
+  getPublicIp,
   handleResume,
   startInstance,
   waitForInstanceRunning,
-  getPublicIp,
-  getInstanceState,
-  findInstanceId,
 } from "@/lib/aws-client";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
-import type { StartServerResponse, ApiResponse } from "@/lib/types";
+import type { ApiResponse, StartServerResponse } from "@/lib/types";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
   try {
