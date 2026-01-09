@@ -9,11 +9,23 @@ import { promisify } from "node:util";
 import { checkStackExists } from "@/lib/aws/cloudformation-client";
 import type { ApiResponse, DeployResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { requireAdmin } from "@/lib/api-auth";
 
 const execAsync = promisify(exec);
 
 export async function POST(_request: NextRequest): Promise<NextResponse<ApiResponse<DeployResponse>>> {
   try {
+    // Check admin authorization
+    try {
+      const user = requireAdmin(_request);
+      console.log("[DEPLOY] Admin action by:", user.email);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<DeployResponse>>;
+      }
+      throw error;
+    }
+
     console.log("[DEPLOY] Starting deployment...");
 
     // Optional safety check: see if stack already exists

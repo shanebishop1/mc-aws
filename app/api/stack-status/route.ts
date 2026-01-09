@@ -4,10 +4,14 @@
  */
 
 import { getStackStatus } from "@/lib/aws/cloudformation-client";
+import { getAuthUser } from "@/lib/api-auth";
 import type { ApiResponse, StackStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<StackStatusResponse>>> {
+export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<StackStatusResponse>>> {
+  const user = getAuthUser(request);
+  console.log("[STACK-STATUS] Access by:", user?.email ?? "anonymous");
+
   try {
     console.log("[STACK-STATUS] Checking CloudFormation stack status");
     const stack = await getStackStatus("MinecraftStack");
