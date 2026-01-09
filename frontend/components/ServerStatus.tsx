@@ -34,7 +34,10 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
   };
 
   return (
-    <div className={`relative flex flex-col items-center justify-center space-y-12 ${className}`}>
+    <div
+      data-testid="server-status"
+      className={`relative flex flex-col items-center justify-center space-y-12 ${className}`}
+    >
       {/* Always render to prevent layout shift - component handles visibility internally */}
       <SleepingZs show={state === "hibernated"} />
 
@@ -44,7 +47,8 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
       {/* Status Text - Huge Serif Italic */}
       <div className="text-center space-y-4">
         <h2 className="text-charcoal font-serif text-5xl md:text-6xl tracking-tight">
-          Server<br className="sm:hidden" /> <span className={`italic ${renderColor()}`}>{label}</span>
+          Server
+          <br className="sm:hidden" /> <span className={`italic ${renderColor()}`}>{label}</span>
         </h2>
 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">

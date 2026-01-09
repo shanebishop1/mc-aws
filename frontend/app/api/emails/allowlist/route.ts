@@ -1,5 +1,5 @@
-import { NextResponse } from "next/server";
 import { updateEmailAllowlist } from "@/lib/aws-client";
+import { NextResponse } from "next/server";
 
 declare global {
   var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;
@@ -11,10 +11,7 @@ export async function PUT(request: Request) {
     const { emails } = body;
 
     if (!Array.isArray(emails)) {
-      return NextResponse.json(
-        { success: false, error: "emails must be an array" },
-        { status: 400 }
-      );
+      return NextResponse.json({ success: false, error: "emails must be an array" }, { status: 400 });
     }
 
     // Basic email validation
@@ -38,9 +35,6 @@ export async function PUT(request: Request) {
     });
   } catch (error) {
     console.error("Failed to update allowlist:", error);
-    return NextResponse.json(
-      { success: false, error: "Failed to update email allowlist" },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: false, error: "Failed to update email allowlist" }, { status: 500 });
   }
 }

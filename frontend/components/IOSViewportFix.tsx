@@ -14,15 +14,15 @@ export const IOSViewportFix = () => {
 
     // Set immediately before first paint
     updateVH();
-    
+
     window.addEventListener("resize", updateVH);
     window.addEventListener("orientationchange", updateVH);
-    
+
     return () => {
       window.removeEventListener("resize", updateVH);
       window.removeEventListener("orientationchange", updateVH);
     };
   }, []);
 
-  return null;
-}
+  return <div data-testid="ios-viewport-fix" style={{ display: "none" }} />;
+};
