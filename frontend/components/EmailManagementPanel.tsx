@@ -62,13 +62,13 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-lg mx-4 bg-luxury-cream rounded-sm shadow-xl border border-luxury-black/10"
+            className="relative w-full max-w-lg mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
           >
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading || isSaving}
-              className="absolute top-6 right-6 text-luxury-black/40 hover:text-luxury-black transition-colors z-10 disabled:cursor-not-allowed"
+              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
@@ -84,10 +84,10 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
             >
               <div className="flex items-center justify-between mb-8">
                 <div className="text-center flex-1">
-                  <h2 className="font-serif text-2xl italic text-luxury-black mb-2">
+                  <h2 className="font-serif text-2xl italic text-charcoal mb-2">
                     Email Management
                   </h2>
-                  <p className="font-sans text-xs tracking-widest text-luxury-black/60 uppercase">
+                  <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                     Configure email access and notifications
                   </p>
                 </div>
@@ -98,7 +98,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                   <motion.div
                     animate={{ rotate: 360 }}
                     transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
-                    className="w-8 h-8 border-2 border-luxury-green border-t-transparent rounded-full"
+                    className="w-8 h-8 border-2 border-green border-t-transparent rounded-full"
                   />
                 </div>
               ) : (
@@ -114,14 +114,14 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                   )}
 
                   <div className="mb-8">
-                    <div className="block font-sans text-xs tracking-widest text-luxury-black/60 uppercase mb-3">
+                    <div className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-3">
                       Admin Email
                     </div>
-                    <div className="p-4 bg-luxury-black/5 border border-luxury-black/10 rounded-sm">
-                      <p className="font-sans text-sm text-luxury-black mb-2">
+                    <div className="p-4 bg-charcoal/5 border border-charcoal/10 rounded-sm">
+                      <p className="font-sans text-sm text-charcoal mb-2">
                         {adminEmail || "—"}
                       </p>
-                      <p className="font-sans text-xs text-luxury-black/50">
+                      <p className="font-sans text-xs text-charcoal/50">
                         Set at deploy time. Redeploy to change.
                       </p>
                     </div>
@@ -129,14 +129,14 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
 
                   <div className="mb-8">
                     <div className="flex items-center justify-between mb-3">
-                      <span className="block font-sans text-xs tracking-widest text-luxury-black/60 uppercase">
+                      <span className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                         Allowed Emails
                       </span>
                       <button
                         type="button"
                         onClick={refetch}
                         disabled={isLoading || isRefetching}
-                        className="text-luxury-black/40 hover:text-luxury-green transition-colors disabled:opacity-50"
+                        className="text-charcoal/40 hover:text-green transition-colors disabled:opacity-50"
                         title="Refresh"
                       >
                         <svg
@@ -197,7 +197,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                       type="button"
                       onClick={handleSave}
                       disabled={!hasChanges || isSaving}
-                      className="w-full px-4 py-3 font-sans text-sm text-white bg-luxury-green rounded-sm hover:bg-luxury-green/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      className="w-full px-4 py-3 font-sans text-sm text-white bg-green rounded-sm hover:bg-green/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                       {isSaving ? "Saving..." : "Save Changes"}
                     </button>
@@ -206,7 +206,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                       type="button"
                       onClick={onClose}
                       disabled={isSaving}
-                      className="w-full px-4 py-3 font-sans text-sm text-luxury-black/60 hover:text-luxury-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+                      className="w-full px-4 py-3 font-sans text-sm text-charcoal/60 hover:text-charcoal transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
                     >
                       {hasChanges ? "Discard & Close" : "Close"}
                     </button>

@@ -60,14 +60,14 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-2xl mx-4 bg-luxury-cream rounded-sm shadow-xl border border-luxury-black/10"
+            className="relative w-full max-w-2xl mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading}
-              className="absolute top-6 right-6 text-luxury-black/40 hover:text-luxury-black transition-colors z-10 disabled:cursor-not-allowed"
+              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed"
             >
               <svg
                 className="w-6 h-6"
@@ -94,10 +94,10 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
             >
               {/* Header */}
               <div className="text-center mb-8">
-                <h2 className="font-serif text-2xl italic text-luxury-black mb-2">
+                <h2 className="font-serif text-2xl italic text-charcoal mb-2">
                   Cost Dashboard
                 </h2>
-                <p className="font-sans text-xs tracking-widest text-luxury-black/60 uppercase">
+                <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                   AWS costs for your Minecraft server
                 </p>
               </div>
@@ -110,11 +110,11 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                   transition={{ duration: 0.3 }}
                   className="space-y-6"
                 >
-                  <div className="bg-luxury-black/2 border border-luxury-black/10 rounded-sm p-6 text-center">
-                    <p className="font-sans text-sm text-luxury-black mb-4">
+                  <div className="bg-charcoal/2 border border-charcoal/10 rounded-sm p-6 text-center">
+                    <p className="font-sans text-sm text-charcoal mb-4">
                       Generating this report will call the AWS Cost Explorer API
                     </p>
-                    <p className="font-sans text-sm text-luxury-black/70 mb-4">
+                    <p className="font-sans text-sm text-charcoal/70 mb-4">
                       Each request costs approximately <span className="font-semibold">$0.01</span>
                     </p>
                   </div>
@@ -146,7 +146,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                   <motion.div
                     animate={{ rotate: 360 }}
                     transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
-                    className="w-8 h-8 border-2 border-luxury-green border-t-transparent rounded-full"
+                    className="w-8 h-8 border-2 border-green border-t-transparent rounded-full"
                   />
                 </div>
               )}
@@ -173,22 +173,22 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                     className="mb-8 text-center"
                   >
                     <div className="mb-2">
-                      <p className="font-sans text-xs tracking-widest text-luxury-black/60 uppercase mb-2">
+                      <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-2">
                         Total Cost
                       </p>
-                      <p className="font-serif text-5xl italic text-luxury-black">
+                      <p className="font-serif text-5xl italic text-charcoal">
                         ${costData.totalCost}
                       </p>
-                      <p className="font-sans text-xs text-luxury-black/50 mt-2">
+                      <p className="font-sans text-xs text-charcoal/50 mt-2">
                         {costData.currency}
                       </p>
                     </div>
-                    <div className="w-12 h-[1px] bg-luxury-black/20 mx-auto mt-4" />
-                    <p className="font-sans text-xs text-luxury-black/50 mt-4">
+                    <div className="w-12 h-[1px] bg-charcoal/20 mx-auto mt-4" />
+                    <p className="font-sans text-xs text-charcoal/50 mt-4">
                       {formatDate(costData.period.start)} – {formatDate(costData.period.end)}
                     </p>
                     {isStale && cachedAt && (
-                      <p className="font-sans text-xs text-luxury-black/40 mt-2">
+                      <p className="font-sans text-xs text-charcoal/40 mt-2">
                         Data from {new Date(cachedAt).toLocaleDateString()} — click Refresh for latest
                       </p>
                     )}
@@ -201,7 +201,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                     transition={{ delay: 0.2 }}
                     className="mb-8"
                   >
-                    <div className="block font-sans text-xs tracking-widest text-luxury-black/60 uppercase mb-3">
+                    <div className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-3">
                       Service Breakdown
                     </div>
                     <CostBreakdownTable

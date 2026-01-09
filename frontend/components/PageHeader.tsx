@@ -15,7 +15,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
       transition={{ duration: 0.8, ease: "easeOut" }}
       className="relative shrink-0 pt-2 pb-1 md:pt-8 md:pb-4 text-center"
     >
-      <h1 className="font-serif text-3xl italic tracking-wide text-luxury-black">
+      <h1 className="font-serif text-3xl italic tracking-wide text-charcoal">
         mc-aws <span className="not-italic font-bold">Controller</span>
       </h1>
 
@@ -29,7 +29,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
           whileHover={{ scale: 1.1 }}
           transition={{ duration: 0.1 }}
           whileTap={{ scale: 0.95 }}
-          className="cursor-pointer p-1 text-luxury-black/40 hover:text-luxury-green transition-colors"
+          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
           title="View on GitHub"
         >
           <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
@@ -47,15 +47,10 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
           whileHover={{ scale: 1.1 }}
           transition={{ duration: 0.1 }}
           whileTap={{ scale: 0.95 }}
-          className="cursor-pointer p-1 text-luxury-black/40 hover:text-luxury-green transition-colors"
+          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
           title="View AWS costs"
         >
-          <svg
-            className="w-7 h-7"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -71,15 +66,10 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
           whileHover={{ scale: 1.1 }}
           transition={{ duration: 0.1 }}
           whileTap={{ scale: 0.95 }}
-          className="cursor-pointer p-1 text-luxury-black/40 hover:text-luxury-green transition-colors"
+          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
           title="Manage email access"
         >
-          <svg
-            className="w-7 h-7"
-            fill="none"
-            stroke="currentColor"
-            viewBox="0 0 24 24"
-          >
+          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path
               strokeLinecap="round"
               strokeLinejoin="round"
@@ -91,4 +81,4 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails }: PageHeaderProps) => {
       </div>
     </motion.header>
   );
-}
+};

@@ -28,7 +28,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${inter.variable} ${playfair.variable} antialiased bg-luxury-cream text-luxury-black font-sans`}
+        className={`${inter.variable} ${playfair.variable} antialiased bg-cream text-charcoal font-sans`}
       >
         <IOSViewportFix />
         <div id="app-root">

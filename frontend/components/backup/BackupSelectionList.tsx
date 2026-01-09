@@ -18,14 +18,14 @@ export const BackupSelectionList = ({
   if (isLoading) {
     return (
       <div className="flex justify-center py-8">
-        <div className="w-6 h-6 border-2 border-luxury-green/30 border-t-luxury-green rounded-full animate-spin" />
+        <div className="w-6 h-6 border-2 border-green/30 border-t-green rounded-full animate-spin" />
       </div>
     );
   }
 
   if (backups.length === 0) {
     return (
-      <p className="font-sans text-sm text-luxury-black/60 text-center py-4">
+      <p className="font-sans text-sm text-charcoal/60 text-center py-4">
         No backups available.
       </p>
     );
@@ -43,11 +43,11 @@ export const BackupSelectionList = ({
           onClick={() => onSelect(backup)}
           className={`w-full text-left p-3 rounded-sm border transition-colors cursor-pointer ${
             selectedBackup === backup
-              ? "border-luxury-green bg-luxury-green/10"
-              : "border-luxury-black/10 hover:border-luxury-green/50"
+              ? "border-green bg-green/10"
+              : "border-charcoal/10 hover:border-green/50"
           }`}
         >
-          <span className="font-sans text-sm text-luxury-black">{backup}</span>
+          <span className="font-sans text-sm text-charcoal">{backup}</span>
         </motion.button>
       ))}
     </div>

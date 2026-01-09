@@ -39,25 +39,31 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
 
   // Decide color based on status
   const colorClass = isLoading
-    ? "stroke-luxury-black/50"
+    ? "stroke-charcoal/50"
     : isRunning
-      ? "stroke-luxury-green"
+      ? "stroke-green"
       : status === "unknown"
         ? "stroke-red-800"
         : isStopped
-          ? "stroke-luxury-black/30"
-          : "stroke-luxury-black";
+          ? "stroke-charcoal/30"
+          : "stroke-charcoal";
 
   return (
     <div className={cn("relative flex items-center justify-center w-24 h-24", className)}>
       <motion.div animate={rotateAnimation} className="absolute inset-0 flex items-center justify-center">
         <motion.svg
           viewBox="0 0 100 100"
-          className={cn("w-full h-full fill-none", colorClass)}
+          className={cn("w-full h-full fill-none touch-none", colorClass)}
           initial={{ strokeWidth: 1.5 }}
           onHoverStart={() => setIsHovered(true)}
           onHoverEnd={() => setIsHovered(false)}
+          onTapStart={() => setIsHovered(true)}
+          onTap={() => setIsHovered(false)}
           whileHover={{
+            scale: 1.1,
+            strokeWidth: 3.0,
+          }}
+          whileTap={{
             scale: 1.1,
             strokeWidth: 3.0,
           }}
@@ -71,7 +77,7 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
           <polygon points="50,2 69,8 85,21 95,38 95,62 85,79 69,92 50,98 31,92 15,79 5,62 5,38 15,21 31,8" />
 
           {/* Inner details if valid status */}
-          {isRunning && <circle cx="50" cy="50" r="2" className="fill-luxury-green stroke-none" />}
+          {isRunning && <circle cx="50" cy="50" r="2" className="fill-green stroke-none" />}
         </motion.svg>
       </motion.div>
     </div>
