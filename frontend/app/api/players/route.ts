@@ -1,12 +1,27 @@
 import { getPlayerCount } from "@/lib/aws-client";
-import { NextResponse } from "next/server";
+import type { ApiResponse, PlayersResponse } from "@/lib/types";
+import { type NextRequest, NextResponse } from "next/server";
 
-export async function GET() {
+export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<PlayersResponse["data"]>>> {
   try {
+    console.log("[PLAYERS] Fetching player count");
     const data = await getPlayerCount();
-    return NextResponse.json({ success: true, data });
+    return NextResponse.json({
+      success: true,
+      data,
+      timestamp: new Date().toISOString(),
+    });
   } catch (error) {
-    console.error("Failed to get player count:", error);
-    return NextResponse.json({ success: false, error: "Failed to fetch player count" }, { status: 500 });
+    console.error("[PLAYERS] Failed to get player count:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    return NextResponse.json(
+      {
+        success: false,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      },
+      { status: 500 }
+    );
   }
 }
