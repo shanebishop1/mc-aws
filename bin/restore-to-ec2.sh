@@ -1,4 +1,22 @@
 #!/usr/bin/env bash
+# ============================================================================
+# PARTIAL DEPRECATION NOTICE
+# ============================================================================
+# This script is PARTIALLY DEPRECATED in favor of the API-first architecture.
+#
+# Drive restore mode is deprecated:
+#   - Web UI: http://localhost:3000 (restore tab)
+#   - CLI: pnpm server:restore (from frontend/ directory)
+#   - API: POST /api/restore
+#
+# Local restore mode remains available for developer use:
+#   - Uploads local server data to EC2 via rsync
+#   - No API equivalent exists for this use case
+#
+# This script remains functional but is no longer maintained as the primary
+# interface for Google Drive operations.
+# ============================================================================
+
 set -euo pipefail
 
 # Upload local server folder to EC2, with optional Google Drive intermediary.
