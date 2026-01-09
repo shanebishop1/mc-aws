@@ -1,6 +1,6 @@
 "use client";
 
-import { LuxuryButton } from "@/components/ui/LuxuryButton";
+import { LuxuryButton } from "@/components/ui/Button";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useState } from "react";
 import { CostBreakdownTable } from "@/components/cost";
