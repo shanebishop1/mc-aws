@@ -11,16 +11,20 @@ This project offers a more flexible alternative: an EC2 setup that costs **$0.00
 
 It achieves this by **hibernating** (downloading your server data to your local machine/Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single command spins the infra back up. Then, any of your friends can email the startup email to trigger server startup. The server will automatically close following inactivity.
 
+You can interact with the system via **Web UI**, **CLI commands**, or **REST API**—all powered by the same backend.
+
 Key features:
 
+- **API-First Architecture:** Web UI, CLI, and REST API for maximum flexibility
 - **Zero Idle Cost:** Hibernate your server when not in use.
-- **On-Demand:** Spin up via email trigger or command line.
+- **On-Demand:** Spin up via email, web UI, CLI, or API.
 - **Auto-Shutdown:** Server turns itself off when nobody is playing.
 
 **NOTE: This setup requires some initial configuration (AWS account, Cloudflare), but once set up, it requires very little maintenance.**
 
 ## Table of Contents
 
+- [Usage](#usage)
 - [Background](#background)
 - [How It Works](#how-it-works)
 - [Repo Structure](#repo-structure)
@@ -30,6 +34,61 @@ Key features:
 - [Weekly EBS Snapshots](#weekly-ebs-snapshots-optional)
 - [How to Manage It](#how-to-manage-it)
 - [Hibernation](#hibernation-zero-storage-cost)
+
+## Usage
+
+You can interact with your Minecraft server through three interfaces:
+
+### Web UI
+
+The web interface provides a dashboard for server status, cost tracking, and management operations.
+
+```bash
+cd frontend
+pnpm dev
+# Open http://localhost:3000
+```
+
+### CLI Commands
+
+Run these commands from the `frontend/` directory:
+
+| Command | Description |
+| :------- | :---------- |
+| `pnpm server:status` | Check server state |
+| `pnpm server:start` | Start the server |
+| `pnpm server:stop` | Stop the server |
+| `pnpm server:hibernate` | Backup + stop + delete volume (zero cost) |
+| `pnpm server:resume` | Create volume + start |
+| `pnpm server:backup` | Manual backup to Google Drive |
+| `pnpm server:restore` | Restore from backup |
+| `pnpm server:backups` | List available backups |
+
+### REST API
+
+All API endpoints are prefixed with `/api/`. Base URL is your deployed frontend URL.
+
+| Endpoint | Method | Description |
+| :-------- | :----- | :---------- |
+| `/api/status` | GET | Server state and info |
+| `/api/start` | POST | Start server |
+| `/api/stop` | POST | Stop server |
+| `/api/hibernate` | POST | Hibernate (backup + stop + delete volume) |
+| `/api/resume` | POST | Resume from hibernation |
+| `/api/backup` | POST | Trigger backup |
+| `/api/restore` | POST | Restore from backup |
+| `/api/backups` | GET | List available backups |
+| `/api/players` | GET | Player count |
+| `/api/costs` | GET | Cost tracking |
+
+## Legacy Scripts
+
+Shell scripts in `bin/` are deprecated in favor of the web UI, CLI, and REST API. The following utilities remain available for specific use cases:
+
+- **`bin/connect.sh`** — Interactive SSH access to the EC2 instance via AWS Systems Manager
+- **`bin/console.sh`** — Direct access to the Minecraft console screen session
+
+All other shell scripts for backup, restore, hibernate, and resume are superseded by the CLI commands and API endpoints.
 
 ## Background
 
