@@ -3,24 +3,33 @@
  */
 
 import {
-  EC2Client,
-  DescribeInstancesCommand,
-  StartInstancesCommand,
-  StopInstancesCommand,
-  DescribeImagesCommand,
-  CreateVolumeCommand,
   AttachVolumeCommand,
+  CreateVolumeCommand,
+  DeleteVolumeCommand,
+  DescribeImagesCommand,
+  DescribeInstancesCommand,
   DescribeVolumesCommand,
   DetachVolumeCommand,
-  DeleteVolumeCommand,
+  EC2Client,
+  StartInstancesCommand,
+  StopInstancesCommand,
 } from "@aws-sdk/client-ec2";
-import { SSMClient, SendCommandCommand, GetCommandInvocationCommand } from "@aws-sdk/client-ssm";
+import {
+  GetCommandInvocationCommand,
+  GetParameterCommand,
+  PutParameterCommand,
+  SSMClient,
+  SendCommandCommand,
+} from "@aws-sdk/client-ssm";
 import { env } from "./env";
 import type { ServerState } from "./types";
 
 // Initialize AWS clients
-const ec2 = new EC2Client({ region: env.AWS_REGION || "us-east-1" });
-const ssm = new SSMClient({ region: env.AWS_REGION || "us-east-1" });
+const region = env.AWS_REGION || "us-east-1";
+console.log(`[AWS Config] Initializing clients in region: ${region}`);
+
+const ec2 = new EC2Client({ region });
+const ssm = new SSMClient({ region });
 
 // Constants for polling
 const MAX_POLL_ATTEMPTS = 300;
@@ -37,27 +46,33 @@ export async function findInstanceId(): Promise<string> {
     return env.INSTANCE_ID;
   }
 
+  console.log(
+    `[Discovery] Searching for instance with tag:Name = MinecraftServer OR MinecraftStack/MinecraftServer in region ${env.AWS_REGION}`
+  );
+
   try {
     const { Reservations } = await ec2.send(
       new DescribeInstancesCommand({
         Filters: [
-          { Name: "tag:Name", Values: ["MinecraftServer"] },
-          { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped"] },
+          { Name: "tag:Name", Values: ["MinecraftServer", "MinecraftStack/MinecraftServer"] },
+          { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped", "shutting-down"] },
         ],
       })
     );
 
     const instanceFn = Reservations?.[0]?.Instances?.[0];
     if (instanceFn?.InstanceId) {
-      console.log(`Discovered Instance ID: ${instanceFn.InstanceId}`);
+      console.log(`[Discovery] Discovered Instance ID: ${instanceFn.InstanceId} (${instanceFn.State?.Name})`);
       return instanceFn.InstanceId;
     }
+    console.warn("[Discovery] No instances found matching filters.");
   } catch (err) {
-    console.error("Failed to discover instance ID:", err);
+    console.error("[Discovery] Failed to discover instance ID:", err);
+    throw err;
   }
 
   throw new Error(
-    "Could not find Minecraft Server instance. Set INSTANCE_ID in .env or ensure instance has tag Name=MinecraftServer"
+    `Could not find Minecraft Server. Searched for tag Name=MinecraftServer OR MinecraftStack/MinecraftServer in ${env.AWS_REGION}`
   );
 }
 
@@ -576,6 +591,190 @@ export async function listBackups(instanceId?: string): Promise<string[]> {
     console.error("Error listing backups:", error);
     return [];
   }
+}
+
+/**
+ * Get email allowlist from SSM Parameter Store
+ */
+export async function getEmailAllowlist(): Promise<string[]> {
+  try {
+    const command = new GetParameterCommand({
+      Name: "/minecraft/email-allowlist",
+    });
+    const response = await ssm.send(command);
+    const value = response.Parameter?.Value || "";
+    return value
+      .split(",")
+      .map((e) => e.trim())
+      .filter((e) => e.length > 0);
+  } catch (error: unknown) {
+    // Parameter may not exist yet
+    const errorWithName = error as { name?: string };
+    if (errorWithName.name === "ParameterNotFound") {
+      return [];
+    }
+    throw error;
+  }
+}
+
+/**
+ * Update email allowlist in SSM Parameter Store
+ */
+export async function updateEmailAllowlist(emails: string[]): Promise<void> {
+  const command = new PutParameterCommand({
+    Name: "/minecraft/email-allowlist",
+    Value: emails.join(","),
+    Type: "String",
+    Overwrite: true,
+  });
+  await ssm.send(command);
+}
+
+/**
+ * Get player count from SSM Parameter Store
+ */
+export async function getPlayerCount(): Promise<{ count: number; lastUpdated: string }> {
+  try {
+    const command = new GetParameterCommand({
+      Name: "/minecraft/player-count",
+    });
+    const response = await ssm.send(command);
+    const count = Number.parseInt(response.Parameter?.Value || "0", 10);
+    const lastUpdated = response.Parameter?.LastModifiedDate?.toISOString() || new Date().toISOString();
+    
+    return { count, lastUpdated };
+  } catch (error: unknown) {
+    // Parameter may not exist yet
+    const errorWithName = error as { name?: string };
+    if (errorWithName.name === "ParameterNotFound") {
+      return { count: 0, lastUpdated: new Date().toISOString() };
+    }
+    throw error;
+  }
+}
+
+/**
+ * Cost Explorer types and functions
+ */
+export interface CostBreakdown {
+  service: string;
+  cost: string;
+}
+
+export interface CostData {
+  period: { start: string; end: string };
+  totalCost: string;
+  currency: string;
+  breakdown: CostBreakdown[];
+  fetchedAt: string;
+}
+
+/**
+ * Get AWS costs for the specified period
+ * Note: Requires @aws-sdk/client-cost-explorer to be installed
+ */
+export async function getCosts(periodType: "current-month" | "last-month" | "last-30-days" = "current-month"): Promise<CostData> {
+  // Dynamic import to avoid build issues if package not installed
+  let CostExplorerClient: unknown;
+  let GetCostAndUsageCommand: unknown;
+
+  try {
+    // Use dynamic require to avoid compile-time errors
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const costExplorerModule = require("@aws-sdk/client-cost-explorer");
+    CostExplorerClient = costExplorerModule.CostExplorerClient;
+    GetCostAndUsageCommand = costExplorerModule.GetCostAndUsageCommand;
+  } catch {
+    throw new Error("@aws-sdk/client-cost-explorer package is not installed. Please install it to use cost tracking.");
+  }
+
+  if (typeof CostExplorerClient !== "function") {
+    throw new Error("CostExplorerClient is not available");
+  }
+
+  // Type narrowing: after typeof check, we can safely cast to function
+  const CostExplorerClientFn = CostExplorerClient as unknown as {
+    new (config: { region: string }): unknown;
+  };
+  const costExplorer = new CostExplorerClientFn({ region: "us-east-1" }); // Cost Explorer is always us-east-1
+
+  const now = new Date();
+  let start: Date;
+  let end: Date;
+
+  if (periodType === "current-month") {
+    start = new Date(now.getFullYear(), now.getMonth(), 1);
+    end = now;
+  } else if (periodType === "last-month") {
+    start = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    end = new Date(now.getFullYear(), now.getMonth(), 0); // Last day of prev month
+  } else {
+    start = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    end = now;
+  }
+
+  if (typeof GetCostAndUsageCommand !== "function") {
+    throw new Error("GetCostAndUsageCommand is not available");
+  }
+
+  const GetCostAndUsageCommandFn = GetCostAndUsageCommand as unknown as {
+    new (config: object): unknown;
+  };
+  const command = new GetCostAndUsageCommandFn({
+    TimePeriod: {
+      Start: start.toISOString().split("T")[0],
+      End: end.toISOString().split("T")[0],
+    },
+    Granularity: "MONTHLY",
+    Metrics: ["UnblendedCost"],
+    GroupBy: [{ Type: "DIMENSION", Key: "SERVICE" }],
+  });
+
+  const costExplorerWithMethod = costExplorer as unknown as {
+    send(cmd: unknown): Promise<unknown>;
+  };
+  const response = await costExplorerWithMethod.send(command);
+
+  const breakdown: CostBreakdown[] = [];
+  let total = 0;
+  let currency = "USD";
+
+  const responseWithData = response as unknown as {
+    ResultsByTime?: Array<{
+      Groups?: Array<{
+        Keys?: string[];
+        Metrics?: {
+          UnblendedCost?: {
+            Amount?: string;
+            Unit?: string;
+          };
+        };
+      }>;
+    }>;
+  };
+
+  for (const result of responseWithData.ResultsByTime || []) {
+    for (const group of result.Groups || []) {
+      const serviceName = group.Keys?.[0] || "Unknown";
+      const amount = Number.parseFloat(group.Metrics?.UnblendedCost?.Amount || "0");
+      currency = group.Metrics?.UnblendedCost?.Unit || "USD";
+      if (amount > 0) {
+        breakdown.push({ service: serviceName, cost: amount.toFixed(2) });
+        total += amount;
+      }
+    }
+  }
+
+  // Sort by cost descending
+  breakdown.sort((a, b) => Number.parseFloat(b.cost) - Number.parseFloat(a.cost));
+
+  return {
+    period: { start: start.toISOString().split("T")[0], end: end.toISOString().split("T")[0] },
+    totalCost: total.toFixed(2),
+    currency,
+    breakdown,
+    fetchedAt: new Date().toISOString(),
+  };
 }
 
 export { ec2, ssm };

@@ -3,10 +3,10 @@
  * Returns the current server state and details
  */
 
-import { type NextRequest, NextResponse } from "next/server";
-import { getInstanceState, getInstanceDetails, getPublicIp, findInstanceId } from "@/lib/aws-client";
+import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws-client";
 import { env } from "@/lib/env";
-import type { ServerStatusResponse, ApiResponse } from "@/lib/types";
+import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
   try {
@@ -20,6 +20,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const instanceId = queryId || (await findInstanceId());
     console.log("[STATUS] Getting server status for instance:", instanceId);
 
+    const { blockDeviceMappings } = await getInstanceDetails(instanceId);
     const state = await getInstanceState(instanceId);
     let publicIp: string | undefined;
 
@@ -39,6 +40,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         state,
         instanceId,
         publicIp,
+        hasVolume: blockDeviceMappings.length > 0,
         lastUpdated: new Date().toISOString(),
       },
       timestamp: new Date().toISOString(),

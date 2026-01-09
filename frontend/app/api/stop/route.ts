@@ -3,10 +3,10 @@
  * Stops the server (keeps EBS attached - not hibernation)
  */
 
-import { type NextRequest, NextResponse } from "next/server";
-import { stopInstance, getInstanceState, findInstanceId } from "@/lib/aws-client";
+import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws-client";
 import { env } from "@/lib/env";
-import type { StopServerResponse, ApiResponse } from "@/lib/types";
+import type { ApiResponse, StopServerResponse } from "@/lib/types";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
   try {

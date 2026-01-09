@@ -24,6 +24,24 @@ get_instance_id() {
   curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/instance-id
 }
 
+# Helper function to get region (IMDSv2)
+get_region() {
+  TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 21600")
+  curl -s -H "X-aws-ec2-metadata-token: $TOKEN" http://169.254.169.254/latest/meta-data/placement/region
+}
+
+# Write player count to SSM for frontend display
+update_player_count() {
+  local count=$1
+  local region=$(get_region)
+  aws ssm put-parameter \
+    --name "/minecraft/player-count" \
+    --value "$count" \
+    --type "String" \
+    --overwrite \
+    --region "$region" 2>/dev/null || log "Warning: Failed to update player count in SSM"
+}
+
 # 1. Query player count
 set +e
 MC_OUTPUT=$(/usr/local/bin/mcstatus localhost status 2>&1)
@@ -46,6 +64,9 @@ else
 fi
 
 log "$PLAYERS players online"
+
+# Write player count to SSM
+update_player_count "$PLAYERS"
 
 # 2. If players are online, clear marker and exit
 if (( PLAYERS > 0 )); then
