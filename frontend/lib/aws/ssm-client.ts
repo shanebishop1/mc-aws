@@ -203,3 +203,39 @@ export async function getPlayerCount(): Promise<{ count: number; lastUpdated: st
     throw error;
   }
 }
+
+/**
+ * Set a parameter in SSM Parameter Store
+ */
+export async function putParameter(
+  name: string,
+  value: string,
+  type: "String" | "SecureString" = "String"
+): Promise<void> {
+  const command = new PutParameterCommand({
+    Name: name,
+    Value: value,
+    Type: type,
+    Overwrite: true,
+  });
+  await ssm.send(command);
+}
+
+/**
+ * Get a parameter from SSM Parameter Store
+ */
+export async function getParameter(name: string): Promise<string | null> {
+  try {
+    const command = new GetParameterCommand({
+      Name: name,
+    });
+    const response = await ssm.send(command);
+    return response.Parameter?.Value || null;
+  } catch (error: unknown) {
+    const errorWithName = error as { name?: string };
+    if (errorWithName.name === "ParameterNotFound") {
+      return null;
+    }
+    throw error;
+  }
+}
