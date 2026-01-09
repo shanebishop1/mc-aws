@@ -7,7 +7,16 @@
 ## To Do
 
 - [ ] Test restore command via email
+- [ ] Test restore command via email
 - [ ] Test hibernate/resume cycle
+
+## Phase 4: Frontend UI (Luxury Design)
+
+- [ ] Setup Tailwind with "Luxury" theme (Cream background, Serif fonts)
+- [ ] Implement UI Components (LuxuryButton, StatusIndicator, Spinning Decagon)
+- [ ] Assemble Main Control Interface (page.tsx)
+- [ ] Integrate Backend API with UI
+
 
 ## Backlog
 
