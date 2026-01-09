@@ -116,3 +116,25 @@ export interface PlayerCountData {
 }
 
 export type PlayersResponse = ApiResponse<PlayerCountData>;
+
+export interface StackStatusResponse {
+  exists: boolean;
+  status?: string; // e.g., "CREATE_COMPLETE", "UPDATE_IN_PROGRESS"
+  stackId?: string;
+  error?: string; // Only if AWS connection failed
+}
+
+export interface GDriveStatusResponse {
+  configured: boolean;
+  error?: string;
+}
+
+export interface DeployResponse {
+  message: string;
+  output?: string;
+}
+
+export interface DestroyResponse {
+  message: string;
+  output?: string;
+}
