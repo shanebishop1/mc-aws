@@ -18,7 +18,6 @@ interface SleepingZsProps {
 
 export const SleepingZs = ({ show = true }: SleepingZsProps) => {
   const [particles, setParticles] = useState<ZParticle[]>([]);
-  const [counter, setCounter] = useState(0);
 
   useEffect(() => {
     // Only create particles when shown
@@ -29,8 +28,6 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
 
     // Create new Z particles periodically
     const interval = setInterval(() => {
-      setCounter((c) => c + 1);
-
       const newParticle: ZParticle = {
         id: Date.now(),
         startX: Math.random() * 20 - 10, // Random offset from center
@@ -48,11 +45,13 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
 
   // Remove particles after animation completes
   useEffect(() => {
+    if (particles.length === 0) return;
+
     const cleanup = setTimeout(() => {
       setParticles((prev) => prev.slice(1));
     }, 6500);
     return () => clearTimeout(cleanup);
-  }, [counter]);
+  }, [particles]);
 
   return (
     <div className="absolute inset-0 pointer-events-none overflow-hidden">
@@ -89,4 +88,4 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
       </AnimatePresence>
     </div>
   );
-}
+};
