@@ -26,4 +26,9 @@ export const env = {
   // Google Drive Configuration (optional for now)
   GDRIVE_REMOTE: getEnv("GDRIVE_REMOTE", true),
   GDRIVE_ROOT: getEnv("GDRIVE_ROOT", true),
+
+  // Google OAuth (optional, for setup)
+  GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", true),
+  GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", true),
+  NEXT_PUBLIC_APP_URL: getEnv("NEXT_PUBLIC_APP_URL", true) || "http://localhost:3000",
 };
