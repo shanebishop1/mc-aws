@@ -2,7 +2,7 @@
 
 <p align="center"><img width="320" height="320" alt="mc-aws-image" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
-Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that’s a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:
+Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that's a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:
 
 - **A.** keep the server online 24/7, or
 - **B.** manually spin it up/down whenever somebody wants to hop on
@@ -24,6 +24,7 @@ Key features:
 
 ## Table of Contents
 
+- [Authentication](#authentication)
 - [Usage](#usage)
 - [Background](#background)
 - [How It Works](#how-it-works)
@@ -34,6 +35,68 @@ Key features:
 - [Weekly EBS Snapshots](#weekly-ebs-snapshots-optional)
 - [How to Manage It](#how-to-manage-it)
 - [Hibernation](#hibernation-zero-storage-cost)
+
+## Authentication
+
+The web UI uses Google OAuth to control who can perform actions. Authentication is **optional in development** and **required in production**.
+
+### Authorization Tiers
+
+| Role | Can View Status | Can Start/Stop | Can Backup/Restore/Hibernate |
+|------|-----------------|----------------|------------------------------|
+| Public (not logged in) | ✅ | ❌ | ❌ |
+| Allowed (on allow list) | ✅ | ✅ | ❌ |
+| Admin | ✅ | ✅ | ✅ |
+
+### Development Mode
+
+When running `pnpm dev`, authentication is completely bypassed. All actions are allowed without logging in. This makes local development easier.
+
+### Production Setup
+
+For production deployments, you need to set up Google OAuth:
+
+#### 1. Create Google OAuth Credentials
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project (or select existing)
+3. Go to **APIs & Services** → **Credentials**
+4. Click **Create Credentials** → **OAuth client ID**
+5. Select **Web application**
+6. Add authorized redirect URI: `https://your-domain.com/api/auth/callback`
+7. Copy the **Client ID** and **Client Secret**
+
+#### 2. Configure Environment Variables
+
+Add these to your `.env` file (or Cloudflare environment variables):
+
+```bash
+# Required for production
+GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
+GOOGLE_CLIENT_SECRET="your-client-secret"
+AUTH_SECRET="generate-a-random-32-char-string"
+ADMIN_EMAIL="your-email@gmail.com"
+
+# Optional: comma-separated list of emails that can start/stop (not backup/restore)
+ALLOWED_EMAILS="friend1@gmail.com,friend2@example.com"
+```
+
+**Generate AUTH_SECRET:**
+```bash
+openssl rand -base64 32
+```
+
+#### 3. Build Validation
+
+The build will fail if required auth environment variables are missing in production. This prevents accidental deployments without proper authentication.
+
+### How It Works
+
+1. User clicks "Sign in with Google" in the header
+2. Redirected to Google OAuth consent screen
+3. After approval, redirected back with a session cookie
+4. Session lasts 7 days
+5. API routes check the session and enforce authorization based on user's role
 
 ## Usage
 

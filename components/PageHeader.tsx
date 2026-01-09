@@ -1,6 +1,7 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { LoginButton } from "@/components/auth/login-button";
 
 interface PageHeaderProps {
   onOpenCosts: () => void;
@@ -23,6 +24,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
 
       {/* Header Icons - Below title on mobile, absolute top-right on desktop */}
       <div className="flex justify-center gap-3 mt-2 md:absolute md:top-8 md:right-4 md:mt-0">
+        <LoginButton />
         {/* GitHub Button */}
         <motion.a
           href="https://github.com/shanebishop1/mc-aws"
