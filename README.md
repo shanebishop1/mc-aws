@@ -24,7 +24,6 @@ Key features:
 
 ## Table of Contents
 
-- [Authentication](#authentication)
 - [Usage](#usage)
 - [Background](#background)
 - [How It Works](#how-it-works)
@@ -35,68 +34,8 @@ Key features:
 - [Weekly EBS Snapshots](#weekly-ebs-snapshots-optional)
 - [How to Manage It](#how-to-manage-it)
 - [Hibernation](#hibernation-zero-storage-cost)
-
-## Authentication
-
-The web UI uses Google OAuth to control who can perform actions. Authentication is **optional in development** and **required in production**.
-
-### Authorization Tiers
-
-| Role | Can View Status | Can Start/Stop | Can Backup/Restore/Hibernate |
-|------|-----------------|----------------|------------------------------|
-| Public (not logged in) | ✅ | ❌ | ❌ |
-| Allowed (on allow list) | ✅ | ✅ | ❌ |
-| Admin | ✅ | ✅ | ✅ |
-
-### Development Mode
-
-When running `pnpm dev`, authentication is completely bypassed. All actions are allowed without logging in. This makes local development easier.
-
-### Production Setup
-
-For production deployments, you need to set up Google OAuth:
-
-#### 1. Create Google OAuth Credentials
-
-1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project (or select existing)
-3. Go to **APIs & Services** → **Credentials**
-4. Click **Create Credentials** → **OAuth client ID**
-5. Select **Web application**
-6. Add authorized redirect URI: `https://your-domain.com/api/auth/callback`
-7. Copy the **Client ID** and **Client Secret**
-
-#### 2. Configure Environment Variables
-
-Add these to your `.env` file (or Cloudflare environment variables):
-
-```bash
-# Required for production
-GOOGLE_CLIENT_ID="your-client-id.apps.googleusercontent.com"
-GOOGLE_CLIENT_SECRET="your-client-secret"
-AUTH_SECRET="generate-a-random-32-char-string"
-ADMIN_EMAIL="your-email@gmail.com"
-
-# Optional: comma-separated list of emails that can start/stop (not backup/restore)
-ALLOWED_EMAILS="friend1@gmail.com,friend2@example.com"
-```
-
-**Generate AUTH_SECRET:**
-```bash
-openssl rand -base64 32
-```
-
-#### 3. Build Validation
-
-The build will fail if required auth environment variables are missing in production. This prevents accidental deployments without proper authentication.
-
-### How It Works
-
-1. User clicks "Sign in with Google" in the header
-2. Redirected to Google OAuth consent screen
-3. After approval, redirected back with a session cookie
-4. Session lasts 7 days
-5. API routes check the session and enforce authorization based on user's role
+- [Authentication](#authentication)
+- [Production Deployment](#production-deployment)
 
 ## Usage
 
@@ -723,3 +662,122 @@ When you want to play again:
 - You play regularly (weekly)
 - You want instant startup via email trigger
 - You don't want to manage local backups
+
+## Authentication
+
+The web UI uses Google OAuth to control who can perform actions. Authentication is **optional in development** (all actions allowed) and **required in production**.
+
+### Authorization Tiers
+
+| Role | Can View Status | Can Start/Stop | Can Backup/Restore/Hibernate |
+|------|-----------------|----------------|------------------------------|
+| Public (not logged in) | ✅ | ❌ | ❌ |
+| Allowed (on allow list) | ✅ | ✅ | ❌ |
+| Admin | ✅ | ✅ | ✅ |
+
+### How Authentication Works
+
+1. User clicks "Sign in with Google" in the header
+2. Redirected to Google OAuth consent screen
+3. After approval, redirected back with a session cookie
+4. Session lasts 7 days
+5. API routes check the session and enforce authorization based on user's role
+
+## Production Deployment
+
+This application deploys to **Cloudflare Workers** using the OpenNext adapter.
+
+### Prerequisites
+
+1. [Cloudflare account](https://dash.cloudflare.com/sign-up)
+2. [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) authenticated: `wrangler login`
+3. Google OAuth credentials (see [Authentication](#authentication))
+4. Domain configured in Cloudflare DNS
+
+### DNS Configuration
+
+The control panel can run on the same domain as your Minecraft server. Options:
+
+**Option A: Subdomain (Recommended)**
+- Minecraft server: `mc.example.com` (A record → EC2 IP)
+- Control panel: `panel.mc.example.com` (proxied through Cloudflare Workers)
+
+**Option B: Same domain, different port**
+- Not recommended for Workers deployment
+
+To set up:
+1. Go to Cloudflare Dashboard → DNS
+2. Add a CNAME record: `panel.mc` → `your-worker.workers.dev` (or use custom domain in Workers settings)
+
+### Environment Variables
+
+Copy `.env.template` to `.env` and configure:
+
+```bash
+cp .env.template .env
+```
+
+**Required for deployment:**
+| Variable | Description |
+|----------|-------------|
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
+| `AUTH_SECRET` | JWT signing secret (32+ chars) |
+| `ADMIN_EMAIL` | Your email for admin access |
+| `NEXT_PUBLIC_APP_URL` | Your deployed URL (e.g., `https://panel.mc.example.com`) |
+| `AWS_REGION` | AWS region for your EC2 instance |
+| `AWS_ACCESS_KEY_ID` | AWS access key |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
+
+### Setting Cloudflare Secrets
+
+Secrets must be set via Wrangler (not in config files):
+
+```bash
+# Authentication secrets
+wrangler secret put GOOGLE_CLIENT_ID
+wrangler secret put GOOGLE_CLIENT_SECRET
+wrangler secret put AUTH_SECRET
+
+# AWS credentials
+wrangler secret put AWS_ACCESS_KEY_ID
+wrangler secret put AWS_SECRET_ACCESS_KEY
+```
+
+Each command prompts for the value interactively.
+
+### Non-Secret Variables
+
+Edit `wrangler.jsonc` to set non-secret environment variables:
+
+```jsonc
+"vars": {
+  "ADMIN_EMAIL": "your-email@gmail.com",
+  "ALLOWED_EMAILS": "friend1@gmail.com,friend2@gmail.com",
+  "NEXT_PUBLIC_APP_URL": "https://panel.mc.example.com",
+  "AWS_REGION": "us-west-2"
+}
+```
+
+### Deploy
+
+```bash
+# Preview locally first
+pnpm preview:cf
+
+# Deploy to Cloudflare
+pnpm deploy:cf
+```
+
+### Build Validation
+
+The build automatically validates that all required environment variables are set:
+- **Development**: Warns about missing variables but continues
+- **Production**: Fails the build if any required variables are missing
+
+### Updating Google OAuth Redirect URI
+
+After deployment, update your Google OAuth credentials:
+1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+2. Edit your OAuth 2.0 Client ID
+3. Add authorized redirect URI: `https://panel.mc.example.com/api/auth/callback`
