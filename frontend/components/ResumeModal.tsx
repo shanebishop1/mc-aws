@@ -1,6 +1,7 @@
 "use client";
 
 import { LuxuryButton } from "@/components/ui/LuxuryButton";
+import { BackupSelectionList } from "@/components/backup";
 import { motion, AnimatePresence } from "framer-motion";
 import { useEffect, useState } from "react";
 
@@ -175,64 +176,20 @@ export function ResumeModal({ isOpen, onClose, onResume }: ResumeModalProps) {
                   </p>
                 </div>
 
-                {/* Loading State */}
-                 {isLoading && (
-                   <div className="py-12 flex items-center justify-center">
-                     <motion.div
-                       animate={{ rotate: 360 }}
-                       transition={{ duration: 2, repeat: Number.POSITIVE_INFINITY, ease: "linear" }}
-                       className="w-8 h-8 border-2 border-luxury-green border-t-transparent rounded-full"
-                     />
-                  </div>
-                )}
-
                 {/* Error State */}
-                {error && !isLoading && (
+                {error && (
                   <div className="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm">
                     <p className="font-sans text-xs text-red-800 text-center">{error}</p>
                   </div>
                 )}
 
                 {/* Backups List */}
-                {!isLoading && !error && backups.length > 0 && (
-                  <div className="space-y-3 mb-6 max-h-64 overflow-y-auto">
-                    {backups.map((backup) => (
-                      <motion.button
-                        key={backup.name}
-                        onClick={() => setSelectedBackup(backup.name)}
-                        whileHover={{ x: 4 }}
-                        whileTap={{ x: 2 }}
-                        className={`w-full text-left p-4 border rounded-sm transition-all ${
-                          selectedBackup === backup.name
-                            ? "border-luxury-green bg-luxury-green/5"
-                            : "border-luxury-black/20 hover:border-luxury-black/40"
-                        }`}
-                      >
-                        <div className="flex items-center gap-3">
-                          <div
-                            className={`w-4 h-4 border rounded-sm transition-all ${
-                              selectedBackup === backup.name
-                                ? "bg-luxury-green border-luxury-green"
-                                : "border-luxury-black/40"
-                            }`}
-                          />
-                          <span className="font-sans text-xs tracking-wide text-luxury-black">
-                            {backup.name}
-                          </span>
-                        </div>
-                      </motion.button>
-                    ))}
-                  </div>
-                )}
-
-                {/* Empty State */}
-                {!isLoading && !error && backups.length === 0 && (
-                  <div className="py-12 text-center">
-                    <p className="font-sans text-xs tracking-widest text-luxury-black/50 uppercase">
-                      No backups available
-                    </p>
-                  </div>
-                )}
+                <BackupSelectionList
+                  backups={backups.map((b) => b.name)}
+                  selectedBackup={selectedBackup}
+                  onSelect={setSelectedBackup}
+                  isLoading={isLoading}
+                />
 
                 {/* Action Buttons */}
                 <div className="space-y-3">
