@@ -36,7 +36,7 @@ export function useCostData(): UseCostDataReturn {
 
       if (data.data) {
         setCostData(data.data);
-        setCachedAt(data.cachedAt || Date.now());
+        setCachedAt(data.data.cachedAt || Date.now());
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch cost data";
@@ -61,7 +61,7 @@ export function useCostData(): UseCostDataReturn {
 
       if (data.data) {
         setCostData(data.data);
-        setCachedAt(data.cachedAt || Date.now());
+        setCachedAt(data.data.cachedAt || Date.now());
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to refresh cost data";

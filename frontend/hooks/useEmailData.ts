@@ -1,5 +1,6 @@
 "use client";
 
+import type { EmailsResponse } from "@/lib/types";
 import { useCallback, useEffect, useState } from "react";
 
 interface UseEmailDataReturn {
@@ -16,17 +17,8 @@ interface UseEmailDataReturn {
   isSaving: boolean;
 }
 
-interface EmailResponse {
-  success: boolean;
-  data?: { adminEmail: string; allowlist: string[] };
-  error?: string;
-}
-
-/**
- * Update state from successful email response
- */
 function updateFromResponse(
-  data: EmailResponse["data"],
+  data: EmailsResponse["data"],
   setAdminEmail: React.Dispatch<React.SetStateAction<string>>,
   setAllowlist: React.Dispatch<React.SetStateAction<string[]>>,
   setOriginalAllowlist: React.Dispatch<React.SetStateAction<string[]>>,
@@ -46,12 +38,12 @@ function updateFromResponse(
 async function fetchEmailsFromApi(
   url: string,
   isBackground: boolean,
-  onSuccess: (data: EmailResponse["data"]) => void,
+  onSuccess: (data: EmailsResponse["data"]) => void,
   onError: (message: string) => void
 ): Promise<void> {
   try {
     const response = await fetch(url);
-    const data: EmailResponse = await response.json();
+    const data: EmailsResponse = await response.json();
 
     if (!data.success) {
       if (!isBackground) onError(data.error || "Failed to load emails");
@@ -81,7 +73,7 @@ export function useEmailData(): UseEmailDataReturn {
     setLoadingState(true);
 
     const url = `/api/emails${isBackground ? "?refresh=true" : ""}`;
-    const onSuccess = (data: EmailResponse["data"]) =>
+    const onSuccess = (data: EmailsResponse["data"]) =>
       updateFromResponse(data, setAdminEmail, setAllowlist, setOriginalAllowlist, setError);
 
     await fetchEmailsFromApi(url, isBackground, onSuccess, setError);
@@ -99,7 +91,7 @@ export function useEmailData(): UseEmailDataReturn {
 
     try {
       const response = await fetch("/api/emails?refresh=true");
-      const data: EmailResponse = await response.json();
+      const data: EmailsResponse = await response.json();
 
       if (data.success && data.data) {
         updateFromResponse(data.data, setAdminEmail, setAllowlist, setOriginalAllowlist, setError);
@@ -125,7 +117,7 @@ export function useEmailData(): UseEmailDataReturn {
         body: JSON.stringify({ emails: allowlist }),
       });
 
-      const data: EmailResponse = await response.json();
+      const data: EmailsResponse = await response.json();
 
       if (data.success) {
         setOriginalAllowlist(allowlist);
