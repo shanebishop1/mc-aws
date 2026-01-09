@@ -1,5 +1,10 @@
 import { NextResponse } from "next/server";
-import { updateEmailAllowlist, getEmailAllowlist } from "@/lib/aws-client";
+import { updateEmailAllowlist } from "@/lib/aws-client";
+
+declare global {
+  // eslint-disable-next-line no-var
+  var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;
+}
 
 export async function PUT(request: Request) {
   try {
@@ -24,6 +29,9 @@ export async function PUT(request: Request) {
     }
 
     await updateEmailAllowlist(emails);
+
+    // Invalidate /api/emails cache so the next GET is fresh
+    globalThis.__mc_cachedEmails = null;
 
     return NextResponse.json({
       success: true,
