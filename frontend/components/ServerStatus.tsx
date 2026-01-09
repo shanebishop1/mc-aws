@@ -2,6 +2,7 @@
 
 import { DecagonLoader } from "@/components/ui/DecagonLoader";
 import { motion } from "framer-motion";
+import { SleepingZs } from "./SleepingZs";
 
 interface ServerStatusProps {
   state: "running" | "stopped" | "hibernated" | "pending" | "stopping" | "terminated" | "unknown";
@@ -33,7 +34,9 @@ export function ServerStatus({ state, ip, playerCount, className, isLoading }: S
   };
 
   return (
-    <div className={`flex flex-col items-center justify-center space-y-12 ${className}`}>
+    <div className={`relative flex flex-col items-center justify-center space-y-12 ${className}`}>
+      {state === "hibernated" && <SleepingZs />}
+
       {/* Central Anchor */}
       <DecagonLoader
         status={state}

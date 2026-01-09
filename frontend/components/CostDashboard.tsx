@@ -260,8 +260,8 @@ export function CostDashboard({ isOpen, onClose }: CostDashboardProps) {
                           {costData.breakdown.map((item, index) => (
                             <motion.div
                               key={`${item.service}-${index}`}
-                              initial={{ opacity: 0, x: -10 }}
-                              animate={{ opacity: 1, x: 0 }}
+                              initial={{ opacity: 0 }}
+                              animate={{ opacity: 1 }}
                               transition={{ delay: 0.2 + index * 0.05 }}
                               className={`flex justify-between items-center p-3 font-sans text-xs ${
                                 index % 2 === 0

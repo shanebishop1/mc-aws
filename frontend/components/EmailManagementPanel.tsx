@@ -2,7 +2,7 @@
 
 import { LuxuryButton } from "@/components/ui/LuxuryButton";
 import { motion, AnimatePresence } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface EmailManagementPanelProps {
   isOpen: boolean;
@@ -239,7 +239,7 @@ export function EmailManagementPanel({ isOpen, onClose }: EmailManagementPanelPr
                         {adminEmail || "—"}
                       </p>
                       <p className="font-sans text-xs text-luxury-black/50">
-                        Set at deploy time. Contact your administrator to change.
+                        Set at deploy time. Redeploy to change.
                       </p>
                     </div>
                   </div>
