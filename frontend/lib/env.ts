@@ -13,9 +13,9 @@ export function getEnv(name: string, optional = false): string {
 
 export const env = {
   // AWS Configuration
-  AWS_REGION: getEnv("AWS_REGION"),
-  AWS_ACCOUNT_ID: getEnv("AWS_ACCOUNT_ID"),
-  INSTANCE_ID: getEnv("INSTANCE_ID"),
+  AWS_REGION: getEnv("AWS_REGION", true) || process.env.CDK_DEFAULT_REGION || "",
+  AWS_ACCOUNT_ID: getEnv("AWS_ACCOUNT_ID", true) || process.env.CDK_DEFAULT_ACCOUNT || "",
+  INSTANCE_ID: getEnv("INSTANCE_ID", true),
 
   // Cloudflare Configuration
   CLOUDFLARE_ZONE_ID: getEnv("CLOUDFLARE_ZONE_ID"),

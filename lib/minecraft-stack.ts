@@ -80,10 +80,10 @@ export class MinecraftStack extends cdk.Stack {
       ],
     });
 
-    // Add permissions to read SSM parameters (GitHub credentials)
+    // Add permissions to read/write SSM parameters (GitHub credentials, player count)
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["ssm:GetParameter"],
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`,
         ],
