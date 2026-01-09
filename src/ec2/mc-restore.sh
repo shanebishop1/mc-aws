@@ -13,15 +13,25 @@ MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
 touch "$MAINTENANCE_LOCK"
 trap "rm -f $MAINTENANCE_LOCK" EXIT
 
-BACKUP_NAME="$1"
-if [[ -z "$BACKUP_NAME" ]]; then
-  log "ERROR: Backup name required"
-  exit 1
-fi
-
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 SERVER_DIR="/opt/minecraft/server"
+
+BACKUP_NAME="${1:-}"
+if [[ -z "$BACKUP_NAME" ]]; then
+  log "Backup name not provided, finding latest backup..."
+  # Get latest .tar.gz file from GDrive
+  BACKUP_FILE=$(rclone lsf "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" --sort time --reverse --files-only | grep "\.tar\.gz$" | head -n 1)
+  if [[ -z "$BACKUP_FILE" ]]; then
+    log "ERROR: No backups found in ${GDRIVE_REMOTE}:${GDRIVE_ROOT}/"
+    exit 1
+  fi
+  BACKUP_NAME="${BACKUP_FILE%.tar.gz}"
+  log "Found latest backup: $BACKUP_NAME"
+else
+  # Strip extension if provided to avoid double extension
+  BACKUP_NAME="${BACKUP_NAME%.tar.gz}"
+fi
 
 log "Starting restore from: $BACKUP_NAME"
 
