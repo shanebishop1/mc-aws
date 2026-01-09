@@ -2,7 +2,15 @@
  * TypeScript types for API responses and payloads
  */
 
-export type ServerState = "running" | "stopped" | "hibernated" | "pending" | "stopping" | "terminated" | "unknown";
+export enum ServerState {
+  Running = "running",
+  Stopped = "stopped",
+  Hibernating = "hibernating",
+  Pending = "pending",
+  Stopping = "stopping",
+  Terminated = "terminated",
+  Unknown = "unknown",
+}
 
 export interface ServerStatusResponse {
   state: ServerState;
@@ -47,7 +55,7 @@ export interface RestoreResponse {
 export interface HibernateResponse {
   message: string;
   backupOutput: string;
-  instanceId?: string; // Optional because hibernated state might not need it? Actually it's useful.
+  instanceId?: string; // Optional because hibernating state might not need it? Actually it's useful.
 }
 
 export interface ResumeResponse {

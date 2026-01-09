@@ -11,7 +11,7 @@ import { LuxuryButton } from "@/components/ui/Button";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 export default function Home() {
   const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus } = useServerStatus();
@@ -21,6 +21,21 @@ export default function Home() {
   const [isResumeModalOpen, setIsResumeModalOpen] = useState(false);
   const [isEmailPanelOpen, setIsEmailPanelOpen] = useState(false);
   const [isCostDashboardOpen, setIsCostDashboardOpen] = useState(false);
+  const [awsConsoleUrl, setAwsConsoleUrl] = useState<string | undefined>(undefined);
+
+  // Fetch AWS config for console URL
+  useEffect(() => {
+    fetch("/api/aws-config")
+      .then((res) => res.json())
+      .then((data) => {
+        if (data.success && data.data.ec2ConsoleUrl) {
+          setAwsConsoleUrl(data.data.ec2ConsoleUrl);
+        }
+      })
+      .catch(() => {
+        // Silently fail - AWS link is optional
+      });
+  }, []);
 
   // Use custom hook to derive button visibility state
   const { showResume, showStart, showStop, showHibernate, showBackupRestore, actionsEnabled } = useButtonVisibility(
@@ -81,7 +96,11 @@ export default function Home() {
       >
         <ArtDecoBorder />
         {/* Header */}
-        <PageHeader onOpenCosts={() => setIsCostDashboardOpen(true)} onOpenEmails={() => setIsEmailPanelOpen(true)} />
+        <PageHeader
+          onOpenCosts={() => setIsCostDashboardOpen(true)}
+          onOpenEmails={() => setIsEmailPanelOpen(true)}
+          awsConsoleUrl={awsConsoleUrl}
+        />
 
         {/* Middle Section - Centers Status Vertically */}
         <div className="flex-1 flex flex-col justify-center items-center w-full">
@@ -119,9 +138,7 @@ export default function Home() {
               {message}
             </motion.p>
           )}
-          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">
-            Shane Bishop | 2026 {/* PHASE IV */}
-          </p>
+          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
         </footer>
       </main>
 
