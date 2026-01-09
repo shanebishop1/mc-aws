@@ -21,7 +21,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
       setError(null);
       // Don't reset costData or showConfirmation - keep cache
     }
-  }, [isOpen]);
+  }, [isOpen, setError]);
 
   const handleGenerateReport = () => {
     setShowConfirmation(false);
@@ -69,18 +69,8 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
               disabled={isLoading}
               className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed"
             >
-              <svg
-                className="w-6 h-6"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={1.5}
-                  d="M6 18L18 6M6 6l12 12"
-                />
+              <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
 
@@ -94,9 +84,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
             >
               {/* Header */}
               <div className="text-center mb-8">
-                <h2 className="font-serif text-2xl italic text-charcoal mb-2">
-                  Cost Dashboard
-                </h2>
+                <h2 className="font-serif text-2xl italic text-charcoal mb-2">Cost Dashboard</h2>
                 <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                   AWS costs for your Minecraft server
                 </p>
@@ -120,11 +108,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                   </div>
 
                   <div className="space-y-3">
-                    <LuxuryButton
-                      onClick={handleGenerateReport}
-                      disabled={isLoading}
-                      className="w-full"
-                    >
+                    <LuxuryButton onClick={handleGenerateReport} disabled={isLoading} className="w-full">
                       Generate Report
                     </LuxuryButton>
 
@@ -173,15 +157,9 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                     className="mb-8 text-center"
                   >
                     <div className="mb-2">
-                      <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-2">
-                        Total Cost
-                      </p>
-                      <p className="font-serif text-5xl italic text-charcoal">
-                        ${costData.totalCost}
-                      </p>
-                      <p className="font-sans text-xs text-charcoal/50 mt-2">
-                        {costData.currency}
-                      </p>
+                      <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-2">Total Cost</p>
+                      <p className="font-serif text-5xl italic text-charcoal">${costData.totalCost}</p>
+                      <p className="font-sans text-xs text-charcoal/50 mt-2">{costData.currency}</p>
                     </div>
                     <div className="w-12 h-[1px] bg-charcoal/20 mx-auto mt-4" />
                     <p className="font-sans text-xs text-charcoal/50 mt-4">
@@ -204,10 +182,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                     <div className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-3">
                       Service Breakdown
                     </div>
-                    <CostBreakdownTable
-                      breakdown={costData.breakdown}
-                      currency={costData.currency}
-                    />
+                    <CostBreakdownTable breakdown={costData.breakdown} currency={costData.currency} />
                   </motion.div>
                 </>
               )}
@@ -215,11 +190,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
               {/* Action Buttons */}
               {!showConfirmation && costData && (
                 <div className="space-y-3">
-                  <LuxuryButton
-                    onClick={handleRefresh}
-                    disabled={isLoading}
-                    className="w-full"
-                  >
+                  <LuxuryButton onClick={handleRefresh} disabled={isLoading} className="w-full">
                     {isLoading ? "Fetching..." : "Refresh Costs"}
                   </LuxuryButton>
 
@@ -239,4 +210,4 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
       )}
     </AnimatePresence>
   );
-}
+};

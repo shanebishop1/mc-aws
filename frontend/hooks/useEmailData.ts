@@ -16,6 +16,54 @@ interface UseEmailDataReturn {
   isSaving: boolean;
 }
 
+interface EmailResponse {
+  success: boolean;
+  data?: { adminEmail: string; allowlist: string[] };
+  error?: string;
+}
+
+/**
+ * Update state from successful email response
+ */
+function updateFromResponse(
+  data: EmailResponse["data"],
+  setAdminEmail: React.Dispatch<React.SetStateAction<string>>,
+  setAllowlist: React.Dispatch<React.SetStateAction<string[]>>,
+  setOriginalAllowlist: React.Dispatch<React.SetStateAction<string[]>>,
+  setError: React.Dispatch<React.SetStateAction<string | null>>
+): void {
+  if (data) {
+    setAdminEmail(data.adminEmail);
+    setAllowlist(data.allowlist);
+    setOriginalAllowlist(data.allowlist);
+    setError(null);
+  }
+}
+
+/**
+ * Fetch emails from API
+ */
+async function fetchEmailsFromApi(
+  url: string,
+  isBackground: boolean,
+  onSuccess: (data: EmailResponse["data"]) => void,
+  onError: (message: string) => void
+): Promise<void> {
+  try {
+    const response = await fetch(url);
+    const data: EmailResponse = await response.json();
+
+    if (!data.success) {
+      if (!isBackground) onError(data.error || "Failed to load emails");
+      return;
+    }
+
+    onSuccess(data.data);
+  } catch {
+    if (!isBackground) onError("Failed to load emails");
+  }
+}
+
 export function useEmailData(): UseEmailDataReturn {
   const [adminEmail, setAdminEmail] = useState("");
   const [allowlist, setAllowlist] = useState<string[]>([]);
@@ -29,28 +77,17 @@ export function useEmailData(): UseEmailDataReturn {
   const hasChanges = JSON.stringify(allowlist) !== JSON.stringify(originalAllowlist);
 
   const fetchEmails = useCallback(async (isBackground = false) => {
-    if (!isBackground) setIsLoading(true);
-    else setIsRefetching(true);
+    const setLoadingState = isBackground ? setIsRefetching : setIsLoading;
+    setLoadingState(true);
 
-    try {
-      const response = await fetch(`/api/emails${isBackground ? "?refresh=true" : ""}`);
-      const data = await response.json();
+    const url = `/api/emails${isBackground ? "?refresh=true" : ""}`;
+    const onSuccess = (data: EmailResponse["data"]) =>
+      updateFromResponse(data, setAdminEmail, setAllowlist, setOriginalAllowlist, setError);
 
-      if (data.success && data.data) {
-        setAdminEmail(data.data.adminEmail);
-        setAllowlist(data.data.allowlist);
-        setOriginalAllowlist(data.data.allowlist);
-        setError(null);
-      } else {
-        if (!isBackground) setError(data.error || "Failed to load emails");
-      }
-    } catch {
-      if (!isBackground) setError("Failed to load emails");
-    } finally {
-      if (!isBackground) setIsLoading(false);
-      else setIsRefetching(false);
-      setHasFetchedOnce(true);
-    }
+    await fetchEmailsFromApi(url, isBackground, onSuccess, setError);
+
+    setLoadingState(false);
+    setHasFetchedOnce(true);
   }, []);
 
   const refetch = useCallback(async () => {
@@ -62,13 +99,10 @@ export function useEmailData(): UseEmailDataReturn {
 
     try {
       const response = await fetch("/api/emails?refresh=true");
-      const data = await response.json();
+      const data: EmailResponse = await response.json();
 
       if (data.success && data.data) {
-        setAdminEmail(data.data.adminEmail);
-        setAllowlist(data.data.allowlist);
-        setOriginalAllowlist(data.data.allowlist);
-        setError(null);
+        updateFromResponse(data.data, setAdminEmail, setAllowlist, setOriginalAllowlist, setError);
       } else {
         setError(data.error || "Failed to refresh emails");
       }
@@ -91,7 +125,7 @@ export function useEmailData(): UseEmailDataReturn {
         body: JSON.stringify({ emails: allowlist }),
       });
 
-      const data = await response.json();
+      const data: EmailResponse = await response.json();
 
       if (data.success) {
         setOriginalAllowlist(allowlist);
