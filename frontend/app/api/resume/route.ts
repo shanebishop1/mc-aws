@@ -3,7 +3,7 @@
  * Resume from hibernation: create EBS, start EC2, optionally restore from backup
  *
  * This route combines the /start logic with optional restore functionality.
- * The existing /api/start route already handles volume creation for hibernated instances.
+ * The existing /api/start route already handles volume creation for hibernating instances.
  */
 
 import {
@@ -18,6 +18,7 @@ import {
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { ApiResponse, ResumeResponse } from "@/lib/types";
+import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 async function handleAlreadyRunning(resolvedId: string): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
@@ -40,11 +41,11 @@ async function handleAlreadyRunning(resolvedId: string): Promise<NextResponse<Ap
 }
 
 async function validateInstanceState(currentState: string): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
-  if (currentState !== "hibernated" && currentState !== "stopped") {
+  if (currentState !== ServerState.Hibernating && currentState !== ServerState.Stopped) {
     return NextResponse.json(
       {
         success: false,
-        error: `Cannot resume from state: ${currentState}. Server must be hibernated or stopped.`,
+        error: `Cannot resume from state: ${currentState}. Server must be hibernating or stopped.`,
         timestamp: new Date().toISOString(),
       },
       { status: 400 }
@@ -95,7 +96,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const currentState = await getInstanceState(resolvedId);
     console.log("[RESUME] Current state:", currentState);
 
-    if (currentState === "running") {
+    if (currentState === ServerState.Running) {
       const response = await handleAlreadyRunning(resolvedId);
       if (response) return response;
     }

@@ -6,6 +6,7 @@
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
+import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
@@ -24,7 +25,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     console.log("[STOP] Current state:", currentState);
 
     // If already stopped, just return success
-    if (currentState === "stopped" || currentState === "hibernated") {
+    if (currentState === ServerState.Stopped || currentState === ServerState.Hibernating) {
       return NextResponse.json({
         success: true,
         data: {
@@ -35,7 +36,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       });
     }
 
-    if (currentState !== "running" && currentState !== "pending") {
+    if (currentState !== ServerState.Running && currentState !== ServerState.Pending) {
       return NextResponse.json(
         {
           success: false,

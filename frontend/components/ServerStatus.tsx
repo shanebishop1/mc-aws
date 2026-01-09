@@ -4,8 +4,10 @@ import { DecagonLoader } from "@/components/ui/DecagonLoader";
 import { motion } from "framer-motion";
 import { SleepingZs } from "./SleepingZs";
 
+import { ServerState } from "@/lib/types";
+
 interface ServerStatusProps {
-  state: "running" | "stopped" | "hibernated" | "pending" | "stopping" | "terminated" | "unknown";
+  state: ServerState;
   ip?: string;
   playerCount?: number;
   className?: string;
@@ -13,15 +15,14 @@ interface ServerStatusProps {
 }
 
 export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: ServerStatusProps) => {
-  // Mapping state to display text
-  const stateLabels: Record<string, string> = {
-    running: "Online",
-    stopped: "Stopped",
-    hibernated: "Hibernated",
-    pending: "Starting...",
-    stopping: "Stopping...",
-    terminated: "Terminated",
-    unknown: "Unknown",
+  const stateLabels: Record<ServerState, string> = {
+    [ServerState.Running]: "Online",
+    [ServerState.Stopped]: "Stopped",
+    [ServerState.Hibernating]: "Hibernating",
+    [ServerState.Pending]: "Starting...",
+    [ServerState.Stopping]: "Stopping...",
+    [ServerState.Terminated]: "Terminated",
+    [ServerState.Unknown]: "Unknown",
   };
 
   const label = isLoading ? "Connecting..." : stateLabels[state] || state;
@@ -39,7 +40,7 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
       className={`relative flex flex-col items-center justify-center space-y-12 ${className}`}
     >
       {/* Always render to prevent layout shift - component handles visibility internally */}
-      <SleepingZs show={state === "hibernated"} />
+      <SleepingZs show={state === ServerState.Hibernating} />
 
       {/* Central Anchor */}
       <DecagonLoader status={state} isLoading={isLoading || state === "pending" || state === "stopping"} />

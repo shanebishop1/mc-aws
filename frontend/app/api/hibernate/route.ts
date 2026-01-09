@@ -13,6 +13,7 @@ import {
 } from "@/lib/aws-client";
 import { env } from "@/lib/env";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
+import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
@@ -28,19 +29,19 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const currentState = await getInstanceState(resolvedId);
     console.log("[HIBERNATE] Current state:", currentState);
 
-    if (currentState === "hibernated") {
+    if (currentState === ServerState.Hibernating) {
       return NextResponse.json({
         success: true,
         data: {
-          message: "Server is already hibernated (stopped with no volumes)",
+          message: "Server is already hibernating (stopped with no volumes)",
           instanceId: resolvedId,
-          backupOutput: "Skipped - already hibernated",
+          backupOutput: "Skipped - already hibernating",
         },
         timestamp: new Date().toISOString(),
       });
     }
 
-    if (currentState !== "running") {
+    if (currentState !== ServerState.Running) {
       return NextResponse.json(
         {
           success: false,
@@ -72,7 +73,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const response: ApiResponse<HibernateResponse> = {
       success: true,
       data: {
-        message: "Server hibernated successfully (volumes deleted)",
+        message: "Server hibernating successfully (volumes deleted)",
         instanceId: resolvedId,
         backupOutput,
       },

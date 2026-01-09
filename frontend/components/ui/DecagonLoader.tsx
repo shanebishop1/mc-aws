@@ -4,16 +4,17 @@ import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
 import { useState } from "react";
 
+import { ServerState } from "@/lib/types";
+
 interface DecagonLoaderProps {
   isLoading?: boolean;
-  status?: string; // "running" | "stopped" | etc.
+  status?: ServerState;
   className?: string;
 }
 
 export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderProps) => {
   const [isHovered, setIsHovered] = useState(false);
 
-  // Breathing animation configuration
   const breatheAnimation = {
     scale: [1, 1.12, 1],
     opacity: [0.7, 1, 0.7],
@@ -24,18 +25,17 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
     },
   };
 
-  // Rotation animation
   const rotateAnimation = {
     rotate: 360,
     transition: {
-      duration: 12, // Faster rotation
+      duration: 12,
       repeat: Number.POSITIVE_INFINITY,
       ease: "linear" as const,
     },
   };
 
-  const isRunning = status === "running";
-  const isStopped = status === "stopped" || status === "hibernated";
+  const isRunning = status === ServerState.Running;
+  const isStopped = status === ServerState.Stopped || status === ServerState.Hibernating;
 
   // Decide color based on status
   const colorClass = isLoading

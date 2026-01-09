@@ -21,7 +21,7 @@ I have successfully implemented the core backend API routes for the Minecraft se
 3. **`lib/aws-client.ts`** (430+ lines)
    - EC2 and SSM client initialization
    - Core AWS operations with polling and timeout protection:
-     - **State detection:** `getInstanceState()` - Detects hibernated state (stopped + no volumes)
+     - **State detection:** `getInstanceState()` - Detects hibernating state (stopped + no volumes)
      - **Instance management:** `startInstance()`, `stopInstance()`, `waitForInstanceRunning()`
      - **IP management:** `getPublicIp()` - Polls for up to 5 minutes with 1-second intervals
      - **Hibernation recovery:** `handleResume()` - Creates 8GB GP3 volume from latest AL2023 ARM64 AMI snapshot
@@ -38,7 +38,7 @@ I have successfully implemented the core backend API routes for the Minecraft se
    - **Endpoint:** `GET /api/status`
    - **Purpose:** Check current server state
    - **Returns:** Server state, instance ID, public IP (if running), timestamp
-   - **States detected:** running, stopped, hibernated, pending, stopping, terminated, unknown
+   - **States detected:** running, stopped, hibernating, pending, stopping, terminated, unknown
 
 2. **`app/api/start/route.ts`** (80 lines)
    - **Endpoint:** `POST /api/start`
@@ -212,7 +212,7 @@ The framework supports these planned features from the PRD:
 ### State Mapping
 - `running` → Instance state is "running"
 - `stopped` → Instance state is "stopped" AND has volumes
-- `hibernated` → Instance state is "stopped" AND NO volumes
+- `hibernating` → Instance state is "stopped" AND NO volumes
 - `pending` → Instance state is "pending"
 - `stopping` → Instance state is "stopping"
 - `terminated` → Instance state is "terminated"
@@ -221,7 +221,7 @@ The framework supports these planned features from the PRD:
 ### Start Operation Flow
 1. Get current state
 2. If running, return current IP
-3. Create/attach volume if hibernated (handleResume)
+  3. Create/attach volume if hibernating (handleResume)
 4. Send EC2 StartInstances command
 5. Poll instance state until "running" (max 5 min)
 6. Poll for public IP assignment (max 5 min)
