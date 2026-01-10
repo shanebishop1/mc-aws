@@ -8,56 +8,63 @@ A Minecraft server management system on AWS with:
 - **Infrastructure**: AWS CDK (TypeScript) for EC2, Lambda, SES, SNS, SSM
 - **Frontend**: Next.js 15 with App Router, React 19, Tailwind CSS
 - **Backend**: Next.js API routes + AWS Lambda functions
+- **Deployment**: Cloudflare Workers via OpenNext
 
 ## Directory Structure
 
 ```
 mc-aws/
-├── bin/                    # CLI scripts (connect.sh, backup.sh, etc.)
+├── app/                    # Next.js App Router pages and API routes
+│   └── api/                # REST API endpoints (23 routes)
+├── components/             # React components
+│   ├── ui/                 # Reusable UI components
+│   ├── auth/               # Authentication components
+│   ├── email/              # Email management components
+│   ├── cost/               # Cost tracking components
+│   └── backup/             # Backup components
+├── hooks/                  # React hooks
+├── lib/                    # Shared utilities and types
+│   └── aws/                # AWS SDK clients (EC2, SSM, Cost, etc.)
+├── scripts/                # CLI utilities (TypeScript)
+├── tests/                  # E2E tests (Playwright) and mocks
 ├── config/                 # Minecraft server config (server.properties, whitelist.json)
-├── lib/                    # CDK stack definitions
-│   └── minecraft-stack.ts  # Main infrastructure stack
-├── src/
-│   ├── ec2/                # Scripts running on EC2 instance
-│   └── lambda/             # Lambda function code (JavaScript)
-├── scripts/                # Deployment scripts
-└── frontend/               # Next.js web application
-    ├── app/                # App Router pages and API routes
-    │   └── api/            # REST API endpoints
-    ├── components/         # React components
-    ├── lib/                # Shared utilities and types
-    └── hooks/              # React hooks
+├── docs/                   # Documentation and PRDs
+│   └── tasks/              # Task definitions
+├── infra/                  # AWS CDK infrastructure
+│   ├── bin/                # CDK entry point
+│   ├── lib/                # CDK stack definitions
+│   ├── scripts/            # CDK deployment scripts
+│   ├── setup/              # AWS setup configs (DLM, IAM)
+│   └── src/                # Code deployed to AWS
+│       ├── ec2/            # Shell scripts for EC2 instance
+│       └── lambda/         # Lambda function code (JavaScript)
+└── [config files]          # package.json, tsconfig.json, biome.json, etc.
 ```
 
 ## Build, Lint, and Test Commands
 
-### Root (CDK Infrastructure)
+### Next.js Application (Root)
 
 ```bash
-# Package manager: npm
-npm run deploy          # Deploy CDK stack (runs scripts/deploy.js)
-npx cdk synth           # Synthesize CloudFormation template
-npx cdk diff            # Show infrastructure changes
-```
-
-### Frontend (Next.js)
-
-```bash
-# Package manager: pnpm (run from frontend/ directory)
+# Package manager: pnpm
 pnpm dev                # Start development server
 pnpm build              # Production build
 pnpm start              # Start production server
 pnpm lint               # Run Biome linter
 pnpm format             # Format code with Biome
 pnpm check              # Run both lint and format with auto-fix
+pnpm test               # Run Vitest unit tests
+pnpm test:e2e           # Run Playwright E2E tests
 ```
 
-### Testing
+### CDK Infrastructure (infra/)
 
-**No test framework is currently configured.** If adding tests:
-- Use Vitest for unit tests (recommended for Next.js)
-- Run single test: `pnpm vitest run path/to/file.test.ts`
-- Run specific test: `pnpm vitest run -t "test name pattern"`
+```bash
+# Package manager: pnpm (run from infra/ directory)
+pnpm cdk synth          # Synthesize CloudFormation template
+pnpm cdk diff           # Show infrastructure changes
+pnpm cdk deploy         # Deploy CDK stack
+```
 
 ## Code Style Guidelines
 
@@ -92,10 +99,10 @@ pnpm check              # Run both lint and format with auto-fix
 // Order: external packages, then internal modules with @/ alias
 import { NextRequest, NextResponse } from "next/server";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
-import { findInstanceId, getInstanceState } from "@/lib/aws-client";
+import { findInstanceId, getInstanceState } from "@/lib/aws";
 ```
 
-- Use `@/*` path alias for frontend imports (maps to `frontend/*`)
+- Use `@/*` path alias for imports (maps to root)
 - Group imports: React/Next, external packages, internal modules, types
 
 ### Naming Conventions
@@ -179,7 +186,7 @@ export const ServerStatus = ({ initialState }: Props) => {
 - Use TypeScript for all props
 - Extract reusable UI to `components/ui/`
 
-### Shell Scripts (bin/, src/ec2/)
+### Shell Scripts (infra/src/ec2/)
 
 ```bash
 #!/usr/bin/env bash
@@ -209,19 +216,19 @@ const response = await client.send(new DescribeInstancesCommand({ InstanceIds: [
 ## Environment Variables
 
 - Defined in `.env` files (not committed)
-- Validated in `frontend/lib/env.ts`
+- Validated in `lib/env.ts`
 - Access via the `env` object: `env.AWS_REGION`, `env.INSTANCE_ID`
 
 ## Type Definitions
 
-All shared types are in `frontend/lib/types.ts`:
+All shared types are in `lib/types.ts`:
 - `ServerState`: Union type for instance states
 - `ApiResponse<T>`: Standard API response wrapper
 - `*Response` interfaces: Specific endpoint response types
 
 ## CDK Infrastructure
 
-- Stack defined in `lib/minecraft-stack.ts`
+- Stack defined in `infra/lib/minecraft-stack.ts`
 - Uses CDK v2 with `aws-cdk-lib`
 - Environment variables for configuration (GDRIVE_*, GITHUB_*, etc.)
 - Secrets stored in SSM Parameter Store (SecureString)
@@ -230,10 +237,11 @@ All shared types are in `frontend/lib/types.ts`:
 
 | Purpose | Location |
 |---------|----------|
-| CDK Entry | `bin/mc-aws.ts` |
-| CDK Stack | `lib/minecraft-stack.ts` |
-| API Routes | `frontend/app/api/*/route.ts` |
-| AWS Client | `frontend/lib/aws-client.ts` |
-| Type Definitions | `frontend/lib/types.ts` |
-| Environment | `frontend/lib/env.ts` |
-| Lambda Handler | `src/lambda/StartMinecraftServer/index.js` |
+| CDK Entry | `infra/bin/mc-aws.ts` |
+| CDK Stack | `infra/lib/minecraft-stack.ts` |
+| API Routes | `app/api/*/route.ts` |
+| AWS Clients | `lib/aws/` |
+| Type Definitions | `lib/types.ts` |
+| Environment | `lib/env.ts` |
+| Lambda Handlers | `infra/src/lambda/*/index.js` |
+| EC2 Scripts | `infra/src/ec2/*.sh` |
