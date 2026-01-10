@@ -1,15 +1,15 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import * as cdk from "aws-cdk-lib";
-import type { Construct } from "constructs";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
-import * as sns from "aws-cdk-lib/aws-sns";
-import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as ses from "aws-cdk-lib/aws-ses";
 import * as sesActions from "aws-cdk-lib/aws-ses-actions";
-import * as fs from "node:fs";
-import * as path from "node:path";
+import * as sns from "aws-cdk-lib/aws-sns";
+import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
 import * as cr from "aws-cdk-lib/custom-resources";
+import type { Construct } from "constructs";
 
 import * as ssm from "aws-cdk-lib/aws-ssm";
 
@@ -17,8 +17,7 @@ export class MinecraftStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    const driveTokenSecretArn =
-      process.env.GDRIVE_TOKEN_SECRET_ARN || "";
+    const driveTokenSecretArn = process.env.GDRIVE_TOKEN_SECRET_ARN || "";
     const driveRemote = process.env.GDRIVE_REMOTE || "gdrive";
     const driveRoot = process.env.GDRIVE_ROOT || "mc-backups";
 
@@ -73,21 +72,15 @@ export class MinecraftStack extends cdk.Stack {
     // 2. IAM Role for EC2
     const ec2Role = new iam.Role(this, "MinecraftServerRole", {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
-      managedPolicies: [
-        iam.ManagedPolicy.fromAwsManagedPolicyName(
-          "AmazonSSMManagedInstanceCore",
-        ),
-      ],
+      managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")],
     });
 
     // Add permissions to read/write SSM parameters (GitHub credentials, player count)
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameter", "ssm:PutParameter"],
-        resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`,
-        ],
-      }),
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`],
+      })
     );
 
     // Add permission to decrypt (needed for SecureString)
@@ -95,52 +88,40 @@ export class MinecraftStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["kms:Decrypt"],
         resources: ["*"], // Scope this down if you have a specific KMS key
-      }),
+      })
     );
 
-     // Add permission to stop itself
-     ec2Role.addToPolicy(
-       new iam.PolicyStatement({
-         actions: ["ec2:StopInstances"],
-         resources: ["*"], // We can't easily restrict to "self" in IAM without tags, but the script uses instance metadata to find its own ID
-       }),
-     );
+    // Add permission to stop itself
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:StopInstances"],
+        resources: ["*"], // We can't easily restrict to "self" in IAM without tags, but the script uses instance metadata to find its own ID
+      })
+    );
 
-     // Add permissions to manage volumes (for hibernate/resume)
-     ec2Role.addToPolicy(
-       new iam.PolicyStatement({
-         actions: [
-           "ec2:DescribeVolumes",
-           "ec2:DescribeInstances",
-           "ec2:DetachVolume",
-           "ec2:DeleteVolume",
-           "ec2:CreateVolume",
-           "ec2:AttachVolume"
-         ],
-         resources: ["*"],
-       }),
-     );
+    // Add permissions to manage volumes (for hibernate/resume)
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: [
+          "ec2:DescribeVolumes",
+          "ec2:DescribeInstances",
+          "ec2:DetachVolume",
+          "ec2:DeleteVolume",
+          "ec2:CreateVolume",
+          "ec2:AttachVolume",
+        ],
+        resources: ["*"],
+      })
+    );
 
     // 3. Security Group
-    const securityGroup = new ec2.SecurityGroup(
-      this,
-      "MinecraftSecurityGroup",
-      {
-        vpc,
-        description: "Allow Minecraft and SSH access",
-        allowAllOutbound: true,
-      },
-    );
-    securityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(25565),
-      "Allow Minecraft",
-    );
-    securityGroup.addIngressRule(
-      ec2.Peer.anyIpv4(),
-      ec2.Port.tcp(22),
-      "Allow SSH",
-    );
+    const securityGroup = new ec2.SecurityGroup(this, "MinecraftSecurityGroup", {
+      vpc,
+      description: "Allow Minecraft and SSH access",
+      allowAllOutbound: true,
+    });
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(25565), "Allow Minecraft");
+    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), "Allow SSH");
 
     // 4. EC2 Instance
     const baseUserData = fs
@@ -151,7 +132,7 @@ export class MinecraftStack extends cdk.Stack {
         (line) =>
           `${line}export GDRIVE_TOKEN_SECRET_ARN="${driveTokenSecretArn}"\n` +
           `export GDRIVE_REMOTE="${driveRemote}"\n` +
-          `export GDRIVE_ROOT="${driveRoot}"\n`,
+          `export GDRIVE_ROOT="${driveRoot}"\n`
       );
 
     // Fallback if no shebang was found (should not happen, but keeps user-data valid)
@@ -162,10 +143,7 @@ export class MinecraftStack extends cdk.Stack {
     const instance = new ec2.Instance(this, "MinecraftServer", {
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
-      instanceType: ec2.InstanceType.of(
-        ec2.InstanceClass.T4G,
-        ec2.InstanceSize.MEDIUM,
-      ),
+      instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MEDIUM),
       machineImage: ec2.MachineImage.latestAmazonLinux2023({
         cpuType: ec2.AmazonLinuxCpuType.ARM_64,
       }),
@@ -191,7 +169,7 @@ export class MinecraftStack extends cdk.Stack {
         new iam.PolicyStatement({
           actions: ["secretsmanager:GetSecretValue"],
           resources: [driveTokenSecretArn],
-        }),
+        })
       );
     }
 
@@ -207,9 +185,7 @@ export class MinecraftStack extends cdk.Stack {
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: "index.handler",
-      code: lambda.Code.fromAsset(
-        path.join(__dirname, "../src/lambda/StartMinecraftServer"),
-      ),
+      code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/StartMinecraftServer")),
       environment: {
         INSTANCE_ID: instance.instanceId,
         // These need to be provided via context or manually set after deploy if not hardcoded
@@ -228,9 +204,7 @@ export class MinecraftStack extends cdk.Stack {
     const updateDnsLambda = new lambda.Function(this, "UpdateDnsLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: "index.handler",
-      code: lambda.Code.fromAsset(
-        path.join(__dirname, "../src/lambda/UpdateDns"),
-      ),
+      code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/UpdateDns")),
       environment: {
         INSTANCE_ID: instance.instanceId,
         CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID || "",
@@ -245,7 +219,7 @@ export class MinecraftStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["ec2:DescribeInstances"],
         resources: ["*"],
-      }),
+      })
     );
 
     const updateDnsProvider = new cr.Provider(this, "UpdateDnsProvider", {
@@ -262,7 +236,7 @@ export class MinecraftStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["ec2:StartInstances", "ec2:DescribeInstances"],
         resources: ["*"],
-      }),
+      })
     );
 
     // Grant Lambda permission to send email (for notifications)
@@ -270,18 +244,16 @@ export class MinecraftStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["ses:SendEmail", "ses:SendRawEmail"],
         resources: ["*"],
-      }),
+      })
     );
 
-     // Grant Lambda permission to read/write email allowlist in SSM
-     startLambda.addToRolePolicy(
-       new iam.PolicyStatement({
-         actions: ["ssm:GetParameter", "ssm:PutParameter"],
-         resources: [
-           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`,
-         ],
-       }),
-     );
+    // Grant Lambda permission to read/write email allowlist in SSM
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`],
+      })
+    );
 
     // Grant Lambda permission to run SSM commands on EC2 (for backup/restore/hibernate)
     startLambda.addToRolePolicy(
@@ -291,29 +263,21 @@ export class MinecraftStack extends cdk.Stack {
           `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
           `arn:aws:ec2:${this.region}:${this.account}:instance/*`,
         ],
-      }),
+      })
     );
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetCommandInvocation"],
         resources: ["*"],
-      }),
+      })
     );
-
-
 
     // Subscribe Lambda to SNS
-    startTopic.addSubscription(
-      new subscriptions.LambdaSubscription(startLambda),
-    );
+    startTopic.addSubscription(new subscriptions.LambdaSubscription(startLambda));
 
     // 7. SES Receipt Rule
     // Note: You must manually verify the domain/email in SES Console first!
-    const _ruleSet = ses.ReceiptRuleSet.fromReceiptRuleSetName(
-      this,
-      "RuleSet",
-      "default-rule-set",
-    );
+    const _ruleSet = ses.ReceiptRuleSet.fromReceiptRuleSetName(this, "RuleSet", "default-rule-set");
 
     // Create a new SES Receipt Rule Set
     const mcRuleSet = new ses.ReceiptRuleSet(this, "MinecraftRuleSet", {

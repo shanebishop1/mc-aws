@@ -3,7 +3,7 @@
  * List available Google Drive backups
  */
 
-import { findInstanceId, getInstanceState, listBackups } from "@/lib/aws-client";
+import { findInstanceId, getInstanceState, listBackups } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, ListBackupsResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";

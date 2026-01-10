@@ -98,7 +98,9 @@ export const ConfirmationDialog = ({
     onConfirm();
   };
 
-  const isConfirmDisabled = Boolean(isLoading || (requireTypedConfirmation && typedConfirmation !== requireTypedConfirmation));
+  const isConfirmDisabled = Boolean(
+    isLoading || (requireTypedConfirmation && typedConfirmation !== requireTypedConfirmation)
+  );
   const isDanger = variant === "danger";
 
   const renderCancelButton = () => (
@@ -137,9 +139,7 @@ export const ConfirmationDialog = ({
           : "border-green text-green hover:bg-green hover:text-white"
       )}
     >
-      <span className="relative z-10">
-        {isLoading ? "Loading..." : confirmText}
-      </span>
+      <span className="relative z-10">{isLoading ? "Loading..." : confirmText}</span>
       {!isLoading && !isConfirmDisabled && (
         <motion.div
           className={cn("absolute inset-0", isDanger ? "bg-red-600" : "bg-green")}
@@ -201,10 +201,7 @@ export const ConfirmationDialog = ({
               <div className="mb-6">
                 <h2
                   id="dialog-title"
-                  className={cn(
-                    "font-serif text-2xl italic mb-3",
-                    isDanger ? "text-red-600" : "text-charcoal"
-                  )}
+                  className={cn("font-serif text-2xl italic mb-3", isDanger ? "text-red-600" : "text-charcoal")}
                 >
                   {title}
                 </h2>
@@ -216,7 +213,10 @@ export const ConfirmationDialog = ({
               {/* Typed Confirmation Input */}
               {requireTypedConfirmation && (
                 <div className="mb-6">
-                  <label htmlFor="typed-confirmation" className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-2">
+                  <label
+                    htmlFor="typed-confirmation"
+                    className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-2"
+                  >
                     Type &quot;{requireTypedConfirmation}&quot; to confirm
                   </label>
                   <input

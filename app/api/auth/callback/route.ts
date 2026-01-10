@@ -3,9 +3,9 @@
  * Handles the Google OAuth callback
  */
 
-import { Google, type OAuth2Tokens } from "arctic";
 import { createSession, createSessionCookie } from "@/lib/auth";
 import { env } from "@/lib/env";
+import { Google, type OAuth2Tokens } from "arctic";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 

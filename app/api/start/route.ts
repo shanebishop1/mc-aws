@@ -3,6 +3,7 @@
  * Starts the server, handling hibernation recovery if needed
  */
 
+import { requireAllowed } from "@/lib/api-auth";
 import {
   findInstanceId,
   getInstanceState,
@@ -10,8 +11,7 @@ import {
   handleResume,
   startInstance,
   waitForInstanceRunning,
-} from "@/lib/aws-client";
-import { requireAllowed } from "@/lib/api-auth";
+} from "@/lib/aws";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";

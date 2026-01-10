@@ -1,7 +1,7 @@
-import { getEmailAllowlist } from "@/lib/aws-client";
+import { requireAdmin } from "@/lib/api-auth";
+import { getEmailAllowlist } from "@/lib/aws";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 // Permanent in-memory cache
 let cachedEmails: {

@@ -3,10 +3,10 @@
  * Checks if Google Drive is configured (token exists in SSM)
  */
 
+import { requireAdmin } from "@/lib/api-auth";
 import { getParameter } from "@/lib/aws/ssm-client";
 import type { ApiResponse, GDriveStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<GDriveStatusResponse>>> {
   try {

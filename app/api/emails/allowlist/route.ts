@@ -1,7 +1,7 @@
-import { updateEmailAllowlist } from "@/lib/aws-client";
+import { requireAdmin } from "@/lib/api-auth";
+import { updateEmailAllowlist } from "@/lib/aws";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 declare global {
   var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;

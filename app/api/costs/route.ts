@@ -1,7 +1,7 @@
-import { getCosts } from "@/lib/aws-client";
+import { requireAdmin } from "@/lib/api-auth";
+import { getCosts } from "@/lib/aws";
 import type { ApiResponse, CostData } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 // Permanent in-memory cache (until server restart or manual refresh)
 let cachedCosts: { data: CostData; timestamp: number } | null = null;

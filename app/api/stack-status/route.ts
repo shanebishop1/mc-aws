@@ -3,8 +3,8 @@
  * Returns the status of the CloudFormation stack
  */
 
-import { getStackStatus } from "@/lib/aws/cloudformation-client";
 import { getAuthUser } from "@/lib/api-auth";
+import { getStackStatus } from "@/lib/aws/cloudformation-client";
 import type { ApiResponse, StackStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 

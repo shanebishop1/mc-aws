@@ -3,12 +3,12 @@
  * Execute restore via SSM with selected backup name
  */
 
-import { executeSSMCommand, findInstanceId, getInstanceState, getPublicIp } from "@/lib/aws-client";
+import { requireAdmin } from "@/lib/api-auth";
+import { executeSSMCommand, findInstanceId, getInstanceState, getPublicIp } from "@/lib/aws";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
   try {

@@ -3,9 +3,9 @@
  * Returns the current server state and details
  */
 
-import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws-client";
-import { env } from "@/lib/env";
 import { getAuthUser } from "@/lib/api-auth";
+import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws";
+import { env } from "@/lib/env";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
