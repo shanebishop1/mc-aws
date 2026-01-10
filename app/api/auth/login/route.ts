@@ -12,9 +12,9 @@
  * - Redirects to Google's authorization URL
  */
 
-import { Google, generateState, generateCodeVerifier } from "arctic";
 import { createSession, createSessionCookie } from "@/lib/auth";
 import { env } from "@/lib/env";
+import { Google, generateCodeVerifier, generateState } from "arctic";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -63,9 +63,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     if (!clientId || !clientSecret || !appUrl) {
       console.error("[LOGIN] Missing OAuth configuration");
-      return NextResponse.redirect(
-        new URL("/?error=oauth_config", request.url)
-      );
+      return NextResponse.redirect(new URL("/?error=oauth_config", request.url));
     }
 
     // Generate state and code verifier for PKCE

@@ -3,10 +3,10 @@
  * Initiates Google OAuth flow by returning the authorization URL
  */
 
+import { requireAdmin } from "@/lib/api-auth";
 import { env } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ authUrl: string }>>> {
   try {

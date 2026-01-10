@@ -1,5 +1,5 @@
-import { getPlayerCount } from "@/lib/aws-client";
 import { getAuthUser } from "@/lib/api-auth";
+import { getPlayerCount } from "@/lib/aws";
 import type { ApiResponse, PlayersResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 

@@ -3,6 +3,7 @@
  * Full hibernation: backup, stop EC2, delete EBS volume (zero cost mode)
  */
 
+import { requireAdmin } from "@/lib/api-auth";
 import {
   detachAndDeleteVolumes,
   executeSSMCommand,
@@ -10,12 +11,11 @@ import {
   getInstanceState,
   stopInstance,
   waitForInstanceStopped,
-} from "@/lib/aws-client";
+} from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
   try {

@@ -3,8 +3,8 @@
  * Stops the server (keeps EBS attached - not hibernation)
  */
 
-import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws-client";
 import { requireAllowed } from "@/lib/api-auth";
+import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";

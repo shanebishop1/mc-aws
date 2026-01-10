@@ -1,5 +1,5 @@
-import { NextResponse, type NextRequest } from "next/server";
 import { jwtVerify } from "jose";
+import { type NextRequest, NextResponse } from "next/server";
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
   // Skip auth processing in development mode

@@ -1,15 +1,13 @@
-import type { Page, Route } from "@playwright/test";
-import {
-  ServerState,
-} from "@/lib/types";
+import { ServerState } from "@/lib/types";
 import type {
   ApiResponse,
   BackupInfo,
   BackupResponse,
   CostsResponse,
-  DestroyResponse,
   DeployResponse,
+  DestroyResponse,
   EmailsResponse,
+  GDriveStatusResponse,
   HibernateResponse,
   ListBackupsResponse,
   PlayerCountData,
@@ -17,11 +15,11 @@ import type {
   RestoreResponse,
   ResumeResponse,
   ServerStatusResponse,
-  StartServerResponse,
   StackStatusResponse,
+  StartServerResponse,
   StopServerResponse,
-  GDriveStatusResponse,
 } from "@/lib/types";
+import type { Page, Route } from "@playwright/test";
 
 // Mock scenarios
 export type MockScenario =
@@ -132,11 +130,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       ? "gdrive-not-configured"
       : "gdrive-configured";
 
-  const stackScenario = hasAwsError
-    ? "aws-error"
-    : hasNoStack
-      ? "no-stack"
-      : "stack-stopped";
+  const stackScenario = hasAwsError ? "aws-error" : hasNoStack ? "no-stack" : "stack-stopped";
 
   // Mock /api/stack-status
   await page.route("**/api/stack-status", async (route) => {
@@ -170,9 +164,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to start instance: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to start instance: AWS connection error")),
       });
     } else {
       const data: StartServerResponse = {
@@ -195,9 +187,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to start instance: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to start instance: AWS connection error")),
       });
     } else {
       const data: StartServerResponse = {
@@ -220,9 +210,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to stop instance: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to stop instance: AWS connection error")),
       });
     } else {
       const data: StopServerResponse = {
@@ -243,9 +231,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to hibernate: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to hibernate: AWS connection error")),
       });
     } else {
       const data: HibernateResponse = {
@@ -267,9 +253,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to resume: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to resume: AWS connection error")),
       });
     } else {
       const data: ResumeResponse = {
@@ -343,9 +327,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to create backup: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to create backup: AWS connection error")),
       });
     } else {
       const data: BackupResponse = {
@@ -399,9 +381,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
-        body: JSON.stringify(
-          createErrorResponse("Failed to restore: AWS connection error")
-        ),
+        body: JSON.stringify(createErrorResponse("Failed to restore: AWS connection error")),
       });
     } else {
       const data: RestoreResponse = {

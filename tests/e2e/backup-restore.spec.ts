@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { expect, test } from "@playwright/test";
 import { setupMocks } from "../mocks/handlers";
 import { confirmDialog, expectErrorMessage, expectSuccessMessage, waitForPageLoad } from "./helpers";
 
@@ -63,9 +63,7 @@ test.describe("Backup and Restore", () => {
 
     // Should show confirmation dialog
     await expect(page.getByText(/restore server/i)).toBeVisible();
-    await expect(
-      page.getByText(/this will restore your server from a backup/i)
-    ).toBeVisible();
+    await expect(page.getByText(/this will restore your server from a backup/i)).toBeVisible();
     await expect(page.getByText(/any unsaved progress will be lost/i)).toBeVisible();
 
     // Confirm the action
@@ -135,7 +133,10 @@ test.describe("Backup and Restore", () => {
     await expect(page.getByText(/backup server/i)).toBeVisible();
 
     // Cancel the dialog
-    await page.getByRole("dialog").getByRole("button", { name: /cancel/i }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /cancel/i })
+      .click();
 
     // Dialog should close
     await expect(page.getByText(/backup server/i)).not.toBeVisible();
@@ -155,7 +156,10 @@ test.describe("Backup and Restore", () => {
     await expect(page.getByText(/restore server/i)).toBeVisible();
 
     // Cancel the dialog
-    await page.getByRole("dialog").getByRole("button", { name: /cancel/i }).click();
+    await page
+      .getByRole("dialog")
+      .getByRole("button", { name: /cancel/i })
+      .click();
 
     // Dialog should close
     await expect(page.getByText(/restore server/i)).not.toBeVisible();
