@@ -71,7 +71,7 @@ async function pollCommandCompletion(
  * Execute an SSM command on an EC2 instance
  */
 export async function executeSSMCommand(instanceId: string | undefined, commands: string[]): Promise<string> {
-  const { findInstanceId } = await import("../aws-client");
+  const { findInstanceId } = await import("./ec2-client");
   const resolvedId = instanceId || (await findInstanceId());
   console.log(`Executing SSM command on instance ${resolvedId}: ${commands.join(" ")}`);
 
@@ -111,7 +111,7 @@ export async function listBackups(instanceId?: string): Promise<BackupInfo[]> {
     return [];
   }
 
-  const { findInstanceId } = await import("../aws-client");
+  const { findInstanceId } = await import("./ec2-client");
   const resolvedId = instanceId || (await findInstanceId());
 
   try {

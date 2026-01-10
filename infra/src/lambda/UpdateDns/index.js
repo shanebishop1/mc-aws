@@ -8,9 +8,7 @@ async function getPublicIp(instanceId) {
   let attempts = 0;
   while (attempts < MAX_POLL_ATTEMPTS) {
     attempts += 1;
-    const { Reservations } = await ec2.send(
-      new DescribeInstancesCommand({ InstanceIds: [instanceId] }),
-    );
+    const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
     const inst = Reservations?.[0]?.Instances?.[0];
     const ip = inst?.PublicIpAddress;
     if (ip) return ip;

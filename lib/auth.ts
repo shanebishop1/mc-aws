@@ -61,9 +61,7 @@ export async function createSession(email: string): Promise<string> {
  * @param token - The JWT string to verify
  * @returns The payload with email and role, or null if invalid
  */
-export async function verifySession(
-  token: string
-): Promise<{ email: string; role: UserRole } | null> {
+export async function verifySession(token: string): Promise<{ email: string; role: UserRole } | null> {
   try {
     const secret = new TextEncoder().encode(env.AUTH_SECRET);
     const { payload } = await jwtVerify(token, secret);

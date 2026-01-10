@@ -3,11 +3,11 @@
  * Execute backup via SSM with optional custom name
  */
 
-import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws-client";
+import { requireAdmin } from "@/lib/api-auth";
+import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<BackupResponse>>> {
   try {

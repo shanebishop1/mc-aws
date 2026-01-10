@@ -11,7 +11,7 @@
  * - If valid session, returns { authenticated: true, email, role }
  */
 
-import { verifySession, SESSION_COOKIE_NAME } from "@/lib/auth";
+import { SESSION_COOKIE_NAME, verifySession } from "@/lib/auth";
 import { isDev } from "@/lib/env";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
@@ -20,9 +20,7 @@ type AuthMeResponse =
   | { authenticated: false }
   | { authenticated: true; email: string; role: "admin" | "allowed" | "public" };
 
-export async function GET(
-  _request: NextRequest
-): Promise<NextResponse<AuthMeResponse>> {
+export async function GET(_request: NextRequest): Promise<NextResponse<AuthMeResponse>> {
   try {
     const cookieStore = await cookies();
     const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;

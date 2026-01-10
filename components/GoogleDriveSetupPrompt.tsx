@@ -58,11 +58,7 @@ export const GoogleDriveSetupPrompt = ({
       }
 
       // Open OAuth in popup window
-      const popup = window.open(
-        authUrl,
-        "google-oauth",
-        "width=500,height=600,scrollbars=yes,resizable=yes"
-      );
+      const popup = window.open(authUrl, "google-oauth", "width=500,height=600,scrollbars=yes,resizable=yes");
 
       if (!popup) {
         throw new Error("Popup blocked. Please allow popups and try again.");
@@ -189,7 +185,13 @@ export const GoogleDriveSetupPrompt = ({
               </svg>
             </button>
 
-            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.2 }} className="p-8">
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.2 }}
+              className="p-8"
+            >
               {/* Header */}
               <div className="text-center mb-8">
                 <h2 className="font-serif text-2xl italic text-charcoal mb-2">{getTitle()}</h2>
@@ -211,14 +213,15 @@ export const GoogleDriveSetupPrompt = ({
               {/* Action Buttons */}
               <div className="space-y-4">
                 {/* Set Up Google Drive Button - Primary */}
-                <LuxuryButton
-                  onClick={handleSetupClick}
-                  disabled={isLoading}
-                  className="w-full"
-                >
+                <LuxuryButton onClick={handleSetupClick} disabled={isLoading} className="w-full">
                   {isLoading ? (
                     <span className="flex items-center justify-center gap-2">
-                      <svg className="animate-spin h-4 w-4" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                      <svg
+                        className="animate-spin h-4 w-4"
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                      >
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path
                           className="opacity-75"
