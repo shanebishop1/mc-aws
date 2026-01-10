@@ -5,6 +5,10 @@
 import { DescribeInstancesCommand, EC2Client, StartInstancesCommand, StopInstancesCommand } from "@aws-sdk/client-ec2";
 import { env } from "../env";
 import { ServerState } from "../types";
+import { findInstanceId, resolveInstanceId } from "./instance-resolver";
+
+// Re-export for backwards compatibility
+export { findInstanceId, resolveInstanceId };
 
 // Initialize AWS client
 const region = env.AWS_REGION || "us-east-1";
@@ -17,51 +21,10 @@ export const MAX_POLL_ATTEMPTS = 300;
 export const POLL_INTERVAL_MS = 1000;
 
 /**
- * Find the Minecraft Server instance ID.
- * Priority:
- * 1. Environment variable INSTANCE_ID
- * 2. AWS Query for tag:Name=MinecraftServer (non-terminated)
- */
-export async function findInstanceId(): Promise<string> {
-  if (env.INSTANCE_ID) {
-    return env.INSTANCE_ID;
-  }
-
-  console.log(
-    `[Discovery] Searching for instance with tag:Name = MinecraftServer OR MinecraftStack/MinecraftServer in region ${env.AWS_REGION}`
-  );
-
-  try {
-    const { Reservations } = await ec2.send(
-      new DescribeInstancesCommand({
-        Filters: [
-          { Name: "tag:Name", Values: ["MinecraftServer", "MinecraftStack/MinecraftServer"] },
-          { Name: "instance-state-name", Values: ["pending", "running", "stopping", "stopped", "shutting-down"] },
-        ],
-      })
-    );
-
-    const instanceFn = Reservations?.[0]?.Instances?.[0];
-    if (instanceFn?.InstanceId) {
-      console.log(`[Discovery] Discovered Instance ID: ${instanceFn.InstanceId} (${instanceFn.State?.Name})`);
-      return instanceFn.InstanceId;
-    }
-    console.warn("[Discovery] No instances found matching filters.");
-  } catch (err) {
-    console.error("[Discovery] Failed to discover instance ID:", err);
-    throw err;
-  }
-
-  throw new Error(
-    `Could not find Minecraft Server. Searched for tag Name=MinecraftServer OR MinecraftStack/MinecraftServer in ${env.AWS_REGION}`
-  );
-}
-
-/**
  * Get the current state of an EC2 instance
  */
 export async function getInstanceState(instanceId?: string): Promise<ServerState> {
-  const resolvedId = instanceId || (await findInstanceId());
+  const resolvedId = await resolveInstanceId(instanceId);
   try {
     const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [resolvedId] }));
 
@@ -103,7 +66,7 @@ export async function getInstanceState(instanceId?: string): Promise<ServerState
  * Get instance details including state and public IP
  */
 export async function getInstanceDetails(instanceId?: string) {
-  const resolvedId = instanceId || (await findInstanceId());
+  const resolvedId = await resolveInstanceId(instanceId);
   const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [resolvedId] }));
 
   if (!Reservations || Reservations.length === 0 || !Reservations[0].Instances) {
@@ -210,7 +173,7 @@ export async function getPublicIp(instanceId: string): Promise<string> {
  * Start an EC2 instance
  */
 export async function startInstance(instanceId?: string) {
-  const resolvedId = instanceId || (await findInstanceId());
+  const resolvedId = await resolveInstanceId(instanceId);
   console.log(`Sending start command for instance ${resolvedId}`);
   await ec2.send(new StartInstancesCommand({ InstanceIds: [resolvedId] }));
 }
@@ -219,7 +182,7 @@ export async function startInstance(instanceId?: string) {
  * Stop an EC2 instance
  */
 export async function stopInstance(instanceId?: string) {
-  const resolvedId = instanceId || (await findInstanceId());
+  const resolvedId = await resolveInstanceId(instanceId);
   console.log(`Sending stop command for instance ${resolvedId}`);
   await ec2.send(new StopInstancesCommand({ InstanceIds: [resolvedId] }));
 }
