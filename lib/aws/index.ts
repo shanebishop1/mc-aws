@@ -2,12 +2,14 @@
  * AWS client modules - barrel export
  */
 
+// Instance resolution (shared utility)
+export { findInstanceId, resolveInstanceId } from "./instance-resolver";
+
 // EC2 operations
 export {
   ec2,
   MAX_POLL_ATTEMPTS,
   POLL_INTERVAL_MS,
-  findInstanceId,
   getInstanceState,
   getInstanceDetails,
   waitForInstanceRunning,

@@ -11,6 +11,7 @@ import {
 } from "@aws-sdk/client-ssm";
 import { env } from "../env";
 import type { BackupInfo } from "../types";
+import { resolveInstanceId } from "./instance-resolver";
 
 // Initialize SSM client
 const region = env.AWS_REGION || "us-east-1";
@@ -71,8 +72,7 @@ async function pollCommandCompletion(
  * Execute an SSM command on an EC2 instance
  */
 export async function executeSSMCommand(instanceId: string | undefined, commands: string[]): Promise<string> {
-  const { findInstanceId } = await import("./ec2-client");
-  const resolvedId = instanceId || (await findInstanceId());
+  const resolvedId = await resolveInstanceId(instanceId);
   console.log(`Executing SSM command on instance ${resolvedId}: ${commands.join(" ")}`);
 
   try {
@@ -111,8 +111,7 @@ export async function listBackups(instanceId?: string): Promise<BackupInfo[]> {
     return [];
   }
 
-  const { findInstanceId } = await import("./ec2-client");
-  const resolvedId = instanceId || (await findInstanceId());
+  const resolvedId = await resolveInstanceId(instanceId);
 
   try {
     console.log(`Listing backups from Google Drive on instance ${resolvedId}...`);
