@@ -1,5 +1,11 @@
 /**
  * Environment variable validation and retrieval
+ *
+ * Environment files:
+ * - .env.local: Development config (ENABLE_DEV_LOGIN=true for local auth)
+ * - .env.production: Production config (requires Google OAuth)
+ *
+ * Next.js automatically loads the appropriate file based on NODE_ENV
  */
 
 export function getEnv(name: string, optional = false): string {
@@ -10,9 +16,6 @@ export function getEnv(name: string, optional = false): string {
   }
   return value || "";
 }
-
-// Development mode check
-export const isDev = process.env.NODE_ENV !== "production";
 
 export const env = {
   // AWS Configuration
@@ -26,27 +29,30 @@ export const env = {
   CLOUDFLARE_MC_DOMAIN: getEnv("CLOUDFLARE_MC_DOMAIN"),
   CLOUDFLARE_API_TOKEN: getEnv("CLOUDFLARE_API_TOKEN"),
 
-  // Google Drive Configuration (optional for now)
+  // Google Drive Configuration (optional)
   GDRIVE_REMOTE: getEnv("GDRIVE_REMOTE", true),
   GDRIVE_ROOT: getEnv("GDRIVE_ROOT", true),
 
   // Authentication Configuration
-  AUTH_SECRET: getEnv("AUTH_SECRET", isDev),
-  ADMIN_EMAIL: getEnv("ADMIN_EMAIL", isDev),
+  AUTH_SECRET: getEnv("AUTH_SECRET"),
+  ADMIN_EMAIL: getEnv("ADMIN_EMAIL", true),
   ALLOWED_EMAILS: getEnv("ALLOWED_EMAILS", true),
 
-  // Google OAuth (optional in dev, required in prod if auth is enabled)
-  GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", isDev),
-  GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", isDev),
+  // Google OAuth (required in production for real auth)
+  GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", true),
+  GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", true),
   NEXT_PUBLIC_APP_URL: getEnv("NEXT_PUBLIC_APP_URL", true) || "http://localhost:3000",
+
+  // Development
+  ENABLE_DEV_LOGIN: getEnv("ENABLE_DEV_LOGIN", true),
 };
 
 /**
- * Check if authentication is enabled
- * Auth is enabled if Google Client ID is configured and we're not in development mode
+ * Check if authentication is properly configured
+ * Returns true if Google OAuth credentials are set
  */
-export function isAuthEnabled(): boolean {
-  return Boolean(env.GOOGLE_CLIENT_ID && !isDev);
+export function isAuthConfigured(): boolean {
+  return Boolean(env.GOOGLE_CLIENT_ID && env.GOOGLE_CLIENT_SECRET);
 }
 
 /**

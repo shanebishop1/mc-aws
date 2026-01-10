@@ -665,7 +665,7 @@ When you want to play again:
 
 ## Authentication
 
-The web UI uses Google OAuth to control who can perform actions. Authentication is **optional in development** (all actions allowed) and **required in production**.
+The web UI uses Google OAuth to control who can perform actions. Authentication works the same way in all environments—no code bypasses.
 
 ### Authorization Tiers
 
@@ -674,6 +674,44 @@ The web UI uses Google OAuth to control who can perform actions. Authentication 
 | Public (not logged in) | ✅ | ❌ | ❌ |
 | Allowed (on allow list) | ✅ | ✅ | ❌ |
 | Admin | ✅ | ✅ | ✅ |
+
+### Environment Configuration
+
+This project uses separate environment files for development and production:
+
+| File | Purpose | Loaded When |
+|------|---------|-------------|
+| `.env.local` | Local development | `pnpm dev` |
+| `.env.production` | Production deployment | `pnpm build` / Cloudflare |
+
+**Setup:**
+
+```bash
+# For local development
+cp .env.local.template .env.local
+
+# For production
+cp .env.production.template .env.production
+```
+
+### Local Development Authentication
+
+Instead of bypassing auth in development, use the dev-login route to get a real session cookie:
+
+1. Add `ENABLE_DEV_LOGIN=true` to `.env.local`
+2. Run `pnpm dev`
+3. Visit `http://localhost:3000/api/auth/dev-login`
+4. You're logged in with a real cookie for 30 days
+
+To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
+- `"admin"` - Full access
+- `"allowed"` - Can start/stop server
+- `"public"` - View only
+
+**Why this approach?**
+- Your local environment behaves exactly like production
+- Auth bugs are caught during development, not in production
+- Easy to test different permission levels
 
 ### How Authentication Works
 
