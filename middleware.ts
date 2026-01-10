@@ -2,12 +2,13 @@ import { jwtVerify } from "jose";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function middleware(request: NextRequest): Promise<NextResponse> {
-  // Skip auth processing in development mode
-  if (process.env.NODE_ENV !== "production") {
-    return NextResponse.next();
-  }
+  // Create a copy of request headers that we can modify
+  const requestHeaders = new Headers(request.headers);
 
-  const response = NextResponse.next();
+  // CRITICAL: Delete any incoming auth headers to prevent spoofing
+  // Attackers could send these headers directly to bypass auth
+  requestHeaders.delete("x-user-email");
+  requestHeaders.delete("x-user-role");
 
   // Try to read and verify the session cookie
   const sessionCookie = request.cookies.get("mc_session");
@@ -17,24 +18,28 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
       const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
       const { payload } = await jwtVerify(sessionCookie.value, secret);
 
-      // Enrich request with auth headers for downstream routes
+      // Set trusted headers from verified JWT payload
       const userEmail = payload.email as string | undefined;
       const userRole = payload.role as string | undefined;
 
       if (userEmail) {
-        response.headers.set("x-user-email", userEmail);
+        requestHeaders.set("x-user-email", userEmail);
       }
 
       if (userRole) {
-        response.headers.set("x-user-role", userRole);
+        requestHeaders.set("x-user-role", userRole);
       }
     } catch {
-      // Invalid token - continue without headers (don't block)
+      // Invalid token - headers remain deleted, user is unauthenticated
     }
   }
 
-  // Always continue - middleware only enriches context, doesn't block
-  return response;
+  // Pass the sanitized headers to downstream routes
+  return NextResponse.next({
+    request: {
+      headers: requestHeaders,
+    },
+  });
 }
 
 // Configure which routes the middleware should run on
