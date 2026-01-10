@@ -3,11 +3,11 @@
  * Returns AWS configuration for constructing console URLs
  */
 
-import { findInstanceId } from "@/lib/aws-client";
+import { requireAdmin } from "@/lib/api-auth";
+import { findInstanceId } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 interface AwsConfigResponse {
   region: string | null;

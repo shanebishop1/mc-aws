@@ -3,10 +3,10 @@
  * Handles Google OAuth callback, exchanges code for tokens, and stores them in SSM
  */
 
+import { requireAdmin } from "@/lib/api-auth";
 import { putParameter } from "@/lib/aws/ssm-client";
 import { env } from "@/lib/env";
 import { type NextRequest, NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/api-auth";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   // Check admin authorization

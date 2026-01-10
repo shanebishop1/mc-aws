@@ -1,7 +1,7 @@
 "use client";
 
-import { motion } from "framer-motion";
 import { LoginButton } from "@/components/auth/login-button";
+import { motion } from "framer-motion";
 
 interface PageHeaderProps {
   onOpenCosts: () => void;
