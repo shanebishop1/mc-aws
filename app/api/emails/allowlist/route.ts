@@ -11,7 +11,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse<ApiRespons
   try {
     // Check admin authorization
     try {
-      const user = requireAdmin(request);
+      const user = await requireAdmin(request);
       console.log("[EMAILS] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {

@@ -4,7 +4,7 @@ import type { ApiResponse, PlayersResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<PlayersResponse["data"]>>> {
-  const user = getAuthUser(request);
+  const user = await getAuthUser(request);
   console.log("[PLAYERS] Access by:", user?.email ?? "anonymous");
 
   try {

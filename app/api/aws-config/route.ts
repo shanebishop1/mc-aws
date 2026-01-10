@@ -19,7 +19,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
   try {
     // Check admin authorization
     try {
-      const user = requireAdmin(_request);
+      const user = await requireAdmin(_request);
       console.log("[CONFIG] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {

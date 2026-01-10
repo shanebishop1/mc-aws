@@ -12,7 +12,7 @@ export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ 
   try {
     // Check admin authorization
     try {
-      const user = requireAdmin(request as NextRequest);
+      const user = await requireAdmin(request as NextRequest);
       console.log("[GDRIVE-SETUP] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {
