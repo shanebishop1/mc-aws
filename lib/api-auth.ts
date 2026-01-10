@@ -18,14 +18,6 @@ export type UserRole = "admin" | "allowed" | "public";
 export type AuthUser = { email: string; role: UserRole };
 
 /**
- * Check if running in development mode
- * @returns true if NODE_ENV !== "production"
- */
-export function isDevMode(): boolean {
-  return process.env.NODE_ENV !== "production";
-}
-
-/**
  * Extract authenticated user from request headers
  * Headers are set by middleware (x-user-email and x-user-role)
  * @param request - NextRequest object
@@ -50,17 +42,11 @@ export function getAuthUser(request: NextRequest): AuthUser | null {
 
 /**
  * Require authentication - returns user or throws 401 error
- * In dev mode, returns a mock admin user
  * @param request - NextRequest object
  * @returns AuthUser
  * @throws 401 Response if not authenticated
  */
 export function requireAuth(request: NextRequest): AuthUser {
-  // In dev mode, return mock admin user
-  if (isDevMode()) {
-    return { email: "dev@localhost", role: "admin" };
-  }
-
   const user = getAuthUser(request);
   if (!user) {
     throw NextResponse.json(
@@ -74,17 +60,11 @@ export function requireAuth(request: NextRequest): AuthUser {
 
 /**
  * Require "allowed" or "admin" role - returns user or throws 403 error
- * In dev mode, returns a mock admin user
  * @param request - NextRequest object
  * @returns AuthUser
  * @throws 401 Response if not authenticated, 403 if insufficient permissions
  */
 export function requireAllowed(request: NextRequest): AuthUser {
-  // In dev mode, return mock admin user
-  if (isDevMode()) {
-    return { email: "dev@localhost", role: "admin" };
-  }
-
   const user = getAuthUser(request);
   if (!user) {
     throw NextResponse.json(
@@ -105,17 +85,11 @@ export function requireAllowed(request: NextRequest): AuthUser {
 
 /**
  * Require "admin" role - returns user or throws 403 error
- * In dev mode, returns a mock admin user
  * @param request - NextRequest object
  * @returns AuthUser
  * @throws 401 Response if not authenticated, 403 if insufficient permissions
  */
 export function requireAdmin(request: NextRequest): AuthUser {
-  // In dev mode, return mock admin user
-  if (isDevMode()) {
-    return { email: "dev@localhost", role: "admin" };
-  }
-
   const user = getAuthUser(request);
   if (!user) {
     throw NextResponse.json(
