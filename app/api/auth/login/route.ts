@@ -2,17 +2,13 @@
  * GET /api/auth/login
  * Initiates the Google OAuth flow
  *
- * In development mode:
- * - If dev_email query param is provided, creates a session directly and redirects to home
- * - Otherwise, redirects to home (auth bypassed)
- *
- * In production mode:
  * - Generates OAuth state and code verifier
  * - Stores them in HTTP-only cookies
  * - Redirects to Google's authorization URL
+ *
+ * For local development, use /api/auth/dev-login instead
  */
 
-import { createSession, createSessionCookie } from "@/lib/auth";
 import { env } from "@/lib/env";
 import { Google, generateCodeVerifier, generateState } from "arctic";
 import { cookies } from "next/headers";
@@ -24,38 +20,7 @@ const OAUTH_COOKIE_EXPIRY = 600; // 10 minutes in seconds
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
-    const isDev = process.env.NODE_ENV !== "production";
-    const url = new URL(request.url);
-
-    if (isDev) {
-      // Development mode: auth bypass
-      console.log("[LOGIN] Development mode - auth bypassed");
-
-      const devEmail = url.searchParams.get("dev_email");
-      if (devEmail) {
-        // Create session for the provided dev email
-        console.log("[LOGIN] Creating dev session for email:", devEmail);
-        const token = await createSession(devEmail);
-        const sessionCookie = createSessionCookie(token);
-
-        const response = NextResponse.redirect(new URL("/", request.url));
-        response.cookies.set(sessionCookie.name, sessionCookie.value, {
-          httpOnly: sessionCookie.httpOnly,
-          secure: sessionCookie.secure,
-          sameSite: sessionCookie.sameSite,
-          path: sessionCookie.path,
-          maxAge: sessionCookie.maxAge,
-        });
-
-        return response;
-      }
-
-      // No dev_email provided, just redirect to home
-      return NextResponse.redirect(new URL("/", request.url));
-    }
-
-    // Production mode: initiate OAuth flow
-    console.log("[LOGIN] Production mode - initiating OAuth flow");
+    console.log("[LOGIN] Initiating OAuth flow");
 
     const clientId = env.GOOGLE_CLIENT_ID;
     const clientSecret = env.GOOGLE_CLIENT_SECRET;
