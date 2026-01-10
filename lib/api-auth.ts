@@ -1,11 +1,12 @@
 /**
  * API route authorization helpers
  *
- * These functions are used in Next.js API routes to check user permissions
- * based on headers set by middleware (x-user-email and x-user-role).
+ * These functions verify the session cookie directly (zero-trust approach).
+ * They do NOT rely on headers set by middleware - each route verifies auth independently.
  */
 
 import { type NextRequest, NextResponse } from "next/server";
+import { SESSION_COOKIE_NAME, verifySession } from "./auth";
 
 /**
  * User roles for authorization
@@ -18,26 +19,22 @@ export type UserRole = "admin" | "allowed" | "public";
 export type AuthUser = { email: string; role: UserRole };
 
 /**
- * Extract authenticated user from request headers
- * Headers are set by middleware (x-user-email and x-user-role)
+ * Extract authenticated user by verifying the session cookie directly
  * @param request - NextRequest object
  * @returns AuthUser or null if not authenticated
  */
-export function getAuthUser(request: NextRequest): AuthUser | null {
-  const email = request.headers.get("x-user-email");
-  const roleHeader = request.headers.get("x-user-role");
-
-  if (!email || !roleHeader) {
+export async function getAuthUser(request: NextRequest): Promise<AuthUser | null> {
+  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
+  if (!token) {
     return null;
   }
 
-  // Validate role value
-  const role = roleHeader as UserRole;
-  if (role !== "admin" && role !== "allowed" && role !== "public") {
+  const payload = await verifySession(token);
+  if (!payload) {
     return null;
   }
 
-  return { email, role };
+  return { email: payload.email, role: payload.role };
 }
 
 /**
@@ -46,8 +43,8 @@ export function getAuthUser(request: NextRequest): AuthUser | null {
  * @returns AuthUser
  * @throws 401 Response if not authenticated
  */
-export function requireAuth(request: NextRequest): AuthUser {
-  const user = getAuthUser(request);
+export async function requireAuth(request: NextRequest): Promise<AuthUser> {
+  const user = await getAuthUser(request);
   if (!user) {
     throw NextResponse.json(
       { success: false, error: "Authentication required", timestamp: new Date().toISOString() },
@@ -64,8 +61,8 @@ export function requireAuth(request: NextRequest): AuthUser {
  * @returns AuthUser
  * @throws 401 Response if not authenticated, 403 if insufficient permissions
  */
-export function requireAllowed(request: NextRequest): AuthUser {
-  const user = getAuthUser(request);
+export async function requireAllowed(request: NextRequest): Promise<AuthUser> {
+  const user = await getAuthUser(request);
   if (!user) {
     throw NextResponse.json(
       { success: false, error: "Authentication required", timestamp: new Date().toISOString() },
@@ -89,8 +86,8 @@ export function requireAllowed(request: NextRequest): AuthUser {
  * @returns AuthUser
  * @throws 401 Response if not authenticated, 403 if insufficient permissions
  */
-export function requireAdmin(request: NextRequest): AuthUser {
-  const user = getAuthUser(request);
+export async function requireAdmin(request: NextRequest): Promise<AuthUser> {
+  const user = await getAuthUser(request);
   if (!user) {
     throw NextResponse.json(
       { success: false, error: "Authentication required", timestamp: new Date().toISOString() },

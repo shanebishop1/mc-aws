@@ -1,40 +1,20 @@
-import { jwtVerify } from "jose";
 import { type NextRequest, NextResponse } from "next/server";
 
+/**
+ * Middleware that sanitizes incoming requests
+ *
+ * Security: Strips any x-user-* headers that attackers might try to spoof.
+ * API routes verify auth independently via the session cookie (zero-trust).
+ */
 export async function middleware(request: NextRequest): Promise<NextResponse> {
-  // Create a copy of request headers that we can modify
   const requestHeaders = new Headers(request.headers);
 
-  // CRITICAL: Delete any incoming auth headers to prevent spoofing
-  // Attackers could send these headers directly to bypass auth
+  // Strip any auth headers - prevents spoofing attempts
+  // API routes verify JWT from cookies directly, but we still strip these
+  // to prevent any legacy code or future bugs from trusting them
   requestHeaders.delete("x-user-email");
   requestHeaders.delete("x-user-role");
 
-  // Try to read and verify the session cookie
-  const sessionCookie = request.cookies.get("mc_session");
-
-  if (sessionCookie?.value) {
-    try {
-      const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
-      const { payload } = await jwtVerify(sessionCookie.value, secret);
-
-      // Set trusted headers from verified JWT payload
-      const userEmail = payload.email as string | undefined;
-      const userRole = payload.role as string | undefined;
-
-      if (userEmail) {
-        requestHeaders.set("x-user-email", userEmail);
-      }
-
-      if (userRole) {
-        requestHeaders.set("x-user-role", userRole);
-      }
-    } catch {
-      // Invalid token - headers remain deleted, user is unauthenticated
-    }
-  }
-
-  // Pass the sanitized headers to downstream routes
   return NextResponse.next({
     request: {
       headers: requestHeaders,
@@ -42,10 +22,6 @@ export async function middleware(request: NextRequest): Promise<NextResponse> {
   });
 }
 
-// Configure which routes the middleware should run on
 export const config = {
-  matcher: [
-    // Match all API routes except /api/auth routes (they handle their own auth)
-    "/api/((?!auth).*)*",
-  ],
+  matcher: ["/api/:path*"],
 };

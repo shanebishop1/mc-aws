@@ -10,7 +10,7 @@ import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
-  const user = getAuthUser(request);
+  const user = await getAuthUser(request);
   console.log("[STATUS] Access by:", user?.email ?? "anonymous");
 
   try {
