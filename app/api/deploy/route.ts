@@ -17,7 +17,7 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
   try {
     // Check admin authorization
     try {
-      const user = requireAdmin(_request);
+      const user = await requireAdmin(_request);
       console.log("[DEPLOY] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {
