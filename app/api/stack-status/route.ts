@@ -9,7 +9,7 @@ import type { ApiResponse, StackStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<StackStatusResponse>>> {
-  const user = getAuthUser(request);
+  const user = await getAuthUser(request);
   console.log("[STACK-STATUS] Access by:", user?.email ?? "anonymous");
 
   try {

@@ -11,7 +11,7 @@ import { type NextRequest, NextResponse } from "next/server";
 export async function GET(request: NextRequest): Promise<NextResponse> {
   // Check admin authorization
   try {
-    const user = requireAdmin(request);
+    const user = await requireAdmin(request);
     console.log("[GDRIVE-CALLBACK] Admin action by:", user.email);
   } catch (error) {
     if (error instanceof Response) {
