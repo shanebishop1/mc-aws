@@ -26,7 +26,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     try {
       const body = await request.clone().json();
       instanceId = body?.instanceId;
-    } catch {}
+    } catch {
+      // Empty or invalid body is fine, fallback to finding instance ID
+    }
 
     const resolvedId = instanceId || (await findInstanceId());
     console.log("[STOP] Stopping server instance:", resolvedId);
