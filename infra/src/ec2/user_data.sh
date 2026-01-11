@@ -9,7 +9,6 @@ PAPER_BUILD="133"
 PAPER_URL="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${MC_VERSION}-${PAPER_BUILD}.jar"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
-GDRIVE_TOKEN_SECRET_ARN="${GDRIVE_TOKEN_SECRET_ARN:-}"
 
 # 1. Update & install prerequisites
 log "Updating base packages..."

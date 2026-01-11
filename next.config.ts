@@ -1,9 +1,5 @@
 import { resolve } from "node:path";
-import { config } from "dotenv";
 import type { NextConfig } from "next";
-
-// Load environment variables from parent directory's .env file
-config({ path: resolve(__dirname, "../.env") });
 
 const nextConfig: NextConfig = {
   // Fix warning about multiple lockfiles in monorepo structure
