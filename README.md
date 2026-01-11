@@ -54,33 +54,33 @@ pnpm dev
 
 Run these commands from the project root:
 
-| Command | Description |
-| :------- | :---------- |
-| `pnpm server:status` | Check server state |
-| `pnpm server:start` | Start the server |
-| `pnpm server:stop` | Stop the server |
+| Command                 | Description                               |
+| :---------------------- | :---------------------------------------- |
+| `pnpm server:status`    | Check server state                        |
+| `pnpm server:start`     | Start the server                          |
+| `pnpm server:stop`      | Stop the server                           |
 | `pnpm server:hibernate` | Backup + stop + delete volume (zero cost) |
-| `pnpm server:resume` | Create volume + start |
-| `pnpm server:backup` | Manual backup to Google Drive |
-| `pnpm server:restore` | Restore from backup |
-| `pnpm server:backups` | List available backups |
+| `pnpm server:resume`    | Create volume + start                     |
+| `pnpm server:backup`    | Manual backup to Google Drive             |
+| `pnpm server:restore`   | Restore from backup                       |
+| `pnpm server:backups`   | List available backups                    |
 
 ### REST API
 
 All API endpoints are prefixed with `/api/`. Base URL is your deployed frontend URL.
 
-| Endpoint | Method | Description |
-| :-------- | :----- | :---------- |
-| `/api/status` | GET | Server state and info |
-| `/api/start` | POST | Start server |
-| `/api/stop` | POST | Stop server |
-| `/api/hibernate` | POST | Hibernate (backup + stop + delete volume) |
-| `/api/resume` | POST | Resume from hibernation |
-| `/api/backup` | POST | Trigger backup |
-| `/api/restore` | POST | Restore from backup |
-| `/api/backups` | GET | List available backups |
-| `/api/players` | GET | Player count |
-| `/api/costs` | GET | Cost tracking |
+| Endpoint         | Method | Description                               |
+| :--------------- | :----- | :---------------------------------------- |
+| `/api/status`    | GET    | Server state and info                     |
+| `/api/start`     | POST   | Start server                              |
+| `/api/stop`      | POST   | Stop server                               |
+| `/api/hibernate` | POST   | Hibernate (backup + stop + delete volume) |
+| `/api/resume`    | POST   | Resume from hibernation                   |
+| `/api/backup`    | POST   | Trigger backup                            |
+| `/api/restore`   | POST   | Restore from backup                       |
+| `/api/backups`   | GET    | List available backups                    |
+| `/api/players`   | GET    | Player count                              |
+| `/api/costs`     | GET    | Cost tracking                             |
 
 ## Legacy Scripts
 
@@ -669,19 +669,19 @@ The web UI uses Google OAuth to control who can perform actions. Authentication 
 
 ### Authorization Tiers
 
-| Role | Can View Status | Can Start/Stop | Can Backup/Restore/Hibernate |
-|------|-----------------|----------------|------------------------------|
-| Public (not logged in) | ✅ | ❌ | ❌ |
-| Allowed (on allow list) | ✅ | ✅ | ❌ |
-| Admin | ✅ | ✅ | ✅ |
+| Role                    | Can View Status | Can Start/Stop | Can Backup/Restore/Hibernate |
+| ----------------------- | --------------- | -------------- | ---------------------------- |
+| Public (not logged in)  | ✅              | ❌             | ❌                           |
+| Allowed (on allow list) | ✅              | ✅             | ❌                           |
+| Admin                   | ✅              | ✅             | ✅                           |
 
 ### Environment Configuration
 
 This project uses separate environment files for development and production:
 
-| File | Purpose | Loaded When |
-|------|---------|-------------|
-| `.env.local` | Local development | `pnpm dev` |
+| File              | Purpose               | Loaded When               |
+| ----------------- | --------------------- | ------------------------- |
+| `.env.local`      | Local development     | `pnpm dev`                |
 | `.env.production` | Production deployment | `pnpm build` / Cloudflare |
 
 **Setup:**
@@ -704,11 +704,13 @@ Instead of bypassing auth in development, use the dev-login route to get a real 
 4. You're logged in with a real cookie for 30 days
 
 To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
+
 - `"admin"` - Full access
 - `"allowed"` - Can start/stop server
 - `"public"` - View only
 
 **Why this approach?**
+
 - Your local environment behaves exactly like production
 - Auth bugs are caught during development, not in production
 - Easy to test different permission levels
@@ -737,13 +739,16 @@ This application deploys to **Cloudflare Workers** using the OpenNext adapter.
 The control panel can run on the same domain as your Minecraft server. Options:
 
 **Option A: Subdomain (Recommended)**
+
 - Minecraft server: `mc.example.com` (A record → EC2 IP)
 - Control panel: `panel.mc.example.com` (proxied through Cloudflare Workers)
 
 **Option B: Same domain, different port**
+
 - Not recommended for Workers deployment
 
 To set up:
+
 1. Go to Cloudflare Dashboard → DNS
 2. Add a CNAME record: `panel.mc` → `your-worker.workers.dev` (or use custom domain in Workers settings)
 
@@ -793,7 +798,7 @@ Edit `wrangler.jsonc` to set non-secret environment variables:
   "ADMIN_EMAIL": "your-email@gmail.com",
   "ALLOWED_EMAILS": "friend1@gmail.com,friend2@gmail.com",
   "NEXT_PUBLIC_APP_URL": "https://panel.mc.example.com",
-  "AWS_REGION": "us-west-2"
+  "AWS_REGION": "us-west-1"
 }
 ```
 
@@ -810,12 +815,14 @@ pnpm deploy:cf
 ### Build Validation
 
 The build automatically validates that all required environment variables are set:
+
 - **Development**: Warns about missing variables but continues
 - **Production**: Fails the build if any required variables are missing
 
 ### Updating Google OAuth Redirect URI
 
 After deployment, update your Google OAuth credentials:
+
 1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
 2. Edit your OAuth 2.0 Client ID
 3. Add authorized redirect URI: `https://panel.mc.example.com/api/auth/callback`
