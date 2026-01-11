@@ -47,21 +47,23 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
 
       {/* Status Text - Huge Serif Italic */}
       <div className="text-center space-y-4">
-        <h2 className="text-charcoal font-serif text-5xl md:text-6xl tracking-tight">
-          Server
-          <br className="sm:hidden" />{" "}
-          <AnimatePresence mode="wait">
-            <motion.span
-              key={label}
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -10 }}
-              transition={{ duration: 0.5 }}
-              className={`italic inline-block min-w-[10ch] text-left ${renderColor()}`}
-            >
-              {label}
-            </motion.span>
-          </AnimatePresence>
+        <h2 className="text-charcoal font-serif text-5xl md:text-6xl tracking-tight flex flex-wrap items-baseline">
+          <span>Server</span>
+          <br className="sm:hidden" />
+          <span className="min-w-[10ch] relative inline-flex overflow-hidden pb-2 ml-[0.3em]">
+            <AnimatePresence initial={false}>
+              <motion.span
+                key={label}
+                initial={{ opacity: 0, y: 60 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -80, position: "absolute", top: 0, left: 0 }}
+                transition={{ duration: 0.4 }}
+                className={`italic ${renderColor()}`}
+              >
+                {label}
+              </motion.span>
+            </AnimatePresence>
+          </span>
         </h2>
 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
