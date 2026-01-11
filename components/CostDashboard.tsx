@@ -13,7 +13,15 @@ interface CostDashboardProps {
 
 export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
   const { costData, cachedAt, isLoading, error, isStale, setError, fetchCosts, refresh } = useCostData();
-  const [showConfirmation, setShowConfirmation] = useState(true);
+  // Show confirmation only if no cached data exists
+  const [showConfirmation, setShowConfirmation] = useState(!costData);
+
+  // Update showConfirmation when costData loads from localStorage
+  useEffect(() => {
+    if (costData) {
+      setShowConfirmation(false);
+    }
+  }, [costData]);
 
   // Reset state when modal closes
   useEffect(() => {

@@ -5,11 +5,7 @@ import { useAuth } from "./auth-provider";
 export function LoginButton() {
   const { user, isLoading, isAuthenticated } = useAuth();
 
-  if (isLoading) {
-    return <span className="text-sm text-charcoal/50">Loading...</span>;
-  }
-
-  if (!isAuthenticated) {
+  if (isLoading || !isAuthenticated) {
     return null;
   }
 
@@ -19,7 +15,7 @@ export function LoginButton() {
   };
 
   return (
-    <div className="flex items-center gap-3">
+    <div className="flex items-center gap-3 animate-in slide-in-from-right-4 fade-in duration-300">
       <span className="text-sm text-charcoal/70">{user?.email}</span>
       <button
         type="button"
