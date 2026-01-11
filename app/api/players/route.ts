@@ -1,11 +1,18 @@
-import { getAuthUser } from "@/lib/api-auth";
+import { requireAuth } from "@/lib/api-auth";
 import { getPlayerCount } from "@/lib/aws";
 import type { ApiResponse, PlayersResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<PlayersResponse["data"]>>> {
-  const user = await getAuthUser(request);
-  console.log("[PLAYERS] Access by:", user?.email ?? "anonymous");
+  try {
+    const user = await requireAuth(request);
+    console.log("[PLAYERS] Action by:", user.email);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse<ApiResponse<PlayersResponse["data"]>>;
+    }
+    throw error;
+  }
 
   try {
     console.log("[PLAYERS] Fetching player count");

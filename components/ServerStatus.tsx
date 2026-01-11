@@ -64,7 +64,7 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
           {/* Player count - always reserve space to prevent layout shift */}
           <div className="h-5 flex items-center justify-center">
             {!isLoading && state === "running" && playerCount !== undefined ? (
-              <span className="font-sans text-xs tracking-[0.15em] text-charcoal/40 uppercase">
+              <span className="font-sans text-xs tracking-[0.15em] text-green uppercase">
                 {playerCount === 1 ? "1 player online" : `${playerCount} players online`}
               </span>
             ) : (

@@ -1,9 +1,11 @@
 "use client";
 
+import { DestroyButton } from "@/components/DestroyButton";
 import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
 import { useAuth } from "@/components/auth/auth-provider";
 import { LuxuryButton } from "@/components/ui/Button";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
+import { motion } from "framer-motion";
 import { useState } from "react";
 
 interface ControlsSectionProps {
@@ -16,6 +18,8 @@ interface ControlsSectionProps {
   actionsEnabled: boolean;
   onAction: (action: string, endpoint: string) => void;
   onOpenResume: () => void;
+  onDestroyComplete?: () => void;
+  onDestroyError?: (error: string) => void;
 }
 
 export const ControlsSection = ({
@@ -28,8 +32,10 @@ export const ControlsSection = ({
   actionsEnabled,
   onAction,
   onOpenResume,
+  onDestroyComplete,
+  onDestroyError,
 }: ControlsSectionProps) => {
-  const { isAdmin, isAllowed } = useAuth();
+  const { isAdmin, isAllowed, isAuthenticated } = useAuth();
 
   const [showHibernateConfirm, setShowHibernateConfirm] = useState(false);
   const [showBackupConfirm, setShowBackupConfirm] = useState(false);
@@ -98,8 +104,26 @@ export const ControlsSection = ({
     }
   };
 
+  const handlePrimaryAction = () => {
+    if (showResume) {
+      if (!isAuthenticated) {
+        window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
+        return;
+      }
+      onOpenResume();
+    } else {
+      onAction("Start", "/api/start");
+    }
+  };
+
   return (
-    <div data-testid="controls-section" className="shrink-0 h-24 md:h-48 flex items-center justify-center w-full">
+    <motion.div
+      data-testid="controls-section"
+      className="shrink-0 h-24 md:h-48 flex items-center justify-center w-full"
+      initial={{ y: 20, opacity: 0 }}
+      animate={{ y: 0, opacity: 1 }}
+      transition={{ duration: 0.8, ease: "easeOut" }}
+    >
       {/* Controls Grid - Only renders buttons inside container */}
       {status !== "unknown" && (
         <section className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-8 items-center justify-items-center">
@@ -117,8 +141,8 @@ export const ControlsSection = ({
             )}
           </div>
 
-          {/* Center - Primary Action */}
-          <div className="order-first md:order-none">
+          {/* Center - Primary Action + Destroy Button */}
+          <div className="order-first md:order-none flex flex-col items-center gap-4">
             {showStop ? (
               <LuxuryButton
                 onClick={() => onAction("Stop", "/api/stop")}
@@ -129,13 +153,14 @@ export const ControlsSection = ({
               </LuxuryButton>
             ) : showStart || showResume ? (
               <LuxuryButton
-                onClick={() => (showResume ? onOpenResume() : onAction("Start", "/api/start"))}
-                disabled={!actionsEnabled || !isAllowed}
-                title={!isAllowed ? "Allowed or admin privileges required" : undefined}
+                onClick={handlePrimaryAction}
+                disabled={showStart && (!actionsEnabled || !isAllowed)}
+                title={showStart && !isAllowed ? "Allowed or admin privileges required" : undefined}
               >
                 {showResume ? "Resume" : "Start Server"}
               </LuxuryButton>
             ) : null}
+            <DestroyButton onDestroyComplete={onDestroyComplete} onError={onDestroyError} />
           </div>
 
           {/* Right Col */}
@@ -238,6 +263,6 @@ export const ControlsSection = ({
           </div>
         </div>
       )}
-    </div>
+    </motion.div>
   );
 };
