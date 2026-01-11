@@ -16,26 +16,6 @@ function prompt(question) {
   );
 }
 
-async function setupGDrive() {
-  const answer = (await prompt("No Google Drive token found (GDRIVE_TOKEN_SECRET_ARN). Run setup now? [y/N]: "))
-    .trim()
-    .toLowerCase();
-
-  if (!answer.startsWith("y")) return null;
-
-  const setupScript = path.resolve(__dirname, "..", "bin", "setup-drive-token.sh");
-  try {
-    execSync(setupScript, { stdio: "inherit" });
-    require("dotenv").config({ override: true });
-    const arn = process.env.GDRIVE_TOKEN_SECRET_ARN;
-    console.log(arn ? "Google Drive token configured." : "Google Drive token not detected after setup.");
-    return arn;
-  } catch (_err) {
-    console.warn("Google Drive setup was skipped or failed; continuing without Drive token.");
-    return null;
-  }
-}
-
 async function setupDLMSnapshots() {
   const backupPrompt = [
     "Enable AWS DLM weekly EBS snapshots?",
@@ -95,10 +75,6 @@ async function setupDLMSnapshots() {
     console.error("Error: GITHUB_TOKEN not found in .env file.");
     console.error('Please add GITHUB_TOKEN="ghp_..." to your .env file.');
     process.exit(1);
-  }
-
-  if (!process.env.GDRIVE_TOKEN_SECRET_ARN) {
-    await setupGDrive();
   }
 
   console.log("Deploying Minecraft Stack...");
