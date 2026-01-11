@@ -1,7 +1,34 @@
 "use client";
 
 import type { CostData, CostsResponse } from "@/lib/types";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
+
+const STORAGE_KEY = "mc-aws-cost-cache";
+
+interface CachedCostData {
+  data: CostData;
+  cachedAt: number;
+}
+
+function loadFromStorage(): CachedCostData | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const stored = localStorage.getItem(STORAGE_KEY);
+    if (!stored) return null;
+    return JSON.parse(stored) as CachedCostData;
+  } catch {
+    return null;
+  }
+}
+
+function saveToStorage(data: CostData, cachedAt: number): void {
+  if (typeof window === "undefined") return;
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, cachedAt }));
+  } catch {
+    // localStorage full or unavailable - ignore
+  }
+}
 
 interface UseCostDataReturn {
   costData: CostData | null;
@@ -20,6 +47,15 @@ export function useCostData(): UseCostDataReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Load from localStorage on mount
+  useEffect(() => {
+    const cached = loadFromStorage();
+    if (cached) {
+      setCostData(cached.data);
+      setCachedAt(cached.cachedAt);
+    }
+  }, []);
+
   const isStale = cachedAt ? Date.now() - cachedAt > 86400000 : false; // 1 day
 
   const fetchCosts = useCallback(async () => {
@@ -35,8 +71,10 @@ export function useCostData(): UseCostDataReturn {
       }
 
       if (data.data) {
+        const timestamp = data.data.cachedAt || Date.now();
         setCostData(data.data);
-        setCachedAt(data.data.cachedAt || Date.now());
+        setCachedAt(timestamp);
+        saveToStorage(data.data, timestamp);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch cost data";
@@ -60,8 +98,10 @@ export function useCostData(): UseCostDataReturn {
       }
 
       if (data.data) {
+        const timestamp = data.data.cachedAt || Date.now();
         setCostData(data.data);
-        setCachedAt(data.data.cachedAt || Date.now());
+        setCachedAt(timestamp);
+        saveToStorage(data.data, timestamp);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to refresh cost data";
