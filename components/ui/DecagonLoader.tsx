@@ -12,6 +12,26 @@ interface DecagonLoaderProps {
   className?: string;
 }
 
+const getStrokeColorClass = (status: ServerState | undefined, isLoading: boolean | undefined): string => {
+  if (isLoading) return "stroke-charcoal/50";
+  if (status === ServerState.Running) return "stroke-green";
+  if (status === "unknown") return "stroke-red-800";
+  if (status === ServerState.Stopped || status === ServerState.Hibernating) return "stroke-charcoal/30";
+  return "stroke-charcoal";
+};
+
+const getFillOpacity = (status: ServerState | undefined, isLoading: boolean | undefined): number => {
+  if (status === ServerState.Running) return 0.35;
+  if (status === ServerState.Pending || isLoading) return 0.2;
+  if (status === ServerState.Stopped || status === ServerState.Hibernating) return 0.08;
+  return 0.12;
+};
+
+const rotateAnimation = {
+  rotate: 360,
+  transition: { duration: 12, repeat: Number.POSITIVE_INFINITY, ease: "linear" as const },
+};
+
 export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderProps) => {
   const [isHovered, setIsHovered] = useState(false);
 
@@ -25,32 +45,9 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
     },
   };
 
-  const rotateAnimation = {
-    rotate: 360,
-    transition: {
-      duration: 12,
-      repeat: Number.POSITIVE_INFINITY,
-      ease: "linear" as const,
-    },
-  };
-
   const isRunning = status === ServerState.Running;
-  const isStopped = status === ServerState.Stopped || status === ServerState.Hibernating;
-  const isPending = status === ServerState.Pending || isLoading;
-
-  // Decide color based on status
-  const colorClass = isLoading
-    ? "stroke-charcoal/50"
-    : isRunning
-      ? "stroke-green"
-      : status === "unknown"
-        ? "stroke-red-800"
-        : isStopped
-          ? "stroke-charcoal/30"
-          : "stroke-charcoal";
-
-  // Fill opacity based on state - animates between states
-  const fillOpacity = isRunning ? 0.35 : isPending ? 0.2 : isStopped ? 0.08 : 0.12;
+  const colorClass = getStrokeColorClass(status, isLoading);
+  const fillOpacity = getFillOpacity(status, isLoading);
 
   return (
     <div data-testid="decagon-loader" className={cn("relative flex items-center justify-center w-24 h-24", className)}>
