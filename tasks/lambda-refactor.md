@@ -2,7 +2,6 @@
 
 ## In Progress
 
-- [ ] [documenter] Phase 6b: Commit changes - After tests pass, commit all changes with message 'refactor: modularize StartMinecraftServer Lambda'. Push to remote. Ref: goals/lambda-refactor-prd-2026-01-10.md
 
 ## To Do
 
@@ -26,6 +25,7 @@
 - [x] [engineer] Phase 4d: Create handlers/resume.js - Extract handleResume, findLatestAL2023Snapshot, createAndAttachVolume, waitForVolumeAvailable, attachVolumeToInstance from lines 605-718. Import EC2 client from clients.js. Ref: goals/lambda-refactor-prd-2026-01-10.md
 - [x] [engineer] Phase 5: Refactor index.js - Replace inline functions with imports from new modules. Keep only: handler, validateEnvironment, handleAllowlistUpdate, parseAndAuthorizeCommand, executeCommand, handleStartCommand, handleResumeCommand. Wire up all imports. Handler signature MUST remain: export const handler = async (event) => {}. Ref: goals/lambda-refactor-prd-2026-01-10.md
 - [x] [debugger] Phase 6a: Run tests - Execute 'pnpm test' and 'pnpm test:e2e' to verify all functionality works after refactoring. Fix any issues found. Ref: AGENTS.md for test commands
+- [x] [documenter] Phase 6b: Commit changes - After tests pass, commit all changes with message 'refactor: modularize StartMinecraftServer Lambda'. Push to remote. Ref: goals/lambda-refactor-prd-2026-01-10.md
 
 ## Reminders
 
