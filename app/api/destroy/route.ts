@@ -27,7 +27,6 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
     }
 
     console.log("[DESTROY] Starting destruction...");
-    console.log("[DESTROY] Starting destruction...");
 
     // Safety check: stack must exist to be destroyed
     const exists = await checkStackExists();

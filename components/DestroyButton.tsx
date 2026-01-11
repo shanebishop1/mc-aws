@@ -1,5 +1,6 @@
 "use client";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { cn } from "@/lib/utils";
 import { motion } from "framer-motion";
@@ -12,8 +13,17 @@ interface DestroyButtonProps {
 }
 
 export const DestroyButton = ({ onDestroyStart, onDestroyComplete, onError }: DestroyButtonProps) => {
+  const { isAuthenticated } = useAuth();
   const [isDialogOpen, setIsDialogOpen] = useState(false);
   const [isDestroying, setIsDestroying] = useState(false);
+
+  const handleClick = () => {
+    if (!isAuthenticated) {
+      window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
+      return;
+    }
+    setIsDialogOpen(true);
+  };
 
   const handleDestroy = async () => {
     setIsDestroying(true);
@@ -57,7 +67,7 @@ export const DestroyButton = ({ onDestroyStart, onDestroyComplete, onError }: De
         whileHover={{ y: -1 }}
         transition={{ duration: 0.1 }}
         whileTap={{ y: 0 }}
-        onClick={() => setIsDialogOpen(true)}
+        onClick={handleClick}
         className={cn(
           "cursor-pointer relative px-6 py-2 overflow-hidden border transition-all duration-300",
           "font-sans text-xs tracking-[0.2em] font-medium uppercase",

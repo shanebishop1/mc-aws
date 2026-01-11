@@ -6,21 +6,11 @@ export function LoginButton() {
   const { user, isLoading, isAuthenticated } = useAuth();
 
   if (isLoading) {
-    return <span className="text-sm text-gray-500">Loading...</span>;
+    return <span className="text-sm text-charcoal/50">Loading...</span>;
   }
 
   if (!isAuthenticated) {
-    return (
-      <button
-        type="button"
-        onClick={() => {
-          window.location.href = "/api/auth/login";
-        }}
-        className="px-4 py-2 text-sm font-medium text-white bg-blue-600 rounded-md hover:bg-blue-700 transition-colors"
-      >
-        Sign in with Google
-      </button>
-    );
+    return null;
   }
 
   const handleSignOut = async () => {
@@ -30,11 +20,11 @@ export function LoginButton() {
 
   return (
     <div className="flex items-center gap-3">
-      <span className="text-sm text-gray-700">{user?.email}</span>
+      <span className="text-sm text-charcoal/70">{user?.email}</span>
       <button
         type="button"
         onClick={handleSignOut}
-        className="px-3 py-1.5 text-sm font-medium text-gray-700 border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+        className="px-3 py-1.5 text-sm font-medium text-charcoal/70 border border-charcoal/20 rounded-md hover:bg-cream/50 transition-colors"
       >
         Sign out
       </button>

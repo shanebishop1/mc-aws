@@ -1,5 +1,6 @@
 "use client";
 
+import { useAuth } from "@/components/auth/auth-provider";
 import { LoginButton } from "@/components/auth/login-button";
 import { motion } from "framer-motion";
 
@@ -10,6 +11,32 @@ interface PageHeaderProps {
 }
 
 export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHeaderProps) => {
+  const { isAuthenticated } = useAuth();
+
+  const handleCostsClick = () => {
+    if (!isAuthenticated) {
+      window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
+      return;
+    }
+    onOpenCosts();
+  };
+
+  const handleEmailsClick = () => {
+    if (!isAuthenticated) {
+      window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
+      return;
+    }
+    onOpenEmails();
+  };
+
+  const handleAwsConsoleClick = () => {
+    if (!isAuthenticated) {
+      window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
+      return;
+    }
+    window.open(awsConsoleUrl || "https://console.aws.amazon.com", "_blank", "noopener,noreferrer");
+  };
+
   return (
     <motion.header
       data-testid="page-header"
@@ -47,7 +74,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
 
         {/* Costs Button */}
         <motion.button
-          onClick={onOpenCosts}
+          onClick={handleCostsClick}
           whileHover={{ scale: 1.1 }}
           transition={{ duration: 0.1 }}
           whileTap={{ scale: 0.95 }}
@@ -66,7 +93,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
 
         {/* Email Management Button */}
         <motion.button
-          onClick={onOpenEmails}
+          onClick={handleEmailsClick}
           whileHover={{ scale: 1.1 }}
           transition={{ duration: 0.1 }}
           whileTap={{ scale: 0.95 }}
@@ -84,10 +111,8 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
         </motion.button>
 
         {/* AWS Console Button - always show, fallback to generic AWS signin */}
-        <motion.a
-          href={awsConsoleUrl || "https://console.aws.amazon.com"}
-          target="_blank"
-          rel="noopener noreferrer"
+        <motion.button
+          onClick={handleAwsConsoleClick}
           whileHover={{ scale: 1.1 }}
           transition={{ duration: 0.1 }}
           whileTap={{ scale: 0.95 }}
@@ -102,7 +127,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
               d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"
             />
           </svg>
-        </motion.a>
+        </motion.button>
       </div>
     </motion.header>
   );

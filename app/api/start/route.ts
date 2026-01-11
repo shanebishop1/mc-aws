@@ -32,9 +32,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     // Try to get ID from body to avoid discovery overhead
     let instanceId: string | undefined;
     try {
-      const body = await request.clone().json(); // clone because we might read it again? No, usually nextjs consumes stream.
-      // Wait, if I read body here, I can't read it later?
-      // Actually Start route doesn't use body for anything else.
+      const body = await request.json();
       instanceId = body?.instanceId;
     } catch {
       // Body parsing failed or empty

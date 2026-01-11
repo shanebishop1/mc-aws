@@ -4,7 +4,6 @@ import { ArtDecoBorder } from "@/components/ArtDecoBorder";
 import { ControlsSection } from "@/components/ControlsSection";
 import { CostDashboard } from "@/components/CostDashboard";
 import { DeployButton } from "@/components/DeployButton";
-import { DestroyButton } from "@/components/DestroyButton";
 import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { ResumeModal } from "@/components/ResumeModal";
@@ -129,18 +128,8 @@ export default function Home() {
     setTimeout(() => setMessage(null), 5000);
   };
 
-  // Loading state - stack status check
-  if (stackLoading) {
-    return (
-      <main className="h-full flex flex-col items-center justify-center px-4 bg-cream">
-        <ArtDecoBorder />
-        <div className="flex flex-col items-center gap-4">
-          <div className="w-12 h-12 border-4 border-green/20 border-t-green rounded-full animate-spin" />
-          <p className="font-sans text-sm tracking-widest text-charcoal/60">Checking deployment status...</p>
-        </div>
-      </main>
-    );
-  }
+  // Loading state - stack status check (show main UI with connecting state instead)
+  // Removed separate loading screen - ServerStatus handles "connecting" state
 
   // Error state - AWS connection failed
   if (stackError) {
@@ -168,8 +157,8 @@ export default function Home() {
     );
   }
 
-  // No stack exists - show deploy button
-  if (!stackExists) {
+  // No stack exists - show deploy button (only after loading completes and confirmed no stack)
+  if (!stackLoading && !stackExists) {
     return (
       <main
         data-testid="home-page"
@@ -250,9 +239,11 @@ export default function Home() {
           actionsEnabled={actionsEnabled}
           onAction={handleAction}
           onOpenResume={handleResumeClick}
+          onDestroyComplete={handleDestroyComplete}
+          onDestroyError={handleDestroyError}
         />
 
-        {/* Footer - Fixed Small Height with Destroy Button */}
+        {/* Footer - Fixed Small Height */}
         <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center gap-2">
           {message && (
             <motion.p
@@ -267,10 +258,7 @@ export default function Home() {
               {message}
             </motion.p>
           )}
-          <div className="flex items-center gap-4">
-            <DestroyButton onDestroyComplete={handleDestroyComplete} onError={handleDestroyError} />
-            <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
-          </div>
+          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
         </footer>
       </main>
 

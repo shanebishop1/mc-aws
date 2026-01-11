@@ -36,6 +36,7 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
 
   const isRunning = status === ServerState.Running;
   const isStopped = status === ServerState.Stopped || status === ServerState.Hibernating;
+  const isPending = status === ServerState.Pending || isLoading;
 
   // Decide color based on status
   const colorClass = isLoading
@@ -48,12 +49,15 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
           ? "stroke-charcoal/30"
           : "stroke-charcoal";
 
+  // Fill opacity based on state - animates between states
+  const fillOpacity = isRunning ? 0.35 : isPending ? 0.2 : isStopped ? 0.08 : 0.12;
+
   return (
     <div data-testid="decagon-loader" className={cn("relative flex items-center justify-center w-24 h-24", className)}>
       <motion.div animate={rotateAnimation} className="absolute inset-0 flex items-center justify-center">
         <motion.svg
           viewBox="0 0 100 100"
-          className={cn("w-full h-full fill-none touch-none", colorClass)}
+          className={cn("w-full h-full touch-none", colorClass)}
           initial={{ strokeWidth: 1.5 }}
           onHoverStart={() => setIsHovered(true)}
           onHoverEnd={() => setIsHovered(false)}
@@ -73,8 +77,14 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
           }}
           animate={isRunning || isLoading ? breatheAnimation : { scale: 1, strokeWidth: 1.5 }}
         >
-          {/* Decagon Shape */}
-          <polygon points="50,2 69,8 85,21 95,38 95,62 85,79 69,92 50,98 31,92 15,79 5,62 5,38 15,21 31,8" />
+          {/* Decagon Shape with animated fill */}
+          <motion.polygon
+            points="50,2 69,8 85,21 95,38 95,62 85,79 69,92 50,98 31,92 15,79 5,62 5,38 15,21 31,8"
+            className="fill-green"
+            initial={{ fillOpacity: 0.08 }}
+            animate={{ fillOpacity }}
+            transition={{ duration: 0.8, ease: "easeInOut" }}
+          />
 
           {/* Inner details if valid status */}
           {isRunning && <circle cx="50" cy="50" r="2" className="fill-green stroke-none" />}
