@@ -17,7 +17,6 @@ export class MinecraftStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
     super(scope, id, props);
 
-    const driveTokenSecretArn = process.env.GDRIVE_TOKEN_SECRET_ARN || "";
     const driveRemote = process.env.GDRIVE_REMOTE || "gdrive";
     const driveRoot = process.env.GDRIVE_ROOT || "mc-backups";
 
@@ -129,16 +128,13 @@ export class MinecraftStack extends cdk.Stack {
       // Insert exports immediately after the shebang to keep cloud-init happy
       .replace(
         /^#!.*\n/,
-        (line) =>
-          `${line}export GDRIVE_TOKEN_SECRET_ARN="${driveTokenSecretArn}"\n` +
-          `export GDRIVE_REMOTE="${driveRemote}"\n` +
-          `export GDRIVE_ROOT="${driveRoot}"\n`
+        (line) => `${line}export GDRIVE_REMOTE="${driveRemote}"\nexport GDRIVE_ROOT="${driveRoot}"\n`
       );
 
     // Fallback if no shebang was found (should not happen, but keeps user-data valid)
     const userDataScript = baseUserData.startsWith("#!/")
       ? baseUserData
-      : `#!/usr/bin/env bash\nexport GDRIVE_TOKEN_SECRET_ARN="${driveTokenSecretArn}"\nexport GDRIVE_REMOTE="${driveRemote}"\nexport GDRIVE_ROOT="${driveRoot}"\n${baseUserData}`;
+      : `#!/usr/bin/env bash\nexport GDRIVE_REMOTE="${driveRemote}"\nexport GDRIVE_ROOT="${driveRoot}"\n${baseUserData}`;
 
     const instance = new ec2.Instance(this, "MinecraftServer", {
       vpc,
@@ -163,15 +159,6 @@ export class MinecraftStack extends cdk.Stack {
         },
       ],
     });
-
-    if (driveTokenSecretArn) {
-      ec2Role.addToPolicy(
-        new iam.PolicyStatement({
-          actions: ["secretsmanager:GetSecretValue"],
-          resources: [driveTokenSecretArn],
-        })
-      );
-    }
 
     // Tag for backups (DLM)
     cdk.Tags.of(instance).add("Backup", "weekly");
