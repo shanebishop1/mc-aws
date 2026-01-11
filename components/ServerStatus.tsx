@@ -1,7 +1,7 @@
 "use client";
 
 import { DecagonLoader } from "@/components/ui/DecagonLoader";
-import { motion } from "framer-motion";
+import { AnimatePresence, motion } from "framer-motion";
 import { SleepingZs } from "./SleepingZs";
 
 import { ServerState } from "@/lib/types";
@@ -49,7 +49,19 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
       <div className="text-center space-y-4">
         <h2 className="text-charcoal font-serif text-5xl md:text-6xl tracking-tight">
           Server
-          <br className="sm:hidden" /> <span className={`italic ${renderColor()}`}>{label}</span>
+          <br className="sm:hidden" />{" "}
+          <AnimatePresence mode="wait">
+            <motion.span
+              key={label}
+              initial={{ opacity: 0, y: 10 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -10 }}
+              transition={{ duration: 0.2 }}
+              className={`italic inline-block min-w-[10ch] text-left ${renderColor()}`}
+            >
+              {label}
+            </motion.span>
+          </AnimatePresence>
         </h2>
 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
