@@ -4,8 +4,6 @@ import type {
   BackupInfo,
   BackupResponse,
   CostsResponse,
-  DeployResponse,
-  DestroyResponse,
   EmailsResponse,
   GDriveStatusResponse,
   HibernateResponse,
@@ -418,34 +416,6 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
     const data = {
       adminEmail: "admin@example.com",
       allowlist: ["player1@example.com", "player2@example.com"],
-    };
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(createResponse(data)),
-    });
-  });
-
-  // Mock /api/deploy
-  await page.route("**/api/deploy", async (route) => {
-    const data: DeployResponse = {
-      message: "Deployment started",
-      output: "Building Minecraft stack...",
-    };
-
-    await route.fulfill({
-      status: 200,
-      contentType: "application/json",
-      body: JSON.stringify(createResponse(data)),
-    });
-  });
-
-  // Mock /api/destroy
-  await page.route("**/api/destroy", async (route) => {
-    const data: DestroyResponse = {
-      message: "Stack destruction started",
-      output: "Deleting Minecraft stack...",
     };
 
     await route.fulfill({

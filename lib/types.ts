@@ -128,13 +128,3 @@ export interface GDriveStatusResponse {
   configured: boolean;
   error?: string;
 }
-
-export interface DeployResponse {
-  message: string;
-  output?: string;
-}
-
-export interface DestroyResponse {
-  message: string;
-  output?: string;
-}
