@@ -33,10 +33,6 @@ const checkGDriveStatus = async (): Promise<boolean> => {
   }
 };
 
-const triggerAuthPopup = () => {
-  window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
-};
-
 export const ControlsSection = ({
   status,
   showStart,
@@ -50,7 +46,12 @@ export const ControlsSection = ({
   onDestroyComplete,
   onDestroyError,
 }: ControlsSectionProps) => {
-  const { isAdmin, isAllowed, isAuthenticated } = useAuth();
+  const { isAdmin, isAllowed, isAuthenticated, refetch } = useAuth();
+
+  const showStopEffective = showStop && isAdmin;
+  const showResumeEffective = showResume && isAdmin;
+  const showHibernateEffective = showHibernate && isAdmin;
+  const showBackupRestoreEffective = showBackupRestore && isAdmin;
 
   const [showHibernateConfirm, setShowHibernateConfirm] = useState(false);
   const [showBackupConfirm, setShowBackupConfirm] = useState(false);
@@ -96,14 +97,87 @@ export const ControlsSection = ({
     }
   };
 
+  const isSignedIn = async (): Promise<boolean> => {
+    try {
+      const res = await fetch("/api/auth/me");
+      const data = (await res.json()) as { authenticated?: boolean };
+      return data.authenticated === true;
+    } catch {
+      return false;
+    }
+  };
+
+  const openLoginPopup = (onSuccess?: () => void) => {
+    const popup = window.open(
+      "/api/auth/login?popup=1",
+      "google-auth",
+      "width=500,height=600,menubar=no,toolbar=no"
+    );
+
+    if (!popup) {
+      window.location.href = "/api/auth/login";
+      return;
+    }
+
+    let poll: number | undefined;
+
+    const cleanup = () => {
+      if (poll !== undefined) {
+        window.clearInterval(poll);
+      }
+      window.removeEventListener("message", handleMessage);
+    };
+
+    const complete = async () => {
+      cleanup();
+      await refetch();
+      if (onSuccess && (await isSignedIn())) {
+        onSuccess();
+      }
+    };
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) return;
+      if (typeof event.data !== "object" || event.data === null) return;
+      if ((event.data as { type?: string }).type !== "MC_AUTH_SUCCESS") return;
+      void complete();
+    };
+
+    window.addEventListener("message", handleMessage);
+
+    poll = window.setInterval(() => {
+      if (popup.closed) {
+        void complete();
+      }
+    }, 500);
+  };
+
+  const promptLoginOnly = () => {
+    openLoginPopup();
+  };
+
+  const promptLoginAndStart = () => {
+    // Ensure full-page fallback can continue the action after redirect.
+    window.sessionStorage.setItem("mc_pending_action", "start");
+
+    openLoginPopup(() => {
+      window.sessionStorage.removeItem("mc_pending_action");
+      onAction("Start", "/api/start");
+    });
+  };
+
   const handlePrimaryAction = () => {
-    if (showResume) {
+    if (showResumeEffective) {
       if (!isAuthenticated) {
-        triggerAuthPopup();
+        promptLoginOnly();
         return;
       }
       onOpenResume();
     } else {
+      if (!isAuthenticated) {
+        promptLoginAndStart();
+        return;
+      }
       onAction("Start", "/api/start");
     }
   };
@@ -116,55 +190,73 @@ export const ControlsSection = ({
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.8, ease: "easeOut" }}
     >
-      <ControlsGrid
-        status={status}
-        showStop={showStop}
-        showStart={showStart}
-        showResume={showResume}
-        showHibernate={showHibernate}
-        showBackupRestore={showBackupRestore}
-        actionsEnabled={actionsEnabled}
-        isAdmin={isAdmin}
-        isAllowed={isAllowed}
-        onAction={onAction}
-        onPrimaryAction={handlePrimaryAction}
-        onHibernateClick={() => setShowHibernateConfirm(true)}
-        onBackupClick={handleBackupClick}
-        onRestoreClick={handleRestoreClick}
-        onDestroyComplete={onDestroyComplete}
-        onDestroyError={onDestroyError}
-      />
+      {isAdmin ? (
+        <>
+          <ControlsGrid
+            status={status}
+            showStop={showStopEffective}
+            showStart={showStart}
+            showResume={showResumeEffective}
+            showHibernate={showHibernateEffective}
+            showBackupRestore={showBackupRestoreEffective}
+            actionsEnabled={actionsEnabled}
+            isAdmin={isAdmin}
+            isAllowed={isAllowed}
+            isAuthenticated={isAuthenticated}
+            onAction={onAction}
+            onPrimaryAction={handlePrimaryAction}
+            onHibernateClick={() => setShowHibernateConfirm(true)}
+            onBackupClick={handleBackupClick}
+            onRestoreClick={handleRestoreClick}
+            onDestroyComplete={onDestroyComplete}
+            onDestroyError={onDestroyError}
+          />
 
-      <ConfirmationDialogs
-        showHibernateConfirm={showHibernateConfirm}
-        showBackupConfirm={showBackupConfirm}
-        showRestoreConfirm={showRestoreConfirm}
-        onHibernateClose={() => setShowHibernateConfirm(false)}
-        onBackupClose={() => setShowBackupConfirm(false)}
-        onRestoreClose={() => setShowRestoreConfirm(false)}
-        onHibernateConfirm={() => {
-          setShowHibernateConfirm(false);
-          onAction("Hibernate", "/api/hibernate");
-        }}
-        onBackupConfirm={() => {
-          setShowBackupConfirm(false);
-          onAction("Backup", "/api/backup");
-        }}
-        onRestoreConfirm={() => {
-          setShowRestoreConfirm(false);
-          onAction("Restore", "/api/restore");
-        }}
-      />
+          <ConfirmationDialogs
+            showHibernateConfirm={showHibernateConfirm}
+            showBackupConfirm={showBackupConfirm}
+            showRestoreConfirm={showRestoreConfirm}
+            onHibernateClose={() => setShowHibernateConfirm(false)}
+            onBackupClose={() => setShowBackupConfirm(false)}
+            onRestoreClose={() => setShowRestoreConfirm(false)}
+            onHibernateConfirm={() => {
+              setShowHibernateConfirm(false);
+              onAction("Hibernate", "/api/hibernate");
+            }}
+            onBackupConfirm={() => {
+              setShowBackupConfirm(false);
+              onAction("Backup", "/api/backup");
+            }}
+            onRestoreConfirm={() => {
+              setShowRestoreConfirm(false);
+              onAction("Restore", "/api/restore");
+            }}
+          />
 
-      <GoogleDriveSetupPrompt
-        isOpen={showGDrivePrompt}
-        onClose={handleGDrivePromptClose}
-        onSetupComplete={handleGDriveSetupComplete}
-        allowSkip={false}
-        context={pendingAction?.action === "Backup" ? "backup" : "restore"}
-      />
+          <GoogleDriveSetupPrompt
+            isOpen={showGDrivePrompt}
+            onClose={handleGDrivePromptClose}
+            onSetupComplete={handleGDriveSetupComplete}
+            allowSkip={false}
+            context={pendingAction?.action === "Backup" ? "backup" : "restore"}
+          />
 
-      {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGDriveError(null)} />}
+          {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGDriveError(null)} />}
+        </>
+      ) : (
+        <section className="w-full max-w-4xl flex items-center justify-center">
+          <PrimaryActionButton
+            showStop={false}
+            showStart={showStart || showResume}
+            showResume={false}
+            actionsEnabled={actionsEnabled}
+            isAllowed={isAllowed}
+            isAuthenticated={isAuthenticated}
+            onAction={onAction}
+            onPrimaryAction={handlePrimaryAction}
+          />
+        </section>
+      )}
     </motion.div>
   );
 };
@@ -181,6 +273,7 @@ interface ControlsGridProps {
   actionsEnabled: boolean;
   isAdmin: boolean;
   isAllowed: boolean;
+  isAuthenticated: boolean;
   onAction: (action: string, endpoint: string) => void;
   onPrimaryAction: () => void;
   onHibernateClick: () => void;
@@ -200,6 +293,7 @@ const ControlsGrid = ({
   actionsEnabled,
   isAdmin,
   isAllowed,
+  isAuthenticated,
   onAction,
   onPrimaryAction,
   onHibernateClick,
@@ -232,6 +326,7 @@ const ControlsGrid = ({
           showResume={showResume}
           actionsEnabled={actionsEnabled}
           isAllowed={isAllowed}
+          isAuthenticated={isAuthenticated}
           onAction={onAction}
           onPrimaryAction={onPrimaryAction}
         />
@@ -270,8 +365,24 @@ interface PrimaryActionButtonProps {
   showResume: boolean;
   actionsEnabled: boolean;
   isAllowed: boolean;
+  isAuthenticated: boolean;
   onAction: (action: string, endpoint: string) => void;
   onPrimaryAction: () => void;
+}
+
+function getStartButtonMeta({
+  actionsEnabled,
+  isAllowed,
+  isAuthenticated,
+}: {
+  actionsEnabled: boolean;
+  isAllowed: boolean;
+  isAuthenticated: boolean;
+}): { disabled: boolean; title?: string } {
+  // When logged out, we keep the button enabled so it can trigger sign-in.
+  const disabled = !actionsEnabled || (isAuthenticated && !isAllowed);
+  const title = !isAuthenticated ? "Sign in to start the server" : !isAllowed ? "Allowed or admin privileges required" : undefined;
+  return { disabled, title };
 }
 
 const PrimaryActionButton = ({
@@ -280,6 +391,7 @@ const PrimaryActionButton = ({
   showResume,
   actionsEnabled,
   isAllowed,
+  isAuthenticated,
   onAction,
   onPrimaryAction,
 }: PrimaryActionButtonProps) => {
@@ -296,11 +408,15 @@ const PrimaryActionButton = ({
   }
 
   if (showStart || showResume) {
+    const { disabled, title } = showStart
+      ? getStartButtonMeta({ actionsEnabled, isAllowed, isAuthenticated })
+      : { disabled: false, title: undefined };
+
     return (
       <LuxuryButton
         onClick={onPrimaryAction}
-        disabled={showStart && (!actionsEnabled || !isAllowed)}
-        title={showStart && !isAllowed ? "Allowed or admin privileges required" : undefined}
+        disabled={disabled}
+        title={title}
       >
         {showResume ? "Resume" : "Start Server"}
       </LuxuryButton>

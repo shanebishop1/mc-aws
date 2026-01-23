@@ -16,6 +16,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 const OAUTH_STATE_COOKIE = "oauth_state";
 const OAUTH_CODE_VERIFIER_COOKIE = "oauth_code_verifier";
+const OAUTH_POPUP_COOKIE = "oauth_popup";
 const OAUTH_COOKIE_EXPIRY = 600; // 10 minutes in seconds
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -38,6 +39,18 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     // Store state and code verifier in HTTP-only cookies
     const cookieStore = await cookies();
+
+    const isPopup = new URL(request.url).searchParams.get("popup") === "1";
+    if (isPopup) {
+      cookieStore.set(OAUTH_POPUP_COOKIE, "1", {
+        httpOnly: true,
+        secure: true,
+        sameSite: "lax",
+        path: "/",
+        maxAge: OAUTH_COOKIE_EXPIRY,
+      });
+    }
+
     cookieStore.set(OAUTH_STATE_COOKIE, state, {
       httpOnly: true,
       secure: true,

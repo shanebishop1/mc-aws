@@ -3,16 +3,15 @@
  * Stops the server (keeps EBS attached - not hibernation)
  */
 
-import { requireAllowed } from "@/lib/api-auth";
+import { requireAdmin } from "@/lib/api-auth";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
-import { env } from "@/lib/env";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
   try {
-    const user = await requireAllowed(request);
+    const user = await requireAdmin(request);
     console.log("[STOP] Action by:", user.email, "role:", user.role);
   } catch (error) {
     if (error instanceof Response) {

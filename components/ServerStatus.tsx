@@ -63,7 +63,8 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
           >
             Server
           </motion.span>
-          <br className="sm:hidden" />
+          {/* In a flex container, <br> doesn't reliably force a new line; basis-full does. */}
+          <span className="basis-full block sm:hidden" aria-hidden="true" />
           <motion.span
             layout
             transition={{
