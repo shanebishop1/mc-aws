@@ -13,7 +13,7 @@ import { useButtonVisibility } from "@/hooks/useButtonVisibility";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { useStackStatus } from "@/hooks/useStackStatus";
 import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 export default function Home() {
   const { isAdmin, isAuthenticated } = useAuth();
@@ -65,15 +65,18 @@ export default function Home() {
     hasVolume
   );
 
-  const buildRequestBody = (backupName?: string): string | undefined => {
-    const bodyData: { instanceId?: string; backupName?: string } = instanceId ? { instanceId } : {};
-    if (backupName) {
-      bodyData.backupName = backupName;
-    }
-    return Object.keys(bodyData).length > 0 ? JSON.stringify(bodyData) : undefined;
-  };
+  const buildRequestBody = useCallback(
+    (backupName?: string): string | undefined => {
+      const bodyData: { instanceId?: string; backupName?: string } = instanceId ? { instanceId } : {};
+      if (backupName) {
+        bodyData.backupName = backupName;
+      }
+      return Object.keys(bodyData).length > 0 ? JSON.stringify(bodyData) : undefined;
+    },
+    [instanceId]
+  );
 
-  const handleAction = async (action: string, endpoint: string, backupName?: string) => {
+  const handleAction = useCallback(async (action: string, endpoint: string, backupName?: string) => {
     setIsLoading(true);
     setMessage(`Initiating ${action}...`);
     try {
@@ -99,7 +102,7 @@ export default function Home() {
       // Clear message after 5s
       setTimeout(() => setMessage(null), 5000);
     }
-  };
+  }, [buildRequestBody, fetchStatus]);
 
   // If the user clicked Start while logged out, continue automatically after sign-in.
   useEffect(() => {
@@ -112,7 +115,7 @@ export default function Home() {
 
     window.sessionStorage.removeItem("mc_pending_action");
     void handleAction("Start", "/api/start");
-  }, [isAuthenticated, stackExists, showStart, showResume]);
+  }, [handleAction, isAuthenticated, stackExists, showStart, showResume]);
 
   const handleResumeClick = () => {
     setIsResumeModalOpen(true);
