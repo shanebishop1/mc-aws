@@ -46,24 +46,54 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
       <DecagonLoader status={state} isLoading={isLoading || state === "pending" || state === "stopping"} />
 
       {/* Status Text - Huge Serif Italic */}
-      <div className="text-center space-y-4">
-        <h2 className="text-charcoal font-serif text-5xl md:text-6xl tracking-tight flex flex-wrap items-baseline">
-          <span>Server</span>
+      <div className="w-full text-center space-y-4">
+        <h2
+          className={`w-full text-charcoal font-serif text-5xl md:text-6xl tracking-tight
+            flex flex-wrap items-baseline justify-center gap-x-[0.3em]`}
+        >
+          <motion.span
+            layout="position"
+            transition={{
+              layout: {
+                type: "spring",
+                stiffness: 500,
+                damping: 45,
+              },
+            }}
+          >
+            Server
+          </motion.span>
           <br className="sm:hidden" />
-          <span className="min-w-[10ch] relative inline-flex overflow-hidden pb-2 ml-[0.3em]">
-            <AnimatePresence initial={false}>
+          <motion.span
+            layout
+            transition={{
+              layout: {
+                type: "spring",
+                stiffness: 500,
+                damping: 45,
+              },
+            }}
+            className="relative inline-flex overflow-hidden pb-2 whitespace-nowrap pr-[0.12em] -mr-[0.12em]"
+          >
+            <AnimatePresence initial={false} mode="popLayout">
               <motion.span
                 key={label}
                 initial={{ opacity: 0, y: 60 }}
                 animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -80, position: "absolute", top: 0, left: 0 }}
+                exit={{
+                  opacity: 0,
+                  y: -80,
+                  position: "absolute",
+                  top: 0,
+                  left: 0,
+                }}
                 transition={{ duration: 0.4 }}
-                className={`italic ${renderColor()}`}
+                className={`italic ${renderColor()} whitespace-nowrap`}
               >
                 {label}
               </motion.span>
             </AnimatePresence>
-          </span>
+          </motion.span>
         </h2>
 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
