@@ -138,10 +138,6 @@ mc-aws/
 - `pnpm test` runs from root (Vitest unit tests)
 - `pnpm test:e2e` runs Playwright tests
 
-### UC4: API-Triggered CDK Deploy/Destroy
-- API routes (`/api/deploy`, `/api/destroy`) call CDK commands
-- Updated to use `infrastructure/` directory paths
-
 ---
 
 ## Success Criteria
@@ -150,7 +146,7 @@ mc-aws/
 2. **Dev server works**: `pnpm dev` starts Next.js at root
 3. **Tests pass**: All existing tests continue to pass
 4. **CDK works**: `cdk deploy` succeeds from `infrastructure/`
-5. **API routes work**: Deploy/destroy endpoints function correctly
+5. **No broken imports**: All `@/*` imports resolve correctly
 6. **No broken imports**: All `@/*` imports resolve correctly
 7. **Git history preserved**: Use `git mv` where possible
 
@@ -274,8 +270,6 @@ const command = 'npx cdk deploy ... --app "npx ts-node bin/mc-aws.ts"';
 | `frontend/tsconfig.json` | TS config | Move to root |
 | `frontend/next.config.ts` | Next config | Move to root, update paths |
 | `frontend/biome.json` | Linter | Move to root |
-| `frontend/app/api/deploy/route.ts` | CDK deploy | Update paths |
-| `frontend/app/api/destroy/route.ts` | CDK destroy | Update paths |
 | `package.json` | CDK deps | Move to infrastructure/ |
 | `cdk.json` | CDK config | Move to infrastructure/ |
 | `bin/mc-aws.ts` | CDK entry | Move to infrastructure/bin/ |
@@ -292,7 +286,6 @@ const command = 'npx cdk deploy ... --app "npx ts-node bin/mc-aws.ts"';
 |------|------------|--------|------------|
 | Broken imports after move | Medium | High | Use `git mv`, test build immediately |
 | CDK commands fail | Medium | Medium | Test CDK from infrastructure/ before cleanup |
-| API deploy/destroy broken | Medium | High | Update paths, test endpoints |
 | Lost git history | Low | Low | Use `git mv` consistently |
 
 ---
