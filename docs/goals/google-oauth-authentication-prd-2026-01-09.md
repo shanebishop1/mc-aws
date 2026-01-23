@@ -53,8 +53,6 @@ Add optional Google OAuth authentication to the mc-aws Minecraft server manageme
 | GET /api/costs | No | No | Yes |
 | GET /api/backups | No | No | Yes |
 | */api/gdrive/* | No | No | Yes |
-| POST /api/deploy | No | No | Yes |
-| POST /api/destroy | No | No | Yes |
 
 ## Technical Design
 
