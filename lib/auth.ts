@@ -66,9 +66,13 @@ export async function verifySession(token: string): Promise<{ email: string; rol
     const secret = new TextEncoder().encode(env.AUTH_SECRET);
     const { payload } = await jwtVerify(token, secret);
 
+     const email = payload.email as string | undefined;
+     if (!email) return null;
+
     return {
-      email: payload.email as string,
-      role: payload.role as UserRole,
+      email,
+      // Role is derived from the current environment, so allowlist changes take effect immediately.
+      role: getUserRole(email),
     };
   } catch {
     return null;

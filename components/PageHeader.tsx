@@ -11,7 +11,7 @@ interface PageHeaderProps {
 }
 
 export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHeaderProps) => {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, isAdmin } = useAuth();
 
   const handleCostsClick = () => {
     if (!isAuthenticated) {
@@ -72,62 +72,66 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
           </svg>
         </motion.a>
 
-        {/* Costs Button */}
-        <motion.button
-          onClick={handleCostsClick}
-          whileHover={{ scale: 1.1 }}
-          transition={{ duration: 0.1 }}
-          whileTap={{ scale: 0.95 }}
-          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
-          title="View AWS costs"
-        >
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
-            />
-          </svg>
-        </motion.button>
+        {isAdmin && (
+          <>
+            {/* Costs Button */}
+            <motion.button
+              onClick={handleCostsClick}
+              whileHover={{ scale: 1.1 }}
+              transition={{ duration: 0.1 }}
+              whileTap={{ scale: 0.95 }}
+              className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
+              title="View AWS costs"
+            >
+              <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M12 8c-1.657 0-3 .895-3 2s1.343 2 3 2 3 .895 3 2-1.343 2-3 2m0-8c1.11 0 2.08.402 2.599 1M12 8V7m0 1v8m0 0v1m0-1c-1.11 0-2.08-.402-2.599-1M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+                />
+              </svg>
+            </motion.button>
 
-        {/* Email Management Button */}
-        <motion.button
-          onClick={handleEmailsClick}
-          whileHover={{ scale: 1.1 }}
-          transition={{ duration: 0.1 }}
-          whileTap={{ scale: 0.95 }}
-          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
-          title="Manage email access"
-        >
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
-            />
-          </svg>
-        </motion.button>
+            {/* Email Management Button */}
+            <motion.button
+              onClick={handleEmailsClick}
+              whileHover={{ scale: 1.1 }}
+              transition={{ duration: 0.1 }}
+              whileTap={{ scale: 0.95 }}
+              className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
+              title="Manage email access"
+            >
+              <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z"
+                />
+              </svg>
+            </motion.button>
 
-        {/* AWS Console Button - always show, fallback to generic AWS signin */}
-        <motion.button
-          onClick={handleAwsConsoleClick}
-          whileHover={{ scale: 1.1 }}
-          transition={{ duration: 0.1 }}
-          whileTap={{ scale: 0.95 }}
-          className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
-          title="Open in AWS Console"
-        >
-          <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path
-              strokeLinecap="round"
-              strokeLinejoin="round"
-              strokeWidth={1.5}
-              d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"
-            />
-          </svg>
-        </motion.button>
+            {/* AWS Console Button */}
+            <motion.button
+              onClick={handleAwsConsoleClick}
+              whileHover={{ scale: 1.1 }}
+              transition={{ duration: 0.1 }}
+              whileTap={{ scale: 0.95 }}
+              className="cursor-pointer p-1 text-charcoal/40 hover:text-green transition-colors"
+              title="Open in AWS Console"
+            >
+              <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={1.5}
+                  d="M2.25 15a4.5 4.5 0 004.5 4.5H18a3.75 3.75 0 001.332-7.257 3 3 0 00-3.758-3.848 5.25 5.25 0 00-10.233 2.33A4.502 4.502 0 002.25 15z"
+                />
+              </svg>
+            </motion.button>
+          </>
+        )}
       </div>
     </motion.header>
   );
