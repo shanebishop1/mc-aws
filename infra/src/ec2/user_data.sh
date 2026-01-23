@@ -5,8 +5,7 @@ log() { echo "[$(date -Is)] $*"; }
 
 # Centralized version variables
 MC_VERSION="1.21.11"
-PAPER_BUILD="99"
-PAPER_URL="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${MC_VERSION}-${PAPER_BUILD}.jar"
+PAPER_BUILD_DEFAULT="69"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 
@@ -20,7 +19,7 @@ curl -L -o /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
 
 # 3. Install Java 21, unzip, git, Python3 & pip3, and cron
 log "Installing Java, Git, Python, pip, cron, rsync (core deps)..."
-dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip cronie rsync
+dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip cronie rsync screen
 log "Installing rclone (upstream binary)..."
 curl -L -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-arm64.zip
 unzip -o /tmp/rclone.zip -d /tmp/rclone
@@ -81,11 +80,19 @@ if [[ ! -d "/opt/setup" ]]; then
 fi
 
 # 8. Download Paper jar & accept EULA
+PAPER_BUILD="${PAPER_BUILD:-$PAPER_BUILD_DEFAULT}"
+log "Resolving Paper build for ${MC_VERSION} (default ${PAPER_BUILD})..."
+LATEST_PAPER_BUILD="$(curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}" \
+  | python3 -c 'import sys,json; j=json.load(sys.stdin); builds=j.get("builds",[]); print(builds[-1] if builds else "")' \
+  || true)"
+if [[ -n "$LATEST_PAPER_BUILD" ]]; then
+  PAPER_BUILD="$LATEST_PAPER_BUILD"
+fi
+PAPER_URL="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${MC_VERSION}-${PAPER_BUILD}.jar"
+log "Using Paper jar: ${MC_VERSION} build ${PAPER_BUILD}"
+
 if [[ ! -f "/opt/minecraft/server/paper.jar" ]]; then
-  sudo -u minecraft bash -c "
-    cd /opt/minecraft/server
-    wget ${PAPER_URL} -O paper.jar
-  "
+  sudo -u minecraft bash -c "cd /opt/minecraft/server && wget \"${PAPER_URL}\" -O paper.jar"
 fi
 if [[ ! -f "/opt/minecraft/server/eula.txt" ]]; then
   sudo -u minecraft bash -c 'echo "eula=true" > /opt/minecraft/server/eula.txt'
@@ -116,17 +123,17 @@ fi
 
 # 10. Deploy service unit and shutdown script
 if [[ ! -f "/etc/systemd/system/minecraft.service" ]]; then
-  if [[ -f /opt/setup/src/ec2/minecraft.service ]]; then
-    cp /opt/setup/src/ec2/minecraft.service /etc/systemd/system/
+  if [[ -f /opt/setup/infra/src/ec2/minecraft.service ]]; then
+    cp /opt/setup/infra/src/ec2/minecraft.service /etc/systemd/system/
   else
-    log "Error: minecraft.service unit file missing in /opt/setup/src/ec2; aborting."
+    log "Error: minecraft.service unit file missing in /opt/setup/infra/src/ec2; aborting."
     exit 1
   fi
 fi
 
 # 11 Copy idle-check script and schedule cron
-if [[ -f /opt/setup/src/ec2/check-mc-idle.sh ]]; then
-  cp /opt/setup/src/ec2/check-mc-idle.sh /usr/local/bin/check-mc-idle.sh
+if [[ -f /opt/setup/infra/src/ec2/check-mc-idle.sh ]]; then
+  cp /opt/setup/infra/src/ec2/check-mc-idle.sh /usr/local/bin/check-mc-idle.sh
   chmod +x /usr/local/bin/check-mc-idle.sh
 else
   log "Warning: check-mc-idle.sh missing; skipping idle cron install."
@@ -143,8 +150,8 @@ fi
 
 # 12. Deploy management scripts (backup, restore, hibernate, resume)
 for script in mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh; do
-  if [[ -f /opt/setup/src/ec2/$script ]]; then
-    cp /opt/setup/src/ec2/$script /usr/local/bin/$script
+  if [[ -f /opt/setup/infra/src/ec2/$script ]]; then
+    cp /opt/setup/infra/src/ec2/$script /usr/local/bin/$script
     chmod +x /usr/local/bin/$script
     log "Deployed $script"
   fi
