@@ -25,8 +25,6 @@
 - [ ] [debugger] Move goals/ to docs/goals/: git mv goals/* docs/goals/. Move PRDs to documentation folder.
 - [ ] [debugger] Move frontend/docs to docs/: git mv frontend/docs/* docs/. Includes API.md reference.
 - [ ] [engineer] Update next.config.ts: Remove '../.env' path (now same directory), remove outputFileTracingRoot (no longer needed for monorepo). File: next.config.ts
-- [ ] [engineer] Update API route deploy path: Change projectRoot from path.resolve(process.cwd(), '..') to path.resolve(process.cwd(), 'infrastructure'). Update CDK command cwd. File: app/api/deploy/route.ts
-- [ ] [engineer] Update API route destroy path: Same changes as deploy route - update projectRoot and cwd for CDK commands. File: app/api/destroy/route.ts
 - [ ] [engineer] Update root package.json: Add CDK proxy scripts (cdk:deploy, cdk:synth, cdk:diff) that cd into infrastructure/. Keep all Next.js scripts. File: package.json
 - [ ] [engineer] Verify tsconfig.json paths: Confirm @/* alias maps to './*' (should work as-is). File: tsconfig.json
 - [ ] [engineer] Update AGENTS.md: Update directory structure section to reflect new layout with infrastructure/, legacy/, docs/ folders. File: AGENTS.md
@@ -35,7 +33,6 @@
 - [ ] [debugger] Validate build: Run 'pnpm build' and ensure Next.js builds successfully with no import errors
 - [ ] [debugger] Validate tests: Run 'pnpm test' to ensure all unit tests pass
 - [ ] [debugger] Validate CDK: cd infrastructure && npm install && npx cdk synth to ensure CDK still works
-- [ ] [debugger] Test API endpoints: Start dev server, test /api/deploy and /api/destroy endpoints work with new paths
 
 ## Backlog
 

@@ -16,6 +16,15 @@ const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
  * @returns The user's role: 'admin' | 'allowed' | 'public'
  */
 export function getUserRole(email: string): UserRole {
+  // Local dev convenience account. Only applies when dev-login is explicitly enabled.
+  if (
+    email.toLowerCase() === "dev@localhost" &&
+    process.env.NODE_ENV !== "production" &&
+    process.env.ENABLE_DEV_LOGIN === "true"
+  ) {
+    return "admin";
+  }
+
   const adminEmail = env.ADMIN_EMAIL;
   const allowedEmails = env.ALLOWED_EMAILS;
 
@@ -66,8 +75,8 @@ export async function verifySession(token: string): Promise<{ email: string; rol
     const secret = new TextEncoder().encode(env.AUTH_SECRET);
     const { payload } = await jwtVerify(token, secret);
 
-     const email = payload.email as string | undefined;
-     if (!email) return null;
+    const email = payload.email as string | undefined;
+    if (!email) return null;
 
     return {
       email,

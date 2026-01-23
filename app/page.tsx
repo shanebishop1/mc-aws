@@ -3,7 +3,6 @@
 import { ArtDecoBorder } from "@/components/ArtDecoBorder";
 import { ControlsSection } from "@/components/ControlsSection";
 import { CostDashboard } from "@/components/CostDashboard";
-import { DeployButton } from "@/components/DeployButton";
 import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { ResumeModal } from "@/components/ResumeModal";
@@ -18,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 export default function Home() {
   const { isAdmin, isAuthenticated } = useAuth();
   const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus } = useServerStatus();
-  const { stackExists, isLoading: stackLoading, error: stackError, refetch: refetchStack } = useStackStatus();
+  const { stackExists, isLoading: stackLoading, error: stackError } = useStackStatus();
 
   const [instanceId] = useState<string | undefined>(undefined);
   const [_isLoading, setIsLoading] = useState(false);
@@ -76,33 +75,36 @@ export default function Home() {
     [instanceId]
   );
 
-  const handleAction = useCallback(async (action: string, endpoint: string, backupName?: string) => {
-    setIsLoading(true);
-    setMessage(`Initiating ${action}...`);
-    try {
-      const body = buildRequestBody(backupName);
-      const res = await fetch(endpoint, {
-        method: "POST",
-        headers: body ? { "Content-Type": "application/json" } : undefined,
-        body,
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || "Action failed");
-      setMessage(data.message || `${action} initiated successfully.`);
+  const handleAction = useCallback(
+    async (action: string, endpoint: string, backupName?: string) => {
+      setIsLoading(true);
+      setMessage(`Initiating ${action}...`);
+      try {
+        const body = buildRequestBody(backupName);
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: body ? { "Content-Type": "application/json" } : undefined,
+          body,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Action failed");
+        setMessage(data.message || `${action} initiated successfully.`);
 
-      // Immediate status refresh
-      setTimeout(async () => {
-        await fetchStatus();
-      }, 2000);
-    } catch (err: unknown) {
-      const error = err as { message?: string };
-      setMessage(error.message || "Unknown error");
-    } finally {
-      setIsLoading(false);
-      // Clear message after 5s
-      setTimeout(() => setMessage(null), 5000);
-    }
-  }, [buildRequestBody, fetchStatus]);
+        // Immediate status refresh
+        setTimeout(async () => {
+          await fetchStatus();
+        }, 2000);
+      } catch (err: unknown) {
+        const error = err as { message?: string };
+        setMessage(error.message || "Unknown error");
+      } finally {
+        setIsLoading(false);
+        // Clear message after 5s
+        setTimeout(() => setMessage(null), 5000);
+      }
+    },
+    [buildRequestBody, fetchStatus]
+  );
 
   // If the user clicked Start while logged out, continue automatically after sign-in.
   useEffect(() => {
@@ -124,28 +126,6 @@ export default function Home() {
   const handleResumeFromModal = (backupName?: string) => {
     setIsResumeModalOpen(false);
     handleAction("Resume", "/api/resume", backupName);
-  };
-
-  const handleDeployComplete = () => {
-    setMessage("Server deployed successfully!");
-    setTimeout(() => setMessage(null), 5000);
-    refetchStack();
-  };
-
-  const handleDeployError = (error: string) => {
-    setMessage(`Deployment failed: ${error}`);
-    setTimeout(() => setMessage(null), 5000);
-  };
-
-  const handleDestroyComplete = () => {
-    setMessage("Server destroyed successfully!");
-    setTimeout(() => setMessage(null), 5000);
-    refetchStack();
-  };
-
-  const handleDestroyError = (error: string) => {
-    setMessage(`Destruction failed: ${error}`);
-    setTimeout(() => setMessage(null), 5000);
   };
 
   // Loading state - stack status check (show main UI with connecting state instead)
@@ -177,7 +157,7 @@ export default function Home() {
     );
   }
 
-  // No stack exists - show deploy button (only after loading completes and confirmed no stack)
+  // No stack exists - show informational message (infra is deployed locally via CDK)
   if (!stackLoading && !stackExists) {
     return (
       <main
@@ -192,21 +172,19 @@ export default function Home() {
           awsConsoleUrl={awsConsoleUrl}
         />
 
-        {/* Middle Section - Deploy Button */}
+        {/* Middle Section */}
         <div className="flex-1 flex flex-col justify-center items-center w-full px-4">
           <div className="flex flex-col items-center gap-8 max-w-lg text-center">
             <div>
-              <h2 className="font-serif text-3xl italic mb-4 text-charcoal">No Server Deployed</h2>
+              <h2 className="font-serif text-3xl italic mb-4 text-charcoal">Server Not Configured</h2>
               <p className="font-sans text-sm text-charcoal/70 leading-relaxed max-w-md">
-                Your Minecraft server hasn&apos;t been deployed yet. Click the button below to create a new server on
-                AWS with all required infrastructure.
+                This app can&apos;t find the AWS infrastructure (CloudFormation stack). Provision the stack locally,
+                then refresh this page.
               </p>
             </div>
-            {isAdmin ? (
-              <DeployButton onDeployComplete={handleDeployComplete} onError={handleDeployError} />
-            ) : (
-              <p className="font-sans text-xs text-charcoal/60 tracking-wide">Admin privileges required to deploy.</p>
-            )}
+            <p className="font-sans text-xs text-charcoal/60 tracking-wide">
+              Admin sign-in is still required for server actions.
+            </p>
           </div>
         </div>
 
@@ -263,8 +241,6 @@ export default function Home() {
           actionsEnabled={actionsEnabled}
           onAction={handleAction}
           onOpenResume={handleResumeClick}
-          onDestroyComplete={handleDestroyComplete}
-          onDestroyError={handleDestroyError}
         />
 
         {/* Footer - Fixed Small Height */}

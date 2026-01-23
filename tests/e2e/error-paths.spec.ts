@@ -12,9 +12,6 @@ test.describe("Error Handling", () => {
 
     // Should show error message
     await expect(page.getByText(/AWS connection failed/i)).toBeVisible();
-
-    // Should NOT show deploy button
-    await expect(page.getByRole("button", { name: /deploy/i })).not.toBeVisible();
   });
 
   test("shows error when start fails", async ({ page }) => {
@@ -61,54 +58,6 @@ test.describe("Error Handling", () => {
 
     // Should show error message
     await expect(page.getByText(/failed to stop/i)).toBeVisible();
-  });
-
-  test("shows error when deploy fails", async ({ page }) => {
-    await setupMocks(page, ["no-stack", "gdrive-configured"]);
-
-    // Override deploy to fail
-    await page.route("**/api/deploy", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "CDK deployment failed",
-          timestamp: new Date().toISOString(),
-        }),
-      });
-    });
-
-    await page.goto("/");
-    await page.getByRole("button", { name: /deploy server/i }).click();
-    await confirmDialog(page, "deploy");
-
-    // Should show error message
-    await expect(page.getByText(/deployment failed|cdk/i)).toBeVisible();
-  });
-
-  test("shows error when destroy fails", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
-
-    // Override destroy to fail
-    await page.route("**/api/destroy", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to destroy stack",
-          timestamp: new Date().toISOString(),
-        }),
-      });
-    });
-
-    await page.goto("/");
-    await page.getByRole("button", { name: /destroy/i }).click();
-    await confirmDialog(page, "destroy");
-
-    // Should show error message
-    await expect(page.getByText(/destruction failed|destroy/i)).toBeVisible();
   });
 
   test("shows error when backup fails", async ({ page }) => {
