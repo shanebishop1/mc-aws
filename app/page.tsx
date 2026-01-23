@@ -8,6 +8,7 @@ import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { PageHeader } from "@/components/PageHeader";
 import { ResumeModal } from "@/components/ResumeModal";
 import { ServerStatus } from "@/components/ServerStatus";
+import { useAuth } from "@/components/auth/auth-provider";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { useStackStatus } from "@/hooks/useStackStatus";
@@ -15,6 +16,7 @@ import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 export default function Home() {
+  const { isAdmin, isAuthenticated } = useAuth();
   const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus } = useServerStatus();
   const { stackExists, isLoading: stackLoading, error: stackError, refetch: refetchStack } = useStackStatus();
 
@@ -43,6 +45,8 @@ export default function Home() {
 
   // Fetch AWS config for console URL
   useEffect(() => {
+    if (!isAdmin) return;
+
     fetch("/api/aws-config")
       .then((res) => res.json())
       .then((data) => {
@@ -53,7 +57,7 @@ export default function Home() {
       .catch(() => {
         // Silently fail - AWS link is optional
       });
-  }, []);
+  }, [isAdmin]);
 
   // Use custom hook to derive button visibility state
   const { showResume, showStart, showStop, showHibernate, showBackupRestore, actionsEnabled } = useButtonVisibility(
@@ -97,6 +101,19 @@ export default function Home() {
     }
   };
 
+  // If the user clicked Start while logged out, continue automatically after sign-in.
+  useEffect(() => {
+    if (!isAuthenticated) return;
+    if (!stackExists) return;
+    if (!(showStart || showResume)) return;
+
+    const pending = window.sessionStorage.getItem("mc_pending_action");
+    if (pending !== "start") return;
+
+    window.sessionStorage.removeItem("mc_pending_action");
+    void handleAction("Start", "/api/start");
+  }, [isAuthenticated, stackExists, showStart, showResume]);
+
   const handleResumeClick = () => {
     setIsResumeModalOpen(true);
   };
@@ -134,7 +151,7 @@ export default function Home() {
   // Error state - AWS connection failed
   if (stackError) {
     return (
-      <main className="h-full flex flex-col items-center justify-center px-4 bg-cream">
+      <main className="h-full flex flex-col items-center justify-center px-6 py-6 bg-cream">
         <ArtDecoBorder />
         <div className="flex flex-col items-center gap-4 max-w-md text-center">
           <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
@@ -162,7 +179,7 @@ export default function Home() {
     return (
       <main
         data-testid="home-page"
-        className="h-full flex flex-col px-4 md:pb-0 bg-cream selection:bg-green selection:text-white"
+        className="h-full flex flex-col px-6 pt-6 pb-6 sm:px-8 sm:pt-8 sm:pb-8 md:px-4 md:pt-4 md:pb-4 bg-cream selection:bg-green selection:text-white"
       >
         <ArtDecoBorder />
         {/* Header */}
@@ -182,7 +199,11 @@ export default function Home() {
                 AWS with all required infrastructure.
               </p>
             </div>
-            <DeployButton onDeployComplete={handleDeployComplete} onError={handleDeployError} />
+            {isAdmin ? (
+              <DeployButton onDeployComplete={handleDeployComplete} onError={handleDeployError} />
+            ) : (
+              <p className="font-sans text-xs text-charcoal/60 tracking-wide">Admin privileges required to deploy.</p>
+            )}
           </div>
         </div>
 
@@ -210,7 +231,7 @@ export default function Home() {
     <>
       <main
         data-testid="home-page"
-        className="h-full flex flex-col px-4 md:pb-0 bg-cream selection:bg-green selection:text-white"
+        className="h-full flex flex-col px-6 pt-6 pb-6 sm:px-8 sm:pt-8 sm:pb-8 md:px-4 md:pt-4 md:pb-4 bg-cream selection:bg-green selection:text-white"
       >
         <ArtDecoBorder />
         {/* Header */}
@@ -263,17 +284,19 @@ export default function Home() {
       </main>
 
       {/* Resume Modal */}
-      <ResumeModal
-        isOpen={isResumeModalOpen}
-        onClose={() => setIsResumeModalOpen(false)}
-        onResume={handleResumeFromModal}
-      />
+      {isAdmin && (
+        <ResumeModal
+          isOpen={isResumeModalOpen}
+          onClose={() => setIsResumeModalOpen(false)}
+          onResume={handleResumeFromModal}
+        />
+      )}
 
       {/* Email Management Panel */}
-      <EmailManagementPanel isOpen={isEmailPanelOpen} onClose={() => setIsEmailPanelOpen(false)} />
+      {isAdmin && <EmailManagementPanel isOpen={isEmailPanelOpen} onClose={() => setIsEmailPanelOpen(false)} />}
 
       {/* Cost Dashboard */}
-      <CostDashboard isOpen={isCostDashboardOpen} onClose={() => setIsCostDashboardOpen(false)} />
+      {isAdmin && <CostDashboard isOpen={isCostDashboardOpen} onClose={() => setIsCostDashboardOpen(false)} />}
     </>
   );
 }
