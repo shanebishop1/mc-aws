@@ -11,6 +11,7 @@ import { type NextRequest, NextResponse } from "next/server";
 
 const OAUTH_STATE_COOKIE = "oauth_state";
 const OAUTH_CODE_VERIFIER_COOKIE = "oauth_code_verifier";
+const OAUTH_POPUP_COOKIE = "oauth_popup";
 
 interface GoogleUserInfo {
   email: string;
@@ -35,6 +36,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const cookieStore = await cookies();
     const oauthState = cookieStore.get(OAUTH_STATE_COOKIE)?.value;
     const codeVerifier = cookieStore.get(OAUTH_CODE_VERIFIER_COOKIE)?.value;
+    const isPopup = cookieStore.get(OAUTH_POPUP_COOKIE)?.value === "1";
 
     // Check for missing cookies
     if (!oauthState || !codeVerifier) {
@@ -110,8 +112,35 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const token = await createSession(email);
     const sessionCookie = createSessionCookie(token);
 
-    // Create response with redirect and set session cookie
-    const response = NextResponse.redirect(new URL("/", request.url));
+    const popupCloseHtml = `<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Signed in</title>
+  </head>
+  <body>
+    <script>
+      try {
+        window.opener?.postMessage({ type: "MC_AUTH_SUCCESS" }, window.location.origin);
+      } catch {}
+      window.close();
+      setTimeout(() => {
+        window.location.href = "/";
+      }, 250);
+    </script>
+    <p>Sign-in complete. You can close this window.</p>
+  </body>
+</html>`;
+
+    const response = isPopup
+      ? new NextResponse(popupCloseHtml, {
+          headers: {
+            "content-type": "text/html; charset=utf-8",
+          },
+        })
+      : NextResponse.redirect(new URL("/", request.url));
+
     response.cookies.set(sessionCookie.name, sessionCookie.value, {
       httpOnly: sessionCookie.httpOnly,
       secure: sessionCookie.secure,
@@ -123,6 +152,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     // Clear OAuth cookies
     response.cookies.delete(OAUTH_STATE_COOKIE);
     response.cookies.delete(OAUTH_CODE_VERIFIER_COOKIE);
+    response.cookies.delete(OAUTH_POPUP_COOKIE);
 
     console.log("[CALLBACK] Session created and OAuth cookies cleared");
     return response;
