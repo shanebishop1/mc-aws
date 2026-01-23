@@ -1,6 +1,5 @@
 "use client";
 
-import { DestroyButton } from "@/components/DestroyButton";
 import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
 import { useAuth } from "@/components/auth/auth-provider";
 import { LuxuryButton } from "@/components/ui/Button";
@@ -18,8 +17,6 @@ interface ControlsSectionProps {
   actionsEnabled: boolean;
   onAction: (action: string, endpoint: string) => void;
   onOpenResume: () => void;
-  onDestroyComplete?: () => void;
-  onDestroyError?: (error: string) => void;
 }
 
 const checkGDriveStatus = async (): Promise<boolean> => {
@@ -43,8 +40,6 @@ export const ControlsSection = ({
   actionsEnabled,
   onAction,
   onOpenResume,
-  onDestroyComplete,
-  onDestroyError,
 }: ControlsSectionProps) => {
   const { isAdmin, isAllowed, isAuthenticated, refetch } = useAuth();
 
@@ -108,11 +103,7 @@ export const ControlsSection = ({
   };
 
   const openLoginPopup = (onSuccess?: () => void) => {
-    const popup = window.open(
-      "/api/auth/login?popup=1",
-      "google-auth",
-      "width=500,height=600,menubar=no,toolbar=no"
-    );
+    const popup = window.open("/api/auth/login?popup=1", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
 
     if (!popup) {
       window.location.href = "/api/auth/login";
@@ -181,7 +172,7 @@ export const ControlsSection = ({
   return (
     <motion.div
       data-testid="controls-section"
-      className="shrink-0 h-24 md:h-48 flex items-center justify-center w-full"
+      className="shrink-0 w-full flex items-center justify-center py-4 md:py-0 min-h-24 md:min-h-48"
       initial={{ y: 20, opacity: 0 }}
       animate={{ y: 0, opacity: 1 }}
       transition={{ duration: 0.8, ease: "easeOut" }}
@@ -204,8 +195,6 @@ export const ControlsSection = ({
             onHibernateClick={() => setShowHibernateConfirm(true)}
             onBackupClick={handleBackupClick}
             onRestoreClick={handleRestoreClick}
-            onDestroyComplete={onDestroyComplete}
-            onDestroyError={onDestroyError}
           />
 
           <ConfirmationDialogs
@@ -275,8 +264,6 @@ interface ControlsGridProps {
   onHibernateClick: () => void;
   onBackupClick: () => void;
   onRestoreClick: () => void;
-  onDestroyComplete?: () => void;
-  onDestroyError?: (error: string) => void;
 }
 
 const ControlsGrid = ({
@@ -295,27 +282,25 @@ const ControlsGrid = ({
   onHibernateClick,
   onBackupClick,
   onRestoreClick,
-  onDestroyComplete,
-  onDestroyError,
 }: ControlsGridProps) => {
   if (status === "unknown") return null;
 
   return (
-    <section className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-8 items-center justify-items-center">
-      <div className="flex flex-col gap-6 w-full max-w-[200px] text-center md:text-right">
-        {showHibernate && (
+    <section className="w-full max-w-4xl grid grid-cols-3 md:grid-cols-[1fr_auto_1fr] md:grid-rows-[auto_auto] gap-4 md:gap-x-8 md:gap-y-4 items-center md:items-center justify-items-center">
+      <div className="order-2 col-span-1 md:col-span-1 md:order-none md:col-start-1 md:row-start-1 w-full max-w-[200px] flex justify-center md:justify-end">
+        {showBackupRestore && (
           <LuxuryButton
-            variant="text"
-            onClick={onHibernateClick}
+            variant="pill"
+            onClick={onBackupClick}
             disabled={!actionsEnabled || !isAdmin}
             title={!isAdmin ? "Admin privileges required" : undefined}
           >
-            Hibernate
+            Backup
           </LuxuryButton>
         )}
       </div>
 
-      <div className="order-first md:order-none flex flex-col items-center gap-4">
+      <div className="order-1 col-span-3 md:col-span-1 md:order-none md:col-start-2 md:row-start-1 flex justify-center">
         <PrimaryActionButton
           showStop={showStop}
           showStart={showStart}
@@ -326,29 +311,31 @@ const ControlsGrid = ({
           onAction={onAction}
           onPrimaryAction={onPrimaryAction}
         />
-        <DestroyButton onDestroyComplete={onDestroyComplete} onError={onDestroyError} />
       </div>
 
-      <div className="flex flex-col gap-6 w-full max-w-[200px] text-center md:text-left">
+      <div className="order-4 col-span-1 md:col-span-1 md:order-none md:col-start-3 md:row-start-1 w-full max-w-[200px] flex justify-center md:justify-start">
         {showBackupRestore && (
-          <>
-            <LuxuryButton
-              variant="text"
-              onClick={onRestoreClick}
-              disabled={!actionsEnabled || !isAdmin}
-              title={!isAdmin ? "Admin privileges required" : undefined}
-            >
-              Restore
-            </LuxuryButton>
-            <LuxuryButton
-              variant="text"
-              onClick={onBackupClick}
-              disabled={!actionsEnabled || !isAdmin}
-              title={!isAdmin ? "Admin privileges required" : undefined}
-            >
-              Backup
-            </LuxuryButton>
-          </>
+          <LuxuryButton
+            variant="pill"
+            onClick={onRestoreClick}
+            disabled={!actionsEnabled || !isAdmin}
+            title={!isAdmin ? "Admin privileges required" : undefined}
+          >
+            Restore
+          </LuxuryButton>
+        )}
+      </div>
+
+      <div className="order-3 col-span-1 md:col-span-1 md:order-none md:col-start-2 md:row-start-2 flex justify-center md:mt-2">
+        {showHibernate && (
+          <LuxuryButton
+            variant="pill"
+            onClick={onHibernateClick}
+            disabled={!actionsEnabled || !isAdmin}
+            title={!isAdmin ? "Admin privileges required" : undefined}
+          >
+            Hibernate
+          </LuxuryButton>
         )}
       </div>
     </section>
@@ -377,7 +364,11 @@ function getStartButtonMeta({
 }): { disabled: boolean; title?: string } {
   // When logged out, we keep the button enabled so it can trigger sign-in.
   const disabled = !actionsEnabled || (isAuthenticated && !isAllowed);
-  const title = !isAuthenticated ? "Sign in to start the server" : !isAllowed ? "Allowed or admin privileges required" : undefined;
+  const title = !isAuthenticated
+    ? "Sign in to start the server"
+    : !isAllowed
+      ? "Allowed or admin privileges required"
+      : undefined;
   return { disabled, title };
 }
 
@@ -409,11 +400,7 @@ const PrimaryActionButton = ({
       : { disabled: false, title: undefined };
 
     return (
-      <LuxuryButton
-        onClick={onPrimaryAction}
-        disabled={disabled}
-        title={title}
-      >
+      <LuxuryButton onClick={onPrimaryAction} disabled={disabled} title={title}>
         {showResume ? "Resume" : "Start Server"}
       </LuxuryButton>
     );

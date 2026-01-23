@@ -10,7 +10,7 @@ interface GoogleDriveSetupPromptProps {
   onSetupComplete: () => void;
   onSkip?: () => void;
   allowSkip?: boolean;
-  context?: "deploy" | "backup" | "restore";
+  context?: "backup" | "restore";
 }
 
 export const GoogleDriveSetupPrompt = ({
@@ -19,7 +19,7 @@ export const GoogleDriveSetupPrompt = ({
   onSetupComplete,
   onSkip,
   allowSkip = true,
-  context = "deploy",
+  context = "backup",
 }: GoogleDriveSetupPromptProps) => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -123,34 +123,20 @@ export const GoogleDriveSetupPrompt = ({
 
   // Determine messaging based on context
   const getTitle = () => {
-    switch (context) {
-      case "backup":
-      case "restore":
-        return "Google Drive Required";
-      default:
-        return "Set Up Backups";
-    }
+    return "Google Drive Required";
   };
 
   const getSubtitle = () => {
     switch (context) {
       case "backup":
-        return "Configure Google Drive to create backups";
+        return "Connect Google Drive to create backups";
       case "restore":
-        return "Configure Google Drive to restore backups";
-      default:
-        return "Configure Google Drive for automatic backups";
+        return "Connect Google Drive to restore backups";
     }
   };
 
   const getDescription = () => {
-    switch (context) {
-      case "backup":
-      case "restore":
-        return "Google Drive is required for this operation. Once connected, your backups will be securely stored in your Google Drive account.";
-      default:
-        return "Set up Google Drive to automatically backup your Minecraft world. This helps protect your progress and allows you to restore from previous states.";
-    }
+    return "Google Drive is required for this operation. Once connected, your backups will be securely stored in your Google Drive account.";
   };
 
   return (
