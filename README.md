@@ -669,7 +669,7 @@ The web UI uses Google OAuth to control who can perform actions. Authentication 
 
 ### Authorization Tiers
 
-| Role                    | Can View Status | Can Start/Stop | Can Backup/Restore/Hibernate |
+| Role                    | Can View Status | Can Start | Can Backup/Restore/Hibernate |
 | ----------------------- | --------------- | -------------- | ---------------------------- |
 | Public (not logged in)  | ✅              | ❌             | ❌                           |
 | Allowed (on allow list) | ✅              | ✅             | ❌                           |
@@ -706,7 +706,7 @@ Instead of bypassing auth in development, use the dev-login route to get a real 
 To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
 
 - `"admin"` - Full access
-- `"allowed"` - Can start/stop server
+- `"allowed"` - Can start server
 - `"public"` - View only
 
 **Why this approach?**
@@ -722,6 +722,34 @@ To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
 3. After approval, redirected back with a session cookie
 4. Session lasts 7 days
 5. API routes check the session and enforce authorization based on user's role
+
+### Web UI Allow List (Control Panel)
+
+This is a separate allow list from the **Email Allowlist** (which is stored in AWS SSM at `/minecraft/email-allowlist` and is used for SES email triggers).
+
+The control panel allow list is controlled by environment variables and is enforced server-side.
+
+- `ADMIN_EMAIL`: the one email that always gets `admin` role
+- `ALLOWED_EMAILS` (optional): comma-separated list of emails that get `allowed` role
+- Any authenticated email not in either list gets `public` role
+
+**Example:**
+
+```bash
+ADMIN_EMAIL=you@gmail.com
+ALLOWED_EMAILS=friend1@gmail.com,friend2@gmail.com
+```
+
+**How it works:**
+
+1. User signs in with Google
+2. Server maps their email to a role in `lib/auth.ts` (`admin` / `allowed` / `public`)
+3. API routes enforce permissions with guards in `lib/api-auth.ts` (`requireAdmin`, `requireAllowed`, `requireAuth`)
+
+**Updating the control panel allow list:**
+
+- Local dev: edit `.env.local` then restart `pnpm dev`
+- Cloudflare Workers: update `wrangler.jsonc` `vars.ALLOWED_EMAILS` then redeploy
 
 ## Production Deployment
 
