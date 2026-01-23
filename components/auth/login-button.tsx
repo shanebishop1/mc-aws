@@ -23,31 +23,27 @@ export function LoginButton() {
       return;
     }
 
-    let poll: number | undefined;
-
-    const cleanup = () => {
-      if (poll !== undefined) {
-        window.clearInterval(poll);
-      }
-      window.removeEventListener("message", handleMessage);
-    };
-
-    const handleMessage = (event: MessageEvent) => {
+    function handleMessage(event: MessageEvent) {
       if (event.origin !== window.location.origin) return;
       if (typeof event.data !== "object" || event.data === null) return;
       if ((event.data as { type?: string }).type !== "MC_AUTH_SUCCESS") return;
       cleanup();
       void refetch();
-    };
+    }
 
-    window.addEventListener("message", handleMessage);
-
-    poll = window.setInterval(() => {
+    const poll = window.setInterval(() => {
       if (popup.closed) {
         cleanup();
         void refetch();
       }
     }, 500);
+
+    function cleanup() {
+      window.clearInterval(poll);
+      window.removeEventListener("message", handleMessage);
+    }
+
+    window.addEventListener("message", handleMessage);
   };
 
   const handleSignOut = async () => {
