@@ -34,12 +34,13 @@ export const handler = async (event) => {
   if (emailData.error) return emailData.error;
 
   const { senderEmail, subject, body } = emailData;
-  const adminEmail = (process.env.NOTIFICATION_EMAIL || "").toLowerCase();
-  const isAdmin = adminEmail && senderEmail === adminEmail;
+  const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").toLowerCase();
+  const adminEmails = uniqueEmails([process.env.NOTIFICATION_EMAIL, process.env.ADMIN_EMAIL]);
+  const isAdmin = adminEmails.includes(senderEmail);
 
   // Handle admin allowlist updates
   if (isAdmin) {
-    const allowlistResult = await handleAllowlistUpdate(senderEmail, body, adminEmail);
+    const allowlistResult = await handleAllowlistUpdate(senderEmail, body, notificationEmail, adminEmails);
     if (allowlistResult) return allowlistResult;
   }
 
@@ -57,13 +58,21 @@ export const handler = async (event) => {
   return executeCommand(commandResult.command, instanceId, senderEmail, { zone, record, domain, cfToken });
 };
 
-async function handleAllowlistUpdate(senderEmail, body, adminEmail) {
+async function handleAllowlistUpdate(senderEmail, body, notificationEmail, adminEmails) {
   const emailsInBody = extractEmails(body);
   if (emailsInBody.length === 0) return null;
 
   console.log(`Admin ${senderEmail} is updating allowlist with emails:`, emailsInBody);
-  await updateAllowlist(emailsInBody);
-  await sendNotification(adminEmail, "Minecraft Allowlist Updated", `Allowlist updated:\n\n${emailsInBody.join("\n")}`);
+  const baselineAllowlist = getBaselineAllowlist(adminEmails);
+  const updatedAllowlist = uniqueEmails([...baselineAllowlist, ...emailsInBody]);
+  await updateAllowlist(updatedAllowlist);
+  if (notificationEmail) {
+    await sendNotification(
+      notificationEmail,
+      "Minecraft Allowlist Updated",
+      `Allowlist updated:\n\n${updatedAllowlist.join("\n")}`
+    );
+  }
   return { statusCode: 200, body: "Allowlist updated successfully." };
 }
 
@@ -93,7 +102,17 @@ async function parseAndAuthorizeCommand(subject, isAdmin, senderEmail) {
 
   // Non-admin authorization
   const allowlist = await getAllowlist();
-  if (allowlist.length > 0 && !allowlist.includes(senderEmail)) {
+  const envAllowlist = getAllowedEmailsFromEnv();
+  const effectiveAllowlist = uniqueEmails([...allowlist, ...envAllowlist]);
+
+  if (!effectiveAllowlist.includes(senderEmail)) {
+    if (effectiveAllowlist.length === 0) {
+      console.log(`Email allowlist empty; denying non-admin sender: ${senderEmail}`);
+      return {
+        error: { statusCode: 403, body: "Email allowlist is empty. Only admin can trigger commands via email." },
+      };
+    }
+
     console.log(`Email ${senderEmail} not in allowlist.`);
     return { error: { statusCode: 403, body: "Email not authorized." } };
   }
@@ -105,8 +124,31 @@ async function parseAndAuthorizeCommand(subject, isAdmin, senderEmail) {
   return { command: { command: "start", args: [] } };
 }
 
+function uniqueEmails(emails) {
+  const output = [];
+  const seen = new Set();
+  for (const email of emails) {
+    const normalized = String(email || "")
+      .trim()
+      .toLowerCase();
+    if (!normalized) continue;
+    if (seen.has(normalized)) continue;
+    seen.add(normalized);
+    output.push(normalized);
+  }
+  return output;
+}
+
+function getAllowedEmailsFromEnv() {
+  return uniqueEmails((process.env.ALLOWED_EMAILS || "").split(","));
+}
+
+function getBaselineAllowlist(adminEmails) {
+  return uniqueEmails([...(adminEmails || []), ...getAllowedEmailsFromEnv()]);
+}
+
 async function executeCommand(parsedCommand, instanceId, senderEmail, cloudflareConfig) {
-  const notificationEmail = process.env.NOTIFICATION_EMAIL;
+  const notificationEmail = process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL;
 
   try {
     switch (parsedCommand.command) {
