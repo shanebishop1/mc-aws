@@ -169,6 +169,16 @@ export class MinecraftStack extends cdk.Stack {
     });
 
     // 6. Lambda Function to Start Server
+    const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+    const adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
+    const allowedEmails = (process.env.ALLOWED_EMAILS || "")
+      .split(",")
+      .map((email) => email.trim().toLowerCase())
+      .filter(Boolean);
+    const emailAllowlistSeed = Array.from(
+      new Set([notificationEmail, adminEmail, ...allowedEmails].filter(Boolean))
+    ).join(",");
+
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: "index.handler",
@@ -182,9 +192,38 @@ export class MinecraftStack extends cdk.Stack {
         CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN || "",
         VERIFIED_SENDER: process.env.VERIFIED_SENDER || "",
         START_KEYWORD: process.env.START_KEYWORD || "start",
-        NOTIFICATION_EMAIL: process.env.NOTIFICATION_EMAIL || "",
+        NOTIFICATION_EMAIL: notificationEmail,
+        ADMIN_EMAIL: (process.env.ADMIN_EMAIL || "").trim().toLowerCase(),
+        ALLOWED_EMAILS: allowedEmails.join(","),
       },
       timeout: cdk.Duration.seconds(60), // 60 seconds for start operation
+    });
+
+    // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
+    const seedEmailAllowlistLambda = new lambda.Function(this, "SeedEmailAllowlistLambda", {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: "index.handler",
+      code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/SeedEmailAllowlist")),
+      environment: {
+        PARAM_NAME: "/minecraft/email-allowlist",
+        SEED_VALUE: emailAllowlistSeed,
+      },
+      timeout: cdk.Duration.seconds(30),
+    });
+
+    seedEmailAllowlistLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`],
+      })
+    );
+
+    const seedEmailAllowlistProvider = new cr.Provider(this, "SeedEmailAllowlistProvider", {
+      onEventHandler: seedEmailAllowlistLambda,
+    });
+
+    new cdk.CustomResource(this, "SeedEmailAllowlist", {
+      serviceToken: seedEmailAllowlistProvider.serviceToken,
     });
 
     // Lambda to update DNS during deploy (no email trigger needed)
