@@ -334,18 +334,18 @@ If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create
 
     The deployment typically takes 3-5 minutes. Once complete, your server is ready to use!
 
-### Email Allowlist (Optional)
+### Email Allowlist
 
-By default, anyone who knows your trigger email can start the server. To restrict this, use the admin email (your `NOTIFICATION_EMAIL`) to manage who can start the server.
+Email commands are default-deny: only the admin email(s) (`NOTIFICATION_EMAIL` / `ADMIN_EMAIL`) and any emails in `ALLOWED_EMAILS` can trigger `start`.
 
 **How it works:**
 
-- The admin email (set in `NOTIFICATION_EMAIL`) can always start the server with the keyword in the **subject**
-- The admin can authorize other emails by listing them in the email **body**
-- Once an allowlist is set, only those emails (and the admin) can start the server
+- Baseline allowed senders: `NOTIFICATION_EMAIL` (fallback: `ADMIN_EMAIL`) + `ALLOWED_EMAILS`
+- Additional allowed senders are stored in AWS SSM at `/minecraft/email-allowlist`
+- Admin can update the stored allowlist by listing emails in the email **body** (baseline senders always remain allowed)
 - No redeployment needed - updates happen via email
 
-**To set up an allowlist:**
+**To add additional emails:**
 
 Send an email to your trigger address (e.g., `start@yourdomain.com`) from your admin email with the authorized email addresses in the **body** (one per line):
 
@@ -357,15 +357,15 @@ friend2@gmail.com
 teammate@company.com
 ```
 
-You'll receive a confirmation email showing the updated allowlist. After this, only those emails (plus your admin email) can start the server by putting the keyword in the **subject**.
+You'll receive a confirmation email showing the updated allowlist. After this, those emails (plus the baseline allowlist) can start the server by putting the keyword in the **subject**.
 
 **To update the allowlist:**
 
-Send another email from your admin address with the new list in the body. It completely replaces the old one.
+Send another email from your admin address with the new list in the body. It replaces the stored allowlist (baseline emails from env always remain allowed).
 
 ### Server Management Commands (Admin Only)
 
-The admin email (set in `NOTIFICATION_EMAIL`) can manage the server by sending emails with specific commands in the **subject line**. Only the admin email can use backup, restore, hibernate, and resume commands.
+The admin email(s) (set in `NOTIFICATION_EMAIL` / `ADMIN_EMAIL`) can manage the server by sending emails with specific commands in the **subject line**. Only the admin email(s) can use backup, restore, hibernate, and resume commands.
 
 **Available Commands:**
 
@@ -725,7 +725,30 @@ To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
 
 ### Web UI Allow List (Control Panel)
 
-This is a separate allow list from the **Email Allowlist** (which is stored in AWS SSM at `/minecraft/email-allowlist` and is used for SES email triggers).
+This is a separate allow list from the **Email Allowlist** (used for SES email triggers), but they share the same baseline emails.
+
+**Email Allowlist behavior (SES triggers):**
+
+- Baseline allowed senders come from env: `NOTIFICATION_EMAIL` (fallback: `ADMIN_EMAIL`) + `ALLOWED_EMAILS`
+- Additional allowed senders are stored in AWS Systems Manager (SSM) Parameter Store as a comma-separated string at `/minecraft/email-allowlist`
+- CDK deploy seeds `/minecraft/email-allowlist` if it doesn't exist, and the control panel keeps the baseline emails present
+- If both the baseline list and the SSM list are empty, only the admin email(s) can trigger commands via email (default deny)
+
+**Set the Email Allowlist (before or after deploy):**
+
+1. AWS Console: Systems Manager -> Parameter Store -> create/update `/minecraft/email-allowlist` in the same region as your stack
+2. AWS CLI:
+
+```bash
+aws ssm put-parameter \
+  --name "/minecraft/email-allowlist" \
+  --type "String" \
+  --value "friend1@gmail.com,friend2@gmail.com" \
+  --overwrite \
+  --region "${AWS_REGION}"
+```
+
+3. Control panel (admin-only): use the Email Management panel to add/remove emails (writes the same SSM parameter)
 
 The control panel allow list is controlled by environment variables and is enforced server-side.
 
