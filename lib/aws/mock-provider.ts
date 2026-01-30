@@ -488,25 +488,145 @@ export const mockProvider: AwsProvider = {
   },
 
   // Cost Explorer
-  getCosts: async (periodType?: "current-month" | "last-month" | "last-30-days"): Promise<CostData> => {
+  getCosts: async (
+    periodType: "current-month" | "last-month" | "last-30-days" = "current-month"
+  ): Promise<CostData> => {
     console.log("[MOCK] getCosts called with period:", periodType);
-    return {
-      period: { start: "2024-01-01", end: "2024-01-31" },
-      totalCost: "0.00",
-      currency: "USD",
-      breakdown: [],
-      fetchedAt: new Date().toISOString(),
-    };
+    const stateStore = getMockStateStore();
+
+    // Check for fault injection
+    const failureConfig = await stateStore.getOperationFailure("getCosts");
+    if (failureConfig?.failNext || failureConfig?.alwaysFail) {
+      if (failureConfig.failNext) {
+        await stateStore.clearOperationFailure("getCosts");
+      }
+      const error = new Error(failureConfig.errorMessage || "Mock Cost Explorer error");
+      (error as any).name = failureConfig.errorCode || "CostExplorerError";
+      throw error;
+    }
+
+    // Apply global latency if configured
+    const latencyMs = await stateStore.getGlobalLatency();
+    if (latencyMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    }
+
+    // Get cost data from state store
+    const costData = await stateStore.getCosts(periodType);
+
+    console.log(`[MOCK] Returning cost data for ${periodType}:`, costData.totalCost);
+    return costData;
   },
 
   // CloudFormation
-  getStackStatus: async (stackName?: string): Promise<Stack | null> => {
+  getStackStatus: async (stackName = "MinecraftStack"): Promise<Stack | null> => {
     console.log("[MOCK] getStackStatus called for:", stackName);
-    return null;
+    const stateStore = getMockStateStore();
+
+    // Check for fault injection
+    const failureConfig = await stateStore.getOperationFailure("getStackStatus");
+    if (failureConfig?.failNext || failureConfig?.alwaysFail) {
+      if (failureConfig.failNext) {
+        await stateStore.clearOperationFailure("getStackStatus");
+      }
+      const error = new Error(failureConfig.errorMessage || "Mock CloudFormation error");
+      (error as any).name = failureConfig.errorCode || "ValidationError";
+      throw error;
+    }
+
+    // Apply global latency if configured
+    const latencyMs = await stateStore.getGlobalLatency();
+    if (latencyMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    }
+
+    // Get stack status from state store
+    const stackState = await stateStore.getStackStatus();
+
+    if (!stackState.exists) {
+      console.log(`[MOCK] Stack "${stackName}" does not exist`);
+      return null;
+    }
+
+    // Get instance details for stack outputs
+    const instance = await stateStore.getInstance();
+
+    // Build realistic Stack object
+    const stack: Stack = {
+      StackName: stackName,
+      StackId: stackState.stackId,
+      StackStatus: stackState.status as any,
+      CreationTime: new Date("2024-01-01T00:00:00Z"),
+      Description: "Minecraft Server Infrastructure",
+      Parameters: [
+        {
+          ParameterKey: "InstanceType",
+          ParameterValue: "t4g.medium",
+        },
+        {
+          ParameterKey: "KeyName",
+          ParameterValue: "minecraft-key",
+        },
+      ],
+      Outputs: [
+        {
+          OutputKey: "InstanceId",
+          OutputValue: instance.instanceId,
+          Description: "EC2 Instance ID",
+        },
+        {
+          OutputKey: "PublicIP",
+          OutputValue: instance.publicIp || "N/A",
+          Description: "Public IP Address",
+        },
+        {
+          OutputKey: "AvailabilityZone",
+          OutputValue: instance.availabilityZone || "us-east-1a",
+          Description: "Availability Zone",
+        },
+      ],
+      Tags: [
+        {
+          Key: "Project",
+          Value: "Minecraft",
+        },
+        {
+          Key: "Environment",
+          Value: "Production",
+        },
+      ],
+    };
+
+    console.log(`[MOCK] Stack "${stackName}" status:`, stackState.status);
+    return stack;
   },
 
-  checkStackExists: async (stackName?: string): Promise<boolean> => {
+  checkStackExists: async (stackName = "MinecraftStack"): Promise<boolean> => {
     console.log("[MOCK] checkStackExists called for:", stackName);
-    return false;
+    const stateStore = getMockStateStore();
+
+    // Check for fault injection
+    const failureConfig = await stateStore.getOperationFailure("checkStackExists");
+    if (failureConfig?.failNext || failureConfig?.alwaysFail) {
+      if (failureConfig.failNext) {
+        await stateStore.clearOperationFailure("checkStackExists");
+      }
+      const error = new Error(failureConfig.errorMessage || "Mock CloudFormation error");
+      (error as any).name = failureConfig.errorCode || "ValidationError";
+      throw error;
+    }
+
+    // Apply global latency if configured
+    const latencyMs = await stateStore.getGlobalLatency();
+    if (latencyMs > 0) {
+      await new Promise((resolve) => setTimeout(resolve, latencyMs));
+    }
+
+    // Get stack status from state store
+    const stackState = await stateStore.getStackStatus();
+    const exists = stackState.exists;
+
+    console.log(`[MOCK] Stack "${stackName}" exists:`, exists);
+    return exists;
   },
 };
