@@ -7,6 +7,7 @@ import { getAuthUser } from "@/lib/api-auth";
 import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
+import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
@@ -26,25 +27,33 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     const { blockDeviceMappings } = await getInstanceDetails(instanceId);
     const state = await getInstanceState(instanceId);
+    const hasVolume = blockDeviceMappings.length > 0;
     let publicIp: string | undefined;
 
     // Only try to get public IP if running
     if (state === "running") {
       try {
-        publicIp = await getPublicIp(instanceId);
+        // Use a short timeout for status checks (2 seconds) to avoid hanging
+        publicIp = await getPublicIp(instanceId, 2);
       } catch (error) {
         console.warn("[STATUS] Could not get public IP:", error);
         // Continue without IP - it might still be assigning
       }
     }
 
+    // Convert stopped + no volume to hibernating
+    let displayState = state;
+    if (state === "stopped" && !hasVolume) {
+      displayState = ServerState.Hibernating;
+    }
+
     const response: ApiResponse<ServerStatusResponse> = {
       success: true,
       data: {
-        state,
+        state: displayState,
         instanceId,
         publicIp,
-        hasVolume: blockDeviceMappings.length > 0,
+        hasVolume,
         lastUpdated: new Date().toISOString(),
       },
       timestamp: new Date().toISOString(),
