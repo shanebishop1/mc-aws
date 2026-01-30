@@ -25,6 +25,7 @@ Key features:
 ## Table of Contents
 
 - [Usage](#usage)
+- [Local Development with Mock Mode](#local-development-with-mock-mode)
 - [Background](#background)
 - [How It Works](#how-it-works)
 - [Repo Structure](#repo-structure)
@@ -81,6 +82,164 @@ All API endpoints are prefixed with `/api/`. Base URL is your deployed frontend 
 | `/api/backups`   | GET    | List available backups                    |
 | `/api/players`   | GET    | Player count                              |
 | `/api/costs`     | GET    | Cost tracking                             |
+
+## Local Development with Mock Mode
+
+Mock mode allows you to develop and test the application without requiring AWS resources, credentials, or infrastructure. It's perfect for:
+
+- **Offline development**: No network or AWS dependencies
+- **Fast iteration**: Instant responses, no API latency
+- **Deterministic testing**: Predefined scenarios for consistent test runs
+- **Error handling**: Test edge cases and failure scenarios
+
+### Quick Start
+
+```bash
+# Start dev server in mock mode
+pnpm dev:mock
+
+# Run E2E tests in mock mode
+pnpm test:e2e:mock
+
+# Run unit tests in mock mode
+pnpm test:mock
+```
+
+### Mock Mode Scripts
+
+| Command            | Description                                    |
+| :----------------- | :--------------------------------------------- |
+| `pnpm dev:mock`    | Start dev server in mock mode                  |
+| `pnpm test:e2e:mock` | Run E2E tests in mock mode                    |
+| `pnpm test:mock`   | Run unit tests in mock mode                    |
+| `pnpm mock:reset`  | Reset mock state to defaults                   |
+| `pnpm mock:scenario` | List available scenarios                      |
+| `pnpm mock:scenario <name>` | Apply a specific scenario              |
+
+### Environment Variables
+
+Mock mode is controlled by the following environment variables:
+
+| Variable            | Description                                      | Default  |
+| :------------------ | :----------------------------------------------- | :------- |
+| `MC_BACKEND_MODE`   | Backend mode: `aws` or `mock`                    | `aws`    |
+| `ENABLE_DEV_LOGIN`  | Enable dev login route for local auth testing    | `false`  |
+| `MOCK_STATE_PATH`   | Optional path for mock state persistence file    | (none)   |
+| `MOCK_SCENARIO`     | Optional default scenario to apply on startup    | (none)   |
+
+### Available Scenarios
+
+Mock mode includes 10 built-in scenarios for testing different states:
+
+| Scenario      | Description                                          |
+| :------------ | :--------------------------------------------------- |
+| `default`     | Normal operation, instance stopped with defaults     |
+| `running`     | Instance is running with public IP and players       |
+| `starting`    | Instance is in pending state (mid-start)             |
+| `stopping`    | Instance is in stopping state (mid-stop)             |
+| `hibernated`  | Instance stopped without volumes (zero cost)         |
+| `high-cost`   | Instance with high monthly costs for testing alerts  |
+| `no-backups`  | No backups available for testing error handling      |
+| `many-players`| Instance running with high player count              |
+| `stack-creating` | CloudFormation stack in CREATE_IN_PROGRESS state  |
+| `errors`      | All operations fail with errors                      |
+
+**Example usage:**
+
+```bash
+# Apply the "running" scenario
+pnpm mock:scenario running
+
+# Apply the "errors" scenario to test error handling
+pnpm mock:scenario errors
+
+# Reset to default state
+pnpm mock:reset
+```
+
+### Mock Control API
+
+When running in mock mode, you can control the mock state via HTTP endpoints:
+
+| Endpoint              | Method | Description                              |
+| :-------------------- | :----- | :--------------------------------------- |
+| `/api/mock/state`     | GET    | Get current mock state                   |
+| `/api/mock/scenario`  | GET    | List available scenarios                 |
+| `/api/mock/scenario`  | POST   | Apply a scenario (body: `{scenario}`)    |
+| `/api/mock/reset`     | POST   | Reset mock state to defaults             |
+| `/api/mock/fault`     | POST   | Inject faults for testing                |
+
+**Example: Apply scenario via API**
+
+```bash
+curl -X POST http://localhost:3001/api/mock/scenario \
+  -H "Content-Type: application/json" \
+  -d '{"scenario": "running"}'
+```
+
+### Testing Workflows
+
+**Testing start/stop flows:**
+
+```bash
+# Apply "stopped" scenario
+pnpm mock:scenario default
+
+# Start dev server
+pnpm dev:mock
+
+# Use the web UI or API to start the server
+# The mock will transition from stopped → pending → running
+
+# Check the state
+curl http://localhost:3001/api/mock/state
+```
+
+**Testing error scenarios:**
+
+```bash
+# Apply the "errors" scenario
+pnpm mock:scenario errors
+
+# All operations will now fail with errors
+# Test your error handling UI and logic
+
+# Reset when done
+pnpm mock:reset
+```
+
+**Testing UI states:**
+
+```bash
+# Apply "high-cost" scenario
+pnpm mock:scenario high-cost
+
+# Start dev server
+pnpm dev:mock
+
+# Verify cost alerts and warnings display correctly
+```
+
+### Persistence
+
+Mock state can optionally be persisted to a JSON file for debugging:
+
+```bash
+# Enable persistence in .env.local
+MOCK_STATE_PATH=./mock-state.json
+
+# State will be saved to this file on every change
+# Useful for debugging and reproducing issues
+```
+
+### For More Information
+
+See [docs/MOCK_MODE_DEVELOPER_GUIDE.md](docs/MOCK_MODE_DEVELOPER_GUIDE.md) for comprehensive documentation including:
+
+- Detailed scenario descriptions
+- Fault injection techniques
+- Troubleshooting common issues
+- Advanced usage patterns
 
 ## Legacy Scripts
 
