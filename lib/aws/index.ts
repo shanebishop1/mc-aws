@@ -45,8 +45,8 @@ export async function stopInstance(instanceId?: string): Promise<void> {
   return getProvider().stopInstance(instanceId);
 }
 
-export async function getPublicIp(instanceId: string): Promise<string> {
-  return getProvider().getPublicIp(instanceId);
+export async function getPublicIp(instanceId: string, timeoutSeconds?: number): Promise<string> {
+  return getProvider().getPublicIp(instanceId, timeoutSeconds);
 }
 
 export async function waitForInstanceRunning(instanceId: string, timeoutSeconds?: number): Promise<void> {

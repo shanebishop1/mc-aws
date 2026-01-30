@@ -54,7 +54,7 @@ export interface AwsProvider {
   getInstanceDetails(instanceId?: string): Promise<InstanceDetails>;
   startInstance(instanceId?: string): Promise<void>;
   stopInstance(instanceId?: string): Promise<void>;
-  getPublicIp(instanceId: string): Promise<string>;
+  getPublicIp(instanceId: string, timeoutSeconds?: number): Promise<string>;
   waitForInstanceRunning(instanceId: string, timeoutSeconds?: number): Promise<void>;
   waitForInstanceStopped(instanceId: string, timeoutSeconds?: number): Promise<void>;
 
