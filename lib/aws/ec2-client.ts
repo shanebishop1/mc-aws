@@ -146,18 +146,20 @@ export async function waitForInstanceStopped(instanceId: string, timeoutSeconds 
 /**
  * Get the public IP address of an EC2 instance, polling until available
  */
-export async function getPublicIp(instanceId: string): Promise<string> {
+export async function getPublicIp(instanceId: string, timeoutSeconds = 300): Promise<string> {
+  const startTime = Date.now();
+  const timeoutMs = timeoutSeconds * 1000;
   const publicIp: string | null = null;
   let attempts = 0;
 
-  console.log(`Polling for public IP address for instance: ${instanceId}`);
+  console.log(`Polling for public IP address for instance: ${instanceId} (timeout: ${timeoutSeconds}s)`);
 
-  while (!publicIp && attempts < MAX_POLL_ATTEMPTS) {
+  while (!publicIp && Date.now() - startTime < timeoutMs) {
     attempts++;
     try {
       const { publicIp: ip, state } = await getInstanceDetails(instanceId);
 
-      console.log(`Polling attempt ${attempts}/${MAX_POLL_ATTEMPTS}: state=${state}, ip=${ip || "not assigned"}`);
+      console.log(`Polling attempt ${attempts}: state=${state}, ip=${ip || "not assigned"}`);
 
       if (ip) {
         return ip;
@@ -167,7 +169,7 @@ export async function getPublicIp(instanceId: string): Promise<string> {
         throw new Error(`Instance entered unexpected state ${state} while waiting for IP`);
       }
     } catch (error) {
-      if (attempts >= MAX_POLL_ATTEMPTS) {
+      if (Date.now() - startTime >= timeoutMs) {
         throw new Error(`Failed to get public IP after ${attempts} attempts: ${error}`);
       }
       console.error(`Error on attempt ${attempts}:`, error);
@@ -178,7 +180,7 @@ export async function getPublicIp(instanceId: string): Promise<string> {
     }
   }
 
-  throw new Error("Timed out waiting for public IP address.");
+  throw new Error(`Timed out waiting for public IP address after ${timeoutSeconds} seconds.`);
 }
 
 /**
