@@ -169,25 +169,41 @@ export const mockProvider: AwsProvider = {
 
   getPublicIp: async (instanceId: string): Promise<string> => {
     await applyFaultInjection("getPublicIp");
+    console.log(`[MOCK] Getting public IP address for instance: ${instanceId}`);
+
+    // Check instance state before polling - throw error immediately if stopped
+    const details = await mockProvider.getInstanceDetails(instanceId);
+    const { publicIp, state } = details;
+
+    if (["stopped", "stopping", "terminated", "shutting-down"].includes(state || "")) {
+      throw new Error(`Instance entered unexpected state ${state} while waiting for IP`);
+    }
+
+    // If IP is already available, return it immediately
+    if (publicIp) {
+      return publicIp;
+    }
+
+    // Poll for IP assignment
     console.log(`[MOCK] Polling for public IP address for instance: ${instanceId}`);
     let attempts = 0;
 
     while (attempts < MAX_POLL_ATTEMPTS) {
       attempts++;
       try {
-        const details = await mockProvider.getInstanceDetails(instanceId);
-        const { publicIp, state } = details;
+        const pollDetails = await mockProvider.getInstanceDetails(instanceId);
+        const { publicIp: pollIp, state: pollState } = pollDetails;
 
         console.log(
-          `[MOCK] Polling attempt ${attempts}/${MAX_POLL_ATTEMPTS}: state=${state}, ip=${publicIp || "not assigned"}`
+          `[MOCK] Polling attempt ${attempts}/${MAX_POLL_ATTEMPTS}: state=${pollState}, ip=${pollIp || "not assigned"}`
         );
 
-        if (publicIp) {
-          return publicIp;
+        if (pollIp) {
+          return pollIp;
         }
 
-        if (["stopped", "stopping", "terminated", "shutting-down"].includes(state || "")) {
-          throw new Error(`Instance entered unexpected state ${state} while waiting for IP`);
+        if (["stopped", "stopping", "terminated", "shutting-down"].includes(pollState || "")) {
+          throw new Error(`Instance entered unexpected state ${pollState} while waiting for IP`);
         }
       } catch (error) {
         if (attempts >= MAX_POLL_ATTEMPTS) {
