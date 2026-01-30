@@ -6,6 +6,7 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { executeSSMCommand, findInstanceId, getInstanceState, getPublicIp, withServerActionLock } from "@/lib/aws";
 import { updateCloudflareDns } from "@/lib/cloudflare";
+import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -52,7 +53,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         );
       }
 
-      const command = backupName ? `/usr/local/bin/mc-restore.sh ${backupName}` : "/usr/local/bin/mc-restore.sh";
+      // Sanitize backup name to prevent command injection
+      const sanitizedName = backupName ? sanitizeBackupName(backupName) : undefined;
+      const command = sanitizedName ? `/usr/local/bin/mc-restore.sh ${sanitizedName}` : "/usr/local/bin/mc-restore.sh";
       const output = await executeSSMCommand(resolvedId, [command]);
       const actualBackupName = parseBackupName(output, backupName);
       const publicIp = await updateDnsAfterRestore(resolvedId);

@@ -6,6 +6,7 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { executeSSMCommand, findInstanceId, getInstanceState, withServerActionLock } from "@/lib/aws";
 import { env } from "@/lib/env";
+import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -52,8 +53,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         );
       }
 
-      // Build backup command
-      const command = backupName ? `/usr/local/bin/mc-backup.sh ${backupName}` : "/usr/local/bin/mc-backup.sh";
+      // Sanitize backup name to prevent command injection
+      const sanitizedName = backupName ? sanitizeBackupName(backupName) : undefined;
+      const command = sanitizedName ? `/usr/local/bin/mc-backup.sh ${sanitizedName}` : "/usr/local/bin/mc-backup.sh";
 
       console.log("[BACKUP] Executing command:", command);
       const output = await executeSSMCommand(resolvedId, [command]);
