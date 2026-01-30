@@ -1,6 +1,55 @@
 import { beforeEach, vi } from "vitest";
 import { mockCostExplorerClient, mockEC2Client, mockSSMClient } from "./mocks/aws";
 
+// Mock authentication functions
+vi.mock("@/lib/api-auth", () => ({
+  getAuthUser: vi.fn().mockResolvedValue({
+    email: "admin@example.com",
+    role: "admin",
+  }),
+  requireAuth: vi.fn().mockResolvedValue({
+    email: "admin@example.com",
+    role: "admin",
+  }),
+  requireAllowed: vi.fn().mockResolvedValue({
+    email: "admin@example.com",
+    role: "admin",
+  }),
+  requireAdmin: vi.fn().mockResolvedValue({
+    email: "admin@example.com",
+    role: "admin",
+  }),
+}));
+
+// Mock auth utilities
+vi.mock("@/lib/auth", () => ({
+  SESSION_COOKIE_NAME: "mc_session",
+  verifySession: vi.fn().mockResolvedValue({
+    email: "admin@example.com",
+    role: "admin",
+  }),
+  createSession: vi.fn().mockResolvedValue("mock-jwt-token"),
+  getUserRole: vi.fn().mockReturnValue("admin"),
+  createSessionCookie: vi.fn().mockReturnValue({
+    name: "mc_session",
+    value: "mock-jwt-token",
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 604800,
+  }),
+  clearSessionCookie: vi.fn().mockReturnValue({
+    name: "mc_session",
+    value: "",
+    httpOnly: true,
+    secure: false,
+    sameSite: "lax",
+    path: "/",
+    maxAge: 0,
+  }),
+}));
+
 // Mock AWS SDK v3
 vi.mock("@aws-sdk/client-ec2", async () => {
   const actual = (await vi.importActual("@aws-sdk/client-ec2")) as Record<string, unknown>;
@@ -45,6 +94,8 @@ vi.mock("@/lib/env", () => ({
     GDRIVE_REMOTE: "gdrive",
     GDRIVE_ROOT: "mc-backups",
     MC_BACKEND_MODE: "aws",
+    AUTH_SECRET: "test-secret-key-for-jwt-signing-12345678",
+    ADMIN_EMAIL: "admin@example.com",
   },
   getBackendMode: () => {
     const mode = process.env.MC_BACKEND_MODE;
