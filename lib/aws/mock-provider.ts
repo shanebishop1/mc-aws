@@ -9,6 +9,47 @@ import { type CostData, ServerState } from "../types";
 import { getMockStateStore } from "./mock-state-store";
 import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount, ServerActionLock } from "./types";
 
+// Re-export scenario engine functions for convenience
+export {
+  applyScenario,
+  getAvailableScenarios,
+  getCurrentScenario,
+  resetToDefaultScenario,
+  injectFault,
+  clearFault,
+  clearAllFaults,
+  setGlobalLatency,
+  getFaultConfig,
+  type Scenario,
+  type FaultConfig,
+} from "./mock-scenarios";
+
+/**
+ * Helper function to apply fault injection before an operation
+ * Throws an error if the operation is configured to fail
+ * Applies latency if configured
+ */
+async function applyFaultInjection(operation: string): Promise<void> {
+  const stateStore = getMockStateStore();
+
+  // Check for operation-specific failure
+  const failureConfig = await stateStore.getOperationFailure(operation);
+  if (failureConfig?.failNext || failureConfig?.alwaysFail) {
+    if (failureConfig.failNext) {
+      await stateStore.clearOperationFailure(operation);
+    }
+    const error = new Error(failureConfig.errorMessage || `Mock ${operation} error`);
+    (error as any).name = failureConfig.errorCode || `${operation}Error`;
+    throw error;
+  }
+
+  // Apply global latency if configured
+  const latencyMs = await stateStore.getGlobalLatency();
+  if (latencyMs > 0) {
+    await new Promise((resolve) => setTimeout(resolve, latencyMs));
+  }
+}
+
 // Constants for state transition delays (in milliseconds)
 const PENDING_DELAY_MS = 2500; // 2.5 seconds
 const STOPPING_DELAY_MS = 2500; // 2.5 seconds
@@ -24,6 +65,7 @@ const MAX_POLL_ATTEMPTS = 300;
 export const mockProvider: AwsProvider = {
   // EC2 - Instance Management
   findInstanceId: async (): Promise<string> => {
+    await applyFaultInjection("findInstanceId");
     console.log("[MOCK] findInstanceId called");
     const stateStore = getMockStateStore();
     const instance = await stateStore.getInstance();
@@ -31,6 +73,7 @@ export const mockProvider: AwsProvider = {
   },
 
   resolveInstanceId: async (instanceId?: string): Promise<string> => {
+    await applyFaultInjection("resolveInstanceId");
     console.log("[MOCK] resolveInstanceId called with:", instanceId);
     if (instanceId) {
       return instanceId;
@@ -41,6 +84,7 @@ export const mockProvider: AwsProvider = {
   },
 
   getInstanceState: async (instanceId?: string): Promise<ServerState> => {
+    await applyFaultInjection("getInstanceState");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
     console.log("[MOCK] getInstanceState called for:", resolvedId);
     const stateStore = getMockStateStore();
@@ -49,6 +93,7 @@ export const mockProvider: AwsProvider = {
   },
 
   getInstanceDetails: async (instanceId?: string): Promise<InstanceDetails> => {
+    await applyFaultInjection("getInstanceDetails");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
     console.log("[MOCK] getInstanceDetails called for:", resolvedId);
     const stateStore = getMockStateStore();
@@ -67,6 +112,7 @@ export const mockProvider: AwsProvider = {
   },
 
   startInstance: async (instanceId?: string): Promise<void> => {
+    await applyFaultInjection("startInstance");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
     console.log(`[MOCK] Sending start command for instance ${resolvedId}`);
     const stateStore = getMockStateStore();
@@ -94,6 +140,7 @@ export const mockProvider: AwsProvider = {
   },
 
   stopInstance: async (instanceId?: string): Promise<void> => {
+    await applyFaultInjection("stopInstance");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
     console.log(`[MOCK] Sending stop command for instance ${resolvedId}`);
     const stateStore = getMockStateStore();
@@ -121,6 +168,7 @@ export const mockProvider: AwsProvider = {
   },
 
   getPublicIp: async (instanceId: string): Promise<string> => {
+    await applyFaultInjection("getPublicIp");
     console.log(`[MOCK] Polling for public IP address for instance: ${instanceId}`);
     let attempts = 0;
 
@@ -155,6 +203,7 @@ export const mockProvider: AwsProvider = {
   },
 
   waitForInstanceRunning: async (instanceId: string, timeoutSeconds = 300): Promise<void> => {
+    await applyFaultInjection("waitForInstanceRunning");
     console.log(`[MOCK] waitForInstanceRunning called for: ${instanceId}, timeout: ${timeoutSeconds}s`);
     const startTime = Date.now();
     const timeoutMs = timeoutSeconds * 1000;
@@ -179,6 +228,7 @@ export const mockProvider: AwsProvider = {
   },
 
   waitForInstanceStopped: async (instanceId: string, timeoutSeconds = 300): Promise<void> => {
+    await applyFaultInjection("waitForInstanceStopped");
     console.log(`[MOCK] waitForInstanceStopped called for: ${instanceId}, timeout: ${timeoutSeconds}s`);
     const startTime = Date.now();
     const timeoutMs = timeoutSeconds * 1000;
@@ -204,6 +254,7 @@ export const mockProvider: AwsProvider = {
 
   // EC2 - Volume Management
   detachAndDeleteVolumes: async (instanceId?: string): Promise<void> => {
+    await applyFaultInjection("detachAndDeleteVolumes");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
     console.log(`[MOCK] Detaching and deleting volumes for instance ${resolvedId}...`);
     const stateStore = getMockStateStore();
@@ -236,6 +287,7 @@ export const mockProvider: AwsProvider = {
   },
 
   handleResume: async (instanceId?: string): Promise<void> => {
+    await applyFaultInjection("handleResume");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
     console.log(`[MOCK] Checking if instance ${resolvedId} needs volume restoration...`);
     const stateStore = getMockStateStore();
@@ -284,6 +336,7 @@ export const mockProvider: AwsProvider = {
 
   // SSM - Command Execution
   executeSSMCommand: async (instanceId: string, commands: string[]): Promise<string> => {
+    await applyFaultInjection("executeSSMCommand");
     console.log("[MOCK] executeSSMCommand called for:", instanceId, "commands:", commands);
     const stateStore = getMockStateStore();
 
@@ -343,6 +396,7 @@ export const mockProvider: AwsProvider = {
   },
 
   listBackups: async (instanceId?: string): Promise<BackupInfo[]> => {
+    await applyFaultInjection("listBackups");
     console.log("[MOCK] listBackups called for:", instanceId);
     const stateStore = getMockStateStore();
     const backups = await stateStore.getBackups();
@@ -357,18 +411,21 @@ export const mockProvider: AwsProvider = {
 
   // SSM - Parameter Store
   getParameter: async (name: string): Promise<string | null> => {
+    await applyFaultInjection("getParameter");
     console.log("[MOCK] getParameter called for:", name);
     const stateStore = getMockStateStore();
     return stateStore.getParameter(name);
   },
 
   putParameter: async (name: string, value: string, type?: "String" | "SecureString"): Promise<void> => {
+    await applyFaultInjection("putParameter");
     console.log("[MOCK] putParameter called for:", name, "value:", value, "type:", type);
     const stateStore = getMockStateStore();
     await stateStore.setParameter(name, value, type || "String");
   },
 
   deleteParameter: async (name: string): Promise<void> => {
+    await applyFaultInjection("deleteParameter");
     console.log("[MOCK] deleteParameter called for:", name);
     const stateStore = getMockStateStore();
     await stateStore.deleteParameter(name);
@@ -376,6 +433,7 @@ export const mockProvider: AwsProvider = {
 
   // SSM - Application-Specific Parameters
   getEmailAllowlist: async (): Promise<string[]> => {
+    await applyFaultInjection("getEmailAllowlist");
     console.log("[MOCK] getEmailAllowlist called");
     const stateStore = getMockStateStore();
     const value = await stateStore.getParameter("/minecraft/email-allowlist");
@@ -402,6 +460,7 @@ export const mockProvider: AwsProvider = {
   },
 
   updateEmailAllowlist: async (emails: string[]): Promise<void> => {
+    await applyFaultInjection("updateEmailAllowlist");
     console.log("[MOCK] updateEmailAllowlist called with:", emails);
     const stateStore = getMockStateStore();
     // Store as JSON array
@@ -409,6 +468,7 @@ export const mockProvider: AwsProvider = {
   },
 
   getPlayerCount: async (): Promise<PlayerCount> => {
+    await applyFaultInjection("getPlayerCount");
     console.log("[MOCK] getPlayerCount called");
     const stateStore = getMockStateStore();
     const value = await stateStore.getParameter("/minecraft/player-count");
@@ -421,6 +481,7 @@ export const mockProvider: AwsProvider = {
   },
 
   getServerAction: async (): Promise<ServerActionLock | null> => {
+    await applyFaultInjection("getServerAction");
     console.log("[MOCK] getServerAction called");
     const stateStore = getMockStateStore();
     const value = await stateStore.getParameter("/minecraft/server-action");
@@ -448,6 +509,7 @@ export const mockProvider: AwsProvider = {
   },
 
   setServerAction: async (action: string): Promise<void> => {
+    await applyFaultInjection("setServerAction");
     console.log("[MOCK] setServerAction called with:", action);
     const stateStore = getMockStateStore();
     const value = JSON.stringify({
@@ -491,25 +553,9 @@ export const mockProvider: AwsProvider = {
   getCosts: async (
     periodType: "current-month" | "last-month" | "last-30-days" = "current-month"
   ): Promise<CostData> => {
+    await applyFaultInjection("getCosts");
     console.log("[MOCK] getCosts called with period:", periodType);
     const stateStore = getMockStateStore();
-
-    // Check for fault injection
-    const failureConfig = await stateStore.getOperationFailure("getCosts");
-    if (failureConfig?.failNext || failureConfig?.alwaysFail) {
-      if (failureConfig.failNext) {
-        await stateStore.clearOperationFailure("getCosts");
-      }
-      const error = new Error(failureConfig.errorMessage || "Mock Cost Explorer error");
-      (error as any).name = failureConfig.errorCode || "CostExplorerError";
-      throw error;
-    }
-
-    // Apply global latency if configured
-    const latencyMs = await stateStore.getGlobalLatency();
-    if (latencyMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, latencyMs));
-    }
 
     // Get cost data from state store
     const costData = await stateStore.getCosts(periodType);
@@ -520,25 +566,9 @@ export const mockProvider: AwsProvider = {
 
   // CloudFormation
   getStackStatus: async (stackName = "MinecraftStack"): Promise<Stack | null> => {
+    await applyFaultInjection("getStackStatus");
     console.log("[MOCK] getStackStatus called for:", stackName);
     const stateStore = getMockStateStore();
-
-    // Check for fault injection
-    const failureConfig = await stateStore.getOperationFailure("getStackStatus");
-    if (failureConfig?.failNext || failureConfig?.alwaysFail) {
-      if (failureConfig.failNext) {
-        await stateStore.clearOperationFailure("getStackStatus");
-      }
-      const error = new Error(failureConfig.errorMessage || "Mock CloudFormation error");
-      (error as any).name = failureConfig.errorCode || "ValidationError";
-      throw error;
-    }
-
-    // Apply global latency if configured
-    const latencyMs = await stateStore.getGlobalLatency();
-    if (latencyMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, latencyMs));
-    }
 
     // Get stack status from state store
     const stackState = await stateStore.getStackStatus();
@@ -602,25 +632,9 @@ export const mockProvider: AwsProvider = {
   },
 
   checkStackExists: async (stackName = "MinecraftStack"): Promise<boolean> => {
+    await applyFaultInjection("checkStackExists");
     console.log("[MOCK] checkStackExists called for:", stackName);
     const stateStore = getMockStateStore();
-
-    // Check for fault injection
-    const failureConfig = await stateStore.getOperationFailure("checkStackExists");
-    if (failureConfig?.failNext || failureConfig?.alwaysFail) {
-      if (failureConfig.failNext) {
-        await stateStore.clearOperationFailure("checkStackExists");
-      }
-      const error = new Error(failureConfig.errorMessage || "Mock CloudFormation error");
-      (error as any).name = failureConfig.errorCode || "ValidationError";
-      throw error;
-    }
-
-    // Apply global latency if configured
-    const latencyMs = await stateStore.getGlobalLatency();
-    if (latencyMs > 0) {
-      await new Promise((resolve) => setTimeout(resolve, latencyMs));
-    }
 
     // Get stack status from state store
     const stackState = await stateStore.getStackStatus();
