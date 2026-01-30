@@ -285,65 +285,206 @@ export const mockProvider: AwsProvider = {
   // SSM - Command Execution
   executeSSMCommand: async (instanceId: string, commands: string[]): Promise<string> => {
     console.log("[MOCK] executeSSMCommand called for:", instanceId, "commands:", commands);
-    return "Mock SSM command output";
+    const stateStore = getMockStateStore();
+
+    // Add command to history
+    const commandId = await stateStore.addCommand(commands);
+    console.log(`[MOCK] SSM command sent with ID: ${commandId}`);
+
+    // Simulate command execution delay
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Update command status to InProgress
+    await stateStore.updateCommand(commandId, { status: "InProgress" });
+
+    // Simulate realistic execution based on command type
+    let output = "";
+    const status: "Success" | "Failed" = "Success";
+
+    const commandString = commands.join(" ");
+
+    if (commandString.includes("ListBackups") || commandString.includes("rclone lsf")) {
+      // Simulate listing backups
+      const backups = await stateStore.getBackups();
+      output = backups.map((b) => `${b.name}|${b.size}|${b.date}`).join("\n");
+    } else if (commandString.includes("GetPlayerCount")) {
+      // Simulate getting player count
+      const playerCount = await stateStore.getParameter("/minecraft/player-count");
+      output = playerCount || "0";
+    } else if (commandString.includes("UpdateEmailAllowlist")) {
+      // Simulate updating email allowlist
+      output = "Email allowlist updated successfully";
+    } else if (commandString.includes("backup") || commandString.includes("Backup")) {
+      // Simulate backup operation
+      output = "Backup completed successfully";
+    } else if (commandString.includes("start") || commandString.includes("Start")) {
+      // Simulate start operation
+      output = "Server started successfully";
+    } else if (commandString.includes("stop") || commandString.includes("Stop")) {
+      // Simulate stop operation
+      output = "Server stopped successfully";
+    } else {
+      // Generic command output
+      output = `Command executed: ${commandString}`;
+    }
+
+    // Simulate additional processing time
+    await new Promise((resolve) => setTimeout(resolve, 500));
+
+    // Update command status to Success
+    await stateStore.updateCommand(commandId, {
+      status,
+      output,
+      completedAt: new Date().toISOString(),
+    });
+
+    console.log(`[MOCK] SSM command completed successfully. Command ID: ${commandId}`);
+    return output;
   },
 
   listBackups: async (instanceId?: string): Promise<BackupInfo[]> => {
     console.log("[MOCK] listBackups called for:", instanceId);
-    return [
-      { name: "backup-2024-01-01.tar.gz", size: "1.2GB", date: "2024-01-01" },
-      { name: "backup-2024-01-02.tar.gz", size: "1.3GB", date: "2024-01-02" },
-    ];
+    const stateStore = getMockStateStore();
+    const backups = await stateStore.getBackups();
+
+    // Convert to BackupInfo format
+    return backups.map((b) => ({
+      name: b.name,
+      size: b.size,
+      date: b.date,
+    }));
   },
 
   // SSM - Parameter Store
   getParameter: async (name: string): Promise<string | null> => {
     console.log("[MOCK] getParameter called for:", name);
-    // Return null for most parameters to simulate not found
-    return null;
+    const stateStore = getMockStateStore();
+    return stateStore.getParameter(name);
   },
 
   putParameter: async (name: string, value: string, type?: "String" | "SecureString"): Promise<void> => {
     console.log("[MOCK] putParameter called for:", name, "value:", value, "type:", type);
-    // No-op in mock mode
+    const stateStore = getMockStateStore();
+    await stateStore.setParameter(name, value, type || "String");
   },
 
   deleteParameter: async (name: string): Promise<void> => {
     console.log("[MOCK] deleteParameter called for:", name);
-    // No-op in mock mode
+    const stateStore = getMockStateStore();
+    await stateStore.deleteParameter(name);
   },
 
   // SSM - Application-Specific Parameters
   getEmailAllowlist: async (): Promise<string[]> => {
     console.log("[MOCK] getEmailAllowlist called");
+    const stateStore = getMockStateStore();
+    const value = await stateStore.getParameter("/minecraft/email-allowlist");
+
+    if (!value) {
+      return [];
+    }
+
+    try {
+      // Try to parse as JSON array
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+    } catch {
+      // If not JSON, split by comma
+      return value
+        .split(",")
+        .map((e) => e.trim())
+        .filter((e) => e.length > 0);
+    }
+
     return [];
   },
 
   updateEmailAllowlist: async (emails: string[]): Promise<void> => {
     console.log("[MOCK] updateEmailAllowlist called with:", emails);
-    // No-op in mock mode
+    const stateStore = getMockStateStore();
+    // Store as JSON array
+    await stateStore.setParameter("/minecraft/email-allowlist", JSON.stringify(emails), "String");
   },
 
   getPlayerCount: async (): Promise<PlayerCount> => {
     console.log("[MOCK] getPlayerCount called");
-    return { count: 0, lastUpdated: new Date().toISOString() };
+    const stateStore = getMockStateStore();
+    const value = await stateStore.getParameter("/minecraft/player-count");
+    const count = value ? Number.parseInt(value, 10) : 0;
+
+    return {
+      count,
+      lastUpdated: new Date().toISOString(),
+    };
   },
 
   getServerAction: async (): Promise<ServerActionLock | null> => {
     console.log("[MOCK] getServerAction called");
-    return null;
+    const stateStore = getMockStateStore();
+    const value = await stateStore.getParameter("/minecraft/server-action");
+
+    if (!value) {
+      return null;
+    }
+
+    try {
+      const parsed = JSON.parse(value) as { action: string; timestamp: number };
+
+      // Check if the action is stale (older than 30 minutes)
+      const expirationMs = 30 * 60 * 1000;
+      if (Date.now() - parsed.timestamp > expirationMs) {
+        console.log("[MOCK] Found stale action marker, clearing it:", parsed.action);
+        await stateStore.deleteParameter("/minecraft/server-action");
+        return null;
+      }
+
+      return parsed;
+    } catch {
+      // Invalid format, treat as no action
+      return null;
+    }
   },
 
   setServerAction: async (action: string): Promise<void> => {
     console.log("[MOCK] setServerAction called with:", action);
-    // No-op in mock mode
+    const stateStore = getMockStateStore();
+    const value = JSON.stringify({
+      action,
+      timestamp: Date.now(),
+    });
+    await stateStore.setParameter("/minecraft/server-action", value, "String");
   },
 
   // SSM - Action Lock
   withServerActionLock: async <T>(actionName: string, fn: () => Promise<T>): Promise<T> => {
     console.log("[MOCK] withServerActionLock called for:", actionName);
-    // In mock mode, just execute the function without locking
-    return fn();
+
+    // Check if an action is already in progress
+    const currentAction = await mockProvider.getServerAction();
+    if (currentAction) {
+      throw new Error(`Cannot start ${actionName}. Another operation is in progress: ${currentAction.action}`);
+    }
+
+    // Set this action as in progress
+    await mockProvider.setServerAction(actionName);
+    console.log(`[MOCK] [ACTION] Started: ${actionName}`);
+
+    try {
+      // Execute the action
+      const result = await fn();
+      console.log(`[MOCK] [ACTION] Completed: ${actionName}`);
+      return result;
+    } finally {
+      // Always clear the action marker
+      try {
+        await mockProvider.deleteParameter("/minecraft/server-action");
+        console.log(`[MOCK] [ACTION] Cleared marker for: ${actionName}`);
+      } catch (error) {
+        console.error(`[MOCK] [ACTION] Failed to clear marker for: ${actionName}`, error);
+      }
+    }
   },
 
   // Cost Explorer
