@@ -4,7 +4,7 @@
  * Uses lazy initialization - AWS clients are only created when in AWS mode
  */
 
-import { env } from "../env";
+import { getBackendMode } from "../env";
 import { awsProvider } from "./aws-provider";
 import { mockProvider } from "./mock-provider";
 import type { AwsProvider } from "./types";
@@ -27,8 +27,10 @@ export function getProvider(): AwsProvider {
     return cachedProvider;
   }
 
-  // Select provider based on backend mode
-  if (env.MC_BACKEND_MODE === "mock") {
+  // Select provider based on backend mode - read dynamically from env
+  const backendMode = getBackendMode();
+
+  if (backendMode === "mock") {
     console.log("[Provider] Using mock provider (MC_BACKEND_MODE=mock)");
     cachedProvider = mockProvider;
   } else {
