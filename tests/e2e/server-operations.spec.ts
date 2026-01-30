@@ -1,10 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { setupMocks } from "../mocks/handlers";
 import { confirmDialog, waitForLoading, waitForPageLoad } from "./helpers";
+import { setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
 
 test.describe("Server Operations", () => {
+  test.beforeEach(async ({ page }) => {
+    // Reset and authenticate before each test
+    await setupStoppedScenario(page);
+  });
+
   test("starts server without confirmation", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
+    await setupStoppedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -19,7 +24,7 @@ test.describe("Server Operations", () => {
   });
 
   test("stops server without confirmation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -34,7 +39,7 @@ test.describe("Server Operations", () => {
   });
 
   test("hibernate requires confirmation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -53,7 +58,7 @@ test.describe("Server Operations", () => {
   });
 
   test("can cancel hibernate confirmation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -74,7 +79,7 @@ test.describe("Server Operations", () => {
   });
 
   test("resume with start fresh option", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -101,7 +106,7 @@ test.describe("Server Operations", () => {
   });
 
   test("resume with restore from backup option", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -119,10 +124,13 @@ test.describe("Server Operations", () => {
     await expect(page.getByText(/select backup/i)).toBeVisible();
 
     // Wait for backups to load
-    await expect(page.getByText(/backup-2025-01-09\.tar\.gz/i)).toBeVisible();
+    await expect(page.getByText(/minecraft-backup-/i)).toBeVisible();
 
-    // Select a backup
-    await page.getByRole("button", { name: /backup-2025-01-09\.tar\.gz/i }).click();
+    // Select a backup (first one)
+    await page
+      .getByRole("button", { name: /minecraft-backup-/i })
+      .first()
+      .click();
 
     // Confirm restore
     await page.getByRole("button", { name: /confirm restore/i }).click();
@@ -135,7 +143,7 @@ test.describe("Server Operations", () => {
   });
 
   test("can cancel resume modal", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -154,7 +162,7 @@ test.describe("Server Operations", () => {
   });
 
   test("can go back from backup selection to choice view", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -180,7 +188,7 @@ test.describe("Server Operations", () => {
   });
 
   test("shows loading state during start operation", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
+    await setupStoppedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -195,7 +203,7 @@ test.describe("Server Operations", () => {
   });
 
   test("shows loading state during stop operation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -210,7 +218,7 @@ test.describe("Server Operations", () => {
   });
 
   test("shows loading state during hibernate operation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -228,7 +236,7 @@ test.describe("Server Operations", () => {
   });
 
   test("shows loading state during resume operation", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -246,7 +254,7 @@ test.describe("Server Operations", () => {
   });
 
   test("resume confirm restore is disabled until backup is selected", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -263,8 +271,11 @@ test.describe("Server Operations", () => {
     const confirmButton = page.getByRole("button", { name: /confirm restore/i });
     await expect(confirmButton).toBeDisabled();
 
-    // Select a backup
-    await page.getByRole("button", { name: /backup-2025-01-09\.tar\.gz/i }).click();
+    // Select a backup (first one)
+    await page
+      .getByRole("button", { name: /minecraft-backup-/i })
+      .first()
+      .click();
 
     // Confirm restore button should now be enabled
     await expect(confirmButton).toBeEnabled();
