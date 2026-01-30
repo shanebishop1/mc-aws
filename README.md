@@ -92,7 +92,25 @@ Mock mode allows you to develop and test the application without requiring AWS r
 - **Deterministic testing**: Predefined scenarios for consistent test runs
 - **Error handling**: Test edge cases and failure scenarios
 
-### Quick Start
+### Quick Start (5 minutes)
+
+```bash
+# 1. Copy the minimal mock mode configuration
+cp .env.local.example .env.local
+
+# 2. Start dev server in mock mode with dev login enabled
+pnpm dev:mock
+
+# 3. Open browser and authenticate
+open http://localhost:3001/api/auth/dev-login
+
+# 4. Start developing!
+open http://localhost:3001
+```
+
+**For detailed instructions:** See [docs/QUICK_START_MOCK_MODE.md](docs/QUICK_START_MOCK_MODE.md)
+
+### Common Commands
 
 ```bash
 # Start dev server in mock mode
@@ -103,6 +121,18 @@ pnpm test:e2e:mock
 
 # Run unit tests in mock mode
 pnpm test:mock
+
+# Validate dev login is working
+pnpm validate:dev-login
+
+# Reset mock state
+pnpm mock:reset
+
+# List available scenarios
+pnpm mock:scenario
+
+# Apply a specific scenario
+pnpm mock:scenario running
 ```
 
 ### Mock Mode Scripts
@@ -873,6 +903,28 @@ To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
 - Your local environment behaves exactly like production
 - Auth bugs are caught during development, not in production
 - Easy to test different permission levels
+
+**For mock mode authentication:**
+
+When using `MC_BACKEND_MODE=mock`, dev login is the recommended authentication method. See [Authentication in Mock Mode](docs/MOCK_MODE_DEVELOPER_GUIDE.md#authentication-in-mock-mode) for detailed documentation including:
+
+- How dev login works in mock mode
+- Security features and safeguards
+- Testing different user roles
+- Troubleshooting common auth issues
+- E2E testing with dev login
+
+**Quick start for mock mode:**
+
+```bash
+# Use the convenience script (sets both MC_BACKEND_MODE and ENABLE_DEV_LOGIN)
+pnpm dev:mock
+
+# Visit dev login endpoint
+open http://localhost:3000/api/auth/dev-login
+```
+
+See [`.env.local.example`](.env.local.example) for the minimal mock mode configuration (no AWS credentials needed).
 
 ### Mock Mode Testing
 
