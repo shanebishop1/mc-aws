@@ -2,6 +2,7 @@
 
 import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
 import { useAuth } from "@/components/auth/auth-provider";
+import { BackupDialog } from "@/components/ui/BackupDialog";
 import { LuxuryButton } from "@/components/ui/Button";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { motion } from "framer-motion";
@@ -15,7 +16,7 @@ interface ControlsSectionProps {
   showHibernate: boolean;
   showBackupRestore: boolean;
   actionsEnabled: boolean;
-  onAction: (action: string, endpoint: string) => void;
+  onAction: (action: string, endpoint: string, body?: Record<string, string>) => Promise<void>;
   onOpenResume: () => void;
 }
 
@@ -49,16 +50,17 @@ export const ControlsSection = ({
   const showBackupRestoreEffective = showBackupRestore && isAdmin;
 
   const [showHibernateConfirm, setShowHibernateConfirm] = useState(false);
-  const [showBackupConfirm, setShowBackupConfirm] = useState(false);
+  const [showBackupDialog, setShowBackupDialog] = useState(false);
   const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
   const [showGDrivePrompt, setShowGDrivePrompt] = useState(false);
   const [pendingAction, setPendingAction] = useState<{ action: string; endpoint: string } | null>(null);
-  const [gdriveError, setGDriveError] = useState<string | null>(null);
+  const [gdriveError, setGdriveError] = useState<string | null>(null);
+  const [isActionPending, setIsActionPending] = useState(false);
 
   const handleBackupClick = async () => {
     const gdriveConfigured = await checkGDriveStatus();
     if (gdriveConfigured) {
-      setShowBackupConfirm(true);
+      setShowBackupDialog(true);
     } else {
       setPendingAction({ action: "Backup", endpoint: "/api/backup" });
       setShowGDrivePrompt(true);
@@ -77,9 +79,9 @@ export const ControlsSection = ({
 
   const handleGDriveSetupComplete = () => {
     setShowGDrivePrompt(false);
-    setGDriveError(null);
+    setGdriveError(null);
     if (pendingAction) {
-      onAction(pendingAction.action, pendingAction.endpoint);
+      void handleAction(pendingAction.action, pendingAction.endpoint);
       setPendingAction(null);
     }
   };
@@ -87,7 +89,7 @@ export const ControlsSection = ({
   const handleGDrivePromptClose = () => {
     setShowGDrivePrompt(false);
     if (pendingAction) {
-      setGDriveError("Google Drive is required for this operation");
+      setGdriveError("Google Drive is required for this operation");
       setPendingAction(null);
     }
   };
@@ -143,13 +145,22 @@ export const ControlsSection = ({
     openLoginPopup();
   };
 
+  const handleAction = async (action: string, endpoint: string, body?: Record<string, string>) => {
+    setIsActionPending(true);
+    try {
+      await onAction(action, endpoint, body);
+    } finally {
+      setIsActionPending(false);
+    }
+  };
+
   const promptLoginAndStart = () => {
     // Ensure full-page fallback can continue the action after redirect.
     window.sessionStorage.setItem("mc_pending_action", "start");
 
     openLoginPopup(() => {
       window.sessionStorage.removeItem("mc_pending_action");
-      onAction("Start", "/api/start");
+      void handleAction("Start", "/api/start");
     });
   };
 
@@ -165,7 +176,7 @@ export const ControlsSection = ({
         promptLoginAndStart();
         return;
       }
-      onAction("Start", "/api/start");
+      void handleAction("Start", "/api/start");
     }
   };
 
@@ -190,6 +201,7 @@ export const ControlsSection = ({
             isAdmin={isAdmin}
             isAllowed={isAllowed}
             isAuthenticated={isAuthenticated}
+            isActionPending={isActionPending}
             onAction={onAction}
             onPrimaryAction={handlePrimaryAction}
             onHibernateClick={() => setShowHibernateConfirm(true)}
@@ -199,23 +211,28 @@ export const ControlsSection = ({
 
           <ConfirmationDialogs
             showHibernateConfirm={showHibernateConfirm}
-            showBackupConfirm={showBackupConfirm}
             showRestoreConfirm={showRestoreConfirm}
+            isActionPending={isActionPending}
             onHibernateClose={() => setShowHibernateConfirm(false)}
-            onBackupClose={() => setShowBackupConfirm(false)}
             onRestoreClose={() => setShowRestoreConfirm(false)}
             onHibernateConfirm={() => {
               setShowHibernateConfirm(false);
-              onAction("Hibernate", "/api/hibernate");
-            }}
-            onBackupConfirm={() => {
-              setShowBackupConfirm(false);
-              onAction("Backup", "/api/backup");
+              void handleAction("Hibernate", "/api/hibernate");
             }}
             onRestoreConfirm={() => {
               setShowRestoreConfirm(false);
-              onAction("Restore", "/api/restore");
+              void handleAction("Restore", "/api/restore");
             }}
+          />
+
+          <BackupDialog
+            isOpen={showBackupDialog}
+            onClose={() => setShowBackupDialog(false)}
+            onConfirm={(backupName) => {
+              setShowBackupDialog(false);
+              void handleAction("Backup", "/api/backup", { name: backupName });
+            }}
+            isLoading={isActionPending}
           />
 
           <GoogleDriveSetupPrompt
@@ -226,17 +243,19 @@ export const ControlsSection = ({
             context={pendingAction?.action === "Backup" ? "backup" : "restore"}
           />
 
-          {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGDriveError(null)} />}
+          {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGdriveError(null)} />}
         </>
       ) : (
         <section className="w-full max-w-4xl flex items-center justify-center">
           <PrimaryActionButton
+            status={status}
             showStop={false}
             showStart={showStart || showResume}
             showResume={false}
             actionsEnabled={actionsEnabled}
             isAllowed={isAllowed}
             isAuthenticated={isAuthenticated}
+            isActionPending={isActionPending}
             onAction={onAction}
             onPrimaryAction={handlePrimaryAction}
           />
@@ -259,6 +278,7 @@ interface ControlsGridProps {
   isAdmin: boolean;
   isAllowed: boolean;
   isAuthenticated: boolean;
+  isActionPending: boolean;
   onAction: (action: string, endpoint: string) => void;
   onPrimaryAction: () => void;
   onHibernateClick: () => void;
@@ -277,6 +297,7 @@ const ControlsGrid = ({
   isAdmin,
   isAllowed,
   isAuthenticated,
+  isActionPending,
   onAction,
   onPrimaryAction,
   onHibernateClick,
@@ -292,8 +313,8 @@ const ControlsGrid = ({
           <LuxuryButton
             variant="pill"
             onClick={onBackupClick}
-            disabled={!actionsEnabled || !isAdmin}
-            title={!isAdmin ? "Admin privileges required" : undefined}
+            disabled={!actionsEnabled || !isAdmin || isActionPending}
+            title={!isAdmin ? "Admin privileges required" : isActionPending ? "Action in progress" : undefined}
           >
             Backup
           </LuxuryButton>
@@ -302,12 +323,14 @@ const ControlsGrid = ({
 
       <div className="order-1 col-span-3 md:col-span-1 md:order-none md:col-start-2 md:row-start-1 flex justify-center">
         <PrimaryActionButton
+          status={status}
           showStop={showStop}
           showStart={showStart}
           showResume={showResume}
           actionsEnabled={actionsEnabled}
           isAllowed={isAllowed}
           isAuthenticated={isAuthenticated}
+          isActionPending={isActionPending}
           onAction={onAction}
           onPrimaryAction={onPrimaryAction}
         />
@@ -318,8 +341,8 @@ const ControlsGrid = ({
           <LuxuryButton
             variant="pill"
             onClick={onRestoreClick}
-            disabled={!actionsEnabled || !isAdmin}
-            title={!isAdmin ? "Admin privileges required" : undefined}
+            disabled={!actionsEnabled || !isAdmin || isActionPending}
+            title={!isAdmin ? "Admin privileges required" : isActionPending ? "Action in progress" : undefined}
           >
             Restore
           </LuxuryButton>
@@ -331,8 +354,8 @@ const ControlsGrid = ({
           <LuxuryButton
             variant="pill"
             onClick={onHibernateClick}
-            disabled={!actionsEnabled || !isAdmin}
-            title={!isAdmin ? "Admin privileges required" : undefined}
+            disabled={!actionsEnabled || !isAdmin || isActionPending}
+            title={!isAdmin ? "Admin privileges required" : isActionPending ? "Action in progress" : undefined}
           >
             Hibernate
           </LuxuryButton>
@@ -343,33 +366,16 @@ const ControlsGrid = ({
 };
 
 interface PrimaryActionButtonProps {
+  status: string;
   showStop: boolean;
   showStart: boolean;
   showResume: boolean;
   actionsEnabled: boolean;
   isAllowed: boolean;
   isAuthenticated: boolean;
+  isActionPending: boolean;
   onAction: (action: string, endpoint: string) => void;
   onPrimaryAction: () => void;
-}
-
-function getStartButtonMeta({
-  actionsEnabled,
-  isAllowed,
-  isAuthenticated,
-}: {
-  actionsEnabled: boolean;
-  isAllowed: boolean;
-  isAuthenticated: boolean;
-}): { disabled: boolean; title?: string } {
-  // When logged out, we keep the button enabled so it can trigger sign-in.
-  const disabled = !actionsEnabled || (isAuthenticated && !isAllowed);
-  const title = !isAuthenticated
-    ? "Sign in to start the server"
-    : !isAllowed
-      ? "Allowed or admin privileges required"
-      : undefined;
-  return { disabled, title };
 }
 
 const PrimaryActionButton = ({
@@ -379,6 +385,7 @@ const PrimaryActionButton = ({
   actionsEnabled,
   isAllowed,
   isAuthenticated,
+  isActionPending,
   onAction,
   onPrimaryAction,
 }: PrimaryActionButtonProps) => {
@@ -386,7 +393,7 @@ const PrimaryActionButton = ({
     return (
       <LuxuryButton
         onClick={() => onAction("Stop", "/api/stop")}
-        disabled={!actionsEnabled || !isAllowed}
+        disabled={!actionsEnabled || !isAllowed || isActionPending}
         title={!isAllowed ? "Allowed or admin privileges required" : undefined}
       >
         Stop Server
@@ -395,9 +402,13 @@ const PrimaryActionButton = ({
   }
 
   if (showStart || showResume) {
-    const { disabled, title } = showStart
-      ? getStartButtonMeta({ actionsEnabled, isAllowed, isAuthenticated })
-      : { disabled: false, title: undefined };
+    // When logged out, we keep the button enabled so it can trigger sign-in.
+    const disabled = !actionsEnabled || (isAuthenticated && !isAllowed) || isActionPending;
+    const title = !isAuthenticated
+      ? "Sign in to start the server"
+      : !isAllowed
+        ? "Allowed or admin privileges required"
+        : undefined;
 
     return (
       <LuxuryButton onClick={onPrimaryAction} disabled={disabled} title={title}>
@@ -411,25 +422,21 @@ const PrimaryActionButton = ({
 
 interface ConfirmationDialogsProps {
   showHibernateConfirm: boolean;
-  showBackupConfirm: boolean;
   showRestoreConfirm: boolean;
+  isActionPending: boolean;
   onHibernateClose: () => void;
-  onBackupClose: () => void;
   onRestoreClose: () => void;
   onHibernateConfirm: () => void;
-  onBackupConfirm: () => void;
   onRestoreConfirm: () => void;
 }
 
 const ConfirmationDialogs = ({
   showHibernateConfirm,
-  showBackupConfirm,
   showRestoreConfirm,
+  isActionPending,
   onHibernateClose,
-  onBackupClose,
   onRestoreClose,
   onHibernateConfirm,
-  onBackupConfirm,
   onRestoreConfirm,
 }: ConfirmationDialogsProps) => (
   <>
@@ -437,27 +444,20 @@ const ConfirmationDialogs = ({
       isOpen={showHibernateConfirm}
       onClose={onHibernateClose}
       onConfirm={onHibernateConfirm}
+      isLoading={isActionPending}
       title="Hibernate Server"
       description="This will backup your server, stop the instance, and delete the volume to save costs. You can resume later."
       confirmText="Hibernate"
       variant="danger"
     />
     <ConfirmationDialog
-      isOpen={showBackupConfirm}
-      onClose={onBackupClose}
-      onConfirm={onBackupConfirm}
-      title="Backup Server"
-      description="This will create a backup of your server and upload it to Google Drive. The process may take a few minutes."
-      confirmText="Backup"
-    />
-    <ConfirmationDialog
       isOpen={showRestoreConfirm}
       onClose={onRestoreClose}
       onConfirm={onRestoreConfirm}
+      isLoading={isActionPending}
       title="Restore Server"
       description="This will restore your server from a backup on Google Drive, overwriting the current server state. Any unsaved progress will be lost."
       confirmText="Restore"
-      variant="danger"
     />
   </>
 );
