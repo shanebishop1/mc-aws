@@ -4,8 +4,10 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { putParameter } from "@/lib/aws/ssm-client";
 import { env } from "@/lib/env";
+import { isMockMode } from "@/lib/env";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -23,7 +25,32 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const error = searchParams.get("error");
+  const mock = searchParams.get("mock");
 
+  // Mock mode: Simulate successful OAuth without calling Google
+  if (isMockMode() || mock === "true") {
+    console.log("[MOCK-GDRIVE] Simulating OAuth callback");
+
+    // Create a mock rclone-compatible token
+    const expiryDate = new Date();
+    expiryDate.setSeconds(expiryDate.getSeconds() + 3600);
+
+    const mockRcloneToken = {
+      access_token: `mock_access_token_${Date.now()}`,
+      token_type: "Bearer",
+      refresh_token: `mock_refresh_token_${Date.now()}`,
+      expiry: expiryDate.toISOString(),
+    };
+
+    // Store mock token in mock state store
+    const mockStore = getMockStateStore();
+    await mockStore.setParameter("/minecraft/gdrive-token", JSON.stringify(mockRcloneToken), "SecureString");
+
+    console.log("[MOCK-GDRIVE] Mock token stored successfully");
+    return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=success`);
+  }
+
+  // AWS mode: Handle real Google OAuth callback
   if (error) {
     console.error("[GDRIVE-CALLBACK] Google OAuth error:", error);
     return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(error)}`);
