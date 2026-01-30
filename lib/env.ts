@@ -8,6 +8,13 @@
  * Next.js automatically loads the appropriate file based on NODE_ENV
  */
 
+/**
+ * Valid backend modes for the application
+ * - aws: Real AWS SDK clients (default)
+ * - mock: Offline, in-process mock backend for local development/testing
+ */
+export type BackendMode = "aws" | "mock";
+
 export function getEnv(name: string, optional = false): string {
   const value = process.env[name];
   if (!value && !optional) {
@@ -17,7 +24,34 @@ export function getEnv(name: string, optional = false): string {
   return value || "";
 }
 
+/**
+ * Validate and parse the MC_BACKEND_MODE environment variable
+ * @throws Error if the value is not "aws" or "mock"
+ */
+function validateBackendMode(value: string): BackendMode {
+  const normalizedValue = value.toLowerCase().trim();
+  if (normalizedValue !== "aws" && normalizedValue !== "mock") {
+    throw new Error(`Invalid MC_BACKEND_MODE value: "${value}". Must be "aws" or "mock".`);
+  }
+  return normalizedValue as BackendMode;
+}
+
+/**
+ * Get the backend mode from environment variable
+ * Defaults to "aws" if not specified
+ */
+export function getBackendMode(): BackendMode {
+  const mode = getEnv("MC_BACKEND_MODE", true);
+  if (!mode) {
+    return "aws"; // Default to aws mode
+  }
+  return validateBackendMode(mode);
+}
+
 export const env = {
+  // Backend Mode
+  MC_BACKEND_MODE: getBackendMode(),
+
   // AWS Configuration
   AWS_REGION: getEnv("AWS_REGION", true) || process.env.CDK_DEFAULT_REGION || "",
   AWS_ACCOUNT_ID: getEnv("AWS_ACCOUNT_ID", true) || process.env.CDK_DEFAULT_ACCOUNT || "",
@@ -64,4 +98,44 @@ export function getAllowedEmails(): string[] {
     return [];
   }
   return env.ALLOWED_EMAILS.split(",").map((email) => email.trim());
+}
+
+/**
+ * Check if the application is running in mock mode
+ */
+export function isMockMode(): boolean {
+  return env.MC_BACKEND_MODE === "mock";
+}
+
+/**
+ * Check if the application is running in AWS mode
+ */
+export function isAwsMode(): boolean {
+  return env.MC_BACKEND_MODE === "aws";
+}
+
+/**
+ * Validate that required AWS credentials are configured
+ * Only validates when in AWS mode; skips validation in mock mode
+ * @throws Error if AWS credentials are missing and in AWS mode
+ */
+export function validateAwsCredentials(): void {
+  if (isMockMode()) {
+    // Skip validation in mock mode
+    return;
+  }
+
+  const requiredCreds = {
+    AWS_REGION: env.AWS_REGION,
+    AWS_ACCOUNT_ID: env.AWS_ACCOUNT_ID,
+    INSTANCE_ID: env.INSTANCE_ID,
+  };
+
+  const missing = Object.entries(requiredCreds)
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+
+  if (missing.length > 0) {
+    throw new Error(`Missing required AWS credentials in AWS mode: ${missing.join(", ")}`);
+  }
 }
