@@ -14,7 +14,10 @@ describe("POST /api/start", () => {
     setupInstanceState("stopped");
 
     // We need to mock the sequence of states for polling
-    const { mockEC2Client } = await import("@/tests/mocks/aws");
+    const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
+
+    // Mock SSM GetParameter to return null (no action in progress)
+    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
 
     // getInstanceState -> stopped
     // handleResume -> calls describeInstances? Yes
@@ -56,6 +59,11 @@ describe("POST /api/start", () => {
   });
 
   it("should return 400 when instance is already running", async () => {
+    const { mockSSMClient } = await import("@/tests/mocks/aws");
+
+    // Mock SSM GetParameter to return null (no action in progress)
+    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
+
     setupInstanceState("running", "1.2.3.4");
 
     const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
