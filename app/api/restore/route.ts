@@ -4,7 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { executeSSMCommand, findInstanceId, getInstanceState, getPublicIp } from "@/lib/aws";
+import { executeSSMCommand, findInstanceId, getInstanceState, getPublicIp, withServerActionLock } from "@/lib/aws";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -39,39 +39,55 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const backupName = body.backupName || body.name;
     const resolvedId = body.instanceId || (await findInstanceId());
 
-    const currentState = await getInstanceState(resolvedId);
-    if (currentState !== "running") {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Cannot restore when server is ${currentState}. Server must be running.`,
-          timestamp: new Date().toISOString(),
+    return await withServerActionLock("restore", async () => {
+      const currentState = await getInstanceState(resolvedId);
+      if (currentState !== "running") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Cannot restore when server is ${currentState}. Server must be running.`,
+            timestamp: new Date().toISOString(),
+          },
+          { status: 400 }
+        );
+      }
+
+      const command = backupName ? `/usr/local/bin/mc-restore.sh ${backupName}` : "/usr/local/bin/mc-restore.sh";
+      const output = await executeSSMCommand(resolvedId, [command]);
+      const actualBackupName = parseBackupName(output, backupName);
+      const publicIp = await updateDnsAfterRestore(resolvedId);
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          backupName: actualBackupName,
+          publicIp,
+          message: `Restore completed successfully (${actualBackupName})${publicIp ? `\nDNS updated to ${publicIp}` : ""}`,
+          output,
         },
-        { status: 400 }
-      );
-    }
-
-    const command = backupName ? `/usr/local/bin/mc-restore.sh ${backupName}` : "/usr/local/bin/mc-restore.sh";
-    const output = await executeSSMCommand(resolvedId, [command]);
-    const actualBackupName = parseBackupName(output, backupName);
-    const publicIp = await updateDnsAfterRestore(resolvedId);
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        backupName: actualBackupName,
-        publicIp,
-        message: `Restore completed successfully (${actualBackupName})${publicIp ? `\nDNS updated to ${publicIp}` : ""}`,
-        output,
-      },
-      timestamp: new Date().toISOString(),
+        timestamp: new Date().toISOString(),
+      });
     });
   } catch (error) {
     console.error("[RESTORE] Error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    // If the error is about another action in progress, return 409 Conflict
+    if (errorMessage.includes("Another operation is in progress")) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: errorMessage,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
     return NextResponse.json(
       {
         success: false,
-        error: error instanceof Error ? error.message : "Unknown error",
+        error: errorMessage,
         timestamp: new Date().toISOString(),
       },
       { status: 500 }
