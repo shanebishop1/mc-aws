@@ -10,11 +10,23 @@ import { findInstanceId, resolveInstanceId } from "./instance-resolver";
 // Re-export for backwards compatibility
 export { findInstanceId, resolveInstanceId };
 
-// Initialize AWS client
-const region = env.AWS_REGION || "us-east-1";
-console.log(`[AWS Config] Initializing EC2 client in region: ${region}`);
+// Lazy initialization of AWS client
+let _ec2Client: EC2Client | null = null;
 
-export const ec2 = new EC2Client({ region });
+function getRegion(): string {
+  return env.AWS_REGION || "us-east-1";
+}
+
+export const ec2: EC2Client = new Proxy({} as EC2Client, {
+  get(_target, prop) {
+    if (!_ec2Client) {
+      const region = getRegion();
+      console.log(`[AWS Config] Initializing EC2 client in region: ${region}`);
+      _ec2Client = new EC2Client({ region });
+    }
+    return _ec2Client[prop as keyof EC2Client];
+  },
+});
 
 // Constants for polling
 export const MAX_POLL_ATTEMPTS = 300;

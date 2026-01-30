@@ -13,9 +13,23 @@ import { env } from "../env";
 import type { BackupInfo } from "../types";
 import { resolveInstanceId } from "./instance-resolver";
 
-// Initialize SSM client
-const region = env.AWS_REGION || "us-east-1";
-export const ssm = new SSMClient({ region });
+// Lazy initialization of SSM client
+let _ssmClient: SSMClient | null = null;
+
+function getRegion(): string {
+  return env.AWS_REGION || "us-east-1";
+}
+
+export const ssm: SSMClient = new Proxy({} as SSMClient, {
+  get(_target, prop) {
+    if (!_ssmClient) {
+      const region = getRegion();
+      console.log(`[AWS Config] Initializing SSM client in region: ${region}`);
+      _ssmClient = new SSMClient({ region });
+    }
+    return _ssmClient[prop as keyof SSMClient];
+  },
+});
 
 async function checkCommandStatus(commandId: string, instanceId: string | undefined) {
   const invocationResponse = await ssm.send(
