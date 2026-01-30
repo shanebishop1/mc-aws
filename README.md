@@ -715,6 +715,30 @@ To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
 - Auth bugs are caught during development, not in production
 - Easy to test different permission levels
 
+### Mock Mode Testing
+
+For local development and testing without AWS resources, use mock mode:
+
+```bash
+# Enable mock mode in .env.local
+MC_BACKEND_MODE=mock
+ENABLE_DEV_LOGIN=true
+```
+
+Mock mode provides:
+- **Offline testing**: No AWS credentials or infrastructure required
+- **Deterministic scenarios**: Predefined states (running, stopped, starting, etc.)
+- **Fault injection**: Test error handling by injecting failures
+- **Fast feedback**: No network latency or AWS API calls
+
+**Run E2E tests in mock mode:**
+
+```bash
+pnpm test:e2e tests/mock-mode-e2e.spec.ts
+```
+
+See [tests/MOCK_MODE_E2E.md](tests/MOCK_MODE_E2E.md) for detailed documentation on mock mode testing.
+
 ### How Authentication Works
 
 1. User clicks "Sign in with Google" in the header
