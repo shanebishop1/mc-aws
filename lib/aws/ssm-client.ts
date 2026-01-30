@@ -238,3 +238,83 @@ export async function getParameter(name: string): Promise<string | null> {
     throw error;
   }
 }
+
+/**
+ * Get current active server action from SSM
+ * Returns the action name if an action is in progress, null otherwise
+ */
+export async function getServerAction(): Promise<{ action: string; timestamp: number } | null> {
+  const value = await getParameter("/minecraft/server-action");
+  if (!value) return null;
+
+  try {
+    const parsed = JSON.parse(value) as { action: string; timestamp: number };
+
+    // Check if the action is stale (older than 30 minutes)
+    const expirationMs = 30 * 60 * 1000;
+    if (Date.now() - parsed.timestamp > expirationMs) {
+      console.log("[ACTION] Found stale action marker, clearing it:", parsed.action);
+      await deleteParameter("/minecraft/server-action");
+      return null;
+    }
+
+    return parsed;
+  } catch {
+    // Invalid format, treat as no action
+    return null;
+  }
+}
+
+/**
+ * Set the current server action in SSM
+ */
+export async function setServerAction(action: string): Promise<void> {
+  const value = JSON.stringify({
+    action,
+    timestamp: Date.now(),
+  });
+  await putParameter("/minecraft/server-action", value);
+}
+
+/**
+ * Delete the current server action from SSM
+ */
+export async function deleteParameter(name: string): Promise<void> {
+  const { DeleteParameterCommand } = await import("@aws-sdk/client-ssm");
+  await ssm.send(
+    new DeleteParameterCommand({
+      Name: name,
+    })
+  );
+}
+
+/**
+ * Execute a server action with mutual exclusion lock
+ * Prevents concurrent actions from being executed
+ */
+export async function withServerActionLock<T>(actionName: string, fn: () => Promise<T>): Promise<T> {
+  // Check if an action is already in progress
+  const currentAction = await getServerAction();
+  if (currentAction) {
+    throw new Error(`Cannot start ${actionName}. Another operation is in progress: ${currentAction.action}`);
+  }
+
+  // Set this action as in progress
+  await setServerAction(actionName);
+  console.log(`[ACTION] Started: ${actionName}`);
+
+  try {
+    // Execute the action
+    const result = await fn();
+    console.log(`[ACTION] Completed: ${actionName}`);
+    return result;
+  } finally {
+    // Always clear the action marker
+    try {
+      await deleteParameter("/minecraft/server-action");
+      console.log(`[ACTION] Cleared marker for: ${actionName}`);
+    } catch (error) {
+      console.error(`[ACTION] Failed to clear marker for: ${actionName}`, error);
+    }
+  }
+}

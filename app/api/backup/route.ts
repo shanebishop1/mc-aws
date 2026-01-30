@@ -4,7 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws";
+import { executeSSMCommand, findInstanceId, getInstanceState, withServerActionLock } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -22,55 +22,69 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
-    let instanceId: string | undefined;
-    let backupName: string | undefined;
+    return await withServerActionLock("backup", async () => {
+      let instanceId: string | undefined;
+      let backupName: string | undefined;
 
-    try {
-      const body = await request.json();
-      backupName = body?.name;
-      instanceId = body?.instanceId;
-    } catch {
-      // Empty or invalid body is fine, provided they are undefined
-    }
+      try {
+        const body = await request.json();
+        backupName = body?.name;
+        instanceId = body?.instanceId;
+      } catch {
+        // Empty or invalid body is fine, provided they are undefined
+      }
 
-    const resolvedId = instanceId || (await findInstanceId());
-    console.log("[BACKUP] Starting backup operation for instance:", resolvedId);
+      const resolvedId = instanceId || (await findInstanceId());
+      console.log("[BACKUP] Starting backup operation for instance:", resolvedId);
 
-    // Check current state - must be running
-    const currentState = await getInstanceState(resolvedId);
-    console.log("[BACKUP] Current state:", currentState);
+      // Check current state - must be running
+      const currentState = await getInstanceState(resolvedId);
+      console.log("[BACKUP] Current state:", currentState);
 
-    if (currentState !== "running") {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Cannot backup when server is ${currentState}. Server must be running.`,
-          timestamp: new Date().toISOString(),
+      if (currentState !== "running") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Cannot backup when server is ${currentState}. Server must be running.`,
+            timestamp: new Date().toISOString(),
+          },
+          { status: 400 }
+        );
+      }
+
+      // Build backup command
+      const command = backupName ? `/usr/local/bin/mc-backup.sh ${backupName}` : "/usr/local/bin/mc-backup.sh";
+
+      console.log("[BACKUP] Executing command:", command);
+      const output = await executeSSMCommand(resolvedId, [command]);
+
+      const response: ApiResponse<BackupResponse> = {
+        success: true,
+        data: {
+          backupName,
+          message: `Backup completed successfully${backupName ? ` (${backupName})` : ""}`,
+          output,
         },
-        { status: 400 }
-      );
-    }
+        timestamp: new Date().toISOString(),
+      };
 
-    // Build backup command
-    const command = backupName ? `/usr/local/bin/mc-backup.sh ${backupName}` : "/usr/local/bin/mc-backup.sh";
-
-    console.log("[BACKUP] Executing command:", command);
-    const output = await executeSSMCommand(resolvedId, [command]);
-
-    const response: ApiResponse<BackupResponse> = {
-      success: true,
-      data: {
-        backupName,
-        message: `Backup completed successfully${backupName ? ` (${backupName})` : ""}`,
-        output,
-      },
-      timestamp: new Date().toISOString(),
-    };
-
-    return NextResponse.json(response);
+      return NextResponse.json(response);
+    });
   } catch (error) {
     console.error("[BACKUP] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    // If the error is about another action in progress, return 409 Conflict
+    if (errorMessage.includes("Another operation is in progress")) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: errorMessage,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json(
       {

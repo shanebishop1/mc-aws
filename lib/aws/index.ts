@@ -28,6 +28,10 @@ export {
   updateEmailAllowlist,
   getPlayerCount,
   getParameter,
+  getServerAction,
+  setServerAction,
+  deleteParameter,
+  withServerActionLock,
 } from "./ssm-client";
 
 // Volume operations
