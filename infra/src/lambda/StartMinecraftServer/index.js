@@ -33,6 +33,12 @@ export const handler = async (event) => {
   const emailData = parseEmailFromEvent(event);
   if (emailData.error) return emailData.error;
 
+  // Verify email authenticity (SPF/DKIM) to prevent spoofing
+  if (!verifyEmailAuthenticity(emailData.verdicts)) {
+    console.warn("Email failed authentication checks - rejecting");
+    return { statusCode: 403, body: "Email failed authentication verification." };
+  }
+
   const { senderEmail, subject, body } = emailData;
   const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").toLowerCase();
   const adminEmails = uniqueEmails([process.env.NOTIFICATION_EMAIL, process.env.ADMIN_EMAIL]);
@@ -57,6 +63,29 @@ export const handler = async (event) => {
   // Execute command
   return executeCommand(commandResult.command, instanceId, senderEmail, { zone, record, domain, cfToken });
 };
+
+/**
+ * Verify email authenticity using SES verdicts.
+ * Requires SPF and DKIM to pass to prevent email spoofing.
+ * @param {Object} verdicts - { spf, dkim, dmarc } verdict statuses
+ * @returns {boolean} True if email is authenticated
+ */
+function verifyEmailAuthenticity(verdicts) {
+  if (!verdicts) {
+    console.warn("No verdicts available - cannot verify email authenticity");
+    return false;
+  }
+
+  const spfPass = verdicts.spf === "PASS";
+  const dkimPass = verdicts.dkim === "PASS";
+
+  if (!spfPass) console.warn("SPF verification failed:", verdicts.spf);
+  if (!dkimPass) console.warn("DKIM verification failed:", verdicts.dkim);
+  if (verdicts.dmarc !== "PASS") console.log("DMARC status:", verdicts.dmarc);
+
+  // Require both SPF and DKIM to pass
+  return spfPass && dkimPass;
+}
 
 async function handleAllowlistUpdate(senderEmail, body, notificationEmail, adminEmails) {
   const emailsInBody = extractEmails(body);
