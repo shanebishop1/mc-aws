@@ -2,9 +2,12 @@
 
 This guide provides comprehensive documentation for using mock mode in the mc-aws project. Mock mode enables offline development and testing without requiring AWS resources.
 
+**New to mock mode?** Start with the [Quick Start Guide](QUICK_START_MOCK_MODE.md) to get up and running in 5 minutes.
+
 ## Table of Contents
 
 - [Quick Start](#quick-start)
+- [Authentication in Mock Mode](#authentication-in-mock-mode)
 - [Environment Variables](#environment-variables)
 - [NPM Scripts](#npm-scripts)
 - [Scenarios](#scenarios)
@@ -49,6 +52,164 @@ pnpm mock:scenario running
 pnpm mock:reset
 ```
 
+## Authentication in Mock Mode
+
+Mock mode provides a streamlined authentication experience that doesn't require Google OAuth or AWS credentials. This makes local development faster and easier.
+
+### How Dev Login Works
+
+In mock mode, you can use the **dev login** feature to authenticate instantly:
+
+1. Set `ENABLE_DEV_LOGIN=true` in your `.env.local` file
+2. Visit `http://localhost:3000/api/auth/dev-login` in your browser
+3. You're automatically logged in with a real session cookie (valid for 30 days)
+
+The dev login creates a real JWT token with the following credentials:
+- **Email:** `dev@localhost`
+- **Role:** `admin` (full access to all features)
+
+### Security Features
+
+The dev login endpoint includes multiple security safeguards:
+
+- **Production blocking:** Returns 404 in production (`NODE_ENV=production`)
+- **Explicit opt-in:** Only works when `ENABLE_DEV_LOGIN=true` is set
+- **Non-production secret:** Uses your local `AUTH_SECRET` for signing
+- **Same session mechanism:** Uses the same JWT verification as production
+
+### Testing Different User Roles
+
+To test different permission levels, you can modify the dev login endpoint:
+
+Edit `app/api/auth/dev-login/route.ts` and change the `role` value:
+
+```typescript
+const token = await new SignJWT({
+  email: "dev@localhost",
+  role: "admin", // Change to "allowed" or "public" to test different roles
+})
+```
+
+**Role Permissions:**
+
+| Role    | Can View Status | Can Start Server | Can Backup/Restore/Hibernate |
+| ------- | --------------- | ---------------- | ---------------------------- |
+| `admin` | ✅              | ✅               | ✅                           |
+| `allowed` | ✅            | ✅               | ❌                           |
+| `public` | ✅             | ❌               | ❌                           |
+
+### Why Use Dev Login?
+
+**Benefits:**
+- **Fast:** No Google OAuth flow, no popup windows
+- **Deterministic:** Same credentials every time
+- **Realistic:** Uses the same session mechanism as production
+- **Flexible:** Easy to test different permission levels
+
+**Compared to bypassing auth:**
+- Catches auth bugs during development
+- Tests the same code paths as production
+- No need to remember to re-enable auth before deploying
+
+### Setting Up Dev Login
+
+**Option 1: Using the convenience script (recommended)**
+
+```bash
+# The dev:mock script automatically sets both MC_BACKEND_MODE and ENABLE_DEV_LOGIN
+pnpm dev:mock
+```
+
+**Option 2: Manual configuration**
+
+1. Copy the example configuration:
+   ```bash
+   cp .env.local.example .env.local
+   ```
+
+2. The `.env.local.example` file already has the minimal mock mode configuration:
+   ```bash
+   MC_BACKEND_MODE=mock
+   ENABLE_DEV_LOGIN=true
+   AUTH_SECRET=dev-secret-change-in-production
+   NEXT_PUBLIC_APP_URL=http://localhost:3000
+   ```
+
+3. Start the dev server:
+   ```bash
+   pnpm dev
+   ```
+
+4. Visit the dev login endpoint:
+   ```bash
+   open http://localhost:3000/api/auth/dev-login
+   ```
+
+### Verifying Authentication
+
+After visiting the dev login endpoint, you can verify you're authenticated:
+
+**Via browser:**
+- The login button in the header should change to "Sign out"
+- You should see admin-only features (cost dashboard, email management)
+
+**Via API:**
+```bash
+curl http://localhost:3000/api/auth/me
+# Returns: {"authenticated":true,"email":"dev@localhost","role":"admin"}
+```
+
+### Logging Out
+
+To sign out and test the unauthenticated experience:
+
+```bash
+# Via browser: Click "Sign out" button in the header
+
+# Via API:
+curl -X POST http://localhost:3000/api/auth/logout
+```
+
+### Common Issues
+
+**Dev login returns 403:**
+- Ensure `ENABLE_DEV_LOGIN=true` is set in `.env.local`
+- Restart the dev server after changing environment variables
+
+**Dev login returns 404:**
+- Check that `NODE_ENV` is not set to `production`
+- In development, Next.js sets `NODE_ENV=development` automatically
+
+**Session expires quickly:**
+- Dev login creates a 30-day session by default
+- If you need to refresh, just visit `/api/auth/dev-login` again
+
+**Protected routes still block access:**
+- Verify the session cookie was set (check browser dev tools → Application → Cookies)
+- Check that `AUTH_SECRET` is set in `.env.local`
+
+### E2E Testing with Dev Login
+
+The mock mode E2E tests use dev login automatically:
+
+```typescript
+// From tests/mock-mode-e2e.spec.ts
+async function authenticateAsDev(page: any): Promise<void> {
+  // Navigate to dev login endpoint (it will set the cookie and redirect)
+  await page.goto("/api/auth/dev-login");
+
+  // Wait for redirect to home page
+  await page.waitForURL("/");
+
+  // Verify we're authenticated
+  const authCheck = await page.request.get("/api/auth/me");
+  const authData = await authCheck.json();
+  expect(authData.authenticated).toBe(true);
+}
+```
+
+This ensures tests are fast, deterministic, and don't require real Google OAuth credentials.
+
 ## Environment Variables
 
 Mock mode is controlled by environment variables. These can be set in `.env.local` for local development.
@@ -59,6 +220,8 @@ Mock mode is controlled by environment variables. These can be set in `.env.loca
 | :------------------ | :----------------------------------------------- | :-------------------- |
 | `MC_BACKEND_MODE`   | Backend mode: `aws` or `mock`                    | `mock`                |
 | `ENABLE_DEV_LOGIN`  | Enable dev login route for local auth testing    | `true`                |
+| `AUTH_SECRET`       | Secret for signing JWT tokens                    | `dev-secret-...`      |
+| `NEXT_PUBLIC_APP_URL` | App URL for redirects                          | `http://localhost:3000` |
 
 ### Optional Variables
 
@@ -76,12 +239,18 @@ MC_BACKEND_MODE=mock
 # Enable dev login for easy authentication
 ENABLE_DEV_LOGIN=true
 
+# Required for authentication
+AUTH_SECRET=dev-secret-change-in-production
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
 # Optional: Persist mock state to file
 MOCK_STATE_PATH=./mock-state.json
 
 # Optional: Apply default scenario on startup
 MOCK_SCENARIO=default
 ```
+
+**Note:** AWS credentials (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, etc.) are **not required** in mock mode. The mock backend simulates all AWS operations locally.
 
 ## NPM Scripts
 
@@ -681,11 +850,82 @@ pnpm dev:mock
 # Add to .env.local
 ENABLE_DEV_LOGIN=true
 
+# Restart the dev server
+# (Environment variables are only loaded on startup)
+
 # Visit the dev login route
 open http://localhost:3001/api/auth/dev-login
 
 # You'll be logged in as an admin user
 ```
+
+**Problem:** Dev login returns 403 Forbidden
+
+**Solution:** Verify environment variables:
+
+```bash
+# Check that ENABLE_DEV_LOGIN is set
+echo $ENABLE_DEV_LOGIN
+
+# If not set, add to .env.local and restart dev server
+echo "ENABLE_DEV_LOGIN=true" >> .env.local
+pnpm dev:mock
+```
+
+**Problem:** Dev login returns 404 Not Found
+
+**Solution:** Check production mode:
+
+```bash
+# Ensure NODE_ENV is not "production"
+# In development, Next.js sets this automatically
+# If you manually set NODE_ENV=production, dev login will be disabled
+
+# Check current value
+echo $NODE_ENV
+
+# Unset if needed
+unset NODE_ENV
+pnpm dev:mock
+```
+
+**Problem:** Session cookie not being set
+
+**Solution:** Check AUTH_SECRET:
+
+```bash
+# Ensure AUTH_SECRET is set in .env.local
+grep AUTH_SECRET .env.local
+
+# If missing, add it:
+echo "AUTH_SECRET=dev-secret-change-in-production" >> .env.local
+
+# Restart dev server
+pnpm dev:mock
+```
+
+**Problem:** Protected routes still block access after dev login
+
+**Solution:** Verify session cookie:
+
+1. Open browser dev tools (F12)
+2. Go to Application → Cookies
+3. Look for `mc_session` cookie
+4. If missing, visit `/api/auth/dev-login` again
+5. If present but still blocked, check the cookie value is valid
+
+**Problem:** Want to test different user roles
+
+**Solution:** Modify dev login endpoint:
+
+Edit `app/api/auth/dev-login/route.ts`:
+
+```typescript
+// Change role to test different permissions
+role: "allowed", // or "public"
+```
+
+Then restart dev server and visit `/api/auth/dev-login` again.
 
 ### State Not Persisting
 
