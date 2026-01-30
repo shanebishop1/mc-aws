@@ -11,12 +11,13 @@ import { useAuth } from "@/components/auth/auth-provider";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { useStackStatus } from "@/hooks/useStackStatus";
+import { ServerState } from "@/lib/types";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 
 export default function Home() {
   const { isAdmin, isAuthenticated } = useAuth();
-  const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus } = useServerStatus();
+  const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus, setStatus } = useServerStatus();
   const { stackExists, isLoading: stackLoading, error: stackError } = useStackStatus();
 
   const [instanceId] = useState<string | undefined>(undefined);
@@ -65,10 +66,10 @@ export default function Home() {
   );
 
   const buildRequestBody = useCallback(
-    (backupName?: string): string | undefined => {
-      const bodyData: { instanceId?: string; backupName?: string } = instanceId ? { instanceId } : {};
-      if (backupName) {
-        bodyData.backupName = backupName;
+    (extraData?: Record<string, string>): string | undefined => {
+      const bodyData: Record<string, string> = instanceId ? { instanceId } : {};
+      if (extraData) {
+        Object.assign(bodyData, extraData);
       }
       return Object.keys(bodyData).length > 0 ? JSON.stringify(bodyData) : undefined;
     },
@@ -76,11 +77,18 @@ export default function Home() {
   );
 
   const handleAction = useCallback(
-    async (action: string, endpoint: string, backupName?: string) => {
+    async (action: string, endpoint: string, bodyData?: Record<string, string>) => {
       setIsLoading(true);
-      setMessage(`Initiating ${action}...`);
+
+      // Optimistically update status based on action
+      if (action === "Start" || action === "Resume") {
+        setStatus(ServerState.Pending);
+      } else if (action === "Stop") {
+        setStatus(ServerState.Stopping);
+      }
+
       try {
-        const body = buildRequestBody(backupName);
+        const body = buildRequestBody(bodyData);
         const res = await fetch(endpoint, {
           method: "POST",
           headers: body ? { "Content-Type": "application/json" } : undefined,
@@ -88,22 +96,23 @@ export default function Home() {
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Action failed");
-        setMessage(data.message || `${action} initiated successfully.`);
 
-        // Immediate status refresh
+        // Immediate status refresh to get actual state
         setTimeout(async () => {
           await fetchStatus();
         }, 2000);
       } catch (err: unknown) {
         const error = err as { message?: string };
         setMessage(error.message || "Unknown error");
+        // Refresh status on error to get actual state
+        await fetchStatus();
       } finally {
         setIsLoading(false);
-        // Clear message after 5s
+        // Clear error message after 5s
         setTimeout(() => setMessage(null), 5000);
       }
     },
-    [buildRequestBody, fetchStatus]
+    [buildRequestBody, fetchStatus, setStatus]
   );
 
   // If the user clicked Start while logged out, continue automatically after sign-in.
@@ -125,7 +134,7 @@ export default function Home() {
 
   const handleResumeFromModal = (backupName?: string) => {
     setIsResumeModalOpen(false);
-    handleAction("Resume", "/api/resume", backupName);
+    handleAction("Resume", "/api/resume", backupName ? { backupName } : undefined);
   };
 
   // Loading state - stack status check (show main UI with connecting state instead)
