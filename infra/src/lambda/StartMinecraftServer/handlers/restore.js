@@ -1,6 +1,7 @@
 import { updateCloudflareDns } from "../cloudflare.js";
 import { ensureInstanceRunning, getPublicIp } from "../ec2.js";
 import { getSanitizedErrorMessage, sendNotification } from "../notifications.js";
+import { sanitizeBackupName } from "../sanitization.js";
 import { executeSSMCommand } from "../ssm.js";
 
 /**
@@ -31,7 +32,8 @@ export async function handleRestore(instanceId, args, adminEmail, cloudflareConf
     await ensureInstanceRunning(instanceId);
     console.log("Step 1 complete: Instance is running");
 
-    const backupName = args[0];
+    // Sanitize backup name to prevent command injection
+    const backupName = sanitizeBackupName(args[0]);
     const command = `/usr/local/bin/mc-restore.sh ${backupName}`;
 
     console.log("Step 2: Executing restore command for backup:", backupName);
