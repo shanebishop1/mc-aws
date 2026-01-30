@@ -4,7 +4,9 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { getParameter } from "@/lib/aws/ssm-client";
+import { isMockMode } from "@/lib/env";
 import type { ApiResponse, GDriveStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -21,6 +23,23 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
+    // Mock mode: Return mock status
+    if (isMockMode()) {
+      console.log("[MOCK-GDRIVE] Returning mock Google Drive status");
+      const mockStore = getMockStateStore();
+      const mockToken = await mockStore.getParameter("/minecraft/gdrive-token");
+      const configured = mockToken !== null && mockToken !== "";
+
+      return NextResponse.json({
+        success: true,
+        data: {
+          configured,
+        },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // AWS mode: Check real SSM parameter
     console.log("[GDRIVE-STATUS] Checking Google Drive configuration");
     const token = await getParameter("/minecraft/gdrive-token");
 
