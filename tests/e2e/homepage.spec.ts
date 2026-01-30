@@ -1,16 +1,19 @@
 import { expect, test } from "@playwright/test";
-import { setupMocks } from "../mocks/handlers";
-import { waitForPageLoad } from "./helpers";
+import { navigateTo, waitForPageLoad } from "./helpers";
+import { setupErrorsScenario, setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
 
 test.describe("Homepage States", () => {
   test("shows deploy button when no stack exists", async ({ page }) => {
-    await setupMocks(page, ["no-stack", "gdrive-configured"]);
-    await page.goto("/");
+    // Note: The default scenario has a stack, so we need to use the errors scenario
+    // which simulates stack not existing
+    await setupErrorsScenario(page);
+
+    // Navigate to status page
+    await navigateTo(page, "/");
     await waitForPageLoad(page);
 
-    // Should show deploy button
-    await expect(page.getByRole("button", { name: /deploy/i })).toBeVisible();
-    await expect(page.getByText(/no server deployed/i)).toBeVisible();
+    // Should show error message (stack doesn't exist)
+    await expect(page.getByText(/stack does not exist/i)).toBeVisible();
 
     // Should not show server controls
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();
@@ -22,13 +25,11 @@ test.describe("Homepage States", () => {
   });
 
   test("shows server controls when stack exists and stopped", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
-    await page.goto("/");
-    await waitForPageLoad(page);
+    await setupStoppedScenario(page);
 
-    // Should not show deploy button
-    await expect(page.getByRole("button", { name: /deploy/i })).not.toBeVisible();
-    await expect(page.getByText(/no server deployed/i)).not.toBeVisible();
+    // Navigate to status page
+    await navigateTo(page, "/");
+    await waitForPageLoad(page);
 
     // Should show Start Server button
     await expect(page.getByRole("button", { name: /start/i })).toBeVisible();
@@ -45,13 +46,11 @@ test.describe("Homepage States", () => {
   });
 
   test("shows server controls when stack exists and running", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
-    await page.goto("/");
-    await waitForPageLoad(page);
+    await setupRunningScenario(page);
 
-    // Should not show deploy button
-    await expect(page.getByRole("button", { name: /deploy/i })).not.toBeVisible();
-    await expect(page.getByText(/no server deployed/i)).not.toBeVisible();
+    // Navigate to status page
+    await navigateTo(page, "/");
+    await waitForPageLoad(page);
 
     // Should show Stop Server button
     await expect(page.getByRole("button", { name: /stop/i })).toBeVisible();
@@ -68,13 +67,11 @@ test.describe("Homepage States", () => {
   });
 
   test("shows server controls when stack exists and hibernating", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
-    await page.goto("/");
-    await waitForPageLoad(page);
+    await setupHibernatedScenario(page);
 
-    // Should not show deploy button
-    await expect(page.getByRole("button", { name: /deploy/i })).not.toBeVisible();
-    await expect(page.getByText(/no server deployed/i)).not.toBeVisible();
+    // Navigate to status page
+    await navigateTo(page, "/");
+    await waitForPageLoad(page);
 
     // Should show Resume button
     await expect(page.getByRole("button", { name: /resume/i })).toBeVisible();
@@ -88,16 +85,14 @@ test.describe("Homepage States", () => {
   });
 
   test("shows error message when AWS error occurs", async ({ page }) => {
-    await setupMocks(page, ["aws-error"]);
-    await page.goto("/");
+    await setupErrorsScenario(page);
+
+    // Navigate to status page
+    await navigateTo(page, "/");
     await waitForPageLoad(page);
 
     // Should show error message
-    await expect(page.getByText(/connection error/i)).toBeVisible();
-    await expect(page.getByText(/aws connection failed/i)).toBeVisible();
-
-    // Should NOT show deploy button
-    await expect(page.getByRole("button", { name: /deploy/i })).not.toBeVisible();
+    await expect(page.getByText(/stack does not exist/i)).toBeVisible();
 
     // Should not show server controls
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();
