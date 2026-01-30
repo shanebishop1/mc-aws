@@ -10,6 +10,7 @@ interface UseServerStatusReturn {
   playerCount: number | undefined;
   isInitialLoad: boolean;
   fetchStatus: () => Promise<void>;
+  setStatus: (status: ServerState) => void;
 }
 
 const fetchPlayerCount = async (setPlayerCount: (count: number | undefined) => void) => {
@@ -107,5 +108,6 @@ export function useServerStatus(): UseServerStatusReturn {
     playerCount,
     isInitialLoad,
     fetchStatus,
+    setStatus,
   };
 }
