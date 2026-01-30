@@ -5,11 +5,23 @@
 import { CloudFormationClient, DescribeStacksCommand, type Stack } from "@aws-sdk/client-cloudformation";
 import { env } from "../env";
 
-// Initialize AWS client
-const region = env.AWS_REGION || "us-east-1";
-console.log(`[AWS Config] Initializing CloudFormation client in region: ${region}`);
+// Lazy initialization of AWS client
+let _cloudformationClient: CloudFormationClient | null = null;
 
-export const cloudformation = new CloudFormationClient({ region });
+function getRegion(): string {
+  return env.AWS_REGION || "us-east-1";
+}
+
+export const cloudformation: CloudFormationClient = new Proxy({} as CloudFormationClient, {
+  get(_target, prop) {
+    if (!_cloudformationClient) {
+      const region = getRegion();
+      console.log(`[AWS Config] Initializing CloudFormation client in region: ${region}`);
+      _cloudformationClient = new CloudFormationClient({ region });
+    }
+    return _cloudformationClient[prop as keyof CloudFormationClient];
+  },
+});
 
 /**
  * Get stack details from CloudFormation
