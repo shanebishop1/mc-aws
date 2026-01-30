@@ -13,7 +13,10 @@ describe("POST /api/resume", () => {
     // 1. Initially hibernating (stopped + no volume)
     setupInstanceState("stopped", undefined, false);
 
-    const { mockEC2Client } = await import("@/tests/mocks/aws");
+    const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
+
+    // Mock SSM GetParameter to return null (no action in progress)
+    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
 
     // getInstanceState -> hibernating
     // handleResume:
@@ -23,9 +26,9 @@ describe("POST /api/resume", () => {
     //   DescribeVolumes (waitForVolumeAvailable) -> returns available
     //   AttachVolume -> returns {}
     //   DescribeVolumes (waitForVolumeAttached) -> returns attached
-    // startInstance -> returns {}
-    // waitForInstanceRunning -> returns running
-    // getPublicIp -> returns IP
+    //   startInstance -> returns {}
+    //   waitForInstanceRunning -> returns running
+    //   getPublicIp -> returns IP
 
     mockEC2Client.send
       .mockResolvedValueOnce({
@@ -72,6 +75,11 @@ describe("POST /api/resume", () => {
   });
 
   it("should return 400 when instance is already running", async () => {
+    const { mockSSMClient } = await import("@/tests/mocks/aws");
+
+    // Mock SSM GetParameter to return null (no action in progress)
+    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
+
     setupInstanceState("running", "1.2.3.4");
 
     const req = createMockNextRequest("http://localhost/api/resume", { method: "POST" });

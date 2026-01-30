@@ -5,7 +5,10 @@ import { POST } from "./route";
 
 describe("POST /api/stop", () => {
   it("should stop the server successfully when running", async () => {
-    const { mockEC2Client } = await import("@/tests/mocks/aws");
+    const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
+
+    // Mock SSM GetParameter to return null (no action in progress)
+    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
 
     // 1. getInstanceState -> running
     // 2. stopInstance -> success
@@ -23,7 +26,10 @@ describe("POST /api/stop", () => {
   });
 
   it("should return 400 when instance is already stopped", async () => {
-    const { mockEC2Client } = await import("@/tests/mocks/aws");
+    const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
+
+    // Mock SSM GetParameter to return null (no action in progress)
+    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
 
     // 1. getInstanceState -> stopped
     mockEC2Client.send.mockResolvedValueOnce({
