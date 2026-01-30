@@ -4,6 +4,39 @@
 
 I have successfully implemented the core backend API routes for the Minecraft server control panel. The implementation provides a complete foundation for managing the EC2-based Minecraft server through HTTP endpoints.
 
+## Mock Mode for Local Development
+
+The project includes a comprehensive mock mode for offline development and testing without AWS resources.
+
+### Quick Start
+
+```bash
+# Start dev server in mock mode
+pnpm dev:mock
+
+# Run E2E tests in mock mode
+pnpm test:e2e:mock
+
+# Reset mock state
+pnpm mock:reset
+
+# List and apply scenarios
+pnpm mock:scenario
+pnpm mock:scenario running
+```
+
+### Features
+
+- **Offline testing**: No AWS credentials or infrastructure required
+- **Deterministic scenarios**: 10 built-in scenarios (running, stopped, starting, stopping, hibernated, high-cost, no-backups, many-players, stack-creating, errors)
+- **Fault injection**: Test error handling by injecting failures
+- **Fast feedback**: No network latency or AWS API calls
+- **State persistence**: Optional JSON file persistence for debugging
+
+### Documentation
+
+See [../MOCK_MODE_DEVELOPER_GUIDE.md](../MOCK_MODE_DEVELOPER_GUIDE.md) for comprehensive mock mode documentation.
+
 ## Files Created
 
 ### Library Files (4 files in `/lib/`)

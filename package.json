@@ -4,6 +4,7 @@
   "private": true,
   "scripts": {
     "dev": "next dev -p 3001",
+    "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3001",
     "prebuild": "tsx scripts/validate-env.ts",
     "build": "next build",
     "start": "next start",
@@ -22,8 +23,12 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
+    "test:mock": "MC_BACKEND_MODE=mock vitest run",
     "test:e2e": "playwright test",
+    "test:e2e:mock": "MC_BACKEND_MODE=mock playwright test",
     "test:e2e:ui": "playwright test --ui",
+    "mock:reset": "tsx scripts/mock-cli.ts reset",
+    "mock:scenario": "tsx scripts/mock-cli.ts scenario",
     "preview:cf": "opennextjs-cloudflare build && wrangler dev",
     "deploy:cf": "opennextjs-cloudflare build && wrangler deploy"
   },
