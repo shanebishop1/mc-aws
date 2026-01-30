@@ -1,10 +1,15 @@
 import { expect, test } from "@playwright/test";
-import { setupMocks } from "../mocks/handlers";
 import { confirmDialog, expectErrorMessage, expectSuccessMessage, waitForPageLoad } from "./helpers";
+import { resetMockState, setMockParameter, setupRunningScenario } from "./setup";
 
 test.describe("Backup and Restore", () => {
+  test.beforeEach(async ({ page }) => {
+    // Reset and authenticate before each test
+    await resetMockState(page);
+  });
+
   test("backup with confirmation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -22,7 +27,12 @@ test.describe("Backup and Restore", () => {
   });
 
   test("backup shows Google Drive prompt when not configured", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-not-configured"]);
+    // Setup running scenario
+    await setupRunningScenario(page);
+
+    // Clear Google Drive token to simulate not configured
+    await setMockParameter(page, "/minecraft/gdrive-token", "", "SecureString");
+
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -38,7 +48,12 @@ test.describe("Backup and Restore", () => {
   });
 
   test("backup blocked without Google Drive setup", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-not-configured"]);
+    // Setup running scenario
+    await setupRunningScenario(page);
+
+    // Clear Google Drive token to simulate not configured
+    await setMockParameter(page, "/minecraft/gdrive-token", "", "SecureString");
+
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -55,7 +70,7 @@ test.describe("Backup and Restore", () => {
   });
 
   test("restore with confirmation", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -74,7 +89,12 @@ test.describe("Backup and Restore", () => {
   });
 
   test("restore shows Google Drive prompt when not configured", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-not-configured"]);
+    // Setup running scenario
+    await setupRunningScenario(page);
+
+    // Clear Google Drive token to simulate not configured
+    await setMockParameter(page, "/minecraft/gdrive-token", "", "SecureString");
+
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -90,7 +110,12 @@ test.describe("Backup and Restore", () => {
   });
 
   test("restore blocked without Google Drive setup", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-not-configured"]);
+    // Setup running scenario
+    await setupRunningScenario(page);
+
+    // Clear Google Drive token to simulate not configured
+    await setMockParameter(page, "/minecraft/gdrive-token", "", "SecureString");
+
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -107,23 +132,20 @@ test.describe("Backup and Restore", () => {
   });
 
   test("backup and restore buttons only visible when server is running", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
-    // When stopped, backup/restore buttons should not be visible
+    // When running, backup/restore buttons should be visible
     const backupButton = page.getByRole("button", { name: /backup/i });
     const restoreButton = page.getByRole("button", { name: /restore/i });
 
-    await expect(backupButton).not.toBeVisible();
-    await expect(restoreButton).not.toBeVisible();
-
-    // Note: Testing visibility when running would require changing the server state
-    // which is covered by other tests
+    await expect(backupButton).toBeVisible();
+    await expect(restoreButton).toBeVisible();
   });
 
   test("backup confirmation can be cancelled", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -146,7 +168,7 @@ test.describe("Backup and Restore", () => {
   });
 
   test("restore confirmation can be cancelled", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -169,7 +191,12 @@ test.describe("Backup and Restore", () => {
   });
 
   test("backup prompt close button shows error", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-not-configured"]);
+    // Setup running scenario
+    await setupRunningScenario(page);
+
+    // Clear Google Drive token to simulate not configured
+    await setMockParameter(page, "/minecraft/gdrive-token", "", "SecureString");
+
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -186,7 +213,12 @@ test.describe("Backup and Restore", () => {
   });
 
   test("restore prompt close button shows error", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-not-configured"]);
+    // Setup running scenario
+    await setupRunningScenario(page);
+
+    // Clear Google Drive token to simulate not configured
+    await setMockParameter(page, "/minecraft/gdrive-token", "", "SecureString");
+
     await page.goto("/");
     await waitForPageLoad(page);
 

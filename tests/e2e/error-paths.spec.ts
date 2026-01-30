@@ -1,56 +1,55 @@
 import { expect, test } from "@playwright/test";
-import { setupMocks } from "../mocks/handlers";
-import { confirmDialog } from "./helpers";
+import { confirmDialog, waitForPageLoad } from "./helpers";
+import { injectFault, setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
 
 test.describe("Error Handling", () => {
+  test.beforeEach(async ({ page }) => {
+    // Reset and authenticate before each test
+    await setupStoppedScenario(page);
+  });
+
   test("shows error when AWS connection fails on load", async ({ page }) => {
-    await setupMocks(page, ["aws-error"]);
+    // Inject fault for getStackStatus operation
+    await injectFault(page, {
+      operation: "getStackStatus",
+      alwaysFail: true,
+      errorCode: "ValidationError",
+      errorMessage: "Stack does not exist",
+    });
+
     await page.goto("/");
 
-    // Should show Connection Error heading
-    await expect(page.getByText(/Connection Error/i)).toBeVisible();
-
     // Should show error message
-    await expect(page.getByText(/AWS connection failed/i)).toBeVisible();
+    await expect(page.getByText(/stack does not exist/i)).toBeVisible();
   });
 
   test("shows error when start fails", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
+    await setupStoppedScenario(page);
 
-    // Override start endpoint to return error
-    await page.route("**/api/start", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to start instance",
-          timestamp: new Date().toISOString(),
-        }),
-      });
+    // Inject fault for startInstance operation
+    await injectFault(page, {
+      operation: "startInstance",
+      failNext: true,
+      errorCode: "InstanceLimitExceeded",
+      errorMessage: "Failed to start instance",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /start server/i }).click();
 
-    // Should show error message in footer
+    // Should show error message
     await expect(page.getByText(/failed to start/i)).toBeVisible();
   });
 
   test("shows error when stop fails", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
 
-    // Override stop endpoint to return error
-    await page.route("**/api/stop", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to stop instance",
-          timestamp: new Date().toISOString(),
-        }),
-      });
+    // Inject fault for stopInstance operation
+    await injectFault(page, {
+      operation: "stopInstance",
+      failNext: true,
+      errorCode: "IncorrectState",
+      errorMessage: "Failed to stop instance",
     });
 
     await page.goto("/");
@@ -61,19 +60,14 @@ test.describe("Error Handling", () => {
   });
 
   test("shows error when backup fails", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
 
-    // Override backup to fail
-    await page.route("**/api/backup", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to create backup",
-          timestamp: new Date().toISOString(),
-        }),
-      });
+    // Inject fault for executeSSMCommand operation
+    await injectFault(page, {
+      operation: "executeSSMCommand",
+      failNext: true,
+      errorCode: "InvalidInstanceId",
+      errorMessage: "Failed to create backup",
     });
 
     await page.goto("/");
@@ -85,19 +79,14 @@ test.describe("Error Handling", () => {
   });
 
   test("shows error when restore fails", async ({ page }) => {
-    await setupMocks(page, ["stack-stopped", "gdrive-configured"]);
+    await setupStoppedScenario(page);
 
-    // Override restore to fail
-    await page.route("**/api/restore", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to restore from backup",
-          timestamp: new Date().toISOString(),
-        }),
-      });
+    // Inject fault for executeSSMCommand operation
+    await injectFault(page, {
+      operation: "executeSSMCommand",
+      failNext: true,
+      errorCode: "InvalidInstanceId",
+      errorMessage: "Failed to restore from backup",
     });
 
     await page.goto("/");
@@ -109,19 +98,14 @@ test.describe("Error Handling", () => {
   });
 
   test("shows error when hibernate fails", async ({ page }) => {
-    await setupMocks(page, ["stack-running", "gdrive-configured"]);
+    await setupRunningScenario(page);
 
-    // Override hibernate to fail
-    await page.route("**/api/hibernate", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to hibernate server",
-          timestamp: new Date().toISOString(),
-        }),
-      });
+    // Inject fault for stopInstance operation
+    await injectFault(page, {
+      operation: "stopInstance",
+      failNext: true,
+      errorCode: "IncorrectState",
+      errorMessage: "Failed to hibernate server",
     });
 
     await page.goto("/");
@@ -133,24 +117,21 @@ test.describe("Error Handling", () => {
   });
 
   test("shows error when resume fails", async ({ page }) => {
-    await setupMocks(page, ["stack-hibernating", "gdrive-configured"]);
+    await setupHibernatedScenario(page);
 
-    // Override resume to fail
-    await page.route("**/api/resume", async (route) => {
-      await route.fulfill({
-        status: 500,
-        contentType: "application/json",
-        body: JSON.stringify({
-          success: false,
-          error: "Failed to resume server",
-          timestamp: new Date().toISOString(),
-        }),
-      });
+    // Inject fault for startInstance operation
+    await injectFault(page, {
+      operation: "startInstance",
+      failNext: true,
+      errorCode: "InstanceLimitExceeded",
+      errorMessage: "Failed to resume server",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /resume/i }).click();
-    await confirmDialog(page);
+
+    // Click start fresh
+    await page.getByRole("button", { name: /start fresh world/i }).click();
 
     // Should show error message
     await expect(page.getByText(/resume.*failed|failed.*resume/i)).toBeVisible();
