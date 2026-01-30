@@ -20,10 +20,10 @@ export function useButtonVisibility(status: ServerState, hasVolume?: boolean): B
   const isTransitioning = status === ServerState.Pending || status === ServerState.Stopping;
 
   const showResume = isHibernating;
-  const showStart = isStopped || isTransitioning;
-  const showStop = isRunning;
-  const showHibernate = (isRunning || isStopped) && !isHibernating;
-  const showBackupRestore = isRunning;
+  const showStart = isStopped && !isTransitioning;
+  const showStop = isRunning && !isTransitioning;
+  const showHibernate = (isRunning || isStopped) && !isHibernating && !isTransitioning;
+  const showBackupRestore = isRunning && !isTransitioning;
 
   const actionsEnabled = !isTransitioning;
 
