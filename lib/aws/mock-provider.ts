@@ -55,9 +55,6 @@ const PENDING_DELAY_MS = 2500; // 2.5 seconds
 const STOPPING_DELAY_MS = 2500; // 2.5 seconds
 const POLL_INTERVAL_MS = 500; // 0.5 seconds for polling
 
-// Constants for polling
-const MAX_POLL_ATTEMPTS = 300;
-
 /**
  * Mock AWS provider for testing and local development
  * Simulates realistic AWS behavior with state transitions and delays
@@ -89,6 +86,13 @@ export const mockProvider: AwsProvider = {
     console.log("[MOCK] getInstanceState called for:", resolvedId);
     const stateStore = getMockStateStore();
     const instance = await stateStore.getInstance();
+
+    // Determine if hibernating based on state and volume presence
+    const isHibernating = instance.state === "stopped" && !instance.hasVolume;
+    if (isHibernating) {
+      return ServerState.Hibernating;
+    }
+
     return instance.state;
   },
 
@@ -167,9 +171,9 @@ export const mockProvider: AwsProvider = {
     }, STOPPING_DELAY_MS);
   },
 
-  getPublicIp: async (instanceId: string): Promise<string> => {
+  getPublicIp: async (instanceId: string, timeoutSeconds = 300): Promise<string> => {
     await applyFaultInjection("getPublicIp");
-    console.log(`[MOCK] Getting public IP address for instance: ${instanceId}`);
+    console.log(`[MOCK] Getting public IP address for instance: ${instanceId} (timeout: ${timeoutSeconds}s)`);
 
     // Check instance state before polling - throw error immediately if stopped
     const details = await mockProvider.getInstanceDetails(instanceId);
@@ -186,17 +190,17 @@ export const mockProvider: AwsProvider = {
 
     // Poll for IP assignment
     console.log(`[MOCK] Polling for public IP address for instance: ${instanceId}`);
+    const startTime = Date.now();
+    const timeoutMs = timeoutSeconds * 1000;
     let attempts = 0;
 
-    while (attempts < MAX_POLL_ATTEMPTS) {
+    while (Date.now() - startTime < timeoutMs) {
       attempts++;
       try {
         const pollDetails = await mockProvider.getInstanceDetails(instanceId);
         const { publicIp: pollIp, state: pollState } = pollDetails;
 
-        console.log(
-          `[MOCK] Polling attempt ${attempts}/${MAX_POLL_ATTEMPTS}: state=${pollState}, ip=${pollIp || "not assigned"}`
-        );
+        console.log(`[MOCK] Polling attempt ${attempts}: state=${pollState}, ip=${pollIp || "not assigned"}`);
 
         if (pollIp) {
           return pollIp;
@@ -206,7 +210,7 @@ export const mockProvider: AwsProvider = {
           throw new Error(`Instance entered unexpected state ${pollState} while waiting for IP`);
         }
       } catch (error) {
-        if (attempts >= MAX_POLL_ATTEMPTS) {
+        if (Date.now() - startTime >= timeoutMs) {
           throw new Error(`Failed to get public IP after ${attempts} attempts: ${error}`);
         }
         console.error(`[MOCK] Error on attempt ${attempts}:`, error);
@@ -215,7 +219,7 @@ export const mockProvider: AwsProvider = {
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
 
-    throw new Error("[MOCK] Timed out waiting for public IP address");
+    throw new Error(`[MOCK] Timed out waiting for public IP address after ${timeoutSeconds} seconds`);
   },
 
   waitForInstanceRunning: async (instanceId: string, timeoutSeconds = 300): Promise<void> => {
