@@ -44,6 +44,26 @@ vi.mock("@/lib/env", () => ({
     CLOUDFLARE_API_TOKEN: "token123",
     GDRIVE_REMOTE: "gdrive",
     GDRIVE_ROOT: "mc-backups",
+    MC_BACKEND_MODE: "aws",
+  },
+  getBackendMode: () => {
+    const mode = process.env.MC_BACKEND_MODE;
+    if (!mode) {
+      return "aws"; // Default to aws mode
+    }
+    const normalizedValue = mode.toLowerCase().trim();
+    if (normalizedValue !== "aws" && normalizedValue !== "mock") {
+      throw new Error(`Invalid MC_BACKEND_MODE value: "${mode}". Must be "aws" or "mock".`);
+    }
+    return normalizedValue as "aws" | "mock";
+  },
+  isMockMode: () => {
+    const mode = process.env.MC_BACKEND_MODE;
+    return mode?.toLowerCase().trim() === "mock";
+  },
+  isAwsMode: () => {
+    const mode = process.env.MC_BACKEND_MODE;
+    return !mode || mode.toLowerCase().trim() === "aws";
   },
 }));
 
