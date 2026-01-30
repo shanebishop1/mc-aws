@@ -5,6 +5,7 @@
 
 import { requireAdmin } from "@/lib/api-auth";
 import { env } from "@/lib/env";
+import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -21,6 +22,19 @@ export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ 
       throw error;
     }
 
+    // Mock mode: Return mock OAuth URL
+    if (isMockMode()) {
+      console.log("[MOCK-GDRIVE] Returning mock OAuth URL");
+      const mockAuthUrl = `${env.NEXT_PUBLIC_APP_URL}/api/gdrive/callback?mock=true`;
+
+      return NextResponse.json({
+        success: true,
+        data: { authUrl: mockAuthUrl },
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    // AWS mode: Generate real Google OAuth URL
     console.log("[GDRIVE-SETUP] Generating Google OAuth URL");
 
     const clientId = env.GOOGLE_CLIENT_ID;
