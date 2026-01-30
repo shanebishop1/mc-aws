@@ -4,7 +4,7 @@
 
 ### Library Files (4)
 1. ✅ **lib/env.ts** - Environment variable validation
-2. ✅ **lib/types.ts** - TypeScript type definitions  
+2. ✅ **lib/types.ts** - TypeScript type definitions
 3. ✅ **lib/aws-client.ts** - AWS EC2/SSM client and utilities
 4. ✅ **lib/cloudflare.ts** - Cloudflare DNS integration
 
@@ -20,6 +20,68 @@
 
 ### Modified Files (1)
 11. ✅ **package.json** - Added AWS SDK dependencies
+
+## Mock Mode
+
+Mock mode enables offline development and testing without AWS resources.
+
+### Quick Start
+
+```bash
+# Start dev server in mock mode
+pnpm dev:mock
+
+# Run E2E tests in mock mode
+pnpm test:e2e:mock
+
+# Run unit tests in mock mode
+pnpm test:mock
+
+# Reset mock state
+pnpm mock:reset
+
+# List scenarios
+pnpm mock:scenario
+
+# Apply a scenario
+pnpm mock:scenario running
+```
+
+### Environment Variables
+
+| Variable            | Description                                      | Default  |
+| :------------------ | :----------------------------------------------- | :------- |
+| `MC_BACKEND_MODE`   | Backend mode: `aws` or `mock`                    | `aws`    |
+| `ENABLE_DEV_LOGIN`  | Enable dev login route for local auth testing    | `false`  |
+| `MOCK_STATE_PATH`   | Optional path for mock state persistence file    | (none)   |
+| `MOCK_SCENARIO`     | Optional default scenario to apply on startup    | (none)   |
+
+### Available Scenarios
+
+- `default` - Normal operation, instance stopped
+- `running` - Instance is running with players
+- `starting` - Instance is in pending state
+- `stopping` - Instance is in stopping state
+- `hibernated` - Instance stopped without volumes
+- `high-cost` - High monthly costs for testing alerts
+- `no-backups` - No backups available
+- `many-players` - High player count
+- `stack-creating` - CloudFormation stack in progress
+- `errors` - All operations fail with errors
+
+### Mock Control API
+
+| Endpoint              | Method | Description                              |
+| :-------------------- | :----- | :--------------------------------------- |
+| `/api/mock/state`     | GET    | Get current mock state                   |
+| `/api/mock/scenario`  | GET    | List available scenarios                 |
+| `/api/mock/scenario`  | POST   | Apply a scenario                         |
+| `/api/mock/reset`     | POST   | Reset mock state to defaults             |
+| `/api/mock/fault`     | POST   | Inject faults for testing                |
+
+### Documentation
+
+See [../MOCK_MODE_DEVELOPER_GUIDE.md](../MOCK_MODE_DEVELOPER_GUIDE.md) for comprehensive mock mode documentation.
 
 ## API Endpoints Summary
 
