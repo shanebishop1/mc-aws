@@ -3,6 +3,7 @@
  */
 
 import { SignJWT, jwtVerify } from "jose";
+import { getCachedAllowlist } from "./allowlist-cache";
 import { env } from "./env";
 
 export type UserRole = "admin" | "allowed" | "public";
@@ -13,9 +14,10 @@ const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
 /**
  * Determines the user role based on email
  * @param email - User's email address
+ * @param allowedEmails - Optional list of allowed emails (from SSM)
  * @returns The user's role: 'admin' | 'allowed' | 'public'
  */
-export function getUserRole(email: string): UserRole {
+export function getUserRole(email: string, allowedEmails: string[] = []): UserRole {
   // Local dev convenience account. Only applies when dev-login is explicitly enabled.
   if (
     email.toLowerCase() === "dev@localhost" &&
@@ -26,17 +28,19 @@ export function getUserRole(email: string): UserRole {
   }
 
   const adminEmail = env.ADMIN_EMAIL;
-  const allowedEmails = env.ALLOWED_EMAILS;
 
   // Check if admin
   if (email === adminEmail) {
     return "admin";
   }
 
-  // Check if in allowed list (comma-separated)
-  if (allowedEmails) {
-    const allowedList = allowedEmails.split(",").map((e: string) => e.trim().toLowerCase());
-    if (allowedList.includes(email.toLowerCase())) {
+  // Check if in allowed list
+  // Note: We now expect the caller to provide the authoritative list (from SSM)
+  // The env.ALLOWED_EMAILS is deprecated for auth logic.
+  if (allowedEmails.length > 0) {
+    const normalize = (e: string) => e.trim().toLowerCase();
+    const normalizedList = allowedEmails.map(normalize);
+    if (normalizedList.includes(normalize(email))) {
       return "allowed";
     }
   }
@@ -44,13 +48,17 @@ export function getUserRole(email: string): UserRole {
   return "public";
 }
 
+
+// ... (previous code)
+
 /**
  * Creates a signed JWT session token
  * @param email - User's email address
  * @returns The signed JWT string
  */
 export async function createSession(email: string): Promise<string> {
-  const role = getUserRole(email);
+  const allowlist = await getCachedAllowlist();
+  const role = getUserRole(email, allowlist);
   const now = Math.floor(Date.now() / 1000);
   const exp = now + SEVEN_DAYS_IN_SECONDS;
 
@@ -78,10 +86,13 @@ export async function verifySession(token: string): Promise<{ email: string; rol
     const email = payload.email as string | undefined;
     if (!email) return null;
 
+    // Fetch fresh allowlist to ensure permission changes take effect relatively quickly
+    const allowlist = await getCachedAllowlist();
+
     return {
       email,
-      // Role is derived from the current environment, so allowlist changes take effect immediately.
-      role: getUserRole(email),
+      // Role is derived from the current environment (SSM), so allowlist changes take effect immediately.
+      role: getUserRole(email, allowlist),
     };
   } catch {
     return null;
