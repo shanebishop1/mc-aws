@@ -11,6 +11,7 @@ import {
   handleResume,
   startInstance,
   waitForInstanceRunning,
+  withServerActionLock,
 } from "@/lib/aws";
 import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
@@ -29,69 +30,83 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   }
 
   try {
-    // Try to get ID from body to avoid discovery overhead
-    let instanceId: string | undefined;
-    try {
-      const body = await request.json();
-      instanceId = body?.instanceId;
-    } catch {
-      // Body parsing failed or empty
-    }
+    return await withServerActionLock("start", async () => {
+      // Try to get ID from body to avoid discovery overhead
+      let instanceId: string | undefined;
+      try {
+        const body = await request.json();
+        instanceId = body?.instanceId;
+      } catch {
+        // Body parsing failed or empty
+      }
 
-    const resolvedId = instanceId || (await findInstanceId());
-    console.log("[START] Starting server instance:", resolvedId);
+      const resolvedId = instanceId || (await findInstanceId());
+      console.log("[START] Starting server instance:", resolvedId);
 
-    // Check current state
-    const currentState = await getInstanceState(resolvedId);
-    console.log("[START] Current state:", currentState);
+      // Check current state
+      const currentState = await getInstanceState(resolvedId);
+      console.log("[START] Current state:", currentState);
 
-    // If running, return error (per requirement)
-    if (currentState === "running") {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Server is already running",
-          timestamp: new Date().toISOString(),
+      // If running, return error (per requirement)
+      if (currentState === "running") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "Server is already running",
+            timestamp: new Date().toISOString(),
+          },
+          { status: 400 }
+        );
+      }
+
+      // Handle hibernation recovery (creates volume if needed)
+      console.log("[START] Handling hibernation recovery...");
+      await handleResume(resolvedId);
+
+      // Start the instance
+      console.log("[START] Sending start command...");
+      await startInstance(resolvedId);
+
+      // Wait for running state
+      console.log("[START] Waiting for instance to reach running state...");
+      await waitForInstanceRunning(resolvedId);
+
+      // Get public IP
+      console.log("[START] Waiting for public IP assignment...");
+      const publicIp = await getPublicIp(resolvedId);
+
+      // Update Cloudflare DNS
+      console.log("[START] Updating Cloudflare DNS...");
+      await updateCloudflareDns(publicIp);
+
+      const response: ApiResponse<StartServerResponse> = {
+        success: true,
+        data: {
+          instanceId: resolvedId,
+          publicIp,
+          domain: env.CLOUDFLARE_MC_DOMAIN,
+          message: `Server started successfully. DNS updated to ${publicIp}`,
         },
-        { status: 400 }
-      );
-    }
+        timestamp: new Date().toISOString(),
+      };
 
-    // Handle hibernation recovery (creates volume if needed)
-    console.log("[START] Handling hibernation recovery...");
-    await handleResume(resolvedId);
-
-    // Start the instance
-    console.log("[START] Sending start command...");
-    await startInstance(resolvedId);
-
-    // Wait for running state
-    console.log("[START] Waiting for instance to reach running state...");
-    await waitForInstanceRunning(resolvedId);
-
-    // Get public IP
-    console.log("[START] Waiting for public IP assignment...");
-    const publicIp = await getPublicIp(resolvedId);
-
-    // Update Cloudflare DNS
-    console.log("[START] Updating Cloudflare DNS...");
-    await updateCloudflareDns(publicIp);
-
-    const response: ApiResponse<StartServerResponse> = {
-      success: true,
-      data: {
-        instanceId: resolvedId,
-        publicIp,
-        domain: env.CLOUDFLARE_MC_DOMAIN,
-        message: `Server started successfully. DNS updated to ${publicIp}`,
-      },
-      timestamp: new Date().toISOString(),
-    };
-
-    return NextResponse.json(response);
+      return NextResponse.json(response);
+    });
   } catch (error) {
     console.error("[START] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+    // If the error is about another action in progress, return 409 Conflict
+    if (errorMessage.includes("Another operation is in progress")) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: errorMessage,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
 
     return NextResponse.json(
       {
