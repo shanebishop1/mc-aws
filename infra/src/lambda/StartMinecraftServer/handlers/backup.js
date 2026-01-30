@@ -1,5 +1,6 @@
 import { ensureInstanceRunning } from "../ec2.js";
 import { getSanitizedErrorMessage, sendNotification } from "../notifications.js";
+import { sanitizeBackupName } from "../sanitization.js";
 import { executeSSMCommand } from "../ssm.js";
 
 /**
@@ -23,7 +24,8 @@ async function handleBackup(instanceId, args, adminEmail) {
     await ensureInstanceRunning(instanceId);
     console.log("Step 1 complete: Instance is running");
 
-    const backupName = args?.[0] ? args[0] : "";
+    // Sanitize backup name (if provided) to prevent command injection
+    const backupName = args?.[0] ? sanitizeBackupName(args[0]) : "";
     const command = backupName ? `/usr/local/bin/mc-backup.sh ${backupName}` : "/usr/local/bin/mc-backup.sh";
 
     console.log("Step 2: Executing backup command...");
