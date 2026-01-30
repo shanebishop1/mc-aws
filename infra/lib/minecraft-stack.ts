@@ -90,11 +90,16 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Add permission to stop itself
+    // Add permission to stop itself (restricted via CloudFormation stack tag)
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         actions: ["ec2:StopInstances"],
-        resources: ["*"], // We can't easily restrict to "self" in IAM without tags, but the script uses instance metadata to find its own ID
+        resources: ["*"],
+        conditions: {
+          StringEquals: {
+            "ec2:ResourceTag/aws:cloudformation:stack-id": this.stackId,
+          },
+        },
       })
     );
 
@@ -120,7 +125,8 @@ export class MinecraftStack extends cdk.Stack {
       allowAllOutbound: true,
     });
     securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(25565), "Allow Minecraft");
-    securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), "Allow SSH");
+    // SSH rule removed for security - use SSM Session Manager instead
+    // securityGroup.addIngressRule(ec2.Peer.anyIpv4(), ec2.Port.tcp(22), "Allow SSH");
 
     // 4. EC2 Instance
     const baseUserData = fs
@@ -257,11 +263,17 @@ export class MinecraftStack extends cdk.Stack {
     });
     updateDnsResource.node.addDependency(instance);
 
-    // Grant Lambda permissions
+    // Grant Lambda permissions (scoped to specific instance where possible)
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ec2:StartInstances", "ec2:DescribeInstances"],
-        resources: ["*"],
+        actions: ["ec2:StartInstances"],
+        resources: [`arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`],
+      })
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:DescribeInstances"],
+        resources: ["*"], // DescribeInstances doesn't support resource-level permissions
       })
     );
 
@@ -281,13 +293,13 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Grant Lambda permission to run SSM commands on EC2 (for backup/restore/hibernate)
+    // Grant Lambda permission to run SSM commands on EC2 (scoped to Minecraft instance only)
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ssm:SendCommand"],
         resources: [
           `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
-          `arn:aws:ec2:${this.region}:${this.account}:instance/*`,
+          `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`,
         ],
       })
     );
