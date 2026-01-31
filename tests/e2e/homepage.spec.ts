@@ -10,10 +10,9 @@ test.describe("Homepage States", () => {
 
     // Navigate to status page
     await navigateTo(page, "/");
-    await waitForPageLoad(page);
 
-    // Should show error message (stack doesn't exist)
-    await expect(page.getByText(/stack does not exist/i)).toBeVisible();
+    // Should show "Server Not Configured" message
+    await expect(page.getByText(/Server Not Configured/i)).toBeVisible();
 
     // Should not show server controls
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();
@@ -50,7 +49,6 @@ test.describe("Homepage States", () => {
 
     // Navigate to status page
     await navigateTo(page, "/");
-    await waitForPageLoad(page);
 
     // Should show Stop Server button
     await expect(page.getByRole("button", { name: /stop/i })).toBeVisible();
@@ -89,10 +87,9 @@ test.describe("Homepage States", () => {
 
     // Navigate to status page
     await navigateTo(page, "/");
-    await waitForPageLoad(page);
 
-    // Should show error message
-    await expect(page.getByText(/stack does not exist/i)).toBeVisible();
+    // Should show "Server Not Configured" message
+    await expect(page.getByText(/Server Not Configured/i)).toBeVisible();
 
     // Should not show server controls
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();

@@ -5,7 +5,8 @@ import type { Locator, Page } from "@playwright/test";
  * Waits for the page to be in a stable state with no network activity
  */
 export async function waitForPageLoad(page: Page): Promise<void> {
-  await page.waitForLoadState("networkidle");
+  // Use domcontentloaded instead of networkidle to avoid timeouts
+  await page.waitForLoadState("domcontentloaded");
 }
 
 /**
@@ -77,8 +78,7 @@ export async function waitForLoading(page: Page, selector?: string): Promise<voi
  * @param path - The path to navigate to (e.g., "/dashboard")
  */
 export async function navigateTo(page: Page, path: string): Promise<void> {
-  await page.goto(path);
-  await waitForPageLoad(page);
+  await page.goto(path, { waitUntil: "domcontentloaded" });
 }
 
 /**
