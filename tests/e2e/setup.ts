@@ -96,10 +96,10 @@ export async function authenticateAsDev(page: Page): Promise<void> {
   }
 
   // Navigate to dev login endpoint (it will set the cookie and redirect)
-  await page.goto("/api/auth/dev-login");
+  await page.goto("/api/auth/dev-login", { waitUntil: "domcontentloaded" });
 
   // Wait for redirect to home page
-  await page.waitForURL("/");
+  await page.waitForURL("/", { timeout: 10000 });
 
   // Verify we're authenticated
   const authCheck = await page.request.get("/api/auth/me");
@@ -115,11 +115,11 @@ export async function authenticateAsDev(page: Page): Promise<void> {
  * Setup test environment with authentication and mock state
  */
 export async function setupTestEnvironment(page: Page, scenario?: string): Promise<void> {
+  // Authenticate as dev user first (required for mock control endpoints)
+  await authenticateAsDev(page);
+
   // Reset mock state before test
   await resetMockState(page);
-
-  // Authenticate as dev user
-  await authenticateAsDev(page);
 
   // Set scenario if provided
   if (scenario) {
