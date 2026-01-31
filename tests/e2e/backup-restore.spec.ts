@@ -1,12 +1,9 @@
 import { expect, test } from "@playwright/test";
 import { confirmDialog, expectErrorMessage, expectSuccessMessage, waitForPageLoad } from "./helpers";
-import { resetMockState, setMockParameter, setupRunningScenario } from "./setup";
+import { setMockParameter, setupRunningScenario } from "./setup";
 
 test.describe("Backup and Restore", () => {
-  test.beforeEach(async ({ page }) => {
-    // Reset and authenticate before each test
-    await resetMockState(page);
-  });
+  // Note: setupRunningScenario already handles authentication and reset in each test
 
   test("backup with confirmation", async ({ page }) => {
     await setupRunningScenario(page);
