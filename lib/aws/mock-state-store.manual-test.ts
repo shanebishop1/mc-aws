@@ -1,6 +1,6 @@
 /**
  * Simple test script for MockStateStore
- * Run with: tsx lib/aws/mock-state-store.test.ts
+ * Run with: tsx lib/aws/mock-state-store.manual-test.ts
  */
 
 import type { ServerState } from "@/lib/types";

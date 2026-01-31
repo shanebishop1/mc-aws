@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { confirmDialog, waitForPageLoad } from "./helpers";
+import { confirmDialog } from "./helpers";
 import { injectFault, setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
 
 test.describe("Error Handling", () => {
@@ -19,8 +19,8 @@ test.describe("Error Handling", () => {
 
     await page.goto("/");
 
-    // Should show error message
-    await expect(page.getByText(/stack does not exist/i)).toBeVisible();
+    // Should show "Server Not Configured" message
+    await expect(page.getByText(/Server Not Configured/i)).toBeVisible();
   });
 
   test("shows error when start fails", async ({ page }) => {

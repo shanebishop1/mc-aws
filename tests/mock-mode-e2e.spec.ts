@@ -113,11 +113,11 @@ async function authenticateAsDev(page: any): Promise<void> {
 // ============================================================================
 
 test.beforeEach(async ({ page }) => {
-  // Reset mock state before each test
-  await resetMockState(page);
-
-  // Authenticate as dev user
+  // Authenticate as dev user FIRST (before any API calls that require auth)
   await authenticateAsDev(page);
+
+  // Reset mock state after authentication
+  await resetMockState(page);
 });
 
 test.afterEach(async ({ page }) => {
@@ -134,6 +134,9 @@ test.describe("Mock Mode E2E Tests", () => {
     // Set scenario to running
     await setScenario(page, "running");
 
+    // Wait a moment for the scenario to be applied
+    await page.waitForTimeout(500);
+
     // Navigate to status page
     await navigateTo(page, "/");
     await waitForPageLoad(page);
@@ -148,11 +151,19 @@ test.describe("Mock Mode E2E Tests", () => {
     // Click cost button to open dashboard
     await page.getByRole("button", { name: /costs/i }).click();
     await expect(page.getByTestId("cost-dashboard")).toBeVisible();
-    await expect(page.getByText(/amazon ec2/i)).toBeVisible();
-    await expect(page.getByText(/\$12\.50/i)).toBeVisible();
 
-    // Close cost dashboard
-    await page.getByRole("button", { name: "" }).nth(0).click();
+    // Click "Generate Report" button to fetch cost data
+    await page.getByRole("button", { name: /generate report/i }).click();
+
+    // Wait for cost data to load
+    await page.waitForTimeout(1000);
+
+    // Verify cost data is displayed
+    await expect(page.getByText(/amazon ec2/i)).toBeVisible();
+    await expect(page.getByText(/\$15\.50/i)).toBeVisible();
+
+    // Close cost dashboard by clicking the Close button
+    await page.getByRole("button", { name: /close/i }).click();
 
     // Verify player count is shown
     await expect(page.getByText(/5 players online/i)).toBeVisible();

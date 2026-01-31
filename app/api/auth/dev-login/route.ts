@@ -11,9 +11,9 @@
  */
 
 import { SignJWT } from "jose";
-import { NextResponse } from "next/server";
+import { type NextRequest, NextResponse } from "next/server";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   // SECURITY: Hard stop in production
   if (process.env.NODE_ENV === "production") {
     return new NextResponse(null, { status: 404 });
@@ -35,8 +35,9 @@ export async function GET() {
     .setExpirationTime("30d")
     .sign(secret);
 
-  // Redirect to home page with the cookie set
-  const response = NextResponse.redirect(new URL("/", "http://localhost:3000"));
+  // Redirect to home page with the cookie set (use request origin to support different ports)
+  const origin = request.nextUrl.origin;
+  const response = NextResponse.redirect(new URL("/", origin));
 
   response.cookies.set("mc_session", token, {
     httpOnly: true,

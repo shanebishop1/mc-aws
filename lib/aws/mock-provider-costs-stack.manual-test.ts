@@ -1,6 +1,6 @@
 /**
  * Test script for Cost Explorer and CloudFormation mock implementations
- * Run with: tsx lib/aws/mock-provider-costs-stack.test.ts
+ * Run with: tsx lib/aws/mock-provider-costs-stack.manual-test.ts
  */
 
 import { mockProvider } from "./mock-provider";
