@@ -34,27 +34,44 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
   }, [isOpen]);
 
   // Fetch backups when switching to backup view
-  const handleRestoreClick = async () => {
-    setView("backups");
+  const fetchBackups = async () => {
     setIsLoading(true);
     setError(null);
 
-    try {
-      const res = await fetch("/api/backups");
-      const data = await res.json();
+    let attempts = 0;
+    const maxAttempts = 10; // 30 seconds max
 
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to fetch backups");
+    // Helper to check backup status
+    // I'll use a standard loop or local helper.
+    // simpler:
+
+    try {
+      const check = async () => {
+        const res = await fetch("/api/backups");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error);
+        return data.data;
+      };
+
+      let data = await check();
+      while (data.status === "caching" && attempts < maxAttempts) {
+        attempts++;
+        await new Promise((r) => setTimeout(r, 3000));
+        data = await check();
       }
 
-      setBackups(data.data.backups || []);
+      setBackups(data.backups || []);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch backups";
       setError(errorMessage);
-      console.error("Failed to fetch backups:", err);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleRestoreClick = async () => {
+    setView("backups");
+    void fetchBackups();
   };
 
   const handleConfirmRestore = () => {

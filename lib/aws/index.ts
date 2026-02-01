@@ -102,6 +102,14 @@ export async function withServerActionLock<T>(actionName: string, fn: () => Prom
   return getProvider().withServerActionLock(actionName, fn);
 }
 
+export async function acquireServerAction(action: string): Promise<void> {
+  return getProvider().acquireServerAction(action);
+}
+
+export async function releaseServerAction(): Promise<void> {
+  return getProvider().releaseServerAction();
+}
+
 // Volume operations
 export async function detachAndDeleteVolumes(instanceId?: string): Promise<void> {
   return getProvider().detachAndDeleteVolumes(instanceId);
@@ -126,6 +134,6 @@ export async function checkStackExists(stackName?: string): Promise<boolean> {
 }
 
 // Lambda operations
-export async function invokeLambda(functionName: string, payload: any): Promise<void> {
+export async function invokeLambda(functionName: string, payload: unknown): Promise<void> {
   return getProvider().invokeLambda(functionName, payload);
 }

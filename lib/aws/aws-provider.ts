@@ -34,6 +34,8 @@ import {
   setServerAction,
   updateEmailAllowlist,
   withServerActionLock,
+  acquireServerAction,
+  releaseServerAction,
 } from "./ssm-client";
 import { detachAndDeleteVolumes, handleResume } from "./volume-client";
 
@@ -75,6 +77,8 @@ export const awsProvider: AwsProvider = {
 
   // SSM - Action Lock
   withServerActionLock,
+  acquireServerAction,
+  releaseServerAction,
 
   // Cost Explorer
   getCosts,

@@ -46,7 +46,6 @@ interface TestResult {
 }
 
 const results: TestResult[] = [];
-let sessionCookie = "";
 
 function recordTest(name: string, passed: boolean, message: string) {
   results.push({ name, passed, message });
@@ -90,10 +89,10 @@ async function makeRequest(
   });
 }
 
-async function runTests() {
-  log("\n=== Dev Login Validation Tests ===\n", "blue");
-
-  // Test 1: Check environment variables
+/**
+ * Test environment variables are set correctly
+ */
+function testEnvironmentVariables(): void {
   info("Checking environment variables...");
   const backendMode = process.env.MC_BACKEND_MODE;
   const enableDevLogin = process.env.ENABLE_DEV_LOGIN;
@@ -119,8 +118,12 @@ async function runTests() {
     !!process.env.AUTH_SECRET && process.env.AUTH_SECRET.length > 0,
     process.env.AUTH_SECRET ? `AUTH_SECRET is set (${process.env.AUTH_SECRET.length} chars)` : "AUTH_SECRET is not set"
   );
+}
 
-  // Test 2: Check if dev server is running
+/**
+ * Check if dev server is running
+ */
+async function testDevServerRunning(): Promise<boolean> {
   info("\nChecking if dev server is running...");
   try {
     const response = await makeRequest("/");
@@ -129,16 +132,20 @@ async function runTests() {
       response.statusCode === 200,
       `Dev server is running (status ${response.statusCode})`
     );
+    return true;
   } catch (err) {
     const errorMessage = err instanceof Error ? err.message : String(err);
     recordTest("Dev server running", false, `Dev server is not running: ${errorMessage}`);
     log("\n❌ Cannot continue tests without dev server running.\n", "red");
     log("Start it with: pnpm dev:mock\n", "blue");
-    printSummary();
-    process.exit(1);
+    return false;
   }
+}
 
-  // Test 3: Check auth status before login
+/**
+ * Check auth status before login
+ */
+async function testAuthStatusBeforeLogin(): Promise<void> {
   info("\nChecking authentication status before login...");
   try {
     const response = await makeRequest("/api/auth/me");
@@ -154,137 +161,174 @@ async function runTests() {
   } catch (err) {
     recordTest("Auth status check", false, `Failed to check auth status: ${err}`);
   }
+}
 
-  // Test 3: Check auth status before login
-  info("\nChecking authentication status before login...");
-  try {
-    const response = await makeRequest("/api/auth/me");
-    const data = JSON.parse(response.body);
+/**
+ * Parse session cookie from response headers
+ */
+function parseSessionCookie(response: { headers: { "set-cookie"?: string | string[] } }): string | null {
+  const setCookieHeader = response.headers["set-cookie"];
+  const cookies = Array.isArray(setCookieHeader) ? setCookieHeader : setCookieHeader ? [setCookieHeader] : [];
+  return cookies.find((c: string) => c.startsWith("mc_session=")) ?? null;
+}
 
-    recordTest(
-      "Not authenticated before login",
-      data.authenticated === false,
-      data.authenticated === false
-        ? "User is not authenticated (as expected)"
-        : "User is authenticated (unexpected - may have existing session)"
-    );
-  } catch (err) {
-    recordTest("Auth status check", false, `Failed to check auth status: ${err}`);
+/**
+ * Test dev login endpoint response
+ */
+function handleDevLoginResponse(response: {
+  statusCode: number;
+  headers: { "set-cookie"?: string | string[] };
+}): { success: boolean; cookie: string | null } {
+  if (response.statusCode === 403) {
+    recordTest("Dev login endpoint", false, "Dev login returned 403 - check ENABLE_DEV_LOGIN=true is set");
+    return { success: false, cookie: null };
   }
 
-  // Test 4: Visit dev login endpoint
+  if (response.statusCode === 404) {
+    recordTest("Dev login endpoint", false, "Dev login returned 404 - check NODE_ENV is not 'production'");
+    return { success: false, cookie: null };
+  }
+
+  if (response.statusCode !== 302 && response.statusCode !== 307) {
+    recordTest("Dev login endpoint", false, `Dev login returned unexpected status ${response.statusCode}`);
+    return { success: false, cookie: null };
+  }
+
+  // Redirect is expected
+  const sessionCookie = parseSessionCookie(response);
+  const hasSessionCookie = sessionCookie !== null;
+
+  recordTest("Dev login endpoint", true, `Dev login returned ${response.statusCode} (redirect)`);
+  recordTest(
+    "Session cookie set",
+    hasSessionCookie,
+    hasSessionCookie ? "Session cookie was set" : "Session cookie was not set"
+  );
+
+  return { success: true, cookie: sessionCookie ? sessionCookie.split(";")[0] : null };
+}
+
+/**
+ * Test authentication status after login
+ */
+async function testAuthStatusAfterLogin(cookie: string): Promise<void> {
+  info("\nChecking authentication status after login...");
+  try {
+    const authResponse = await makeRequest("/api/auth/me", "GET", { Cookie: cookie });
+    const authData = JSON.parse(authResponse.body);
+
+    recordTest(
+      "Authenticated after login",
+      authData.authenticated === true,
+      authData.authenticated === true
+        ? `User is authenticated as ${authData.email} (${authData.role})`
+        : "User is not authenticated after login"
+    );
+
+    recordTest(
+      "Correct user role",
+      authData.role === "admin",
+      authData.role === "admin" ? "User has admin role" : `User has role '${authData.role}' (expected 'admin')`
+    );
+
+    recordTest(
+      "Correct email",
+      authData.email === "dev@localhost",
+      authData.email === "dev@localhost"
+        ? "User email is dev@localhost"
+        : `User email is '${authData.email}' (expected 'dev@localhost')`
+    );
+  } catch (err) {
+    recordTest("Auth status after login", false, `Failed to check auth status: ${err}`);
+  }
+}
+
+/**
+ * Test protected route access
+ */
+async function testProtectedRoute(cookie: string): Promise<void> {
+  info("\nTesting protected route access...");
+  try {
+    const statusResponse = await makeRequest("/api/status", "GET", { Cookie: cookie });
+    const statusData = JSON.parse(statusResponse.body);
+
+    recordTest(
+      "Protected route accessible",
+      statusResponse.statusCode === 200,
+      statusResponse.statusCode === 200
+        ? "Protected route /api/status is accessible"
+        : `Protected route returned ${statusResponse.statusCode}`
+    );
+
+    const hasCorrectStructure = statusData.success === true && typeof statusData.data === "object";
+    recordTest(
+      "Status response has expected structure",
+      hasCorrectStructure,
+      hasCorrectStructure ? "Status response has correct structure" : "Status response structure is incorrect"
+    );
+  } catch (err) {
+    recordTest("Protected route access", false, `Failed to access protected route: ${err}`);
+  }
+}
+
+/**
+ * Test dev login endpoint and subsequent authenticated tests
+ */
+async function testDevLoginFlow(): Promise<void> {
   info("\nTesting dev login endpoint...");
   try {
     const response = await makeRequest("/api/auth/dev-login", "GET");
+    const result = handleDevLoginResponse(response);
 
-    if (response.statusCode === 403) {
-      recordTest("Dev login endpoint", false, "Dev login returned 403 - check ENABLE_DEV_LOGIN=true is set");
-    } else if (response.statusCode === 404) {
-      recordTest("Dev login endpoint", false, "Dev login returned 404 - check NODE_ENV is not 'production'");
-    } else if (response.statusCode === 302 || response.statusCode === 307) {
-      // Redirect is expected
-      const setCookieHeader = response.headers["set-cookie"];
-      const cookies = Array.isArray(setCookieHeader) ? setCookieHeader : setCookieHeader ? [setCookieHeader] : [];
-      const hasSessionCookie = cookies.some((c: string) => c.startsWith("mc_session="));
-
-      recordTest("Dev login endpoint", true, `Dev login returned ${response.statusCode} (redirect)`);
-
-      recordTest(
-        "Session cookie set",
-        hasSessionCookie,
-        hasSessionCookie ? "Session cookie was set" : "Session cookie was not set"
-      );
-
-      // Extract session cookie for next test
-      if (setCookieHeader) {
-        const cookieMatch = cookies.find((c: string) => c.startsWith("mc_session="));
-        if (cookieMatch) {
-          sessionCookie = cookieMatch.split(";")[0];
-        }
-      }
-
-      // Test 5: Check auth status after login
-      info("\nChecking authentication status after login...");
-      try {
-        const authResponse = await makeRequest("/api/auth/me", "GET", {
-          Cookie: sessionCookie,
-        });
-        const authData = JSON.parse(authResponse.body);
-
-        recordTest(
-          "Authenticated after login",
-          authData.authenticated === true,
-          authData.authenticated === true
-            ? `User is authenticated as ${authData.email} (${authData.role})`
-            : "User is not authenticated after login"
-        );
-
-        recordTest(
-          "Correct user role",
-          authData.role === "admin",
-          authData.role === "admin" ? "User has admin role" : `User has role '${authData.role}' (expected 'admin')`
-        );
-
-        recordTest(
-          "Correct email",
-          authData.email === "dev@localhost",
-          authData.email === "dev@localhost"
-            ? "User email is dev@localhost"
-            : `User email is '${authData.email}' (expected 'dev@localhost')`
-        );
-      } catch (err) {
-        recordTest("Auth status after login", false, `Failed to check auth status: ${err}`);
-      }
-
-      // Test 6: Test a protected route
-      info("\nTesting protected route access...");
-      try {
-        const statusResponse = await makeRequest("/api/status", "GET", {
-          Cookie: sessionCookie,
-        });
-        const statusData = JSON.parse(statusResponse.body);
-
-        recordTest(
-          "Protected route accessible",
-          statusResponse.statusCode === 200,
-          statusResponse.statusCode === 200
-            ? "Protected route /api/status is accessible"
-            : `Protected route returned ${statusResponse.statusCode}`
-        );
-
-        recordTest(
-          "Status response has expected structure",
-          statusData.success === true && typeof statusData.data === "object",
-          statusData.success === true && typeof statusData.data === "object"
-            ? "Status response has correct structure"
-            : "Status response structure is incorrect"
-        );
-      } catch (err) {
-        recordTest("Protected route access", false, `Failed to access protected route: ${err}`);
-      }
-    } else {
-      recordTest("Dev login endpoint", false, `Dev login returned unexpected status ${response.statusCode}`);
+    if (!result.success || !result.cookie) {
+      return;
     }
+
+    const sessionCookie = result.cookie;
+    await testAuthStatusAfterLogin(sessionCookie);
+    await testProtectedRoute(sessionCookie);
   } catch (err) {
     recordTest("Dev login endpoint", false, `Failed to access dev login: ${err}`);
   }
+}
 
-  // Test 7: Test logout
+/**
+ * Test logout functionality
+ */
+async function testLogout(): Promise<void> {
   info("\nTesting logout...");
   try {
     const logoutResponse = await makeRequest("/api/auth/logout", "POST");
     const logoutData = JSON.parse(logoutResponse.body);
 
+    const logoutSuccess = logoutResponse.statusCode === 200 && logoutData.success === true;
     recordTest(
       "Logout endpoint",
-      logoutResponse.statusCode === 200 && logoutData.success === true,
-      logoutResponse.statusCode === 200 && logoutData.success === true
-        ? "Logout successful"
-        : `Logout failed: ${logoutResponse.statusCode}`
+      logoutSuccess,
+      logoutSuccess ? "Logout successful" : `Logout failed: ${logoutResponse.statusCode}`
     );
   } catch (err) {
     recordTest("Logout endpoint", false, `Failed to logout: ${err}`);
   }
+}
+
+/**
+ * Main test runner
+ */
+async function runTests() {
+  log("\n=== Dev Login Validation Tests ===\n", "blue");
+
+  testEnvironmentVariables();
+
+  const serverRunning = await testDevServerRunning();
+  if (!serverRunning) {
+    printSummary();
+    process.exit(1);
+  }
+
+  await testAuthStatusBeforeLogin();
+  await testDevLoginFlow();
+  await testLogout();
 
   printSummary();
 }

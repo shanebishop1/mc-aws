@@ -1,4 +1,4 @@
-import { DeleteParameterCommand, GetCommandInvocationCommand, SendCommandCommand, ssm } from "./clients.js";
+import { DeleteParameterCommand, GetCommandInvocationCommand, PutParameterCommand, SendCommandCommand, ssm } from "./clients.js";
 
 /**
  * Execute an SSM command on an EC2 instance and wait for completion
@@ -68,4 +68,21 @@ async function deleteParameter(name) {
   }
 }
 
-export { executeSSMCommand, deleteParameter };
+
+async function putParameter(name, value, type = "String") {
+  try {
+    const command = new PutParameterCommand({
+      Name: name,
+      Value: value,
+      Type: type,
+      Overwrite: true,
+    });
+    await ssm.send(command);
+    console.log(`Successfully put parameter: ${name}`);
+  } catch (error) {
+    console.error(`Error putting parameter ${name}:`, error);
+    throw error;
+  }
+}
+
+export { executeSSMCommand, deleteParameter, putParameter };

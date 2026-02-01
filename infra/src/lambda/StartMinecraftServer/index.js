@@ -22,6 +22,7 @@ import { parseEmailFromEvent } from "./email-parser.js";
 
 // Command handlers
 import { handleBackup } from "./handlers/backup.js";
+import { handleRefreshBackups } from "./handlers/backups.js";
 import { handleHibernate } from "./handlers/hibernate.js";
 import { handleRestore } from "./handlers/restore.js";
 import { handleResume } from "./handlers/resume.js";
@@ -29,36 +30,81 @@ import { handleResume } from "./handlers/resume.js";
 export const handler = async (event) => {
   console.log("=== LAMBDA INVOKED ===");
 
-  // Handle API invocation (Async Start)
-  if (event.invocationType === 'api') {
-    const { instanceId, userEmail, command } = event;
-    console.log(`[API] Async start triggered by ${userEmail}`);
-    
-    // For API events, we trust the caller (API Route) has done authorization
-    // But we still require the basics
-    if (!instanceId || !userEmail || command !== 'start') {
-      console.error("[API] Invalid API payload:", event);
-      return { statusCode: 400, body: "Invalid payload" };
-    }
-    
-    const envResult = validateEnvironment();
-    if (envResult.error) return envResult.error;
-    const { zone, record, domain, cfToken } = envResult;
-
-    try {
-      await handleStartCommand(instanceId, userEmail, process.env.NOTIFICATION_EMAIL, { zone, record, domain, cfToken });
-    } catch (error) {
-       console.error("[API] Start command failed:", error);
-       // We might want to notify user here via email too?
-       // For now, just log.
-    } finally {
-       // Clear the lock
-       console.log("[API] Clearing server-action lock...");
-       await deleteParameter("/minecraft/server-action");
-    }
-    return { statusCode: 200, body: "Async start processing complete" };
+  // Route to appropriate handler based on invocation type
+  if (event.invocationType === "api") {
+    return handleApiInvocation(event);
   }
 
+  return handleEmailInvocation(event);
+};
+
+/**
+ * Handle API invocation for async commands
+ */
+async function handleApiInvocation(event) {
+  const { instanceId, userEmail, command, args } = event;
+  console.log(`[API] Async command '${command}' triggered by ${userEmail}`);
+
+  if (!instanceId || !userEmail || !command) {
+    console.error("[API] Invalid API payload:", event);
+    return { statusCode: 400, body: "Invalid payload" };
+  }
+
+  const envResult = validateEnvironment();
+  if (envResult.error) return envResult.error;
+
+  const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").toLowerCase();
+  const cloudflareConfig = createCloudflareConfig(envResult);
+
+  try {
+    await executeApiCommand(command, instanceId, userEmail, notificationEmail, cloudflareConfig, args);
+  } catch (error) {
+    console.error(`[API] Command '${command}' failed:`, error);
+  } finally {
+    console.log("[API] Clearing server-action lock...");
+    await deleteParameter("/minecraft/server-action");
+  }
+
+  return { statusCode: 202, body: `Async command '${command}' accepted` };
+}
+
+/**
+ * Execute API command based on command type
+ */
+async function executeApiCommand(command, instanceId, userEmail, notificationEmail, cloudflareConfig, args) {
+  const handlers = {
+    start: () => handleStartCommand(instanceId, userEmail, notificationEmail, cloudflareConfig),
+    resume: () => handleResumeCommand(instanceId, userEmail, notificationEmail, cloudflareConfig, args),
+    backup: () => handleBackup(instanceId, args || [], notificationEmail),
+    restore: () => handleRestore(instanceId, args || [], notificationEmail, cloudflareConfig),
+    hibernate: () => handleHibernate(instanceId, args || [], notificationEmail),
+    refreshBackups: () => handleRefreshBackups(instanceId),
+  };
+
+  const handler = handlers[command];
+  if (!handler) {
+    throw new Error(`Unknown command: ${command}`);
+  }
+
+  await handler();
+}
+
+/**
+ * Create Cloudflare config from environment result
+ */
+function createCloudflareConfig(envResult) {
+  return {
+    zone: envResult.zone,
+    record: envResult.record,
+    domain: envResult.domain,
+    cfToken: envResult.cfToken,
+  };
+}
+
+/**
+ * Handle email invocation from SNS event
+ */
+async function handleEmailInvocation(event) {
   // Parse email from SNS event
   const emailData = parseEmailFromEvent(event);
   if (emailData.error) return emailData.error;
@@ -83,7 +129,6 @@ export const handler = async (event) => {
   // Validate environment
   const envResult = validateEnvironment();
   if (envResult.error) return envResult.error;
-  const { instanceId, zone, record, domain, cfToken } = envResult;
 
   // Parse and authorize command
   const commandResult = await parseAndAuthorizeCommand(subject, isAdmin, senderEmail);
@@ -91,8 +136,9 @@ export const handler = async (event) => {
   if (!commandResult.command) return { statusCode: 200, body: "No valid command found." };
 
   // Execute command
-  return executeCommand(commandResult.command, instanceId, senderEmail, { zone, record, domain, cfToken });
-};
+  const cloudflareConfig = createCloudflareConfig(envResult);
+  return executeCommand(commandResult.command, envResult.instanceId, senderEmail, cloudflareConfig);
+}
 
 /**
  * Verify email authenticity using SES verdicts.
@@ -237,6 +283,16 @@ async function executeCommand(parsedCommand, instanceId, senderEmail, cloudflare
       );
     }
     return { statusCode: 500, body: `Failed to process request: ${error.message}` };
+  } finally {
+    // Always release the lock, regardless of success or failure
+    try {
+      await deleteParameter("/minecraft/server-action");
+    } catch (e) {
+      // Don't fail if the parameter doesn't exist (might not have been set)
+      if (e.name !== "ParameterNotFound") {
+        console.error("Failed to release server action lock:", e.message);
+      }
+    }
   }
 }
 
@@ -259,7 +315,13 @@ async function handleStartCommand(instanceId, senderEmail, notificationEmail, { 
   return { statusCode: 200, body: `Instance started, DNS updated to ${publicIp}` };
 }
 
-async function handleResumeCommand(instanceId, senderEmail, notificationEmail, { zone, record, domain, cfToken }) {
+async function handleResumeCommand(
+  instanceId,
+  senderEmail,
+  notificationEmail,
+  { zone, record, domain, cfToken },
+  args
+) {
   console.log(`Resuming instance ${instanceId} triggered by ${senderEmail}`);
 
   if (notificationEmail) {
@@ -272,13 +334,26 @@ async function handleResumeCommand(instanceId, senderEmail, notificationEmail, {
   const resumeOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-resume.sh"]);
   await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
 
+  let restoreMsg = "";
+  if (args && args.length > 0) {
+    console.log(`[RESUME] Restore requested with args: ${args.join(" ")}`);
+    try {
+      // Helper to run restore which handles its own DNS update and notifications
+      await handleRestore(instanceId, args, notificationEmail, { zone, record, domain, cfToken });
+      restoreMsg = `\n\nRestored from backup: ${args[0]}`;
+    } catch (e) {
+      console.error("Resume succeeded but restore failed:", e);
+      restoreMsg = `\n\nWARNING: Restore failed: ${e.message}`;
+    }
+  }
+
   if (notificationEmail) {
     await sendNotification(
       notificationEmail,
       "Minecraft Server Resumed",
-      `Resumed, DNS: ${publicIp}\n\n${resumeOutput}`
+      `Resumed, DNS: ${publicIp}\n\n${resumeOutput}${restoreMsg}`
     );
   }
 
-  return { statusCode: 200, body: `Instance resumed, DNS updated to ${publicIp}` };
+  return { statusCode: 200, body: `Instance resumed, DNS updated to ${publicIp}${restoreMsg}` };
 }
