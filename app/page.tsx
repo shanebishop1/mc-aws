@@ -83,7 +83,7 @@ export default function Home() {
       // Optimistically update status based on action
       if (action === "Start" || action === "Resume") {
         setStatus(ServerState.Pending);
-      } else if (action === "Stop") {
+      } else if (action === "Stop" || action === "Hibernate") {
         setStatus(ServerState.Stopping);
       }
 
@@ -97,6 +97,11 @@ export default function Home() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Action failed");
 
+        // Set success message from API response
+        if (data.data?.message) {
+          setMessage(data.data.message);
+        }
+
         // Immediate status refresh to get actual state
         setTimeout(async () => {
           await fetchStatus();
@@ -108,7 +113,7 @@ export default function Home() {
         await fetchStatus();
       } finally {
         setIsLoading(false);
-        // Clear error message after 5s
+        // Clear message after 5s
         setTimeout(() => setMessage(null), 5000);
       }
     },

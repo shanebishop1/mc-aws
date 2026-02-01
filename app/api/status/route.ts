@@ -4,11 +4,15 @@
  */
 
 import { getAuthUser } from "@/lib/api-auth";
-import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws";
+import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp, getServerAction } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
+
+const noStoreHeaders = { "Cache-Control": "no-store" } as const;
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
   const user = await getAuthUser(request);
@@ -24,6 +28,13 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     // But actually, status check IS the discovery mechanism, so it should probably always verify existence via AWS
     const instanceId = queryId || (await findInstanceId());
     console.log("[STATUS] Getting server status for instance:", instanceId);
+
+    let serverAction: { action: string; timestamp: number } | null = null;
+    try {
+      serverAction = await getServerAction();
+    } catch (error) {
+      console.warn("[STATUS] Could not get server action:", error);
+    }
 
     const { blockDeviceMappings } = await getInstanceDetails(instanceId);
     const state = await getInstanceState(instanceId);
@@ -43,7 +54,18 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     // Convert stopped + no volume to hibernating
     let displayState = state;
-    if (state === "stopped" && !hasVolume) {
+
+    // If an operation is in progress, prefer showing an in-progress state.
+    if (serverAction) {
+      if (serverAction.action === "start" || serverAction.action === "resume") {
+        displayState = ServerState.Pending;
+      }
+      if (serverAction.action === "stop" || serverAction.action === "hibernate") {
+        displayState = ServerState.Stopping;
+      }
+    }
+
+    if (displayState === "stopped" && !hasVolume && !serverAction) {
       displayState = ServerState.Hibernating;
     }
 
@@ -55,11 +77,12 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         publicIp,
         hasVolume,
         lastUpdated: new Date().toISOString(),
+        serverAction,
       },
       timestamp: new Date().toISOString(),
     };
 
-    return NextResponse.json(response);
+    return NextResponse.json(response, { headers: noStoreHeaders });
   } catch (error) {
     console.error("[STATUS] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
@@ -70,7 +93,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         error: errorMessage,
         timestamp: new Date().toISOString(),
       },
-      { status: 500 }
+      { status: 500, headers: noStoreHeaders }
     );
   }
 }
