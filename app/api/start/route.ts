@@ -7,20 +7,17 @@ import { requireAllowed } from "@/lib/api-auth";
 import {
   findInstanceId,
   getInstanceState,
-  getPublicIp,
-  handleResume,
-  startInstance,
-  waitForInstanceRunning,
+  invokeLambda,
   withServerActionLock,
 } from "@/lib/aws";
-import { updateCloudflareDns } from "@/lib/cloudflare";
 import { env } from "@/lib/env";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
+  let user;
   try {
-    const user = await requireAllowed(request);
+    user = await requireAllowed(request);
     console.log("[START] Action by:", user.email, "role:", user.role);
   } catch (error) {
     if (error instanceof Response) {
@@ -58,34 +55,45 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           { status: 400 }
         );
       }
+      
+      // Determine if we are using Mock Mode
+      const isMock = env.MC_BACKEND_MODE === "mock";
 
-      // Handle hibernation recovery (creates volume if needed)
-      console.log("[START] Handling hibernation recovery...");
-      await handleResume(resolvedId);
+      if (isMock) {
+        console.log("[START] Mock Mode: Invoking mock start directly (simulated async)");
+        // In mock mode, we just call the provider's invokeLambda which will delegate to startInstance
+        // This keeps the flow similar to production where we invoke "something"
+        await invokeLambda("StartMinecraftServer", {
+          invocationType: "api",
+          command: "start",
+          userEmail: user.email,
+          instanceId: resolvedId,
+        });
 
-      // Start the instance
-      console.log("[START] Sending start command...");
-      await startInstance(resolvedId);
-
-      // Wait for running state
-      console.log("[START] Waiting for instance to reach running state...");
-      await waitForInstanceRunning(resolvedId);
-
-      // Get public IP
-      console.log("[START] Waiting for public IP assignment...");
-      const publicIp = await getPublicIp(resolvedId);
-
-      // Update Cloudflare DNS
-      console.log("[START] Updating Cloudflare DNS...");
-      await updateCloudflareDns(publicIp);
+      } else {
+         console.log("[START] Production Mode: Invoking Lambda asynchronously");
+         // Invoke the Lambda function asynchronously (Event)
+         // The Lambda will handle:
+         // 1. Resume from hibernation (if needed)
+         // 2. Start EC2
+         // 3. Update DNS
+         // 4. Clear the 'server-action' lock when done
+         
+         await invokeLambda("StartMinecraftServer", {
+           invocationType: "api",
+           command: "start",
+           userEmail: user.email,
+           instanceId: resolvedId,
+         });
+      }
 
       const response: ApiResponse<StartServerResponse> = {
         success: true,
         data: {
           instanceId: resolvedId,
-          publicIp,
+          publicIp: "pending", // IP is not known yet
           domain: env.CLOUDFLARE_MC_DOMAIN,
-          message: `Server started successfully. DNS updated to ${publicIp}`,
+          message: "Server start initiated. This may take 1-2 minutes.",
         },
         timestamp: new Date().toISOString(),
       };
