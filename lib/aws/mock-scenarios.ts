@@ -12,7 +12,7 @@
  */
 
 import type { ServerState } from "@/lib/types";
-import { getMockStateStore } from "./mock-state-store";
+import { getMockStateStore, resetMockStateStore } from "./mock-state-store";
 import type {
   MockBackup,
   MockCostData,
@@ -506,3 +506,4 @@ export async function getFaultConfig(operation: string): Promise<OperationFailur
 // ============================================================================
 
 export { scenarios };
+export { resetMockStateStore };

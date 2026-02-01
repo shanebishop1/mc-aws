@@ -5,9 +5,8 @@
  * The Lambda is responsible for clearing the lock when complete
  */
 
-import type { AuthUser } from "@/lib/api-auth";
-import { requireAllowed } from "@/lib/api-auth";
-import { findInstanceId, getInstanceState, getServerAction, invokeLambda, setServerAction } from "@/lib/aws";
+import { type AuthUser, requireAllowed } from "@/lib/api-auth";
+import { acquireServerAction, findInstanceId, getInstanceState, invokeLambda, releaseServerAction } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -25,20 +24,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   }
 
   try {
-    // Check if an action is already in progress
-    const currentAction = await getServerAction();
-    if (currentAction) {
-      console.log("[START] Another operation in progress:", currentAction.action);
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Cannot start server. Another operation is in progress: ${currentAction.action}`,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
-    }
-
     // Try to get ID from body to avoid discovery overhead
     let instanceId: string | undefined;
     try {
@@ -68,37 +53,50 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Set the server-action lock before invoking Lambda
-    // The Lambda will clear this lock when it completes
-    await setServerAction("start");
-    console.log("[START] Server-action lock set");
+    try {
+      await acquireServerAction("start");
+    } catch (error: unknown) {
+      if (error instanceof Error && error.message.includes("Another operation is in progress")) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: error.message,
+            timestamp: new Date().toISOString(),
+          },
+          { status: 409 }
+        );
+      }
+      throw error;
+    }
 
     // Invoke the Lambda function asynchronously
-    // The Lambda will handle:
-    // 1. Resume from hibernation (if needed)
-    // 2. Start EC2
-    // 3. Update DNS
-    // 4. Clear the 'server-action' lock when done
-    console.log("[START] Invoking StartMinecraftServer Lambda");
-    await invokeLambda("StartMinecraftServer", {
-      invocationType: "api",
-      command: "start",
-      userEmail: user.email,
-      instanceId: resolvedId,
-    });
-
-    // Return immediately with pending status (fire-and-forget)
-    const response: ApiResponse<StartServerResponse> = {
-      success: true,
-      data: {
+    try {
+      console.log("[START] Invoking StartMinecraftServer Lambda");
+      await invokeLambda("StartMinecraftServer", {
+        invocationType: "api",
+        command: "start",
+        userEmail: user.email,
         instanceId: resolvedId,
-        publicIp: "pending", // IP is not known yet
-        domain: env.CLOUDFLARE_MC_DOMAIN,
-        message: "Server start initiated. This may take 1-2 minutes.",
-      },
-      timestamp: new Date().toISOString(),
-    };
+      });
 
-    return NextResponse.json(response);
+      // Return immediately with pending status (fire-and-forget)
+      const response: ApiResponse<StartServerResponse> = {
+        success: true,
+        data: {
+          instanceId: resolvedId,
+          publicIp: "pending", // IP is not known yet
+          domain: env.CLOUDFLARE_MC_DOMAIN,
+          message: "Server start initiated. This may take 1-2 minutes.",
+        },
+        timestamp: new Date().toISOString(),
+      };
+
+      return NextResponse.json(response);
+    } catch (error) {
+      console.error("[START] Lambda invocation failed:", error);
+      await releaseServerAction();
+      throw error;
+    }
   } catch (error) {
     console.error("[START] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";

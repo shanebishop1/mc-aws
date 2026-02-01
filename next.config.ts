@@ -9,17 +9,10 @@ const nextConfig: NextConfig = {
   devIndicators: false,
 
   // Expose specific environment variables to the client
-  env: {
+    // Only expose safe/public variables here.
+    // Secrets (CLOUDFLARE_API_TOKEN, etc.) must remain server-side only.
     AWS_REGION: process.env.AWS_REGION || process.env.CDK_DEFAULT_REGION,
     AWS_ACCOUNT_ID: process.env.AWS_ACCOUNT_ID || process.env.CDK_DEFAULT_ACCOUNT,
-    CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID,
-    CLOUDFLARE_RECORD_ID: process.env.CLOUDFLARE_RECORD_ID,
-    CLOUDFLARE_MC_DOMAIN: process.env.CLOUDFLARE_MC_DOMAIN,
-    CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
-    GDRIVE_REMOTE: process.env.GDRIVE_REMOTE,
-    GDRIVE_ROOT: process.env.GDRIVE_ROOT,
-    INSTANCE_ID: process.env.INSTANCE_ID,
-  },
 };
 
 export default nextConfig;

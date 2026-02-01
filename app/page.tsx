@@ -23,6 +23,11 @@ export default function Home() {
   const [instanceId] = useState<string | undefined>(undefined);
   const [_isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  // Debug: Log message changes
+  useEffect(() => {
+    console.log("[PAGE] Message state changed:", message);
+  }, [message]);
   const [isResumeModalOpen, setIsResumeModalOpen] = useState(false);
   const [isEmailPanelOpen, setIsEmailPanelOpen] = useState(false);
   const [isCostDashboardOpen, setIsCostDashboardOpen] = useState(false);
@@ -76,18 +81,44 @@ export default function Home() {
     [instanceId]
   );
 
-  const handleAction = useCallback(
-    async (action: string, endpoint: string, bodyData?: Record<string, string>) => {
-      setIsLoading(true);
-
-      // Optimistically update status based on action
+  // Helper to update status optimistically based on action
+  const updateOptimisticStatus = useCallback(
+    (action: string) => {
       if (action === "Start" || action === "Resume") {
         setStatus(ServerState.Pending);
       } else if (action === "Stop" || action === "Hibernate") {
         setStatus(ServerState.Stopping);
       }
+    },
+    [setStatus]
+  );
+
+  // Helper to schedule status refresh
+  const scheduleStatusRefresh = useCallback(() => {
+    setTimeout(async () => {
+      await fetchStatus();
+    }, 2000);
+  }, [fetchStatus]);
+
+  // Helper to handle action error
+  const handleActionError = useCallback(
+    async (err: unknown) => {
+      const error = err as { message?: string };
+      const errorMessage = error.message || "Unknown error";
+      console.log("[PAGE ACTION] Error caught, setting message:", errorMessage);
+      setMessage(errorMessage);
+      await fetchStatus();
+    },
+    [fetchStatus]
+  );
+
+  const handleAction = useCallback(
+    async (action: string, endpoint: string, bodyData?: Record<string, string>) => {
+      setIsLoading(true);
+      updateOptimisticStatus(action);
 
       try {
+        // Execute API action
         const body = buildRequestBody(bodyData);
         const res = await fetch(endpoint, {
           method: "POST",
@@ -97,27 +128,18 @@ export default function Home() {
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Action failed");
 
-        // Set success message from API response
         if (data.data?.message) {
           setMessage(data.data.message);
         }
-
-        // Immediate status refresh to get actual state
-        setTimeout(async () => {
-          await fetchStatus();
-        }, 2000);
+        scheduleStatusRefresh();
       } catch (err: unknown) {
-        const error = err as { message?: string };
-        setMessage(error.message || "Unknown error");
-        // Refresh status on error to get actual state
-        await fetchStatus();
+        await handleActionError(err);
       } finally {
         setIsLoading(false);
-        // Clear message after 5s
         setTimeout(() => setMessage(null), 5000);
       }
     },
-    [buildRequestBody, fetchStatus, setStatus]
+    [updateOptimisticStatus, scheduleStatusRefresh, handleActionError, buildRequestBody]
   );
 
   // If the user clicked Start while logged out, continue automatically after sign-in.

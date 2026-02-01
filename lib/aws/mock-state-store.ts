@@ -811,12 +811,36 @@ export class MockStateStore {
    * Reset the state to defaults
    */
   async resetState(): Promise<void> {
+    console.log("[MOCK-STATE-STORE] Resetting state to defaults");
     // Clear any pending timeouts before resetting
     this.clearAllTimeouts();
+    // Clear any pending persistence timeout
+    if (this.persistenceTimeout) {
+      clearTimeout(this.persistenceTimeout);
+      this.persistenceTimeout = null;
+    }
     await this.withLockAndPersist((state) => {
       const defaultState = createDefaultMockState();
-      Object.assign(state, defaultState);
+      console.log("[MOCK-STATE-STORE] Current faults before reset:", Array.from(state.faults.operationFailures.keys()));
+      // Replace all properties including nested objects and Maps
+      state.instance = { ...defaultState.instance };
+      state.ssm = {
+        parameters: { ...defaultState.ssm.parameters },
+        commands: [...defaultState.ssm.commands],
+      };
+      state.backups = [...defaultState.backups];
+      state.costs = { ...defaultState.costs };
+      state.cloudformation = { ...defaultState.cloudformation };
+      state.faults = {
+        globalLatencyMs: defaultState.faults.globalLatencyMs,
+        operationFailures: new Map(defaultState.faults.operationFailures),
+      };
+      state.pendingTimeouts = [];
+      console.log("[MOCK-STATE-STORE] Faults after reset:", Array.from(state.faults.operationFailures.keys()));
     });
+    // Save immediately without debouncing to ensure clean state for next test
+    this.saveState();
+    console.log("[MOCK-STATE-STORE] State reset complete and saved");
   }
 
   /**
@@ -837,36 +861,78 @@ export class MockStateStore {
   }
 
   /**
+   * Apply instance updates to state
+   */
+  private applyInstanceUpdate(state: MockState, instance?: Partial<MockInstanceState>): void {
+    if (instance) {
+      state.instance = { ...state.instance, ...instance };
+    }
+  }
+
+  /**
+   * Apply SSM updates to state
+   */
+  private applySSMUpdate(state: MockState, ssm?: Partial<MockState["ssm"]>): void {
+    if (!ssm) return;
+    if (ssm.parameters) {
+      state.ssm.parameters = { ...state.ssm.parameters, ...ssm.parameters };
+    }
+    if (ssm.commands) {
+      state.ssm.commands = [...ssm.commands];
+    }
+  }
+
+  /**
+   * Apply backup updates to state
+   */
+  private applyBackupsUpdate(state: MockState, backups?: MockBackup[]): void {
+    if (backups) {
+      state.backups = [...backups];
+    }
+  }
+
+  /**
+   * Apply cost updates to state
+   */
+  private applyCostsUpdate(state: MockState, costs?: Partial<MockState["costs"]>): void {
+    if (costs) {
+      state.costs = { ...state.costs, ...costs };
+    }
+  }
+
+  /**
+   * Apply CloudFormation updates to state
+   */
+  private applyCloudFormationUpdate(state: MockState, cloudformation?: Partial<MockCloudFormationStack>): void {
+    if (cloudformation) {
+      state.cloudformation = { ...state.cloudformation, ...cloudformation };
+    }
+  }
+
+  /**
+   * Apply fault injection updates to state
+   */
+  private applyFaultsUpdate(state: MockState, faults?: Partial<MockFaultInjection>): void {
+    if (!faults) return;
+    if (typeof faults.globalLatencyMs === "number") {
+      state.faults.globalLatencyMs = faults.globalLatencyMs;
+    }
+    if (faults.operationFailures) {
+      state.faults.operationFailures = new Map(faults.operationFailures);
+    }
+  }
+
+  /**
    * Apply a partial state update
    */
   async patchState(updates: Partial<MockState>): Promise<void> {
     await this.withLockAndPersist((state) => {
-      if (updates.instance) {
-        state.instance = { ...state.instance, ...updates.instance };
-      }
-      if (updates.ssm) {
-        if (updates.ssm.parameters) {
-          state.ssm.parameters = { ...state.ssm.parameters, ...updates.ssm.parameters };
-        }
-        if (updates.ssm.commands) {
-          state.ssm.commands = [...updates.ssm.commands];
-        }
-      }
-      if (updates.backups) {
-        state.backups = [...updates.backups];
-      }
-      if (updates.costs) {
-        state.costs = { ...state.costs, ...updates.costs };
-      }
-      if (updates.cloudformation) {
-        state.cloudformation = { ...state.cloudformation, ...updates.cloudformation };
-      }
-      if (updates.faults) {
-        state.faults.globalLatencyMs = updates.faults.globalLatencyMs;
-        if (updates.faults.operationFailures) {
-          state.faults.operationFailures = new Map(updates.faults.operationFailures);
-        }
-      }
+      this.applyInstanceUpdate(state, updates.instance);
+      this.applySSMUpdate(state, updates.ssm);
+      this.applyBackupsUpdate(state, updates.backups);
+      this.applyCostsUpdate(state, updates.costs);
+      this.applyCloudFormationUpdate(state, updates.cloudformation);
+      this.applyFaultsUpdate(state, updates.faults);
     });
   }
 
@@ -902,13 +968,18 @@ export function getMockStateStore(options?: MockStateStoreOptions): MockStateSto
   // Check if store exists on globalThis (survives module reloads)
   const existingStore = (globalThis as Record<string, unknown>)[GLOBAL_KEY];
   if (existingStore instanceof MockStateStore) {
+    console.log("[MOCK-STATE-STORE] Reusing existing store from globalThis");
     return existingStore;
   }
+
+  // Disable persistence in test mode to ensure clean state between tests
+  const isTestMode = process.env.NODE_ENV === "test" || process.env.PLAYWRIGHT_TEST === "1";
+  console.log("[MOCK-STATE-STORE] Creating new store, test mode:", isTestMode);
 
   // Enable file persistence by default to survive module reloads in dev mode
   const storeOptions: MockStateStoreOptions = {
     ...options,
-    enablePersistence: true,
+    enablePersistence: !isTestMode,
     persistencePath: path.join(process.cwd(), ".mock-state.json"),
   };
   const newStore = new MockStateStore(storeOptions);
@@ -917,9 +988,11 @@ export function getMockStateStore(options?: MockStateStoreOptions): MockStateSto
 }
 
 /**
- * Reset the global mock state store instance
- * Useful for testing
+ * Force a complete reset of the mock state store singleton
+ * This creates a new store instance, discarding all previous state
+ * Useful for testing to ensure clean state between tests
  */
 export function resetMockStateStore(): void {
+  console.log("[MOCK-STATE-STORE] Force resetting singleton store");
   delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
 }

@@ -20,10 +20,12 @@ import { authenticateAsDev } from "./e2e/setup";
 // Mock Control API Helpers
 // ============================================================================
 
+import type { Page } from "@playwright/test";
+
 /**
  * Set the mock scenario via control API
  */
-async function setScenario(page: any, scenario: string): Promise<void> {
+async function setScenario(page: Page, scenario: string): Promise<void> {
   const response = await page.request.post("/api/mock/scenario", {
     data: { scenario },
   });
@@ -42,7 +44,7 @@ async function setScenario(page: any, scenario: string): Promise<void> {
  * Inject a fault via control API
  */
 async function injectFault(
-  page: any,
+  page: Page,
   config: {
     operation: string;
     failNext?: boolean;
@@ -68,7 +70,7 @@ async function injectFault(
 /**
  * Reset mock state to defaults
  */
-async function resetMockState(page: any): Promise<void> {
+async function resetMockState(page: Page): Promise<void> {
   const response = await page.request.post("/api/mock/reset");
 
   if (!response.ok()) {

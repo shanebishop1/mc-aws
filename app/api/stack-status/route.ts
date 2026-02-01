@@ -27,7 +27,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
           data: {
             exists: true,
             status: stack.StackStatus,
-            stackId: stack.StackId,
+            stackId: user ? stack.StackId : "redacted",
           },
           timestamp: new Date().toISOString(),
         },

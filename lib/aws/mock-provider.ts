@@ -20,6 +20,7 @@ export {
   clearAllFaults,
   setGlobalLatency,
   getFaultConfig,
+  resetMockStateStore,
   type Scenario,
   type FaultConfig,
 } from "./mock-scenarios";
@@ -34,12 +35,14 @@ async function applyFaultInjection(operation: string): Promise<void> {
 
   // Check for operation-specific failure
   const failureConfig = await stateStore.getOperationFailure(operation);
+  console.log(`[MOCK-FAULT] Checking operation ${operation}, failureConfig:`, failureConfig);
   if (failureConfig?.failNext || failureConfig?.alwaysFail) {
+    console.log(`[MOCK-FAULT] Throwing error for ${operation}:`, failureConfig.errorMessage);
     if (failureConfig.failNext) {
       await stateStore.clearOperationFailure(operation);
     }
     const error = new Error(failureConfig.errorMessage || `Mock ${operation} error`);
-    (error as any).name = failureConfig.errorCode || `${operation}Error`;
+    (error as Error & { name: string }).name = failureConfig.errorCode || `${operation}Error`;
     throw error;
   }
 
@@ -187,6 +190,7 @@ export const mockProvider: AwsProvider = {
 
     // If IP is already available, return it immediately
     if (publicIp) {
+      console.log(`[MOCK] Public IP already available: ${publicIp}`);
       return publicIp;
     }
 
@@ -544,6 +548,30 @@ export const mockProvider: AwsProvider = {
     await stateStore.setParameter("/minecraft/server-action", value, "String");
   },
 
+  acquireServerAction: async (action: string): Promise<void> => {
+    await applyFaultInjection("acquireServerAction");
+    console.log("[MOCK] acquireServerAction called for:", action);
+
+    const currentAction = await mockProvider.getServerAction();
+    if (currentAction) {
+      throw new Error(`Cannot start ${action}. Another operation is in progress: ${currentAction.action}`);
+    }
+
+    await mockProvider.setServerAction(action);
+    console.log(`[MOCK] [ACTION] Acquired lock: ${action}`);
+  },
+
+  releaseServerAction: async (): Promise<void> => {
+    await applyFaultInjection("releaseServerAction");
+    console.log("[MOCK] releaseServerAction called");
+    try {
+      await mockProvider.deleteParameter("/minecraft/server-action");
+      console.log("[MOCK] [ACTION] Released lock");
+    } catch (error) {
+      console.warn("[MOCK] Failed to release lock:", error);
+    }
+  },
+
   // SSM - Action Lock
   withServerActionLock: async <T>(actionName: string, fn: () => Promise<T>): Promise<T> => {
     console.log("[MOCK] withServerActionLock called for:", actionName);
@@ -610,7 +638,7 @@ export const mockProvider: AwsProvider = {
     const stack: Stack = {
       StackName: stackName,
       StackId: stackState.stackId,
-      StackStatus: stackState.status as any,
+      StackStatus: stackState.status as unknown as Stack["StackStatus"],
       CreationTime: new Date("2024-01-01T00:00:00Z"),
       Description: "Minecraft Server Infrastructure",
       Parameters: [
@@ -670,7 +698,7 @@ export const mockProvider: AwsProvider = {
   },
 
   // Lambda
-  invokeLambda: async (functionName: string, payload: any): Promise<void> => {
+  invokeLambda: async (functionName: string, payload: unknown): Promise<void> => {
     await applyFaultInjection("invokeLambda");
     console.log("[MOCK] invokeLambda called for:", functionName, "payload:", payload);
 
@@ -681,6 +709,10 @@ export const mockProvider: AwsProvider = {
       if (parsedPayload.command === "start") {
         console.log("[MOCK] Simulating async start by triggering startInstance");
         const stateStore = getMockStateStore();
+
+        // Check for startInstance fault injection BEFORE starting
+        // This ensures errors are propagated back to the API caller
+        await applyFaultInjection("startInstance");
 
         // Start the instance (this will transition to pending, then running after delay)
         await mockProvider.startInstance(parsedPayload.instanceId);

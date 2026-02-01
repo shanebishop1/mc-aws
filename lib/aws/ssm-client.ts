@@ -3,6 +3,7 @@
  */
 
 import {
+  DeleteParameterCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
@@ -294,12 +295,63 @@ export async function setServerAction(action: string): Promise<void> {
  * Delete the current server action from SSM
  */
 export async function deleteParameter(name: string): Promise<void> {
-  const { DeleteParameterCommand } = await import("@aws-sdk/client-ssm");
   await ssm.send(
     new DeleteParameterCommand({
       Name: name,
     })
   );
+}
+
+/**
+ * Acquire the server action lock atomically
+ * @param action The action name
+ * @returns true if acquired, passes error if failed
+ */
+export async function acquireServerAction(action: string): Promise<void> {
+  const paramName = "/minecraft/server-action";
+  const value = JSON.stringify({
+    action,
+    timestamp: Date.now(),
+  });
+
+  try {
+    await ssm.send(
+      new PutParameterCommand({
+        Name: paramName,
+        Value: value,
+        Type: "String",
+        Overwrite: false, // Atomicity: fails if exists
+      })
+    );
+    console.log(`[ACTION] Acquired lock for: ${action}`);
+  } catch (error: unknown) {
+    if (error instanceof Error && (error as Error & { name?: string }).name === "ParameterAlreadyExists") {
+      // Check for staleness
+      const current = await getServerAction();
+      if (!current) {
+        // Was deleted in between? Retry once
+        return acquireServerAction(action);
+      }
+
+      // If serverAction logic (get) didn't auto-delete it (it does auto-delete if > 30m), then it's valid.
+      // throw conflict
+      throw new Error(`Cannot start ${action}. Another operation is in progress: ${current.action}`);
+    }
+    throw error;
+  }
+}
+
+/**
+ * Release the server action lock
+ */
+export async function releaseServerAction(): Promise<void> {
+  const paramName = "/minecraft/server-action";
+  try {
+    await deleteParameter(paramName);
+    console.log("[ACTION] Released lock");
+  } catch (error) {
+    console.warn("[ACTION] Failed to release lock (might be already gone):", error);
+  }
 }
 
 /**

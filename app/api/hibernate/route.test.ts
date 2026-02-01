@@ -1,73 +1,63 @@
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
-import { createMockNextRequest, parseNextResponse, setupInstanceState } from "@/tests/utils";
-import { describe, expect, it, vi } from "vitest";
+import { ServerState } from "@/lib/types";
+import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
+// Use vi.hoisted to avoid hoisting issues
+const mocks = vi.hoisted(() => ({
+  invokeLambda: vi.fn(),
+  getInstanceState: vi.fn(),
+  findInstanceId: vi.fn().mockResolvedValue("i-1234"),
+  acquireServerAction: vi.fn(),
+  releaseServerAction: vi.fn(),
+}));
+
+vi.mock("@/lib/aws", () => ({
+  invokeLambda: mocks.invokeLambda,
+  getInstanceState: mocks.getInstanceState,
+  findInstanceId: mocks.findInstanceId,
+  acquireServerAction: mocks.acquireServerAction,
+  releaseServerAction: mocks.releaseServerAction,
+}));
+
+// Mock requireAdmin to return a fake admin user
+vi.mock("@/lib/api-auth", () => ({
+  requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
+}));
+
 describe("POST /api/hibernate", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("should hibernate successfully when running", async () => {
-    const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
-
-    // Sequence:
-    // 1. getServerAction (SSM GetParameter) -> null (no action in progress)
-    // 2. setServerAction (SSM PutParameter) -> success
-    // 3. getInstanceState -> running
-    // 4. executeSSMCommand (backup) -> SendCommand
-    // 5. executeSSMCommand (backup) -> GetCommandInvocation
-    // 6. stopInstance -> success
-    // 7. waitForInstanceStopped -> stopped
-    // 8. detachAndDeleteVolumes -> DescribeInstances
-    // 9. detachAndDeleteVolumes -> DetachVolume
-    // 10. detachAndDeleteVolumes (waitForVolumeDetached) -> DescribeVolumes
-    // 11. detachAndDeleteVolumes -> DeleteVolume
-    // 12. deleteParameter (SSM DeleteParameter) -> success
-
-    // SSM calls
-    mockSSMClient.send
-      .mockResolvedValueOnce({ Parameter: { Value: null } }) // getServerAction (GetParameter)
-      .mockResolvedValueOnce({}) // setServerAction (PutParameter)
-      .mockResolvedValueOnce({ Command: { CommandId: "cmd-123" } }) // SendCommand
-      .mockResolvedValueOnce({ Status: "Success", StandardOutputContent: "Backup successful" }) // GetCommandInvocation
-      .mockResolvedValueOnce({}); // deleteParameter (DeleteParameter) - called in finally block
-
-    // EC2 calls
-    mockEC2Client.send
-      .mockResolvedValueOnce({
-        Reservations: [{ Instances: [{ State: { Name: "running" }, InstanceId: "i-1234" }] }],
-      }) // getInstanceState
-      .mockResolvedValueOnce({}) // stopInstance
-      .mockResolvedValueOnce({ Reservations: [{ Instances: [{ State: { Name: "stopped" } }] }] }) // waitForInstanceStopped
-      .mockResolvedValueOnce({
-        Reservations: [{ Instances: [{ BlockDeviceMappings: [{ Ebs: { VolumeId: "vol-123" } }] }] }],
-      }) // detachAndDeleteVolumes -> DescribeInstances
-      .mockResolvedValueOnce({}) // detachAndDeleteVolumes -> DetachVolume
-      .mockResolvedValueOnce({ Volumes: [{ Attachments: [] }] }) // detachAndDeleteVolumes (waitForVolumeDetached) -> DescribeVolumes
-      .mockResolvedValueOnce({}); // detachAndDeleteVolumes -> DeleteVolume
+    // Setup state
+    mocks.getInstanceState.mockResolvedValue(ServerState.Running);
+    mocks.acquireServerAction.mockResolvedValue(undefined); // Success
 
     const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
     const res = await POST(req);
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     const body = await parseNextResponse<ApiResponse<HibernateResponse>>(res);
     expect(body.success).toBe(true);
-    expect(body.data?.backupOutput).toBe("Backup successful");
+    expect(body.data?.message).toContain("asynchronously");
+    expect(body.data?.instanceId).toBe("i-1234");
+
+    expect(mocks.acquireServerAction).toHaveBeenCalledWith("hibernate");
+    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
+      invocationType: "api",
+      command: "hibernate",
+      instanceId: "i-1234",
+      userEmail: "admin@example.com",
+      args: [],
+    });
   });
 
   it("should return 400 when instance is not running", async () => {
-    const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
-
-    // Mock SSM GetParameter to return null (no action in progress)
-    mockSSMClient.send.mockResolvedValueOnce({ Parameter: { Value: null } });
-
-    // 1. getInstanceState -> stopped
-    mockEC2Client.send.mockResolvedValueOnce({
-      Reservations: [
-        {
-          Instances: [
-            { State: { Name: "stopped" }, InstanceId: "i-1234", BlockDeviceMappings: [{ DeviceName: "/dev/sda1" }] },
-          ],
-        },
-      ],
-    });
+    // Setup state
+    mocks.getInstanceState.mockResolvedValue(ServerState.Stopped);
 
     const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
     const res = await POST(req);
@@ -76,5 +66,44 @@ describe("POST /api/hibernate", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("must be running");
+
+    expect(mocks.acquireServerAction).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("should return 409 when another action is in progress", async () => {
+    // Setup state - acquireServerAction throws error (conflict)
+    mocks.getInstanceState.mockResolvedValue(ServerState.Running);
+    mocks.acquireServerAction.mockRejectedValue(new Error("Another operation is in progress: backup"));
+
+    const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(409);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Another operation is in progress");
+
+    expect(mocks.acquireServerAction).toHaveBeenCalledWith("hibernate");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("should release lock if lambda invocation fails", async () => {
+    // Setup state
+    mocks.getInstanceState.mockResolvedValue(ServerState.Running);
+    mocks.acquireServerAction.mockResolvedValue(undefined);
+    mocks.invokeLambda.mockRejectedValue(new Error("Lambda failure"));
+
+    const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(500);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Lambda failure");
+
+    expect(mocks.acquireServerAction).toHaveBeenCalledWith("hibernate");
+    expect(mocks.invokeLambda).toHaveBeenCalled();
+    expect(mocks.releaseServerAction).toHaveBeenCalled();
   });
 });

@@ -47,7 +47,7 @@ async function testCostExplorer() {
     console.log("  ✗ Failed - should have thrown error");
   } catch (error) {
     console.log("  Error thrown:", (error as Error).message);
-    console.log("  Error name:", (error as any).name);
+    console.log("  Error name:", (error as Error).name);
     console.log("  ✓ Passed\n");
   }
 
@@ -113,7 +113,7 @@ async function testCloudFormation() {
     console.log("  ✗ Failed - should have thrown error");
   } catch (error) {
     console.log("  Error thrown:", (error as Error).message);
-    console.log("  Error name:", (error as any).name);
+    console.log("  Error name:", (error as Error).name);
     console.log("  ✓ Passed\n");
   }
 

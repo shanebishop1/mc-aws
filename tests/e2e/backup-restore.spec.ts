@@ -27,8 +27,8 @@ test.describe("Backup and Restore", () => {
       .getByRole("button", { name: /backup/i })
       .click();
 
-    // Verify success message
-    await expectSuccessMessage(page, /backup completed successfully/i);
+    // Verify success message (backup is now asynchronous)
+    await expectSuccessMessage(page, /Backup started asynchronously/i);
   });
 
   test("backup shows Google Drive prompt when not configured", async ({ page }) => {
@@ -95,8 +95,8 @@ test.describe("Backup and Restore", () => {
       .getByRole("button", { name: /restore/i })
       .click();
 
-    // Verify success message
-    await expectSuccessMessage(page, /restore completed successfully/i);
+    // Verify success message (restore is now asynchronous)
+    await expectSuccessMessage(page, /Restore started asynchronously/i);
   });
 
   test("restore shows Google Drive prompt when not configured", async ({ page }) => {
