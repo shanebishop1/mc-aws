@@ -1,44 +1,38 @@
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
-import { createMockNextRequest, parseNextResponse, setupInstanceState } from "@/tests/utils";
-import { describe, expect, it, vi } from "vitest";
+import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
-import { invokeLambda } from "@/lib/aws";
 
 // Mock AWS module
-vi.mock("@/lib/aws", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/aws")>();
-  return {
-    ...actual,
-    invokeLambda: vi.fn().mockResolvedValue(undefined),
-    // We still need the real implementation of withServerActionLock?
-    // Actually, utils.ts mocks @/lib/aws generally, but here we want to spy on invokeLambda.
-    // However, setupInstanceState relies on mocking lib/aws too (via tests/mocks/aws).
-    // Let's rely on the existing mock structure but spy on invokeLambda if possible,
-    // or just mock it here if the utils allow.
-    // The previous test setup used "setupInstanceState" which uses the mock provider indirectly or mocks imports.
-    // Let's look at how setupInstanceState works.
-  };
-});
+const mockInvokeLambda = vi.fn();
+const mockGetInstanceState = vi.fn();
+const mockFindInstanceId = vi.fn().mockResolvedValue("i-1234");
+const mockGetServerAction = vi.fn();
+const mockSetServerAction = vi.fn();
 
-// Re-mock to ensure we capture the spy
-vi.mock("@/lib/aws", async (importOriginal) => {
-    const actual = await importOriginal<typeof import("@/lib/aws")>();
-    return {
-        ...actual,
-        invokeLambda: vi.fn(),
-        getInstanceState: vi.fn(),
-        findInstanceId: vi.fn().mockResolvedValue("i-1234"),
-        withServerActionLock: vi.fn((name, fn) => fn()),
-    };
-});
+vi.mock("@/lib/aws", () => ({
+  invokeLambda: mockInvokeLambda,
+  getInstanceState: mockGetInstanceState,
+  findInstanceId: mockFindInstanceId,
+  getServerAction: mockGetServerAction,
+  setServerAction: mockSetServerAction,
+}));
+
+// Mock requireAllowed to return a fake user
+vi.mock("@/lib/api-auth", () => ({
+  requireAllowed: vi.fn().mockResolvedValue({ email: "test@example.com", role: "admin" }),
+}));
 
 describe("POST /api/start", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("should trigger async lambda when server is stopped", async () => {
-    const { getInstanceState, invokeLambda } = await import("@/lib/aws");
-    
     // Setup state
-    vi.mocked(getInstanceState).mockResolvedValue(ServerState.Stopped);
+    mockGetServerAction.mockResolvedValue(null);
+    mockGetInstanceState.mockResolvedValue(ServerState.Stopped);
 
     const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
     const res = await POST(req);
@@ -48,19 +42,20 @@ describe("POST /api/start", () => {
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("initiated");
     expect(body.data?.publicIp).toBe("pending");
-    
-    expect(invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", expect.objectContaining({
-        invocationType: "api",
-        command: "start",
-        instanceId: "i-1234"
-    }));
+
+    expect(mockSetServerAction).toHaveBeenCalledWith("start");
+    expect(mockInvokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
+      invocationType: "api",
+      command: "start",
+      userEmail: "test@example.com",
+      instanceId: "i-1234",
+    });
   });
 
   it("should return 400 when instance is already running", async () => {
-    const { getInstanceState, invokeLambda } = await import("@/lib/aws");
-    
     // Setup state
-    vi.mocked(getInstanceState).mockResolvedValue(ServerState.Running);
+    mockGetServerAction.mockResolvedValue(null);
+    mockGetInstanceState.mockResolvedValue(ServerState.Running);
 
     const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
     const res = await POST(req);
@@ -69,7 +64,48 @@ describe("POST /api/start", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("already running");
-    
-    expect(invokeLambda).not.toHaveBeenCalled();
+
+    expect(mockSetServerAction).not.toHaveBeenCalled();
+    expect(mockInvokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("should return 409 when another action is in progress", async () => {
+    // Setup state - another action is in progress
+    mockGetServerAction.mockResolvedValue({ action: "stop", timestamp: Date.now() });
+
+    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(409);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Another operation is in progress");
+
+    expect(mockSetServerAction).not.toHaveBeenCalled();
+    expect(mockInvokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("should use instanceId from request body if provided", async () => {
+    // Setup state
+    mockGetServerAction.mockResolvedValue(null);
+    mockGetInstanceState.mockResolvedValue(ServerState.Stopped);
+
+    const req = createMockNextRequest("http://localhost/api/start", {
+      method: "POST",
+      body: JSON.stringify({ instanceId: "i-custom-id" }),
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
+    expect(body.success).toBe(true);
+    expect(body.data?.instanceId).toBe("i-custom-id");
+
+    expect(mockInvokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
+      invocationType: "api",
+      command: "start",
+      userEmail: "test@example.com",
+      instanceId: "i-custom-id",
+    });
   });
 });
