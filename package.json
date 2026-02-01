@@ -37,6 +37,7 @@
     "@aws-sdk/client-cloudformation": "^3.965.0",
     "@aws-sdk/client-cost-explorer": "^3.965.0",
     "@aws-sdk/client-ec2": "^3.547.0",
+    "@aws-sdk/client-lambda": "^3.980.0",
     "@aws-sdk/client-ssm": "^3.547.0",
     "arctic": "^3.7.0",
     "clsx": "^2.1.1",

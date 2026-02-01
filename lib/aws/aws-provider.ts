@@ -9,6 +9,7 @@ import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount, ServerActio
 
 import { checkStackExists, getStackStatus } from "./cloudformation-client";
 import { getCosts } from "./cost-client";
+import { invokeLambda } from "./lambda-client";
 // Import all existing AWS client functions
 import {
   findInstanceId,
@@ -81,4 +82,7 @@ export const awsProvider: AwsProvider = {
   // CloudFormation
   getStackStatus,
   checkStackExists,
+  
+  // Lambda
+  invokeLambda,
 };
