@@ -41,6 +41,13 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
+# local mock state
+.mock-state.json
+
+# local e2e artifacts
+tests/*-output.txt
+tests/*-results.txt
+
 # env files - using parent directory .env
 .env
 .env*.local

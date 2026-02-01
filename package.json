@@ -25,7 +25,7 @@
     "test:coverage": "vitest run --coverage",
     "test:mock": "MC_BACKEND_MODE=mock vitest run",
     "test:e2e": "playwright test",
-    "test:e2e:mock": "MC_BACKEND_MODE=mock playwright test",
+    "test:e2e:mock": "MC_BACKEND_MODE=mock playwright test --workers=1",
     "test:e2e:ui": "playwright test --ui",
     "mock:reset": "tsx scripts/mock-cli.ts reset",
     "mock:scenario": "tsx scripts/mock-cli.ts scenario",

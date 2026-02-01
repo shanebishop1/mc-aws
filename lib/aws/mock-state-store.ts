@@ -129,6 +129,7 @@ export interface MockState {
   };
   cloudformation: MockCloudFormationStack;
   faults: MockFaultInjection;
+  pendingTimeouts: NodeJS.Timeout[];
 }
 
 /**
@@ -301,6 +302,7 @@ function createDefaultMockState(): MockState {
     },
     cloudformation: createDefaultCloudFormationStack(),
     faults: createDefaultFaultInjection(),
+    pendingTimeouts: [],
   };
 }
 
@@ -366,7 +368,8 @@ export class MockStateStore {
     const release = await this.acquireLock();
     try {
       const result = fn(this.state);
-      return result;
+      // Await the result if it's a Promise
+      return await Promise.resolve(result);
     } finally {
       release();
     }
@@ -402,6 +405,9 @@ export class MockStateStore {
         parsed.faults.operationFailures = new Map(Object.entries(parsed.faults.operationFailures));
       }
 
+      // Initialize pendingTimeouts (not persisted)
+      parsed.pendingTimeouts = [];
+
       return parsed as MockState;
     } catch (error) {
       console.error("[MOCK-STATE-STORE] Failed to load state:", error);
@@ -415,8 +421,10 @@ export class MockStateStore {
   private saveState(): void {
     try {
       // Convert Map to object for JSON serialization
+      // Exclude pendingTimeouts as it contains non-serializable NodeJS.Timeout objects
+      const { pendingTimeouts, ...stateWithoutTimeouts } = this.state;
       const serializableState = {
-        ...this.state,
+        ...stateWithoutTimeouts,
         faults: {
           ...this.state.faults,
           operationFailures: Object.fromEntries(this.state.faults.operationFailures),
@@ -803,10 +811,29 @@ export class MockStateStore {
    * Reset the state to defaults
    */
   async resetState(): Promise<void> {
+    // Clear any pending timeouts before resetting
+    this.clearAllTimeouts();
     await this.withLockAndPersist((state) => {
       const defaultState = createDefaultMockState();
       Object.assign(state, defaultState);
     });
+  }
+
+  /**
+   * Register a timeout for cleanup on reset
+   */
+  registerTimeout(timeout: NodeJS.Timeout): void {
+    this.state.pendingTimeouts.push(timeout);
+  }
+
+  /**
+   * Clear all pending timeouts
+   */
+  clearAllTimeouts(): void {
+    for (const timeout of this.state.pendingTimeouts) {
+      clearTimeout(timeout);
+    }
+    this.state.pendingTimeouts = [];
   }
 
   /**
@@ -865,16 +892,28 @@ export class MockStateStore {
  * Global singleton instance of the mock state store
  * Initialized lazily on first access
  */
-let globalStateStore: MockStateStore | null = null;
+// Use globalThis to persist state across module reloads in dev mode
+const GLOBAL_KEY = "__MOCK_STATE_STORE__";
 
 /**
  * Get or create the global mock state store instance
  */
 export function getMockStateStore(options?: MockStateStoreOptions): MockStateStore {
-  if (!globalStateStore) {
-    globalStateStore = new MockStateStore(options);
+  // Check if store exists on globalThis (survives module reloads)
+  const existingStore = (globalThis as Record<string, unknown>)[GLOBAL_KEY];
+  if (existingStore instanceof MockStateStore) {
+    return existingStore;
   }
-  return globalStateStore;
+
+  // Enable file persistence by default to survive module reloads in dev mode
+  const storeOptions: MockStateStoreOptions = {
+    ...options,
+    enablePersistence: true,
+    persistencePath: path.join(process.cwd(), ".mock-state.json"),
+  };
+  const newStore = new MockStateStore(storeOptions);
+  (globalThis as Record<string, unknown>)[GLOBAL_KEY] = newStore;
+  return newStore;
 }
 
 /**
@@ -882,5 +921,5 @@ export function getMockStateStore(options?: MockStateStoreOptions): MockStateSto
  * Useful for testing
  */
 export function resetMockStateStore(): void {
-  globalStateStore = null;
+  delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
 }

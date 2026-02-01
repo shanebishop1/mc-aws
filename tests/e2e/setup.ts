@@ -6,6 +6,7 @@
  */
 
 import type { Page } from "@playwright/test";
+import { SignJWT } from "jose";
 
 // ============================================================================
 // Mock Control API Helpers
@@ -82,8 +83,24 @@ export async function resetMockState(page: Page): Promise<void> {
 }
 
 /**
+ * Create a JWT token for dev authentication
+ */
+async function createDevToken(): Promise<string> {
+  const secret = new TextEncoder().encode("dev-secret-placeholder");
+  const token = await new SignJWT({
+    email: "dev@localhost",
+    role: "admin",
+  })
+    .setProtectedHeader({ alg: "HS256" })
+    .setIssuedAt()
+    .setExpirationTime("30d")
+    .sign(secret);
+  return token;
+}
+
+/**
  * Authenticate as dev user (dev@localhost)
- * This uses the dev login feature when ENABLE_DEV_LOGIN=true
+ * This creates and sets a JWT cookie directly
  */
 export async function authenticateAsDev(page: Page): Promise<void> {
   // Check if already authenticated
@@ -95,11 +112,24 @@ export async function authenticateAsDev(page: Page): Promise<void> {
     return;
   }
 
-  // Navigate to dev login endpoint (it will set the cookie and redirect)
-  await page.goto("/api/auth/dev-login", { waitUntil: "domcontentloaded" });
+  // Create JWT token and set as cookie
+  const token = await createDevToken();
+  await page.context().addCookies([
+    {
+      name: "mc_session",
+      value: token,
+      domain: "localhost",
+      path: "/",
+      httpOnly: true,
+      sameSite: "Lax",
+      expires: -1,
+    },
+  ]);
 
-  // Wait for redirect to home page
-  await page.waitForURL("/", { timeout: 10000 });
+  console.log("[AUTH] Set dev session cookie");
+
+  // Navigate to home page
+  await page.goto("/", { waitUntil: "domcontentloaded" });
 
   // Verify we're authenticated
   const authCheck = await page.request.get("/api/auth/me");

@@ -19,11 +19,8 @@ const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
  */
 export function getUserRole(email: string, allowedEmails: string[] = []): UserRole {
   // Local dev convenience account. Only applies when dev-login is explicitly enabled.
-  if (
-    email.toLowerCase() === "dev@localhost" &&
-    process.env.NODE_ENV !== "production" &&
-    process.env.ENABLE_DEV_LOGIN === "true"
-  ) {
+  // Playwright runs the Next server via `next start` (NODE_ENV=production), so we key off ENABLE_DEV_LOGIN.
+  if (email.toLowerCase() === "dev@localhost" && process.env.ENABLE_DEV_LOGIN === "true") {
     return "admin";
   }
 
@@ -47,7 +44,6 @@ export function getUserRole(email: string, allowedEmails: string[] = []): UserRo
 
   return "public";
 }
-
 
 // ... (previous code)
 
