@@ -4,8 +4,7 @@
  * Only available in mock mode
  */
 
-import { requireAllowed } from "@/lib/api-auth";
-import { resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
+import { resetMockStateStore, resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -29,6 +28,9 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
   console.log("[MOCK-CONTROL] Resetting mock state to defaults (mock mode, skipping auth)");
 
   try {
+    // Force a complete reset of the singleton to ensure clean state
+    resetMockStateStore();
+    // Then reset to default scenario
     await resetToDefaultScenario();
 
     return NextResponse.json({

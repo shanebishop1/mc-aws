@@ -58,7 +58,11 @@ export async function createSession(email: string): Promise<string> {
   const now = Math.floor(Date.now() / 1000);
   const exp = now + SEVEN_DAYS_IN_SECONDS;
 
-  const secret = new TextEncoder().encode(env.AUTH_SECRET);
+  const secretKey = env.AUTH_SECRET;
+  if (!secretKey || (process.env.NODE_ENV === "production" && secretKey.length < 32)) {
+    throw new Error("AUTH_SECRET is missing or too short (must be >= 32 chars in production)");
+  }
+  const secret = new TextEncoder().encode(secretKey);
 
   const token = await new SignJWT({ email, role })
     .setProtectedHeader({ alg: "HS256" })
@@ -76,7 +80,9 @@ export async function createSession(email: string): Promise<string> {
  */
 export async function verifySession(token: string): Promise<{ email: string; role: UserRole } | null> {
   try {
-    const secret = new TextEncoder().encode(env.AUTH_SECRET);
+    const secretKey = env.AUTH_SECRET;
+    if (!secretKey) return null; // Can't verify without secret
+    const secret = new TextEncoder().encode(secretKey);
     const { payload } = await jwtVerify(token, secret);
 
     const email = payload.email as string | undefined;

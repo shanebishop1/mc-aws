@@ -20,10 +20,11 @@ function validateEnv() {
   }
 
   if (isProduction) {
-    console.error("[ENV] ❌ Missing required environment variables for production:");
-    missing.forEach((name) => console.error(`  - ${name}`));
-    console.error("\nPlease set these variables before deploying.");
-    process.exit(1);
+    console.warn("[ENV] ⚠️ Missing environment variables for production build:");
+    missing.forEach((name) => console.warn(`  - ${name}`));
+    console.warn("\nThese variables must be available at RUNTIME (e.g. in Cloudflare dashboard or .env file).");
+    // Do not exit(1) here, because Cloudflare secrets are often only available at runtime, not build time.
+    // process.exit(1);
   } else {
     console.warn("[ENV] ⚠️ Missing environment variables (optional in dev):");
     missing.forEach((name) => console.warn(`  - ${name}`));

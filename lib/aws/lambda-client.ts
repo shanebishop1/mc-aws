@@ -26,7 +26,11 @@ export const lambda: LambdaClient = new Proxy({} as LambdaClient, {
 /**
  * Invoke a Lambda function asynchronously (Event) or synchronously (RequestResponse)
  */
-export async function invokeLambda(functionName: string, payload: any, invocationType: "Event" | "RequestResponse" = "Event"): Promise<void> {
+export async function invokeLambda(
+  functionName: string,
+  payload: unknown,
+  invocationType: "Event" | "RequestResponse" = "Event"
+): Promise<void> {
   const command = new InvokeCommand({
     FunctionName: functionName,
     InvocationType: invocationType,
