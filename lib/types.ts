@@ -70,6 +70,7 @@ export interface ResumeResponse {
   publicIp: string;
   domain: string;
   message: string;
+  restoreOutput?: string;
 }
 
 export interface BackupInfo {
@@ -81,6 +82,8 @@ export interface BackupInfo {
 export interface ListBackupsResponse {
   backups: BackupInfo[];
   count: number;
+  status?: "listing" | "caching" | "error";
+  cachedAt?: number;
 }
 
 export interface EmailData {

@@ -286,6 +286,29 @@ interface ControlsGridProps {
   onRestoreClick: () => void;
 }
 
+interface AdminButtonProps {
+  show: boolean;
+  onClick: () => void;
+  disabled: boolean;
+  title?: string;
+  children: React.ReactNode;
+}
+
+const AdminButton = ({ show, onClick, disabled, title, children }: AdminButtonProps) => {
+  if (!show) return null;
+  return (
+    <LuxuryButton variant="pill" onClick={onClick} disabled={disabled} title={title}>
+      {children}
+    </LuxuryButton>
+  );
+};
+
+const getAdminButtonTitle = (isAdmin: boolean, isActionPending: boolean): string | undefined => {
+  if (!isAdmin) return "Admin privileges required";
+  if (isActionPending) return "Action in progress";
+  return undefined;
+};
+
 const ControlsGrid = ({
   status,
   showStop,
@@ -306,19 +329,15 @@ const ControlsGrid = ({
 }: ControlsGridProps) => {
   if (status === "unknown") return null;
 
+  const adminButtonTitle = getAdminButtonTitle(isAdmin, isActionPending);
+  const isDisabled = !actionsEnabled || !isAdmin || isActionPending;
+
   return (
     <section className="w-full max-w-4xl grid grid-cols-3 md:grid-cols-[1fr_auto_1fr] md:grid-rows-[auto_auto] gap-4 md:gap-x-8 md:gap-y-4 items-center md:items-center justify-items-center">
       <div className="order-2 col-span-1 md:col-span-1 md:order-none md:col-start-1 md:row-start-1 w-full max-w-[200px] flex justify-center md:justify-end">
-        {showBackupRestore && (
-          <LuxuryButton
-            variant="pill"
-            onClick={onBackupClick}
-            disabled={!actionsEnabled || !isAdmin || isActionPending}
-            title={!isAdmin ? "Admin privileges required" : isActionPending ? "Action in progress" : undefined}
-          >
-            Backup
-          </LuxuryButton>
-        )}
+        <AdminButton show={showBackupRestore} onClick={onBackupClick} disabled={isDisabled} title={adminButtonTitle}>
+          Backup
+        </AdminButton>
       </div>
 
       <div className="order-1 col-span-3 md:col-span-1 md:order-none md:col-start-2 md:row-start-1 flex justify-center">
@@ -337,29 +356,15 @@ const ControlsGrid = ({
       </div>
 
       <div className="order-4 col-span-1 md:col-span-1 md:order-none md:col-start-3 md:row-start-1 w-full max-w-[200px] flex justify-center md:justify-start">
-        {showBackupRestore && (
-          <LuxuryButton
-            variant="pill"
-            onClick={onRestoreClick}
-            disabled={!actionsEnabled || !isAdmin || isActionPending}
-            title={!isAdmin ? "Admin privileges required" : isActionPending ? "Action in progress" : undefined}
-          >
-            Restore
-          </LuxuryButton>
-        )}
+        <AdminButton show={showBackupRestore} onClick={onRestoreClick} disabled={isDisabled} title={adminButtonTitle}>
+          Restore
+        </AdminButton>
       </div>
 
       <div className="order-3 col-span-1 md:col-span-1 md:order-none md:col-start-2 md:row-start-2 flex justify-center md:mt-2">
-        {showHibernate && (
-          <LuxuryButton
-            variant="pill"
-            onClick={onHibernateClick}
-            disabled={!actionsEnabled || !isAdmin || isActionPending}
-            title={!isAdmin ? "Admin privileges required" : isActionPending ? "Action in progress" : undefined}
-          >
-            Hibernate
-          </LuxuryButton>
-        )}
+        <AdminButton show={showHibernate} onClick={onHibernateClick} disabled={isDisabled} title={adminButtonTitle}>
+          Hibernate
+        </AdminButton>
       </div>
     </section>
   );

@@ -80,6 +80,8 @@ export interface AwsProvider {
 
   // SSM - Action Lock
   withServerActionLock<T>(actionName: string, fn: () => Promise<T>): Promise<T>;
+  acquireServerAction(action: string): Promise<void>;
+  releaseServerAction(): Promise<void>;
 
   // Cost Explorer
   getCosts(periodType?: "current-month" | "last-month" | "last-30-days"): Promise<CostData>;
@@ -89,5 +91,5 @@ export interface AwsProvider {
   checkStackExists(stackName?: string): Promise<boolean>;
 
   // Lambda
-  invokeLambda(functionName: string, payload: any): Promise<void>;
+  invokeLambda(functionName: string, payload: unknown): Promise<void>;
 }
