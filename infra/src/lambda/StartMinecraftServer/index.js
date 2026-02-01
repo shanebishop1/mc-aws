@@ -11,7 +11,7 @@ import { updateCloudflareDns } from "./cloudflare.js";
 import { getSanitizedErrorMessage, sendNotification } from "./notifications.js";
 
 // SSM command execution
-import { executeSSMCommand } from "./ssm.js";
+import { deleteParameter, executeSSMCommand } from "./ssm.js";
 
 // Allowlist management
 import { extractEmails, getAllowlist, updateAllowlist } from "./allowlist.js";
@@ -28,6 +28,36 @@ import { handleResume } from "./handlers/resume.js";
 
 export const handler = async (event) => {
   console.log("=== LAMBDA INVOKED ===");
+
+  // Handle API invocation (Async Start)
+  if (event.invocationType === 'api') {
+    const { instanceId, userEmail, command } = event;
+    console.log(`[API] Async start triggered by ${userEmail}`);
+    
+    // For API events, we trust the caller (API Route) has done authorization
+    // But we still require the basics
+    if (!instanceId || !userEmail || command !== 'start') {
+      console.error("[API] Invalid API payload:", event);
+      return { statusCode: 400, body: "Invalid payload" };
+    }
+    
+    const envResult = validateEnvironment();
+    if (envResult.error) return envResult.error;
+    const { zone, record, domain, cfToken } = envResult;
+
+    try {
+      await handleStartCommand(instanceId, userEmail, process.env.NOTIFICATION_EMAIL, { zone, record, domain, cfToken });
+    } catch (error) {
+       console.error("[API] Start command failed:", error);
+       // We might want to notify user here via email too?
+       // For now, just log.
+    } finally {
+       // Clear the lock
+       console.log("[API] Clearing server-action lock...");
+       await deleteParameter("/minecraft/server-action");
+    }
+    return { statusCode: 200, body: "Async start processing complete" };
+  }
 
   // Parse email from SNS event
   const emailData = parseEmailFromEvent(event);
