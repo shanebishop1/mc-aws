@@ -10,7 +10,7 @@ import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<unknown>>> {
+export async function POST(_request: NextRequest): Promise<NextResponse<ApiResponse<unknown>>> {
   // Only allow in mock mode
   if (!isMockMode()) {
     console.log("[MOCK-CONTROL] Reset endpoint accessed in non-mock mode");
