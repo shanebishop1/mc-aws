@@ -1,4 +1,4 @@
-import { GetCommandInvocationCommand, SendCommandCommand, ssm } from "./clients.js";
+import { DeleteParameterCommand, GetCommandInvocationCommand, SendCommandCommand, ssm } from "./clients.js";
 
 /**
  * Execute an SSM command on an EC2 instance and wait for completion
@@ -53,4 +53,19 @@ async function waitForSSMCompletion(commandId, instanceId) {
   throw new Error(`SSM command did not complete within ${maxAttempts * 2} seconds`);
 }
 
-export { executeSSMCommand };
+
+async function deleteParameter(name) {
+  try {
+    await ssm.send(new DeleteParameterCommand({ Name: name }));
+    console.log(`Successfully deleted parameter: ${name}`);
+  } catch (error) {
+    if (error.name === "ParameterNotFound") {
+      console.log(`Parameter already deleted or not found: ${name}`);
+      return;
+    }
+    console.error(`Error deleting parameter ${name}:`, error);
+    throw error;
+  }
+}
+
+export { executeSSMCommand, deleteParameter };
