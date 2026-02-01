@@ -137,10 +137,11 @@ export const mockProvider: AwsProvider = {
     await stateStore.updateInstanceState(ServerState.Pending);
 
     // Simulate AWS delay before transitioning to running
-    setTimeout(async () => {
+    const timeout = setTimeout(async () => {
       console.log(`[MOCK] Instance ${resolvedId} transitioning to running state`);
       await stateStore.updateInstanceState(ServerState.Running);
     }, PENDING_DELAY_MS);
+    stateStore.registerTimeout(timeout);
   },
 
   stopInstance: async (instanceId?: string): Promise<void> => {
@@ -165,10 +166,11 @@ export const mockProvider: AwsProvider = {
     await stateStore.updateInstanceState(ServerState.Stopping);
 
     // Simulate AWS delay before transitioning to stopped
-    setTimeout(async () => {
+    const timeout = setTimeout(async () => {
       console.log(`[MOCK] Instance ${resolvedId} transitioning to stopped state`);
       await stateStore.updateInstanceState(ServerState.Stopped);
     }, STOPPING_DELAY_MS);
+    stateStore.registerTimeout(timeout);
   },
 
   getPublicIp: async (instanceId: string, timeoutSeconds = 300): Promise<string> => {
@@ -390,6 +392,9 @@ export const mockProvider: AwsProvider = {
     } else if (commandString.includes("backup") || commandString.includes("Backup")) {
       // Simulate backup operation
       output = "Backup completed successfully";
+    } else if (commandString.includes("restore") || commandString.includes("Restore")) {
+      // Simulate restore operation
+      output = "Restore completed successfully";
     } else if (commandString.includes("start") || commandString.includes("Start")) {
       // Simulate start operation
       output = "Server started successfully";

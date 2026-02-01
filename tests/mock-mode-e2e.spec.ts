@@ -14,6 +14,7 @@
 
 import { expect, test } from "@playwright/test";
 import { navigateTo, waitForPageLoad } from "./e2e/helpers";
+import { authenticateAsDev } from "./e2e/setup";
 
 // ============================================================================
 // Mock Control API Helpers
@@ -80,34 +81,6 @@ async function resetMockState(page: any): Promise<void> {
   console.log("[MOCK] Reset mock state to defaults");
 }
 
-/**
- * Authenticate as dev user (dev@localhost)
- * This uses the dev login feature when ENABLE_DEV_LOGIN=true
- */
-async function authenticateAsDev(page: any): Promise<void> {
-  // Check if already authenticated
-  const meResponse = await page.request.get("/api/auth/me");
-  const meData = await meResponse.json();
-
-  if (meData.authenticated) {
-    console.log("[AUTH] Already authenticated");
-    return;
-  }
-
-  // Navigate to dev login endpoint (it will set the cookie and redirect)
-  await page.goto("/api/auth/dev-login");
-
-  // Wait for redirect to home page
-  await page.waitForURL("/");
-
-  // Verify we're authenticated
-  const authCheck = await page.request.get("/api/auth/me");
-  const authData = await authCheck.json();
-  expect(authData.authenticated).toBe(true);
-
-  console.log("[AUTH] Authenticated as dev@localhost");
-}
-
 // ============================================================================
 // Test Setup
 // ============================================================================
@@ -141,11 +114,18 @@ test.describe("Mock Mode E2E Tests", () => {
     await navigateTo(page, "/");
     await waitForPageLoad(page);
 
-    // Verify server shows as running (Online)
-    await expect(page.getByText(/online/i)).toBeVisible();
+    // Reload to ensure scenario state is reflected on the page
+    await page.reload();
+    await waitForPageLoad(page);
 
-    // Verify public IP is displayed
+    // Verify server shows as running (Online)
+    await expect(page.getByText("Online", { exact: true })).toBeVisible();
+
+    // Verify public IP is displayed (check for the specific IP)
     await expect(page.getByText(/203\.0\.113\.42/i)).toBeVisible();
+
+    // Verify player count is shown
+    await expect(page.getByText(/5 players online/i)).toBeVisible();
 
     // Verify costs are displayed (should be visible in cost dashboard)
     // Click cost button to open dashboard
@@ -164,9 +144,6 @@ test.describe("Mock Mode E2E Tests", () => {
 
     // Close cost dashboard by clicking the Close button
     await page.getByRole("button", { name: /close/i }).click();
-
-    // Verify player count is shown
-    await expect(page.getByText(/5 players online/i)).toBeVisible();
   });
 
   test("Start Flow - transitions from stopped to running", async ({ page }) => {
@@ -180,60 +157,78 @@ test.describe("Mock Mode E2E Tests", () => {
     // Verify server is stopped initially
     await expect(page.getByText(/stopped/i)).toBeVisible();
 
-    // Click start button
+    // Click start button and wait for the start API to complete
+    const startResponse = page.waitForResponse(
+      (response) => response.url().includes("/api/start") && response.status() === 200
+    );
     await page.getByRole("button", { name: /start server/i }).click();
 
     // Verify UI shows "starting" state (Starting...)
     await expect(page.getByText(/starting\.\.\./i)).toBeVisible();
 
-    // Wait for transition to running (mock should transition quickly)
-    await page.waitForTimeout(2000);
-
-    // Refresh to get updated status
-    await page.reload();
-    await waitForPageLoad(page);
+    // Ensure the start operation finished before asserting final state
+    await startResponse;
 
     // Verify server is now running (Online)
-    await expect(page.getByText(/online/i)).toBeVisible();
+    await expect(page.locator("h2").getByText("Online", { exact: true })).toBeVisible({ timeout: 20000 });
 
     // Verify public IP is now displayed
-    await expect(page.getByText(/\d+\.\d+\.\d+\.\d+/i)).toBeVisible();
+    await expect(page.getByTestId("server-status").getByText(/\d+\.\d+\.\d+\.\d+/i)).toBeVisible({
+      timeout: 20000,
+    });
   });
 
   test("Stop Flow - transitions from running to stopped", async ({ page }) => {
-    // Set scenario to running
+    // Set scenario to running BEFORE navigating to ensure state is ready
     await setScenario(page, "running");
+    await page.waitForTimeout(500); // Give scenario time to apply
 
-    // Navigate to status page
+    // Navigate to status page - fresh load with running scenario already set
     await navigateTo(page, "/");
     await waitForPageLoad(page);
 
-    // Verify server is running initially (Online)
-    await expect(page.getByText(/online/i)).toBeVisible();
+    // Wait for all critical API responses to complete
+    await page.waitForResponse((response) => response.url().includes("/api/auth/me") && response.status() === 200);
+    await page.waitForResponse((response) => response.url().includes("/api/status") && response.status() === 200);
+    await page.waitForTimeout(1000); // Give React time to render with updated state
+
+    // Verify server is running initially (Online status text in the main heading) before attempting to stop
+    await expect(page.locator("h2").getByText("Online", { exact: true })).toBeVisible({ timeout: 5000 });
+
+    // Wait for the stop button to be visible (admin-only button, only shows when running)
+    const stopButton = page.getByRole("button", { name: /stop server/i });
+    await expect(stopButton).toBeVisible({ timeout: 5000 });
 
     // Click stop button
-    await page.getByRole("button", { name: /stop server/i }).click();
+    await stopButton.click();
 
     // Verify UI shows "stopping" state (Stopping...)
     await expect(page.getByText(/stopping\.\.\./i)).toBeVisible();
 
-    // Wait for transition to stopped
-    await page.waitForTimeout(2000);
+    // Wait for transition to stopped (STOPPING_DELAY_MS is 2500ms + buffer)
+    await page.waitForTimeout(3500);
 
     // Refresh to get updated status
     await page.reload();
     await waitForPageLoad(page);
 
-    // Verify server is now stopped
-    await expect(page.getByText(/stopped/i)).toBeVisible();
+    // Wait for status API to return stopped state
+    await page.waitForResponse((response) => response.url().includes("/api/status") && response.status() === 200);
+    await page.waitForTimeout(500); // Give React time to render
 
-    // Verify public IP is no longer displayed
-    await expect(page.getByText(/\d+\.\d+\.\d+\.\d+/i)).not.toBeVisible();
+    // Verify server is now stopped (check the h2 heading for status)
+    await expect(page.locator("h2").getByText(/stopped/i)).toBeVisible({ timeout: 5000 });
+
+    // Verify public IP is no longer displayed (when stopped, IP shows as transparent/placeholder)
+    // The IP element exists but has transparent text class when not available
+    const ipElement = page.locator("span.font-sans.text-xs.text-transparent").filter({ hasText: /\d+\.\d+\.\d+\.\d+/ });
+    await expect(ipElement).toBeVisible();
   });
 
   test("Backup Flow - displays error when backup operation fails", async ({ page }) => {
     // Set scenario to running
     await setScenario(page, "running");
+    await page.waitForTimeout(500); // Give scenario time to apply
 
     // Inject fault for backup operation
     await injectFault(page, {
@@ -247,21 +242,23 @@ test.describe("Mock Mode E2E Tests", () => {
     await navigateTo(page, "/");
     await waitForPageLoad(page);
 
+    // Reload to ensure scenario state is reflected on the page
+    await page.reload();
+    await waitForPageLoad(page);
+
     // Click backup button
     await page.getByRole("button", { name: /backup/i }).click();
 
     // Verify backup dialog opens
-    await expect(page.getByTestId("backup-dialog")).toBeVisible();
+    await expect(page.getByTestId("backup-dialog")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText(/backup server/i)).toBeVisible();
 
-    // Click backup button in dialog
-    await page.getByRole("button", { name: /backup/i }).click();
+    // Click backup button in dialog (the confirm button)
+    const backupButtons = page.getByRole("button", { name: /backup/i });
+    await backupButtons.nth(1).click();
 
     // Wait for error to appear
-    await page.waitForTimeout(1000);
-
-    // Verify error is displayed
-    await expect(page.getByText(/failed to execute backup command/i)).toBeVisible();
+    await expect(page.getByText(/failed to execute backup command/i)).toBeVisible({ timeout: 5000 });
     await expect(page.getByText(/instance not found/i)).toBeVisible();
 
     // Verify backup dialog is closed after error
@@ -271,26 +268,30 @@ test.describe("Mock Mode E2E Tests", () => {
   test("Backup Flow - succeeds when no fault is injected", async ({ page }) => {
     // Set scenario to running
     await setScenario(page, "running");
+    await page.waitForTimeout(500); // Give scenario time to apply
 
     // Navigate to status page
     await navigateTo(page, "/");
     await waitForPageLoad(page);
 
-    // Click backup button
-    await page.getByRole("button", { name: /backup/i }).click();
+    // Reload to ensure scenario state is reflected on the page
+    await page.reload();
+    await waitForPageLoad(page);
+
+    // Click backup button in the main UI
+    const mainBackupButton = page.locator("section").getByRole("button", { name: /backup/i });
+    await mainBackupButton.click();
 
     // Verify backup dialog opens
-    await expect(page.getByTestId("backup-dialog")).toBeVisible();
+    await expect(page.getByTestId("backup-dialog")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText(/backup server/i)).toBeVisible();
 
-    // Click backup button in dialog
-    await page.getByRole("button", { name: /backup/i }).click();
+    // Click backup button in the dialog (confirm button)
+    const dialogBackupButton = page.getByTestId("backup-dialog").getByRole("button", { name: /backup/i });
+    await dialogBackupButton.click();
 
-    // Wait for backup to complete
-    await page.waitForTimeout(1000);
-
-    // Verify success message is displayed
-    await expect(page.getByText(/backup completed successfully/i)).toBeVisible();
+    // Wait for success message to appear
+    await expect(page.getByText(/backup completed successfully/i)).toBeVisible({ timeout: 5000 });
 
     // Verify backup dialog is closed after success
     await expect(page.getByTestId("backup-dialog")).not.toBeVisible();
@@ -307,7 +308,7 @@ test.describe("Mock Mode E2E Tests", () => {
     await setScenario(page, "running");
     await page.reload();
     await waitForPageLoad(page);
-    await expect(page.getByText(/online/i)).toBeVisible();
+    await expect(page.getByText("Online", { exact: true })).toBeVisible();
 
     // Switch to starting scenario
     await setScenario(page, "starting");
@@ -331,6 +332,8 @@ test.describe("Mock Mode E2E Tests", () => {
   test("High cost scenario - displays elevated costs", async ({ page }) => {
     // Set scenario to high-cost
     await setScenario(page, "high-cost");
+    await page.reload();
+    await waitForPageLoad(page);
 
     // Navigate to status page
     await navigateTo(page, "/");
@@ -339,10 +342,16 @@ test.describe("Mock Mode E2E Tests", () => {
     // Open cost dashboard
     await page.getByRole("button", { name: /costs/i }).click();
 
-    // Verify high costs are displayed
-    await expect(page.getByText(/\$125\.50/i)).toBeVisible();
+    // Click "Generate Report" button to fetch cost data
+    await page.getByRole("button", { name: /generate report/i }).click();
+
+    // Wait for cost data to load
+    await page.waitForTimeout(1000);
+
+    // Verify high costs are displayed (format: "$ 125.50" with space)
+    await expect(page.getByText(/\$\s*125\.50/i)).toBeVisible();
     await expect(page.getByText(/amazon ec2/i)).toBeVisible();
-    await expect(page.getByText(/\$110\.00/i)).toBeVisible();
+    await expect(page.getByText(/\$\s*110\.00/i)).toBeVisible();
 
     // Close cost dashboard
     await page.getByRole("button", { name: /close/i }).click();

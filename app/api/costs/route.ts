@@ -1,5 +1,6 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { getCosts } from "@/lib/aws";
+import { isMockMode } from "@/lib/env";
 import type { ApiResponse, CostData } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -21,9 +22,10 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "true";
+    const skipCache = isMockMode();
 
     // Return cached data if exists and not forcing refresh
-    if (cachedCosts && !forceRefresh) {
+    if (cachedCosts && !forceRefresh && !skipCache) {
       console.log("[COSTS] Returning cached cost data");
       return NextResponse.json({
         success: true,
@@ -35,12 +37,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       });
     }
 
-    console.log("[COSTS] Fetching fresh cost data from AWS");
+    console.log(skipCache ? "[COSTS] Mock mode - skipping cache" : "[COSTS] Fetching fresh cost data from AWS");
     const data = await getCosts();
     const timestamp = Date.now();
 
     // Update cache
-    cachedCosts = { data, timestamp };
+    if (!skipCache) {
+      cachedCosts = { data, timestamp };
+    }
 
     return NextResponse.json({
       success: true,

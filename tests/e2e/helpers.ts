@@ -16,7 +16,10 @@ export async function waitForPageLoad(page: Page): Promise<void> {
  */
 export async function confirmDialog(page: Page, typedConfirmation?: string): Promise<void> {
   // Find the confirm button in the modal/dialog
-  const confirmButton = page.getByRole("dialog").getByRole("button", { name: /confirm/i });
+  // Try multiple patterns: "Confirm", "Restore", "Hibernate", "Backup", etc.
+  const confirmButton = page.getByRole("dialog").getByRole("button", {
+    name: /confirm|restore|hibernate|start|stop|delete|backup/i,
+  });
 
   // If there's a confirmation input, type the text
   if (typedConfirmation) {
@@ -62,11 +65,11 @@ export async function expectSuccessMessage(page: Page, message: string | RegExp)
  * @param selector - Selector for the loading indicator (optional, defaults to common patterns)
  */
 export async function waitForLoading(page: Page, selector?: string): Promise<void> {
-  const loaderSelector = selector || '[aria-busy="true"], .loading, .spinner';
+  const loaderSelector = selector || '[aria-busy="true"], .loading, .spinner, [data-loading="true"]';
 
   try {
-    await page.waitForSelector(loaderSelector, { state: "attached" });
-    await page.waitForSelector(loaderSelector, { state: "detached" });
+    await page.waitForSelector(loaderSelector, { state: "attached", timeout: 2000 });
+    await page.waitForSelector(loaderSelector, { state: "detached", timeout: 10000 });
   } catch {
     // Loading might not have appeared, which is fine
   }

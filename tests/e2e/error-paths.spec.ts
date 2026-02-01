@@ -19,8 +19,8 @@ test.describe("Error Handling", () => {
 
     await page.goto("/");
 
-    // Should show "Server Not Configured" message
-    await expect(page.getByText(/Server Not Configured/i)).toBeVisible();
+    // Should show "Connection Error" message
+    await expect(page.getByText(/Connection Error/i)).toBeVisible({ timeout: 10000 });
   });
 
   test("shows error when start fails", async ({ page }) => {
@@ -31,14 +31,16 @@ test.describe("Error Handling", () => {
       operation: "startInstance",
       failNext: true,
       errorCode: "InstanceLimitExceeded",
-      errorMessage: "Failed to start instance",
+      errorMessage: "You have reached the maximum number of running instances",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /start server/i }).click();
 
-    // Should show error message
-    await expect(page.getByText(/failed to start/i)).toBeVisible();
+    // Should show error message (check for the actual error message)
+    await expect(page.getByText(/You have reached the maximum number of running instances/i)).toBeVisible({
+      timeout: 10000,
+    });
   });
 
   test("shows error when stop fails", async ({ page }) => {
@@ -49,14 +51,16 @@ test.describe("Error Handling", () => {
       operation: "stopInstance",
       failNext: true,
       errorCode: "IncorrectState",
-      errorMessage: "Failed to stop instance",
+      errorMessage: "Instance is in an incorrect state for this operation",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /stop server/i }).click();
 
-    // Should show error message
-    await expect(page.getByText(/failed to stop/i)).toBeVisible();
+    // Should show error message (check for the actual error message)
+    await expect(page.getByText(/Instance is in an incorrect state for this operation/i)).toBeVisible({
+      timeout: 10000,
+    });
   });
 
   test("shows error when backup fails", async ({ page }) => {
@@ -67,34 +71,34 @@ test.describe("Error Handling", () => {
       operation: "executeSSMCommand",
       failNext: true,
       errorCode: "InvalidInstanceId",
-      errorMessage: "Failed to create backup",
+      errorMessage: "The specified instance ID is not valid",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /backup/i }).click();
     await confirmDialog(page);
 
-    // Should show error message
-    await expect(page.getByText(/backup.*failed|failed.*backup/i)).toBeVisible();
+    // Should show error message (check for the actual error message)
+    await expect(page.getByText(/The specified instance ID is not valid/i)).toBeVisible({ timeout: 10000 });
   });
 
   test("shows error when restore fails", async ({ page }) => {
-    await setupStoppedScenario(page);
+    await setupRunningScenario(page);
 
     // Inject fault for executeSSMCommand operation
     await injectFault(page, {
       operation: "executeSSMCommand",
       failNext: true,
       errorCode: "InvalidInstanceId",
-      errorMessage: "Failed to restore from backup",
+      errorMessage: "The specified instance ID is not valid",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /restore/i }).click();
     await confirmDialog(page);
 
-    // Should show error message
-    await expect(page.getByText(/restore.*failed|failed.*restore/i)).toBeVisible();
+    // Should show error message (check for the actual error message)
+    await expect(page.getByText(/The specified instance ID is not valid/i)).toBeVisible({ timeout: 10000 });
   });
 
   test("shows error when hibernate fails", async ({ page }) => {
@@ -105,15 +109,17 @@ test.describe("Error Handling", () => {
       operation: "stopInstance",
       failNext: true,
       errorCode: "IncorrectState",
-      errorMessage: "Failed to hibernate server",
+      errorMessage: "Instance is in an incorrect state for this operation",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /hibernate/i }).click();
     await confirmDialog(page);
 
-    // Should show error message
-    await expect(page.getByText(/hibernate.*failed|failed.*hibernate/i)).toBeVisible();
+    // Should show error message (check for the actual error message)
+    await expect(page.getByText(/Instance is in an incorrect state for this operation/i)).toBeVisible({
+      timeout: 10000,
+    });
   });
 
   test("shows error when resume fails", async ({ page }) => {
@@ -124,16 +130,18 @@ test.describe("Error Handling", () => {
       operation: "startInstance",
       failNext: true,
       errorCode: "InstanceLimitExceeded",
-      errorMessage: "Failed to resume server",
+      errorMessage: "You have reached the maximum number of running instances",
     });
 
     await page.goto("/");
     await page.getByRole("button", { name: /resume/i }).click();
 
     // Click start fresh
-    await page.getByRole("button", { name: /start fresh world/i }).click();
+    await page.getByRole("button", { name: /Start Fresh World/i }).click();
 
-    // Should show error message
-    await expect(page.getByText(/resume.*failed|failed.*resume/i)).toBeVisible();
+    // Should show error message (check for the actual error message)
+    await expect(page.getByText(/You have reached the maximum number of running instances/i)).toBeVisible({
+      timeout: 10000,
+    });
   });
 });

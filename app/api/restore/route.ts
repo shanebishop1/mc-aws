@@ -36,7 +36,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
     console.log("[RESTORE] Admin action by:", authResult.email);
 
-    const body: RestoreRequest = await request.json();
+    // Parse request body, handling empty body case
+    let body: RestoreRequest = {};
+    try {
+      body = await request.json();
+    } catch {
+      // Empty body is valid - will use latest backup
+    }
     const backupName = body.backupName || body.name;
     const resolvedId = body.instanceId || (await findInstanceId());
 

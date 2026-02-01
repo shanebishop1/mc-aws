@@ -4,9 +4,13 @@
  */
 
 import { getAuthUser } from "@/lib/api-auth";
-import { getStackStatus } from "@/lib/aws/cloudformation-client";
+import { getStackStatus } from "@/lib/aws";
 import type { ApiResponse, StackStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+
+export const dynamic = "force-dynamic";
+
+const noStoreHeaders = { "Cache-Control": "no-store" } as const;
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<StackStatusResponse>>> {
   const user = await getAuthUser(request);
@@ -17,38 +21,41 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const stack = await getStackStatus("MinecraftStack");
 
     if (stack) {
-      return NextResponse.json({
-        success: true,
-        data: {
-          exists: true,
-          status: stack.StackStatus,
-          stackId: stack.StackId,
+      return NextResponse.json(
+        {
+          success: true,
+          data: {
+            exists: true,
+            status: stack.StackStatus,
+            stackId: stack.StackId,
+          },
+          timestamp: new Date().toISOString(),
         },
-        timestamp: new Date().toISOString(),
-      });
+        { headers: noStoreHeaders }
+      );
     }
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        exists: false,
+    return NextResponse.json(
+      {
+        success: true,
+        data: {
+          exists: false,
+        },
+        timestamp: new Date().toISOString(),
       },
-      timestamp: new Date().toISOString(),
-    });
+      { headers: noStoreHeaders }
+    );
   } catch (error) {
     console.error("[STACK-STATUS] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
     return NextResponse.json(
       {
-        success: true, // We still return success: true because the request itself succeeded, but the data indicates the error
-        data: {
-          exists: false,
-          error: errorMessage,
-        },
+        success: false,
+        error: errorMessage,
         timestamp: new Date().toISOString(),
       },
-      { status: 200 }
+      { status: 500, headers: noStoreHeaders }
     );
   }
 }

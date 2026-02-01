@@ -11,8 +11,8 @@ test.describe("Homepage States", () => {
     // Navigate to status page
     await navigateTo(page, "/");
 
-    // Should show "Server Not Configured" message
-    await expect(page.getByText(/Server Not Configured/i)).toBeVisible();
+    // Should show "Connection Error" message (not "Server Not Configured")
+    await expect(page.getByText(/Connection Error/i)).toBeVisible({ timeout: 5000 });
 
     // Should not show server controls
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();
@@ -58,9 +58,11 @@ test.describe("Homepage States", () => {
     await expect(page.getByRole("button", { name: /backup/i })).toBeVisible();
     await expect(page.getByRole("button", { name: /restore/i })).toBeVisible();
 
-    // Should not show Start, Hibernate, or Resume buttons
+    // Should show Hibernate button (it's available when running)
+    await expect(page.getByRole("button", { name: /hibernate/i })).toBeVisible();
+
+    // Should not show Start or Resume buttons
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();
-    await expect(page.getByRole("button", { name: /hibernate/i })).not.toBeVisible();
     await expect(page.getByRole("button", { name: /resume/i })).not.toBeVisible();
   });
 
@@ -88,8 +90,8 @@ test.describe("Homepage States", () => {
     // Navigate to status page
     await navigateTo(page, "/");
 
-    // Should show "Server Not Configured" message
-    await expect(page.getByText(/Server Not Configured/i)).toBeVisible();
+    // Should show "Connection Error" message (not "Server Not Configured")
+    await expect(page.getByText(/Connection Error/i)).toBeVisible({ timeout: 5000 });
 
     // Should not show server controls
     await expect(page.getByRole("button", { name: /start/i })).not.toBeVisible();

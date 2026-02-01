@@ -24,19 +24,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     );
   }
 
-  // Require authentication for mutations
-  try {
-    const user = await requireAllowed(request);
-    console.log("[MOCK-CONTROL] State reset by:", user.email, "role:", user.role);
-  } catch (error) {
-    if (error instanceof Response) {
-      return error as NextResponse<ApiResponse<unknown>>;
-    }
-    throw error;
-  }
+  // In mock mode, skip authentication for easier testing
+  // In production, this would be blocked by the isMockMode() check above
+  console.log("[MOCK-CONTROL] Resetting mock state to defaults (mock mode, skipping auth)");
 
   try {
-    console.log("[MOCK-CONTROL] Resetting mock state to defaults");
     await resetToDefaultScenario();
 
     return NextResponse.json({
