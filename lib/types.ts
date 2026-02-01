@@ -18,6 +18,7 @@ export interface ServerStatusResponse {
   publicIp?: string;
   hasVolume?: boolean;
   lastUpdated: string;
+  serverAction?: { action: string; timestamp: number } | null;
 }
 
 export interface ApiResponse<T = unknown> {

@@ -102,6 +102,9 @@ const runningScenario: Scenario = {
     // Set player count to simulate active server
     await stateStore.setParameter("/minecraft/player-count", "5", "String");
 
+    // Set Google Drive token to simulate configured
+    await stateStore.setParameter("/minecraft/gdrive-token", "mock-gdrive-token-12345", "SecureString");
+
     console.log("[SCENARIO] Applied running scenario");
   },
 };
@@ -165,6 +168,9 @@ const hibernatedScenario: Scenario = {
       hasVolume: false,
       blockDeviceMappings: [],
     });
+
+    // Set Google Drive token to simulate configured
+    await stateStore.setParameter("/minecraft/gdrive-token", "mock-gdrive-token-12345", "SecureString");
 
     console.log("[SCENARIO] Applied hibernated scenario");
   },
