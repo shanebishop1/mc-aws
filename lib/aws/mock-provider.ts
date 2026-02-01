@@ -673,34 +673,31 @@ export const mockProvider: AwsProvider = {
   invokeLambda: async (functionName: string, payload: any): Promise<void> => {
     await applyFaultInjection("invokeLambda");
     console.log("[MOCK] invokeLambda called for:", functionName, "payload:", payload);
-    
+
     // Simulate StartMinecraftServer lambda
     if (functionName === "StartMinecraftServer" || functionName.includes("StartMinecraftServer")) {
-      const parsedPayload = typeof payload === 'string' ? JSON.parse(payload) : payload;
-      
+      const parsedPayload = typeof payload === "string" ? JSON.parse(payload) : payload;
+
       if (parsedPayload.command === "start") {
         console.log("[MOCK] Simulating async start by triggering startInstance");
-        // We don't await this to simulate "async" behavior if we wanted, 
-        // but for mock stability it's often better to await or just let it fly.
-        // The API expectation is fire-and-forget.
-        // However, since we are in mock mode, the UI might be polling.
-        // Let's call startInstance.
+        const stateStore = getMockStateStore();
+
+        // Start the instance (this will transition to pending, then running after delay)
         await mockProvider.startInstance(parsedPayload.instanceId);
-        
-        // Also simulate the clearing of the lock which the real lambda does
-        // But the real lambda clears it at the END. 
-        // startInstance (mock) takes some time (simulated delays).
-        // So we should probably let startInstance finish (which it does in mock)
-        // and then we can clear the lock if we set it?
-        // The ROUTE sets the lock. The LAMBDA clears it.
-        // So here we should probably wait for startInstance and then clear the lock.
-        
-        try {
-           await mockProvider.deleteParameter("/minecraft/server-action");
-           console.log("[MOCK] Cleared server-action lock after start");
-        } catch (e) {
-           // Ignore if lock doesn't exist
-        }
+
+        // Simulate the Lambda clearing the lock AFTER the instance reaches running state
+        // The real Lambda does DNS updates after the instance is running, then clears the lock
+        // We'll clear the lock after a realistic delay (after PENDING_DELAY_MS)
+        const lockClearDelay = PENDING_DELAY_MS + 500; // Clear lock shortly after instance reaches running
+        const lockClearTimeout = setTimeout(async () => {
+          try {
+            await mockProvider.deleteParameter("/minecraft/server-action");
+            console.log("[MOCK] Cleared server-action lock after start completion");
+          } catch {
+            // Ignore if lock doesn't exist
+          }
+        }, lockClearDelay);
+        stateStore.registerTimeout(lockClearTimeout);
       }
     }
   },

@@ -156,7 +156,7 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
     }
   });
 
-  // Mock GET /api/start
+  // Mock /api/start (both GET and POST)
   await page.route("**/api/start", async (route) => {
     if (hasAwsError) {
       await route.fulfill({
@@ -167,32 +167,9 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
     } else {
       const data: StartServerResponse = {
         instanceId: mockInstanceId,
-        publicIp: mockPublicIp,
+        publicIp: "pending", // Async start returns pending IP
         domain: mockDomain,
-        message: "Starting Minecraft server",
-      };
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(createResponse(data)),
-      });
-    }
-  });
-
-  // Mock POST /api/start (should match both GET and POST)
-  await page.route("**/api/start", async (route) => {
-    if (hasAwsError) {
-      await route.fulfill({
-        status: 200,
-        contentType: "application/json",
-        body: JSON.stringify(createErrorResponse("Failed to start instance: AWS connection error")),
-      });
-    } else {
-      const data: StartServerResponse = {
-        instanceId: mockInstanceId,
-        publicIp: mockPublicIp,
-        domain: mockDomain,
-        message: "Starting Minecraft server",
+        message: "Server start initiated. This may take 1-2 minutes.",
       };
       await route.fulfill({
         status: 200,
