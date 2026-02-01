@@ -124,3 +124,8 @@ export async function getStackStatus(stackName?: string) {
 export async function checkStackExists(stackName?: string): Promise<boolean> {
   return getProvider().checkStackExists(stackName);
 }
+
+// Lambda operations
+export async function invokeLambda(functionName: string, payload: any): Promise<void> {
+  return getProvider().invokeLambda(functionName, payload);
+}
