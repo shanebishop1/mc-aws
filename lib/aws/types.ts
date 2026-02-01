@@ -87,4 +87,7 @@ export interface AwsProvider {
   // CloudFormation
   getStackStatus(stackName?: string): Promise<Stack | null>;
   checkStackExists(stackName?: string): Promise<boolean>;
+
+  // Lambda
+  invokeLambda(functionName: string, payload: any): Promise<void>;
 }

@@ -15,6 +15,7 @@ import {
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
+  DeleteParameterCommand,
   SSMClient,
   SendCommandCommand,
 } from "@aws-sdk/client-ssm";
@@ -43,5 +44,6 @@ export {
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
+  DeleteParameterCommand,
   SendCommandCommand,
 };
