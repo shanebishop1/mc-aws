@@ -1,6 +1,11 @@
 #!/bin/bash
 # Deploy to Cloudflare Workers with dynamic route configuration
 # This script reads .env.production to configure the deployment route
+#
+# Authentication:
+#   - Uses `wrangler login` (OAuth) for deployment - requires full Workers permissions
+#   - CLOUDFLARE_API_TOKEN from .env.production is ONLY for runtime DNS updates by Lambda
+#     (it only needs "Edit zone DNS" permissions and should NOT be used for deployment)
 
 set -e
 
@@ -80,9 +85,49 @@ for secret in "${REQUIRED_SECRETS[@]}"; do
 done
 
 if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
+echo ""
+echo "🔍 Validating required secrets..."
+
+# Validate all required secrets are set
+MISSING_SECRETS=()
+for secret in "${REQUIRED_SECRETS[@]}"; do
+  if ! grep -q "^${secret}=" .env.production || grep -q "^${secret}=$" .env.production || grep -q "^${secret}=\"\"" .env.production; then
+    MISSING_SECRETS+=("$secret")
+  fi
+done
+
+if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
+  echo "❌ Error: Missing required secrets in .env.production:"
+  for secret in "${MISSING_SECRETS[@]}"; do
+    echo "  - $secret"
+  done
+  exit 1
+fi
+
+echo "✅ All required secrets are set"
+echo ""
+
+# Check if wrangler is authenticated for deployment
+echo "🔐 Checking Cloudflare authentication..."
+if ! pnpm exec wrangler whoami &>/dev/null; then
   echo ""
-  echo "❌ Error: The following required secrets are missing or not set in .env.production:"
+  echo "⚠️  You need to authenticate with Cloudflare to deploy Workers."
   echo ""
+  echo "Important: wrangler login uses OAuth for deployment (full permissions)."
+  echo "This is different from CLOUDFLARE_API_TOKEN which is only for runtime DNS updates."
+  echo ""
+  echo "Running: wrangler login"
+  echo ""
+  
+  if ! pnpm exec wrangler login; then
+    echo ""
+    echo "❌ Error: Failed to authenticate with Cloudflare"
+    echo "Please try running 'pnpm exec wrangler login' manually"
+    exit 1
+  fi
+fi
+echo "✅ Authenticated with Cloudflare"
+echo ""
   for secret in "${MISSING_SECRETS[@]}"; do
     echo "  - $secret"
   done
@@ -132,8 +177,9 @@ while IFS='=' read -r key value; do
   [[ -z "$value" ]] && continue
   
   echo "  Setting: $key"
-  if ! echo "$value" | pnpm exec wrangler secret put "$key" >/dev/null 2>&1; then
-    echo "❌ Error: Failed to set secret: $key"
+  if ! echo "$value" | pnpm exec wrangler secret put "$key"; then
+    echo ""
+    echo "❌ Error: Failed to set secret: $key (see error above)"
     exit 1
   fi
   ((SECRET_COUNT++))
