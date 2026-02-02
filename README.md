@@ -451,10 +451,13 @@ If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create
 
 4.  **Configure Environment:**
 
-    Copy the provided `.env.template` file to `.env`:
+    Copy the environment template:
 
     ```bash
-    cp .env.template .env
+    cp .env.example .env.local
+    ```
+
+    The `.env.local` file contains your credentials. Environment-specific settings (mock mode, dev login, localhost URL) are automatically set by the `pnpm dev` or `pnpm dev:mock` commands.
     ```
 
     Then edit `.env` with your specific values:
@@ -877,10 +880,10 @@ This project uses separate environment files for development and production:
 
 ```bash
 # For local development
-cp .env.local.template .env.local
+cp .env.local.example .env.local
 
 # For production
-cp .env.production.template .env.production
+cp .env.example .env.production
 ```
 
 ### Local Development Authentication
@@ -1016,15 +1019,14 @@ This application deploys to **Cloudflare Workers** using the OpenNext adapter. T
 ### Quick Start
 
 ```bash
-# 1. Copy production template
-cp .env.production.template .env.production
+# Copy the same template (just fill in production URL)
+cp .env.example .env.production
 
-# 2. Fill in your values (see setup guides below)
+# Edit only NEXT_PUBLIC_APP_URL - everything else is identical to .env.local
 vim .env.production
-
-# 3. Deploy (automatically uploads secrets, builds, and deploys)
-pnpm deploy:cf
 ```
+
+The deploy script automatically sets `MC_BACKEND_MODE=aws` and `ENABLE_DEV_LOGIN=false` for production.
 
 The deployment script will:
 - ✅ Auto-generate `AUTH_SECRET` if missing
@@ -1067,7 +1069,7 @@ The control panel runs on the same domain as your Minecraft server:
 
 ```bash
 # Copy template
-cp .env.production.template .env.production
+cp .env.example .env.production
 ```
 
 **Required variables (see setup guides for values):**
@@ -1090,7 +1092,7 @@ cp .env.production.template .env.production
 - `ALLOWED_EMAILS` - Comma-separated list of allowed users
 - Other Cloudflare/GitHub/Google Drive settings
 
-See `.env.production.template` for all available variables.
+See `.env.example` for all available variables.
 
 ### Deploy to Cloudflare
 
