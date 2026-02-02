@@ -50,7 +50,7 @@ tests/*-results.txt
 
 # env files - using parent directory .env
 .env*
-!.env.*template
+!.env.example
 
 # vercel
 .vercel
