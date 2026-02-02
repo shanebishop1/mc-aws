@@ -500,7 +500,7 @@ If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create
     CLOUDFLARE_MC_DOMAIN="mc.yourdomain.com"
 
     # AWS SES (verified emails from Prerequisites section above)
-    VERIFIED_SENDER="start@yourdomain.com"           # Email to receive trigger emails
+    VERIFIED_SENDER="start@yourdomain.com"           # SES address: receives start emails + sends notifications (From)
     NOTIFICATION_EMAIL="you@yourdomain.com"          # (Optional) Where to receive alerts
     START_KEYWORD="start"                            # (Optional) Word that triggers server start
 

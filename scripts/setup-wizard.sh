@@ -41,6 +41,23 @@ wizard_header() {
 
 readonly WIZARD_TOTAL=10
 
+mask_value() {
+  local value="$1"
+  local len=${#value}
+
+  if [[ $len -le 8 ]]; then
+    echo "***"
+    return
+  fi
+
+  echo "${value:0:3}***${value:$((len - 3)):3}"
+}
+
+have_env() {
+  local key="$1"
+  [[ -n "${!key:-}" ]]
+}
+
 step_section() {
   local step_num="$1"
   shift
@@ -162,15 +179,28 @@ write_env() {
   local key="$2"
   local value="$3"
 
-  # Check if key exists in file
-  if grep -q "^${key}=" "$env_file" 2>/dev/null; then
-    # Update existing key
-    sed -i.bak "s/^${key}=.*/${key}=${value}/" "$env_file"
-    rm -f "${env_file}.bak"
-  else
-    # Append new key
-    echo "${key}=${value}" >> "$env_file"
+  # Avoid sed escaping issues (URLs contain '/') by rewriting the file.
+  touch "$env_file"
+
+  local tmp
+  tmp="$(mktemp "${env_file}.tmp.XXXXXX")"
+
+  local found="0"
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "$line" == "${key}="* ]]; then
+      printf '%s=%s\n' "$key" "$value" >> "$tmp"
+      found="1"
+      continue
+    fi
+
+    printf '%s\n' "$line" >> "$tmp"
+  done < "$env_file"
+
+  if [[ "$found" == "0" ]]; then
+    printf '%s=%s\n' "$key" "$value" >> "$tmp"
   fi
+
+  mv "$tmp" "$env_file"
 }
 
 # Check if .env.local exists and offer to resume
@@ -180,6 +210,7 @@ check_resume() {
   if [[ -f "$env_file" ]]; then
     section "Existing Configuration Found"
     log "Found existing .env.local file with some credentials already set."
+    log "Tip: when you see a value in brackets, press Enter to keep it."
     echo ""
     echo "You can either:"
     echo "  1. Continue and update missing credentials"
@@ -446,14 +477,24 @@ collect_google_oauth() {
   echo "  1. Go to https://console.cloud.google.com/"
   echo "  2. Create a new project or select existing one"
   echo "  3. Go to 'APIs & Services' → 'OAuth consent screen'"
-  echo "  4. Choose 'External' and fill in required fields"
+  echo "  4. If you see a 'Get started' button, click it and complete the form"
+  echo "     (app name, support email, developer contact info)."
+  echo "  5. Choose 'External' user type (common for personal projects)"
+  echo "     and add yourself as a test user while the app is in testing."
   echo "  5. Go to 'APIs & Services' → 'Credentials'"
   echo "  6. Click 'Create Credentials' → 'OAuth client ID'"
   echo "  7. Application type: Web application"
-  echo "  8. Add your domain to 'Authorized JavaScript origins'"
+  echo "  8. Add the exact origin for your control panel to 'Authorized JavaScript origins'"
+  echo "     - Use the same host as NEXT_PUBLIC_APP_URL (include https://)"
+  echo "     - If your panel is https://panel.yourdomain.com, add https://panel.yourdomain.com"
+  echo "     - Only add https://yourdomain.com if your panel actually runs on the apex domain"
   echo "  9. Add your callback URL to 'Authorized redirect URIs'"
-  echo "     (e.g., https://panel.example.com/api/auth/callback/google)"
-  echo "  10. Click 'Create' and copy the Client ID and Client Secret"
+  echo "     - Use: https://panel.yourdomain.com/api/auth/callback (no trailing /google)"
+  echo "  10. If you want to use Google sign-in locally, also add:"
+  echo "      - Origin:   http://localhost:3000"
+  echo "      - Redirect: http://localhost:3000/api/auth/callback"
+  echo "      Otherwise you can skip localhost and use the built-in dev login locally."
+  echo "  11. Click 'Create' and copy the Client ID and Client Secret"
   echo ""
 
   prompt GOOGLE_CLIENT_ID "Enter Google OAuth Client ID" "${GOOGLE_CLIENT_ID:-}"
@@ -495,7 +536,7 @@ collect_authorization() {
 
   # Allowed emails
   echo "Allowed emails are users who can start/stop the server."
-  echo "Enter a comma-separated list (e.g., user1@example.com,user2@example.com)"
+  echo "Enter a comma-separated list (e.g., friend1@yourdomain.com,friend2@gmail.com)"
   echo "Leave empty to only allow the admin."
   echo ""
 
@@ -562,7 +603,7 @@ collect_cloudflare() {
   # Minecraft domain
   echo "Enter the subdomain for your Minecraft server."
   echo "This is the domain players will use to connect."
-  echo "Example: mc.example.com"
+  echo "Example: mc.yourdomain.com"
   echo ""
 
   while true; do
@@ -598,7 +639,7 @@ collect_production_url() {
   echo ""
 
   echo "Enter the full URL for your control panel."
-  echo "Example: https://panel.example.com"
+  echo "Example: https://panel.yourdomain.com"
   echo ""
 
   while true; do
@@ -628,11 +669,27 @@ collect_email_settings() {
   log "This feature allows starting the server via email."
   echo ""
 
-  echo "To use email features, you need to verify sender emails in AWS SES."
+  echo "What this email feature does:"
+  echo "  - You send an email to a special address (e.g., start@yourdomain.com)"
+  echo "  - SES receives it and triggers the start Lambda"
+  echo "  - SES also sends notification emails (startup success/failure, etc.)"
+  echo ""
+  echo "VERIFIED_SENDER is BOTH:"
+  echo "  1) The 'To:' address SES listens for (the start trigger address)"
+  echo "  2) The 'From:' address SES uses when sending notifications"
+  echo ""
+  echo "It is NOT an MX record for your Minecraft server."
+  echo "It's an email address on a domain you control (e.g., start@yourdomain.com)."
+  echo ""
+  echo "Prereqs (high level):"
+  echo "  - In AWS SES, verify the identity (email or domain)"
+  echo "  - In DNS, point the domain's MX record to Amazon SES to enable receiving"
+  echo "  - If your SES account is in sandbox, you may also need to verify recipients"
+  echo ""
   echo "Leave these empty to skip email configuration."
   echo ""
 
-  prompt_optional VERIFIED_SENDER "Enter verified sender email" "${VERIFIED_SENDER:-}"
+  prompt_optional VERIFIED_SENDER "Enter start/notification address" "${VERIFIED_SENDER:-}"
 
   if [[ -n "$VERIFIED_SENDER" ]]; then
     while ! validate_email "$VERIFIED_SENDER"; do
@@ -831,11 +888,15 @@ main() {
   echo "  • .env.local      (for local development)"
   echo "  • .env.production (for production deployment)"
   echo ""
-  echo "Next steps:"
-  echo "  1. Review your credentials in .env.local"
-  echo "  2. Run './setup.sh' to deploy AWS infrastructure"
-  echo "  3. Deploy Cloudflare Workers frontend"
-  echo ""
+  if [[ -n "${MC_AWS_SETUP_RETURN_TO_SETUP_SH:-}" ]]; then
+    echo "Returning to setup.sh to deploy infrastructure..."
+    echo ""
+  else
+    echo "Next steps:"
+    echo "  1. Review your credentials in .env.local"
+    echo "  2. Run './setup.sh' to deploy AWS infrastructure and Cloudflare"
+    echo ""
+  fi
   log_success "Setup wizard completed successfully!"
   echo ""
 
