@@ -351,6 +351,36 @@ mc-aws/
 
 This project uses AWS CDK to automate the entire setup process. Follow these steps to deploy your on-demand Minecraft server.
 
+### Quick Start (One Command Setup)
+
+Want to get up and running as fast as possible? The automated `setup.sh` script handles everything for you:
+
+- ✅ Installs [mise](https://mise.jdx.dev/) (the modern tool manager)
+- ✅ Installs Node.js and pnpm via mise
+- ✅ Collects all required credentials (AWS, Cloudflare, GitHub, etc.)
+- ✅ Configures environment variables
+- ✅ Deploys your Minecraft server infrastructure
+
+**Prerequisites:**
+- A GitHub account (for the fork)
+- An AWS account (free tier works)
+- A Cloudflare account with a domain
+
+**Run the setup:**
+
+```bash
+# 1. Clone the repository
+git clone https://github.com/you/mc-aws.git
+cd mc-aws
+
+# 2. Run the automated setup
+./setup.sh
+```
+
+The script will guide you through each step, prompting for any required information. When complete, your server will be ready to use!
+
+> **Note:** If you prefer manual control over each step, or if the automated script encounters issues, see the detailed [Prerequisites](#prerequisites) and [Deployment Steps](#deployment-steps) below.
+
 ### Prerequisites
 
 Before you begin, ensure you have the following:

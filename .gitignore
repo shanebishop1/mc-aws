@@ -44,6 +44,9 @@ yarn-error.log*
 # local mock state
 .mock-state.json
 
+# local configuration
+mise.local.toml
+
 # local e2e artifacts
 tests/*-output.txt
 tests/*-results.txt
