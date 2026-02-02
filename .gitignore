@@ -49,8 +49,8 @@ tests/*-output.txt
 tests/*-results.txt
 
 # env files - using parent directory .env
-.env
-.env*.local
+.env*
+!.env.*template
 
 # vercel
 .vercel
