@@ -74,7 +74,7 @@ for secret in "${REQUIRED_SECRETS[@]}"; do
     value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
     
     # Check if empty or placeholder
-    if [[ -z "$value" ]] || [[ "$value" == "your-"* ]] || [[ "$value" == "https://mc.yourdomain.com" ]]; then
+    if [[ -z "$value" ]] || [[ "$value" == "your-"* ]] || [[ "$value" == "https://mc.yourdomain.com" ]] || [[ "$value" == "http://localhost:3000" ]]; then
       MISSING_SECRETS+=("$secret")
     fi
   fi
@@ -89,15 +89,17 @@ if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
   done
   echo ""
   echo "Please update your .env.production file with the correct values."
-  echo "See .env.production.template for reference."
+  echo "See .env.example for reference."
   exit 1
 fi
 
 echo "✅ All required secrets are set"
 echo ""
 
-# Source .env.production
+# Source .env.production and add production-specific overrides
 export $(grep -v '^#' .env.production | xargs)
+export MC_BACKEND_MODE=aws
+export ENABLE_DEV_LOGIN=false
 
 # Extract domain from NEXT_PUBLIC_APP_URL
 # e.g., https://mc.shane-bishop.com -> mc.shane-bishop.com
@@ -110,10 +112,19 @@ ZONE_NAME=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
 echo "🚀 Deploying to Cloudflare Workers..."
 echo "   Domain: $DOMAIN"
 echo "   Zone: $ZONE_NAME"
+echo "   Backend: aws"
+echo "   Dev Login: disabled"
 echo ""
 
-# Upload secrets first
+# Upload secrets first (including MC_BACKEND_MODE and ENABLE_DEV_LOGIN)
 echo "🔑 Uploading secrets from .env.production..."
+
+# Add production-specific values to upload
+echo "MC_BACKEND_MODE=aws" | wrangler secret put "MC_BACKEND_MODE" >/dev/null 2>&1
+echo "  Setting: MC_BACKEND_MODE"
+echo "ENABLE_DEV_LOGIN=false" | wrangler secret put "ENABLE_DEV_LOGIN" >/dev/null 2>&1
+echo "  Setting: ENABLE_DEV_LOGIN"
+
 while IFS='=' read -r key value; do
   # Skip empty lines and comments
   [[ -z "$key" || "$key" =~ ^#.* ]] && continue
