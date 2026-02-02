@@ -349,11 +349,24 @@ For more information, visit: https://mise.jdx.dev/"
 
   # Step 8: Deploy Cloudflare Workers frontend
   step "Deploying Cloudflare Workers frontend"
-  pnpm deploy:cf
+  if ! pnpm deploy:cf; then
+    echo ""
+    error_exit "Cloudflare deployment failed. Check the error messages above."
+  fi
   success "Cloudflare deployment complete"
 
-  step "Setup complete"
-  success "mc-aws is deployed"
+  step "Setup complete! 🎉"
+  echo ""
+  success "mc-aws is fully deployed and ready to use!"
+  echo ""
+  log "📍 Your Minecraft control panel: https://${NEXT_PUBLIC_APP_URL#https://}"
+  log "📍 Minecraft server domain: ${CLOUDFLARE_MC_DOMAIN}"
+  echo ""
+  log "Next steps:"
+  log "  1. Visit your control panel and sign in with: ${ADMIN_EMAIL}"
+  log "  2. Start your Minecraft server from the panel"
+  log "  3. Connect to ${CLOUDFLARE_MC_DOMAIN} in Minecraft"
+  echo ""
 }
 
 # Run main function

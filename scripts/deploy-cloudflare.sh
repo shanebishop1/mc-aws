@@ -115,15 +115,12 @@ echo "   Backend: aws"
 echo "   Dev Login: disabled"
 echo ""
 
-# Upload secrets first (including MC_BACKEND_MODE and ENABLE_DEV_LOGIN)
+# Upload secrets from .env.production
+# Note: MC_BACKEND_MODE and ENABLE_DEV_LOGIN are exported above for the build process
+# but are NOT uploaded as Cloudflare secrets - they default correctly at runtime.
 echo "🔑 Uploading secrets from .env.production..."
 
-# Add production-specific values to upload
-echo "MC_BACKEND_MODE=aws" | wrangler secret put "MC_BACKEND_MODE" >/dev/null 2>&1
-echo "  Setting: MC_BACKEND_MODE"
-echo "ENABLE_DEV_LOGIN=false" | wrangler secret put "ENABLE_DEV_LOGIN" >/dev/null 2>&1
-echo "  Setting: ENABLE_DEV_LOGIN"
-
+SECRET_COUNT=0
 while IFS='=' read -r key value; do
   # Skip empty lines and comments
   [[ -z "$key" || "$key" =~ ^#.* ]] && continue
@@ -135,20 +132,42 @@ while IFS='=' read -r key value; do
   [[ -z "$value" ]] && continue
   
   echo "  Setting: $key"
-  echo "$value" | wrangler secret put "$key" >/dev/null 2>&1
+  if ! echo "$value" | wrangler secret put "$key" >/dev/null 2>&1; then
+    echo "❌ Error: Failed to set secret: $key"
+    exit 1
+  fi
+  ((SECRET_COUNT++))
 done < .env.production
 
-echo "✅ Secrets uploaded"
+echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
 echo ""
 
 # Build the Next.js app
 echo "📦 Building Next.js app..."
-pnpm build
+if ! pnpm build; then
+  echo ""
+  echo "❌ Error: Failed to build Next.js app"
+  exit 1
+fi
+echo "✅ Build successful"
+echo ""
 
 # Deploy with wrangler using route flags
 echo "🌐 Deploying to Cloudflare..."
-wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23
+if ! wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
+  echo ""
+  echo "❌ Error: Failed to deploy to Cloudflare Workers"
+  exit 1
+fi
 
 echo ""
-echo "✅ Deployment complete!"
-echo "   Your app should be live at: https://$DOMAIN"
+echo "✅✅✅ Deployment complete! ✅✅✅"
+echo ""
+echo "   🌍 Your app is live at: https://$DOMAIN"
+echo "   📊 Dashboard: https://dash.cloudflare.com"
+echo ""
+echo "Next steps:"
+echo "   1. Test your deployment at https://$DOMAIN"
+echo "   2. Check the Cloudflare dashboard for logs and metrics"
+echo "   3. Verify all functionality is working as expected"
+echo ""
