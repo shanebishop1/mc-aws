@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev -p 3001",
-    "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3001",
+    "dev": "next dev",
+    "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev",
     "prebuild": "tsx scripts/validate-env.ts",
     "build": "next build",
     "start": "next start",
