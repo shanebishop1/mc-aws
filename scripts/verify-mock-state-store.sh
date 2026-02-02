@@ -3,7 +3,17 @@
 
 set -euo pipefail
 
-log() { echo "[$(date -Is)] $*"; }
+iso_now() {
+  if date -Is >/dev/null 2>&1; then
+    date -Is
+    return
+  fi
+
+  # macOS/BSD date does not support -I
+  date -u "+%Y-%m-%dT%H:%M:%SZ"
+}
+
+log() { echo "[$(iso_now)] $*"; }
 
 log "Verifying mock-state-store.ts implementation..."
 
