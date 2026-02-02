@@ -11,7 +11,7 @@ export default defineConfig({
   reporter: "html",
   globalSetup: "./tests/e2e/global-setup.ts",
   use: {
-    baseURL: "http://localhost:3004",
+    baseURL: "http://localhost:3001",
     trace: "on-first-retry",
   },
   projects: [
@@ -22,8 +22,8 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "bash -lc 'set -euo pipefail; export MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true AUTH_SECRET=dev-secret-placeholder; npm run build; npm run start -- -p 3004'",
-    url: "http://localhost:3004",
+      "bash -lc 'set -euo pipefail; export MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true AUTH_SECRET=dev-secret-placeholder; npm run build; npm run start -- -p 3001'",
+    url: "http://localhost:3001",
     // In mock mode, always start fresh to avoid stale server/mock state.
     reuseExistingServer: !process.env.CI && !isMockMode,
     timeout: 120000,
