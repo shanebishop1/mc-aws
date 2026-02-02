@@ -31,7 +31,7 @@
     "mock:scenario": "tsx scripts/mock-cli.ts scenario",
     "validate:dev-login": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true tsx scripts/validate-dev-login.ts",
     "preview:cf": "opennextjs-cloudflare build && wrangler dev",
-    "deploy:cf": "opennextjs-cloudflare build && wrangler deploy"
+    "deploy:cf": "./scripts/deploy-cloudflare.sh"
   },
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.965.0",
