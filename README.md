@@ -96,7 +96,7 @@ Mock mode allows you to develop and test the application without requiring AWS r
 
 ```bash
 # 1. Copy the minimal mock mode configuration
-cp .env.local.example .env.local
+cp .env.example .env.local
 
 # 2. Start dev server in mock mode with dev login enabled
 pnpm dev:mock
@@ -880,7 +880,7 @@ This project uses separate environment files for development and production:
 
 ```bash
 # For local development
-cp .env.local.example .env.local
+cp .env.example .env.local
 
 # For production
 cp .env.example .env.production
@@ -927,7 +927,7 @@ pnpm dev:mock
 open http://localhost:3000/api/auth/dev-login
 ```
 
-See [`.env.local.example`](.env.local.example) for the minimal mock mode configuration (no AWS credentials needed).
+See [`.env.example`](.env.example) for the minimal mock mode configuration (no AWS credentials needed).
 
 ### Mock Mode Testing
 
