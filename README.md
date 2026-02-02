@@ -1011,91 +1011,104 @@ ALLOWED_EMAILS=friend1@gmail.com,friend2@gmail.com
 
 ## Production Deployment
 
-This application deploys to **Cloudflare Workers** using the OpenNext adapter.
+This application deploys to **Cloudflare Workers** using the OpenNext adapter. The deployment process is fully automated—just configure your `.env.production` file and run one command.
+
+### Quick Start
+
+```bash
+# 1. Copy production template
+cp .env.production.template .env.production
+
+# 2. Fill in your values (see setup guides below)
+vim .env.production
+
+# 3. Deploy (automatically uploads secrets, builds, and deploys)
+pnpm deploy:cf
+```
+
+The deployment script will:
+- ✅ Auto-generate `AUTH_SECRET` if missing
+- ✅ Validate all required secrets are set
+- ✅ Upload all secrets to Cloudflare Workers
+- ✅ Extract route from your `NEXT_PUBLIC_APP_URL`
+- ✅ Build and deploy to Cloudflare
 
 ### Prerequisites
 
 1. [Cloudflare account](https://dash.cloudflare.com/sign-up)
 2. [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) authenticated: `wrangler login`
-3. Google OAuth credentials (see [Authentication](#authentication))
-4. Domain configured in Cloudflare DNS
+3. Google OAuth credentials → **[Setup Guide](docs/GOOGLE_OAUTH_SETUP.md)**
+4. AWS credentials → **[Setup Guide](docs/AWS_CREDENTIALS_SETUP.md)**
+5. Domain configured in Cloudflare DNS
 
 ### DNS Configuration
 
-The control panel can run on the same domain as your Minecraft server. Options:
+The control panel runs on the same domain as your Minecraft server:
 
-**Option A: Subdomain (Recommended)**
+- **HTTP/HTTPS (ports 80/443):** Cloudflare Workers serves the web panel
+- **TCP (port 25565):** Proxied to your EC2 instance for Minecraft
 
-- Minecraft server: `mc.example.com` (A record → EC2 IP)
-- Control panel: `panel.mc.example.com` (proxied through Cloudflare Workers)
+**Example: `mc.yourdomain.com`**
+- `https://mc.yourdomain.com` → Web control panel
+- `mc.yourdomain.com:25565` → Minecraft server
 
-**Option B: Same domain, different port**
-
-- Not recommended for Workers deployment
-
-To set up:
+**Setup:**
 
 1. Go to Cloudflare Dashboard → DNS
-2. Add a CNAME record: `panel.mc` → `your-worker.workers.dev` (or use custom domain in Workers settings)
+2. Add an A record:
+   - Name: `mc`
+   - Content: Your EC2 public IP (placeholder, auto-updated)
+   - Proxy status: **Proxied** (☁️ orange cloud)
+3. The deploy script automatically configures the Workers route from your `NEXT_PUBLIC_APP_URL`
 
-### Environment Variables
+### Environment Setup
 
-Copy `.env.template` to `.env` and configure:
-
-```bash
-cp .env.template .env
-```
-
-**Required for deployment:**
-| Variable | Description |
-|----------|-------------|
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret |
-| `AUTH_SECRET` | JWT signing secret (32+ chars) |
-| `ADMIN_EMAIL` | Your email for admin access |
-| `NEXT_PUBLIC_APP_URL` | Your deployed URL (e.g., `https://panel.mc.example.com`) |
-| `AWS_REGION` | AWS region for your EC2 instance |
-| `AWS_ACCESS_KEY_ID` | AWS access key |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key |
-
-### Setting Cloudflare Secrets
-
-Secrets must be set via Wrangler (not in config files):
+**All secrets stay in `.env.production` (gitignored)** - no manual `wrangler secret put` commands needed!
 
 ```bash
-# Authentication secrets
-wrangler secret put GOOGLE_CLIENT_ID
-wrangler secret put GOOGLE_CLIENT_SECRET
-wrangler secret put AUTH_SECRET
-
-# AWS credentials
-wrangler secret put AWS_ACCESS_KEY_ID
-wrangler secret put AWS_SECRET_ACCESS_KEY
+# Copy template
+cp .env.production.template .env.production
 ```
 
-Each command prompts for the value interactively.
+**Required variables (see setup guides for values):**
 
-### Non-Secret Variables
+| Variable | Description | Setup Guide |
+|----------|-------------|-------------|
+| `GOOGLE_CLIENT_ID` | Google OAuth client ID | [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md) |
+| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md) |
+| `AWS_ACCESS_KEY_ID` | AWS access key | [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md) |
+| `AWS_SECRET_ACCESS_KEY` | AWS secret key | [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md) |
+| `ADMIN_EMAIL` | Your email for admin access | Your email address |
+| `NEXT_PUBLIC_APP_URL` | Your deployed URL | `https://mc.yourdomain.com` |
+| `AWS_REGION` | AWS region | `us-west-1` (or your region) |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | From Cloudflare dashboard |
+| `CLOUDFLARE_ZONE_ID` | Cloudflare zone ID | From Cloudflare dashboard |
+| `INSTANCE_ID` | EC2 instance ID | From AWS Console or CDK output |
 
-Edit `wrangler.jsonc` to set non-secret environment variables:
+**Optional variables:**
+- `AUTH_SECRET` - Auto-generated if missing (48-byte random)
+- `ALLOWED_EMAILS` - Comma-separated list of allowed users
+- Other Cloudflare/GitHub/Google Drive settings
 
-```jsonc
-"vars": {
-  "ADMIN_EMAIL": "your-email@gmail.com",
-  "ALLOWED_EMAILS": "friend1@gmail.com,friend2@gmail.com",
-  "NEXT_PUBLIC_APP_URL": "https://panel.mc.example.com",
-  "AWS_REGION": "us-west-1"
-}
-```
+See `.env.production.template` for all available variables.
 
-### Deploy
+### Deploy to Cloudflare
 
 ```bash
-# Preview locally first
-pnpm preview:cf
-
-# Deploy to Cloudflare
+# One command deployment
 pnpm deploy:cf
+```
+
+This script automatically:
+1. Generates `AUTH_SECRET` if needed
+2. Validates all required secrets are set
+3. Uploads secrets to Cloudflare Workers
+4. Builds the Next.js app
+5. Deploys with the correct route (extracted from `NEXT_PUBLIC_APP_URL`)
+
+**Preview locally first (optional):**
+```bash
+pnpm preview:cf
 ```
 
 ### Build Validation
@@ -1105,10 +1118,44 @@ The build automatically validates that all required environment variables are se
 - **Development**: Warns about missing variables but continues
 - **Production**: Fails the build if any required variables are missing
 
-### Updating Google OAuth Redirect URI
+### Post-Deployment
 
-After deployment, update your Google OAuth credentials:
+**1. Update Google OAuth Redirect URI:**
 
-1. Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-2. Edit your OAuth 2.0 Client ID
-3. Add authorized redirect URI: `https://panel.mc.example.com/api/auth/callback`
+Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and add:
+```
+https://mc.yourdomain.com/api/auth/callback/google
+```
+
+**2. Test Your Deployment:**
+```bash
+# Visit your control panel
+open https://mc.yourdomain.com
+
+# Sign in with Google
+# Test server start/stop functionality
+```
+
+**3. Check Logs (if issues):**
+```bash
+wrangler tail
+```
+
+### Troubleshooting
+
+**Deployment fails with "Missing required secrets":**
+- Check `.env.production` has all required values
+- Make sure no values are still placeholders (`your-*`)
+
+**OAuth redirect error:**
+- Verify redirect URI in Google Console matches your `NEXT_PUBLIC_APP_URL`
+- Should be: `https://mc.yourdomain.com/api/auth/callback/google`
+
+**Can't connect to AWS:**
+- Verify IAM user has required permissions
+- Check `AWS_REGION` matches where your instance is deployed
+
+For more help, see:
+- [Google OAuth Setup Guide](docs/GOOGLE_OAUTH_SETUP.md)
+- [AWS Credentials Setup Guide](docs/AWS_CREDENTIALS_SETUP.md)
+- [Full Deployment Guide](DEPLOYMENT.md)
