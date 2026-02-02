@@ -9,6 +9,23 @@ if [ ! -f ".env.production" ]; then
   exit 1
 fi
 
+# Define required secrets
+REQUIRED_SECRETS=(
+  "NEXT_PUBLIC_APP_URL"
+  "GOOGLE_CLIENT_ID"
+  "GOOGLE_CLIENT_SECRET"
+  "ADMIN_EMAIL"
+  "ALLOWED_EMAILS"
+  "AWS_REGION"
+  "AWS_ACCESS_KEY_ID"
+  "AWS_SECRET_ACCESS_KEY"
+  "CLOUDFLARE_API_TOKEN"
+  "CLOUDFLARE_ZONE_ID"
+  "CLOUDFLARE_RECORD_ID"
+  "CLOUDFLARE_MC_DOMAIN"
+  "INSTANCE_ID"
+)
+
 # Check if AUTH_SECRET needs to be generated
 if grep -q "AUTH_SECRET=your-secret-here" .env.production || grep -q "AUTH_SECRET=dev-secret-change-in-production" .env.production || ! grep -q "^AUTH_SECRET=" .env.production; then
   echo "🔐 Generating strong AUTH_SECRET..."
@@ -42,6 +59,42 @@ if grep -q "AUTH_SECRET=your-secret-here" .env.production || grep -q "AUTH_SECRE
   echo "✅ Generated and saved new AUTH_SECRET to .env.production"
   echo ""
 fi
+
+# Validate all required secrets are set
+echo "🔍 Validating required secrets..."
+MISSING_SECRETS=()
+
+for secret in "${REQUIRED_SECRETS[@]}"; do
+  # Check if secret exists and is not empty or a placeholder
+  if ! grep -q "^${secret}=" .env.production; then
+    MISSING_SECRETS+=("$secret")
+  else
+    value=$(grep "^${secret}=" .env.production | cut -d'=' -f2-)
+    # Remove quotes
+    value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+    
+    # Check if empty or placeholder
+    if [[ -z "$value" ]] || [[ "$value" == "your-"* ]] || [[ "$value" == "https://mc.yourdomain.com" ]]; then
+      MISSING_SECRETS+=("$secret")
+    fi
+  fi
+done
+
+if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
+  echo ""
+  echo "❌ Error: The following required secrets are missing or not set in .env.production:"
+  echo ""
+  for secret in "${MISSING_SECRETS[@]}"; do
+    echo "  - $secret"
+  done
+  echo ""
+  echo "Please update your .env.production file with the correct values."
+  echo "See .env.production.template for reference."
+  exit 1
+fi
+
+echo "✅ All required secrets are set"
+echo ""
 
 # Source .env.production
 export $(grep -v '^#' .env.production | xargs)
