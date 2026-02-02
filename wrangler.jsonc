@@ -8,13 +8,5 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
-  // Non-secret environment variables
-  // Secrets (GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, AUTH_SECRET, AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY)
-  // should be set via: wrangler secret put <SECRET_NAME>
-  "vars": {
-    "ADMIN_EMAIL": "",
-    "ALLOWED_EMAILS": "",
-    "NEXT_PUBLIC_APP_URL": "",
-    "AWS_REGION": ""
-  }
+  "vars": {}
 }
