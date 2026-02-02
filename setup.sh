@@ -4,19 +4,9 @@
 
 set -euo pipefail
 
-iso_now() {
-  if date -Is >/dev/null 2>&1; then
-    date -Is
-    return
-  fi
-
-  # macOS/BSD date does not support -I
-  date -u "+%Y-%m-%dT%H:%M:%SZ"
-}
-
-# Log function with timestamp
+# Log function
 log() {
-  echo "[$(iso_now)] $*"
+  echo "$*"
 }
 
 # Check if a command exists
