@@ -303,6 +303,17 @@ collect_aws_core() {
   log "You'll need an AWS account with appropriate IAM permissions."
   echo ""
 
+  echo "New to AWS? Quick checklist (recommended):"
+  echo "  1. Create an AWS account: https://aws.amazon.com/"
+  echo "  2. Secure the root user: enable MFA; do NOT create access keys for root"
+  echo "  3. Create a separate admin identity for daily use (not root):"
+  echo "     - IAM -> Users -> Create user (e.g., mc-aws-admin)"
+  echo "     - Attach AdministratorAccess (you can tighten permissions later)"
+  echo "  4. Optional (recommended): use a dedicated AWS account for mc-aws"
+  echo "     - Better isolation (billing/permissions), safer experimentation, easier cleanup"
+  echo "     - If you use AWS Organizations: create a new account (e.g., 'mc-aws') and use it here"
+  echo ""
+
   # AWS Region selection (prefer existing configuration)
   if [[ -z "${AWS_REGION:-}" && -n "${AWS_DEFAULT_REGION:-}" ]]; then
     AWS_REGION="$AWS_DEFAULT_REGION"
