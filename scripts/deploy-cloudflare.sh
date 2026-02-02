@@ -84,7 +84,6 @@ for secret in "${REQUIRED_SECRETS[@]}"; do
   fi
 done
 
-if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
 echo ""
 echo "🔍 Validating required secrets..."
 
@@ -107,6 +106,18 @@ fi
 echo "✅ All required secrets are set"
 echo ""
 
+# Source .env.production to get values (but we'll unset CLOUDFLARE_API_TOKEN for wrangler)
+export $(grep -v '^#' .env.production | xargs)
+
+# Save the CLOUDFLARE_API_TOKEN value for later (to upload as a secret)
+# but unset it from environment so wrangler can use OAuth for deployment
+SAVED_CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN"
+unset CLOUDFLARE_API_TOKEN
+
+# Add production-specific overrides
+export MC_BACKEND_MODE=aws
+export ENABLE_DEV_LOGIN=false
+
 # Check if wrangler is authenticated for deployment
 echo "🔐 Checking Cloudflare authentication..."
 if ! pnpm exec wrangler whoami &>/dev/null; then
@@ -128,22 +139,6 @@ if ! pnpm exec wrangler whoami &>/dev/null; then
 fi
 echo "✅ Authenticated with Cloudflare"
 echo ""
-  for secret in "${MISSING_SECRETS[@]}"; do
-    echo "  - $secret"
-  done
-  echo ""
-  echo "Please update your .env.production file with the correct values."
-  echo "See .env.example for reference."
-  exit 1
-fi
-
-echo "✅ All required secrets are set"
-echo ""
-
-# Source .env.production and add production-specific overrides
-export $(grep -v '^#' .env.production | xargs)
-export MC_BACKEND_MODE=aws
-export ENABLE_DEV_LOGIN=false
 
 # Extract domain from NEXT_PUBLIC_APP_URL
 # e.g., https://mc.shane-bishop.com -> mc.shane-bishop.com
@@ -175,6 +170,11 @@ while IFS='=' read -r key value; do
   
   # Skip if value is empty
   [[ -z "$value" ]] && continue
+  
+  # Use saved value for CLOUDFLARE_API_TOKEN (since we unset it from environment)
+  if [[ "$key" == "CLOUDFLARE_API_TOKEN" ]]; then
+    value="$SAVED_CLOUDFLARE_API_TOKEN"
+  fi
   
   echo "  Setting: $key"
   if ! echo "$value" | pnpm exec wrangler secret put "$key"; then
