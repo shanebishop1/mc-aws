@@ -104,33 +104,37 @@ prompt() {
     label="${prompt_text} (${var_name})"
   fi
 
-  if [[ -n "${default_value}" ]]; then
-    if [[ "$is_secret" == "true" ]]; then
-      echo -n "$label [***]: "
+  while true; do
+    if [[ -n "${default_value}" ]]; then
+      if [[ "$is_secret" == "true" ]]; then
+        echo -n "$label [***]: "
+      else
+        echo -n "$label [$default_value]: "
+      fi
     else
-      echo -n "$label [$default_value]: "
+      echo -n "$label: "
     fi
-  else
-    echo -n "$label: "
-  fi
 
-  local input
-  if [[ "$is_secret" == "true" ]]; then
-    read -rs input
-    echo ""
-  else
-    read -r input
-  fi
+    local input
+    if [[ "$is_secret" == "true" ]]; then
+      read -rs input
+      echo ""
+    else
+      read -r input
+    fi
 
-  # Use input if provided, otherwise use default
-  if [[ -n "$input" ]]; then
-    printf -v "$var_name" '%s' "$input"
-  elif [[ -n "${default_value}" ]]; then
-    printf -v "$var_name" '%s' "${default_value}"
-  else
-    log_error "Input is required"
-    exit 1
-  fi
+    # Use input if provided, otherwise use default
+    if [[ -n "$input" ]]; then
+      printf -v "$var_name" '%s' "$input"
+      return 0
+    elif [[ -n "${default_value}" ]]; then
+      printf -v "$var_name" '%s' "${default_value}"
+      return 0
+    else
+      log_error "This field is required. Please enter a value."
+      echo ""
+    fi
+  done
 }
 
 # Prompt for optional input
@@ -286,6 +290,30 @@ get_aws_account_id() {
   export AWS_DEFAULT_REGION="$region"
 
   aws sts get-caller-identity --query Account --output text 2>/dev/null || echo ""
+}
+
+# Validate Cloudflare API token
+validate_cloudflare_token() {
+  local token="$1"
+  
+  log "Validating Cloudflare API token..."
+  
+  # Test the token by verifying it with Cloudflare's API
+  local response
+  response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json")
+  
+  if echo "$response" | grep -q '"success":true'; then
+    log_success "Cloudflare API token is valid"
+    return 0
+  else
+    log_error "Cloudflare API token is invalid or expired"
+    if echo "$response" | grep -q '"code":1000'; then
+      log_error "Error code 1000: Invalid API Token"
+    fi
+    return 1
+  fi
 }
 
 # Validate email format
@@ -563,18 +591,36 @@ collect_cloudflare() {
 
   log "These credentials enable automatic DNS updates for your Minecraft server."
   echo ""
+  echo "NOTE: You need a Cloudflare API Token for runtime DNS updates (Lambda)."
+  echo "      Deployment uses 'wrangler login' (OAuth), not this token."
+  echo ""
 
-  echo "To get Cloudflare API credentials:"
+  echo "To create an API token for DNS updates:"
   echo "  1. Go to https://dash.cloudflare.com/profile/api-tokens"
   echo "  2. Click 'Create Token'"
   echo "  3. Use template 'Edit zone DNS' or create custom with:"
-  echo "     - Zone → DNS → Edit permissions"
+  echo "     - Zone → DNS → Edit"
   echo "     - Include → Specific zone → select your domain"
-  echo "  4. Copy the API token"
+  echo "  4. Copy the API token (NOT the Global API Key!)"
+  echo ""
+  echo "This token should have LIMITED permissions (just DNS) for security."
   echo ""
 
-  prompt CLOUDFLARE_API_TOKEN "Enter Cloudflare API Token" "${CLOUDFLARE_API_TOKEN:-}" true
-  echo ""
+  # Loop until we get a valid token
+  while true; do
+    prompt CLOUDFLARE_API_TOKEN "Enter Cloudflare API Token (for DNS updates)" "${CLOUDFLARE_API_TOKEN:-}" true
+    echo ""
+    
+    if validate_cloudflare_token "$CLOUDFLARE_API_TOKEN"; then
+      break
+    else
+      log_error "Please check your API token and try again."
+      log_error "Make sure you created a new token (not using a Global API Key)."
+      echo ""
+      # Clear the invalid token so they can't just hit Enter again
+      CLOUDFLARE_API_TOKEN=""
+    fi
+  done
 
   echo "To get your Zone ID:"
   echo "  1. Go to Cloudflare Dashboard → select your domain"
