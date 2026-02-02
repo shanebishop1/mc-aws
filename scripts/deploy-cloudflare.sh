@@ -132,7 +132,7 @@ while IFS='=' read -r key value; do
   [[ -z "$value" ]] && continue
   
   echo "  Setting: $key"
-  if ! echo "$value" | wrangler secret put "$key" >/dev/null 2>&1; then
+  if ! echo "$value" | pnpm exec wrangler secret put "$key" >/dev/null 2>&1; then
     echo "❌ Error: Failed to set secret: $key"
     exit 1
   fi
@@ -154,7 +154,7 @@ echo ""
 
 # Deploy with wrangler using route flags
 echo "🌐 Deploying to Cloudflare..."
-if ! wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
+if ! pnpm exec wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
   echo ""
   echo "❌ Error: Failed to deploy to Cloudflare Workers"
   exit 1
