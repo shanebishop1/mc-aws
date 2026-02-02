@@ -11,35 +11,63 @@ readonly YELLOW='\033[1;33m'
 readonly BLUE='\033[0;34m'
 readonly NC='\033[0m' # No Color
 
-iso_now() {
-  if date -Is >/dev/null 2>&1; then
-    date -Is
+is_tty() {
+  [[ -t 1 ]]
+}
+
+screen_clear() {
+  if ! is_tty; then
     return
   fi
 
-  # macOS/BSD date does not support -I
-  date -u "+%Y-%m-%dT%H:%M:%SZ"
+  if command -v tput >/dev/null 2>&1; then
+    tput clear || true
+    return
+  fi
+
+  if command -v clear >/dev/null 2>&1; then
+    clear || true
+    return
+  fi
+
+  # Fallback ANSI clear
+  printf '\033c' || true
 }
 
-# Logging function with timestamps
+wizard_header() {
+  echo -e "${GREEN}MC-AWS Setup Wizard${NC} (Ctrl+C to exit)"
+  echo -e "${BLUE}───────────────────────────────────────────────────────────────${NC}"
+}
+
+readonly WIZARD_TOTAL=10
+
+step_section() {
+  local step_num="$1"
+  shift
+  section "Step ${step_num}/${WIZARD_TOTAL}: $*"
+}
+
+# Logging functions
 log() {
-  echo -e "${BLUE}[$(iso_now)]${NC} $*"
+  echo -e "${BLUE}•${NC} $*"
 }
 
 log_success() {
-  echo -e "${GREEN}[$(iso_now)]${NC} ✓ $*"
+  echo -e "${GREEN}✓${NC} $*"
 }
 
 log_warning() {
-  echo -e "${YELLOW}[$(iso_now)]${NC} ⚠ $*"
+  echo -e "${YELLOW}!${NC} $*"
 }
 
 log_error() {
-  echo -e "${RED}[$(iso_now)]${NC} ✗ $*"
+  echo -e "${RED}x${NC} $*"
 }
 
 # Section header
 section() {
+  screen_clear
+  wizard_header
   echo ""
   echo -e "${BLUE}═══════════════════════════════════════════════════════════════${NC}"
   echo -e "${BLUE}  $*${NC}"
@@ -54,14 +82,19 @@ prompt() {
   local default_value="${3:-}"
   local is_secret="${4:-false}"
 
+  local label="$prompt_text"
+  if [[ "$var_name" =~ ^[A-Z0-9_]+$ ]]; then
+    label="${prompt_text} (${var_name})"
+  fi
+
   if [[ -n "${default_value}" ]]; then
     if [[ "$is_secret" == "true" ]]; then
-      echo -n "$prompt_text [***]: "
+      echo -n "$label [***]: "
     else
-      echo -n "$prompt_text [$default_value]: "
+      echo -n "$label [$default_value]: "
     fi
   else
-    echo -n "$prompt_text: "
+    echo -n "$label: "
   fi
 
   local input
@@ -90,14 +123,19 @@ prompt_optional() {
   local default_value="${3:-}"
   local is_secret="${4:-false}"
 
+  local label="$prompt_text"
+  if [[ "$var_name" =~ ^[A-Z0-9_]+$ ]]; then
+    label="${prompt_text} (${var_name})"
+  fi
+
   if [[ -n "${default_value}" ]]; then
     if [[ "$is_secret" == "true" ]]; then
-      echo -n "$prompt_text [***, press Enter to skip]: "
+      echo -n "$label [***, press Enter to skip]: "
     else
-      echo -n "$prompt_text [$default_value, press Enter to skip]: "
+      echo -n "$label [$default_value, press Enter to skip]: "
     fi
   else
-    echo -n "$prompt_text [press Enter to skip]: "
+    echo -n "$label [press Enter to skip]: "
   fi
 
   local input
@@ -259,43 +297,55 @@ generate_auth_secret_value() {
 # ============================================================================
 
 collect_aws_core() {
-  section "AWS Core Credentials"
+  step_section 1 "AWS Core Credentials"
 
   log "These credentials are required to deploy and manage AWS resources."
   log "You'll need an AWS account with appropriate IAM permissions."
   echo ""
 
-  # AWS Region selection
-  echo "Common AWS regions:"
-  echo "  1. us-east-1      (N. Virginia)"
-  echo "  2. us-west-2      (Oregon)"
-  echo "  3. eu-west-1      (Ireland)"
-  echo "  4. eu-central-1   (Frankfurt)"
-  echo "  5. ap-southeast-1 (Singapore)"
-  echo "  6. ap-northeast-1 (Tokyo)"
-  echo "  7. Other (enter manually)"
-  echo ""
+  # AWS Region selection (prefer existing configuration)
+  if [[ -z "${AWS_REGION:-}" && -n "${AWS_DEFAULT_REGION:-}" ]]; then
+    AWS_REGION="$AWS_DEFAULT_REGION"
+  fi
+  if [[ -z "${AWS_REGION:-}" && -n "${CDK_DEFAULT_REGION:-}" ]]; then
+    AWS_REGION="$CDK_DEFAULT_REGION"
+  fi
 
-  prompt region_choice "Select your AWS region" "1"
+  if [[ -n "${AWS_REGION:-}" ]]; then
+    log_success "Using region: $AWS_REGION"
+    echo ""
+  else
+    echo "Common AWS regions:"
+    echo "  1. us-east-1      (N. Virginia)"
+    echo "  2. us-west-2      (Oregon)"
+    echo "  3. eu-west-1      (Ireland)"
+    echo "  4. eu-central-1   (Frankfurt)"
+    echo "  5. ap-southeast-1 (Singapore)"
+    echo "  6. ap-northeast-1 (Tokyo)"
+    echo "  7. Other (enter manually)"
+    echo ""
 
-  case "$region_choice" in
-    1) AWS_REGION="us-east-1" ;;
-    2) AWS_REGION="us-west-2" ;;
-    3) AWS_REGION="eu-west-1" ;;
-    4) AWS_REGION="eu-central-1" ;;
-    5) AWS_REGION="ap-southeast-1" ;;
-    6) AWS_REGION="ap-northeast-1" ;;
-    7)
-      prompt AWS_REGION "Enter your AWS region" ""
-      ;;
-    *)
-      log_warning "Invalid choice, defaulting to us-east-1"
-      AWS_REGION="us-east-1"
-      ;;
-  esac
+    prompt region_choice "Select your AWS region" "1"
 
-  log_success "Using region: $AWS_REGION"
-  echo ""
+    case "$region_choice" in
+      1) AWS_REGION="us-east-1" ;;
+      2) AWS_REGION="us-west-2" ;;
+      3) AWS_REGION="eu-west-1" ;;
+      4) AWS_REGION="eu-central-1" ;;
+      5) AWS_REGION="ap-southeast-1" ;;
+      6) AWS_REGION="ap-northeast-1" ;;
+      7)
+        prompt AWS_REGION "Enter your AWS region" ""
+        ;;
+      *)
+        log_warning "Invalid choice, defaulting to us-east-1"
+        AWS_REGION="us-east-1"
+        ;;
+    esac
+
+    log_success "Using region: $AWS_REGION"
+    echo ""
+  fi
 
   # AWS Access Key ID
   echo "To get your AWS access keys:"
@@ -348,7 +398,7 @@ collect_aws_core() {
 }
 
 collect_ec2_access() {
-  section "EC2 Access"
+  step_section 2 "EC2 Access"
 
   log "You need an EC2 key pair to SSH into your Minecraft server."
   echo ""
@@ -376,7 +426,7 @@ collect_ec2_access() {
 }
 
 collect_google_oauth() {
-  section "Google OAuth Credentials"
+  step_section 3 "Google OAuth Credentials"
 
   log "These credentials enable Google OAuth authentication for the control panel."
   echo ""
@@ -409,7 +459,7 @@ collect_google_oauth() {
 }
 
 collect_authorization() {
-  section "Authorization Settings"
+  step_section 4 "Authorization Settings"
 
   log "Configure who can access and control your Minecraft server."
   echo ""
@@ -457,7 +507,7 @@ collect_authorization() {
 }
 
 collect_cloudflare() {
-  section "Cloudflare DNS Credentials"
+  step_section 5 "Cloudflare DNS Credentials"
 
   log "These credentials enable automatic DNS updates for your Minecraft server."
   echo ""
@@ -531,7 +581,7 @@ collect_cloudflare() {
 }
 
 collect_production_url() {
-  section "Production URL"
+  step_section 6 "Production URL"
 
   log "This is the URL where your control panel will be accessible."
   echo ""
@@ -561,7 +611,7 @@ collect_production_url() {
 }
 
 collect_email_settings() {
-  section "Optional: Email Settings (SES)"
+  step_section 7 "Optional: Email Settings (SES)"
 
   log "Configure email notifications for server events."
   log "This feature allows starting the server via email."
@@ -623,7 +673,7 @@ collect_email_settings() {
 }
 
 collect_github_settings() {
-  section "Optional: GitHub Configuration Sync"
+  step_section 8 "Optional: GitHub Configuration Sync"
 
   log "Configure GitHub integration for backing up server configuration."
   log "This allows syncing server.properties and other config files to GitHub."
@@ -676,7 +726,7 @@ collect_github_settings() {
 }
 
 collect_gdrive_settings() {
-  section "Optional: Google Drive Backups"
+  step_section 9 "Optional: Google Drive Backups"
 
   log "Configure Google Drive integration for server backups."
   log "This requires rclone to be configured with a Google Drive remote."
@@ -711,7 +761,7 @@ collect_gdrive_settings() {
 }
 
 generate_auth_secret() {
-  section "Generating AUTH_SECRET"
+  step_section 10 "Generating AUTH_SECRET"
 
   log "Generating a secure AUTH_SECRET for session encryption..."
   echo ""
@@ -733,14 +783,16 @@ generate_auth_secret() {
 # ============================================================================
 
 main() {
+  section "Welcome"
+  log "This wizard will guide you through ${WIZARD_TOTAL} steps and write:"
+  echo "  • .env.local"
+  echo "  • .env.production"
   echo ""
-  echo -e "${GREEN}╔═══════════════════════════════════════════════════════════════╗${NC}"
-  echo -e "${GREEN}║                                                               ║${NC}"
-  echo -e "${GREEN}║        MC-AWS Setup Wizard                                    ║${NC}"
-  echo -e "${GREEN}║        Minecraft Server Management on AWS                      ║${NC}"
-  echo -e "${GREEN}║                                                               ║${NC}"
-  echo -e "${GREEN}╚═══════════════════════════════════════════════════════════════╝${NC}"
-  echo ""
+
+  if is_tty; then
+    echo "Press Enter to begin..."
+    read -r
+  fi
 
   # Check if we should resume
   if check_resume; then
@@ -775,6 +827,11 @@ main() {
   echo ""
   log_success "Setup wizard completed successfully!"
   echo ""
+
+  if is_tty; then
+    echo "Press Enter to finish..."
+    read -r
+  fi
 }
 
 # Run main function
