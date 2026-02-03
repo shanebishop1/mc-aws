@@ -314,7 +314,8 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     echo "❌ Error: Failed to set secret: $key (see error above)"
     exit 1
   fi
-  ((SECRET_COUNT++))
+  # Avoid `set -e` exiting on a post-increment from 0.
+  ((SECRET_COUNT+=1))
 done < "$ENV_FILE"
 
 echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
