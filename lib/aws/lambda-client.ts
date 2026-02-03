@@ -4,6 +4,7 @@
 
 import { InvokeCommand, LambdaClient } from "@aws-sdk/client-lambda";
 import { env } from "../env";
+import { getAwsClientConfig } from "./aws-client-config";
 
 // Lazy initialization of AWS client
 let _lambdaClient: LambdaClient | null = null;
@@ -17,7 +18,7 @@ export const lambda: LambdaClient = new Proxy({} as LambdaClient, {
     if (!_lambdaClient) {
       const region = getRegion();
       console.log(`[AWS Config] Initializing Lambda client in region: ${region}`);
-      _lambdaClient = new LambdaClient({ region });
+      _lambdaClient = new LambdaClient(getAwsClientConfig(region));
     }
     return _lambdaClient[prop as keyof LambdaClient];
   },

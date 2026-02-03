@@ -4,6 +4,7 @@
 
 import { CloudFormationClient, DescribeStacksCommand, type Stack } from "@aws-sdk/client-cloudformation";
 import { env } from "../env";
+import { getAwsClientConfig } from "./aws-client-config";
 
 // Lazy initialization of AWS client
 let _cloudformationClient: CloudFormationClient | null = null;
@@ -17,7 +18,7 @@ export const cloudformation: CloudFormationClient = new Proxy({} as CloudFormati
     if (!_cloudformationClient) {
       const region = getRegion();
       console.log(`[AWS Config] Initializing CloudFormation client in region: ${region}`);
-      _cloudformationClient = new CloudFormationClient({ region });
+      _cloudformationClient = new CloudFormationClient(getAwsClientConfig(region));
     }
     return _cloudformationClient[prop as keyof CloudFormationClient];
   },
