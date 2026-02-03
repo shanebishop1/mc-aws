@@ -14,9 +14,15 @@
 set -euo pipefail
 
 ENV_FILE=".env.production"
+WRANGLER_CONFIG_FILE="wrangler.jsonc"
 
 if [[ ! -f "$ENV_FILE" ]]; then
   echo "❌ Error: $ENV_FILE file not found"
+  exit 1
+fi
+
+if [[ ! -f "$WRANGLER_CONFIG_FILE" ]]; then
+  echo "❌ Error: $WRANGLER_CONFIG_FILE not found (required to determine Worker name)"
   exit 1
 fi
 
@@ -45,9 +51,39 @@ wrangler() {
   env -i \
     PATH="$PATH" \
     HOME="$WRANGLER_HOME_DIR" \
-    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
     TERM="${TERM:-}" \
+    USER="${USER:-}" \
     "$WRANGLER_BIN" "$@"
+}
+
+retry() {
+  local max_attempts="$1"
+  shift
+
+  local attempt=1
+  local delay=2
+  while true; do
+    if "$@"; then
+      return 0
+    fi
+
+    if [[ "$attempt" -ge "$max_attempts" ]]; then
+      return 1
+    fi
+
+    echo "   ⚠️  Command failed; retrying ($attempt/$max_attempts) in ${delay}s..."
+    sleep "$delay"
+    delay=$((delay * 2))
+    attempt=$((attempt + 1))
+  done
+}
+
+get_worker_name() {
+  # Read the Worker name from wrangler.jsonc.
+  # This is a simple extraction that expects a top-level "name": "..." entry.
+  local name
+  name=$(grep -E '^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"[^"]+"' "$WRANGLER_CONFIG_FILE" | head -n 1 | sed -E 's/.*"name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
+  echo "${name:-}"
 }
 
 get_env_value() {
@@ -160,7 +196,7 @@ DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
 ZONE_NAME=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
 
 echo "🔐 Checking Cloudflare deployment authentication..."
-if ! wrangler secret list --format pretty >/dev/null 2>&1; then
+if ! wrangler whoami >/dev/null 2>&1; then
   echo ""
   echo "⚠️  Wrangler is not authenticated for Workers operations (secrets/deploy)."
   echo "We'll try to fix this by logging you in via OAuth."
@@ -173,14 +209,13 @@ if ! wrangler secret list --format pretty >/dev/null 2>&1; then
   # so we always verify after attempting login.
   wrangler login || true
 
-  if ! wrangler secret list --format pretty >/dev/null 2>&1; then
+  if ! wrangler whoami >/dev/null 2>&1; then
     echo ""
     echo "❌ Error: Still not authenticated for Workers operations."
     echo "Try this manually, then re-run this script:"
     echo "  1) pnpm exec wrangler logout"
     echo "  2) pnpm exec wrangler login"
     echo ""
-    echo "If you have CLOUDFLARE_DNS_API_TOKEN exported in your shell profile, remove it."
     exit 1
   fi
 fi
@@ -195,13 +230,39 @@ echo "   Backend: aws"
 echo "   Dev Login: disabled"
 echo ""
 
+WORKER_NAME="$(get_worker_name)"
+if [[ -z "$WORKER_NAME" ]]; then
+  echo "❌ Error: Could not determine Worker name from $WRANGLER_CONFIG_FILE"
+  exit 1
+fi
+
+echo "📦 Building for Cloudflare (OpenNext)..."
+if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm exec opennextjs-cloudflare build; then
+  echo ""
+  echo "❌ Error: Failed to build for Cloudflare"
+  exit 1
+fi
+echo "✅ Build successful"
+echo ""
+
+echo "🌐 Deploying to Cloudflare..."
+if ! retry 3 wrangler deploy --name "$WORKER_NAME" --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
+  echo ""
+  echo "❌ Error: Failed to deploy to Cloudflare Workers"
+  exit 1
+fi
+echo "✅ Deploy successful"
+echo ""
+
 # Upload secrets from .env.production
 # Note: MC_BACKEND_MODE and ENABLE_DEV_LOGIN are exported above for the build process
 # but are NOT uploaded as Cloudflare secrets - they default correctly at runtime.
 echo "🔑 Uploading secrets from .env.production..."
 
 SECRET_COUNT=0
+LINE_NO=0
 while IFS= read -r line || [[ -n "$line" ]]; do
+  LINE_NO=$((LINE_NO + 1))
   # Skip empty lines and comments
   [[ -z "$line" ]] && continue
   [[ "$line" =~ ^#.* ]] && continue
@@ -214,8 +275,25 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   key="${line%%=*}"
   value="${line#*=}"
 
+  # Allow (and ignore) optional 'export ' prefix.
+  if [[ "$key" == export\ * ]]; then
+    key="${key#export }"
+  fi
+
+  # Trim whitespace around key.
+  key="${key#${key%%[![:space:]]*}}"
+  key="${key%${key##*[![:space:]]}}"
+
   # Skip empty keys
   [[ -z "$key" ]] && continue
+
+  # Wrangler secret names must be env-var style.
+  if [[ ! "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+    echo ""
+    echo "❌ Error: Invalid env var name in $ENV_FILE:$LINE_NO: '$key'"
+    echo "Secrets must be uppercase letters/numbers/underscores (e.g. FOO_BAR)."
+    exit 1
+  fi
 
   # Strip surrounding quotes
   value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
@@ -224,10 +302,16 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   [[ -z "$value" ]] && continue
 
   echo "  Setting: $key"
-  if ! echo "$value" | wrangler secret put "$key"; then
+
+  put_secret() {
+    local put_key="$1"
+    local put_value="$2"
+    echo "$put_value" | wrangler secret put --name "$WORKER_NAME" "$put_key"
+  }
+
+  if ! retry 3 put_secret "$key" "$value"; then
     echo ""
     echo "❌ Error: Failed to set secret: $key (see error above)"
-    echo "Hint: If you see '/memberships' auth errors, run: env -u CLOUDFLARE_DNS_API_TOKEN pnpm exec wrangler login"
     exit 1
   fi
   ((SECRET_COUNT++))
@@ -235,24 +319,6 @@ done < "$ENV_FILE"
 
 echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
 echo ""
-
-# Build the Next.js app
-echo "📦 Building Next.js app..."
-if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm build; then
-  echo ""
-  echo "❌ Error: Failed to build Next.js app"
-  exit 1
-fi
-echo "✅ Build successful"
-echo ""
-
-# Deploy with wrangler using route flags
-echo "🌐 Deploying to Cloudflare..."
-if ! wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
-  echo ""
-  echo "❌ Error: Failed to deploy to Cloudflare Workers"
-  exit 1
-fi
 
 echo ""
 echo "✅✅✅ Deployment complete! ✅✅✅"
