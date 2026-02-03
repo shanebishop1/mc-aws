@@ -5,10 +5,23 @@
 
 import { DescribeInstancesCommand, EC2Client } from "@aws-sdk/client-ec2";
 import { env } from "../env";
+import { getAwsClientConfig } from "./aws-client-config";
 
-// Shared EC2 client for instance resolution
-const region = env.AWS_REGION || "us-east-1";
-const ec2 = new EC2Client({ region });
+// Lazy initialization to avoid resolving AWS credentials at module load time.
+let _resolverEc2Client: EC2Client | null = null;
+
+function getRegion(): string {
+  return env.AWS_REGION || "us-east-1";
+}
+
+function getResolverEc2Client(): EC2Client {
+  if (!_resolverEc2Client) {
+    const region = getRegion();
+    console.log(`[AWS Config] Initializing EC2 resolver client in region: ${region}`);
+    _resolverEc2Client = new EC2Client(getAwsClientConfig(region));
+  }
+  return _resolverEc2Client;
+}
 
 /**
  * Find the Minecraft Server instance ID.
@@ -21,12 +34,13 @@ export async function findInstanceId(): Promise<string> {
     return env.INSTANCE_ID;
   }
 
+  const region = getRegion();
   console.log(
-    `[Discovery] Searching for instance with tag:Name = MinecraftServer OR MinecraftStack/MinecraftServer in region ${env.AWS_REGION}`
+    `[Discovery] Searching for instance with tag:Name = MinecraftServer OR MinecraftStack/MinecraftServer in region ${region}`
   );
 
   try {
-    const { Reservations } = await ec2.send(
+    const { Reservations } = await getResolverEc2Client().send(
       new DescribeInstancesCommand({
         Filters: [
           { Name: "tag:Name", Values: ["MinecraftServer", "MinecraftStack/MinecraftServer"] },
@@ -47,7 +61,7 @@ export async function findInstanceId(): Promise<string> {
   }
 
   throw new Error(
-    `Could not find Minecraft Server. Searched for tag Name=MinecraftServer OR MinecraftStack/MinecraftServer in ${env.AWS_REGION}`
+    `Could not find Minecraft Server. Searched for tag Name=MinecraftServer OR MinecraftStack/MinecraftServer in ${region}`
   );
 }
 

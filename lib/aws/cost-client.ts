@@ -2,6 +2,8 @@
  * Cost Explorer types and functions
  */
 
+import { getAwsClientConfig } from "./aws-client-config";
+
 export interface CostBreakdown {
   service: string;
   cost: string;
@@ -105,9 +107,9 @@ export async function getCosts(
   }
 
   const CostExplorerClientFn = CostExplorerClient as unknown as {
-    new (config: { region: string }): unknown;
+    new (config: { region: string; credentials?: unknown }): unknown;
   };
-  const costExplorer = new CostExplorerClientFn({ region: "us-east-1" });
+  const costExplorer = new CostExplorerClientFn(getAwsClientConfig("us-east-1"));
 
   const { start, end } = calculateDateRange(periodType);
 
