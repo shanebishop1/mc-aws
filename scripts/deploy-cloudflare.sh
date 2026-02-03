@@ -195,6 +195,134 @@ DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
 # e.g., panel.shane-bishop.com -> shane-bishop.com
 ZONE_NAME=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
 
+CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_DNS_API_TOKEN")"
+CF_ZONE_ID="$(get_env_value "CLOUDFLARE_ZONE_ID")"
+
+cf_api() {
+  local method="$1"
+  local path="$2"
+  local json_body="${3:-}"
+
+  local url="https://api.cloudflare.com/client/v4${path}"
+
+  if [[ -n "$json_body" ]]; then
+    curl -sS \
+      -X "$method" \
+      -H "Authorization: Bearer ${CF_DNS_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      --data "$json_body" \
+      "$url"
+  else
+    curl -sS \
+      -X "$method" \
+      -H "Authorization: Bearer ${CF_DNS_API_TOKEN}" \
+      -H "Content-Type: application/json" \
+      "$url"
+  fi
+}
+
+cf_parse_dns_record() {
+  # Output: id\ttype\tname\tcontent\tproxied
+  # Exit codes:
+  # - 0: found
+  # - 1: not found
+  # - 2: invalid JSON
+  # - 3: Cloudflare API error (prints messages to stderr)
+  node - <<'NODE'
+const fs = require("node:fs");
+
+const raw = fs.readFileSync(0, "utf8");
+let data;
+try {
+  data = JSON.parse(raw);
+} catch {
+  console.error("❌ Error: Failed to parse Cloudflare API response as JSON");
+  process.exit(2);
+}
+
+if (!data.success) {
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  if (errors.length > 0) {
+    for (const err of errors) {
+      console.error(`❌ Cloudflare API: ${err.message || JSON.stringify(err)}`);
+    }
+  } else {
+    console.error("❌ Error: Cloudflare API request failed");
+  }
+  process.exit(3);
+}
+
+const results = Array.isArray(data.result) ? data.result : [];
+const record = results.find((r) => ["A", "AAAA", "CNAME"].includes(r.type)) || null;
+if (!record) {
+  process.exit(1);
+}
+
+process.stdout.write(
+  [
+    record.id,
+    record.type,
+    record.name,
+    record.content,
+    record.proxied ? "true" : "false",
+  ].join("\t"),
+);
+NODE
+}
+
+ensure_panel_dns() {
+  echo "🧭 Ensuring DNS exists for https://${DOMAIN}"
+  echo "   (Workers routes do not create DNS records; the hostname must exist + be proxied.)"
+
+  local resp
+  resp="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${DOMAIN}&per_page=100")"
+
+  local record_line
+  local record_id
+  local record_type
+  local record_name
+  local record_content
+  local record_proxied
+
+  if record_line="$(echo "$resp" | cf_parse_dns_record)"; then
+    IFS=$'\t' read -r record_id record_type record_name record_content record_proxied <<< "$record_line"
+
+    echo "✅ DNS record found: ${record_type} ${record_name} (proxied=${record_proxied})"
+    if [[ "$record_proxied" != "true" ]]; then
+      echo "🔧 Enabling Cloudflare proxy (orange cloud) for ${record_name}..."
+      if ! cf_api PATCH "/zones/${CF_ZONE_ID}/dns_records/${record_id}" '{"proxied":true}' >/dev/null; then
+        echo "❌ Error: Failed to enable proxy for DNS record ${record_name}"
+        exit 1
+      fi
+      echo "✅ Proxy enabled"
+    fi
+  else
+    local code="$?"
+    if [[ "$code" -eq 1 ]]; then
+      echo "➕ No DNS record found for ${DOMAIN}; creating a proxied record..."
+      echo "   Note: The origin IP is unused because the Worker handles requests."
+
+      local create_body
+      create_body=$(cat <<EOF
+{"type":"A","name":"${DOMAIN}","content":"192.0.2.1","ttl":1,"proxied":true}
+EOF
+)
+      if ! cf_api POST "/zones/${CF_ZONE_ID}/dns_records" "$create_body" >/dev/null; then
+        echo "❌ Error: Failed to create DNS record for ${DOMAIN}"
+        exit 1
+      fi
+      echo "✅ DNS record created (proxied)"
+    else
+      echo "❌ Error: Failed to query Cloudflare DNS records"
+      exit 1
+    fi
+  fi
+
+  echo ""
+}
+
+ensure_panel_dns
+
 echo "🔐 Checking Cloudflare deployment authentication..."
 if ! wrangler whoami >/dev/null 2>&1; then
   echo ""
