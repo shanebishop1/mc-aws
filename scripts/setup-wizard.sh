@@ -608,17 +608,17 @@ collect_cloudflare() {
 
   # Loop until we get a valid token
   while true; do
-    prompt CLOUDFLARE_API_TOKEN "Enter Cloudflare API Token (for DNS updates)" "${CLOUDFLARE_API_TOKEN:-}" true
+    prompt CLOUDFLARE_DNS_API_TOKEN "Enter Cloudflare DNS API Token (for DNS updates)" "${CLOUDFLARE_DNS_API_TOKEN:-}" true
     echo ""
-    
-    if validate_cloudflare_token "$CLOUDFLARE_API_TOKEN"; then
+
+    if validate_cloudflare_token "$CLOUDFLARE_DNS_API_TOKEN"; then
       break
     else
       log_error "Please check your API token and try again."
       log_error "Make sure you created a new token (not using a Global API Key)."
       echo ""
       # Clear the invalid token so they can't just hit Enter again
-      CLOUDFLARE_API_TOKEN=""
+      CLOUDFLARE_DNS_API_TOKEN=""
     fi
   done
 
@@ -666,11 +666,11 @@ collect_cloudflare() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_API_TOKEN"
+  write_env ".env.local" "CLOUDFLARE_DNS_API_TOKEN" "$CLOUDFLARE_DNS_API_TOKEN"
   write_env ".env.local" "CLOUDFLARE_ZONE_ID" "$CLOUDFLARE_ZONE_ID"
   write_env ".env.local" "CLOUDFLARE_RECORD_ID" "$CLOUDFLARE_RECORD_ID"
   write_env ".env.local" "CLOUDFLARE_MC_DOMAIN" "$CLOUDFLARE_MC_DOMAIN"
-  write_env ".env.production" "CLOUDFLARE_API_TOKEN" "$CLOUDFLARE_API_TOKEN"
+  write_env ".env.production" "CLOUDFLARE_DNS_API_TOKEN" "$CLOUDFLARE_DNS_API_TOKEN"
   write_env ".env.production" "CLOUDFLARE_ZONE_ID" "$CLOUDFLARE_ZONE_ID"
   write_env ".env.production" "CLOUDFLARE_RECORD_ID" "$CLOUDFLARE_RECORD_ID"
   write_env ".env.production" "CLOUDFLARE_MC_DOMAIN" "$CLOUDFLARE_MC_DOMAIN"

@@ -208,7 +208,7 @@ Admin can browse the list of backups stored on Google Drive with timestamps/name
 From `.env`:
 - `AWS_REGION` - AWS region
 - `AWS_ACCOUNT_ID` - For resource identification
-- `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`, `CLOUDFLARE_MC_DOMAIN`, `CLOUDFLARE_API_TOKEN` - DNS updates
+- `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`, `CLOUDFLARE_MC_DOMAIN`, `CLOUDFLARE_DNS_API_TOKEN` - DNS updates
 - `GDRIVE_REMOTE`, `GDRIVE_ROOT` - Google Drive config for backup listing
 
 ### External Services
