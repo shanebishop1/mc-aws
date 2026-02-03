@@ -1,21 +1,78 @@
-#!/bin/bash
-# Deploy to Cloudflare Workers with dynamic route configuration
-# This script reads .env.production to configure the deployment route
+#!/usr/bin/env bash
+# Deploy the Next.js app to Cloudflare Workers.
 #
-# Authentication:
-#   - Uses `wrangler login` (OAuth) for deployment - requires full Workers permissions
-#   - CLOUDFLARE_API_TOKEN from .env.production is ONLY for runtime DNS updates by Lambda
-#     (it only needs "Edit zone DNS" permissions and should NOT be used for deployment)
+# IMPORTANT: Cloudflare authentication modes
+# - Deployment (wrangler): use OAuth via `wrangler login` (recommended)
+# - Runtime DNS updates (your app/Lambda): use a LIMITED Cloudflare API token
+#   stored as the Worker secret `CLOUDFLARE_API_TOKEN` (typically "Edit zone DNS")
+#
+# Why this matters:
+# - A DNS-scoped API token is not sufficient for Workers deployments / secret management.
+# - If your shell exports CLOUDFLARE_API_TOKEN, wrangler will switch into API-token auth mode
+#   and `wrangler login` will refuse to run.
 
-set -e
+set -euo pipefail
 
-if [ ! -f ".env.production" ]; then
-  echo "❌ Error: .env.production file not found"
+ENV_FILE=".env.production"
+
+if [[ ! -f "$ENV_FILE" ]]; then
+  echo "❌ Error: $ENV_FILE file not found"
   exit 1
 fi
 
-# Define required secrets
-REQUIRED_SECRETS=(
+# Never allow the runtime DNS token to affect wrangler auth.
+# We still upload it as a Worker secret from $ENV_FILE.
+unset CLOUDFLARE_API_TOKEN
+
+WRANGLER_BIN="./node_modules/.bin/wrangler"
+if [[ ! -x "$WRANGLER_BIN" ]]; then
+  echo "❌ Error: wrangler is not installed. Run: pnpm install"
+  exit 1
+fi
+
+wrangler() {
+  # Run wrangler in a scrubbed environment so an exported CLOUDFLARE_API_TOKEN
+  # (DNS token) cannot interfere with OAuth deployment auth.
+  #
+  # Keep PATH/HOME so node, browser launcher, and wrangler config still work.
+  env -i \
+    PATH="$PATH" \
+    HOME="$HOME" \
+    XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
+    TERM="${TERM:-}" \
+    "$WRANGLER_BIN" "$@"
+}
+
+get_env_value() {
+  local key="$1"
+  local line
+  # First matching line wins.
+  line=$(grep -E "^${key}=" "$ENV_FILE" | head -n 1 || true)
+  if [[ -z "$line" ]]; then
+    echo ""
+    return 0
+  fi
+
+  # Everything after the first '='
+  local value
+  value="${line#*=}"
+
+  # Strip surrounding quotes
+  value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+  echo "$value"
+}
+
+is_placeholder() {
+  local value="$1"
+  [[ -z "$value" ]] && return 0
+  [[ "$value" == your-* ]] && return 0
+  [[ "$value" == "https://mc.yourdomain.com" ]] && return 0
+  [[ "$value" == "http://localhost:3000" ]] && return 0
+  return 1
+}
+
+# Define required env vars from .env.production
+REQUIRED_VARS=(
   "NEXT_PUBLIC_APP_URL"
   "GOOGLE_CLIENT_ID"
   "GOOGLE_CLIENT_SECRET"
@@ -23,15 +80,17 @@ REQUIRED_SECRETS=(
   "AWS_REGION"
   "AWS_ACCESS_KEY_ID"
   "AWS_SECRET_ACCESS_KEY"
+  "INSTANCE_ID"
   "CLOUDFLARE_API_TOKEN"
   "CLOUDFLARE_ZONE_ID"
   "CLOUDFLARE_RECORD_ID"
   "CLOUDFLARE_MC_DOMAIN"
-  "INSTANCE_ID"
 )
 
+echo "🔍 Validating required secrets..."
+
 # Check if AUTH_SECRET needs to be generated
-if grep -q "AUTH_SECRET=your-secret-here" .env.production || grep -q "AUTH_SECRET=dev-secret-change-in-production" .env.production || ! grep -q "^AUTH_SECRET=" .env.production; then
+if grep -q "AUTH_SECRET=your-secret-here" "$ENV_FILE" || grep -q "AUTH_SECRET=dev-secret-change-in-production" "$ENV_FILE" || ! grep -q "^AUTH_SECRET=" "$ENV_FILE"; then
   echo "🔐 Generating strong AUTH_SECRET..."
   
   # Try OpenSSL first, fall back to Node.js
@@ -46,59 +105,36 @@ if grep -q "AUTH_SECRET=your-secret-here" .env.production || grep -q "AUTH_SECRE
   fi
   
   # Update or add AUTH_SECRET in .env.production
-  if grep -q "^AUTH_SECRET=" .env.production; then
+  if grep -q "^AUTH_SECRET=" "$ENV_FILE"; then
     # Replace existing placeholder
     if [[ "$OSTYPE" == "darwin"* ]]; then
       # macOS requires -i with empty string
-      sed -i '' "s|^AUTH_SECRET=.*|AUTH_SECRET=$NEW_SECRET|" .env.production
+      sed -i '' "s|^AUTH_SECRET=.*|AUTH_SECRET=$NEW_SECRET|" "$ENV_FILE"
     else
       # Linux
-      sed -i "s|^AUTH_SECRET=.*|AUTH_SECRET=$NEW_SECRET|" .env.production
+      sed -i "s|^AUTH_SECRET=.*|AUTH_SECRET=$NEW_SECRET|" "$ENV_FILE"
     fi
   else
     # Add if missing
-    echo "AUTH_SECRET=$NEW_SECRET" >> .env.production
+    echo "AUTH_SECRET=$NEW_SECRET" >> "$ENV_FILE"
   fi
   
-  echo "✅ Generated and saved new AUTH_SECRET to .env.production"
+  echo "✅ Generated and saved new AUTH_SECRET to $ENV_FILE"
   echo ""
 fi
 
-# Validate all required secrets are set
-echo "🔍 Validating required secrets..."
-MISSING_SECRETS=()
-
-for secret in "${REQUIRED_SECRETS[@]}"; do
-  # Check if secret exists and is not empty or a placeholder
-  if ! grep -q "^${secret}=" .env.production; then
-    MISSING_SECRETS+=("$secret")
-  else
-    value=$(grep "^${secret}=" .env.production | cut -d'=' -f2-)
-    # Remove quotes
-    value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-    
-    # Check if empty or placeholder
-    if [[ -z "$value" ]] || [[ "$value" == "your-"* ]] || [[ "$value" == "https://mc.yourdomain.com" ]] || [[ "$value" == "http://localhost:3000" ]]; then
-      MISSING_SECRETS+=("$secret")
-    fi
+MISSING_VARS=()
+for key in "${REQUIRED_VARS[@]}"; do
+  value="$(get_env_value "$key")"
+  if is_placeholder "$value"; then
+    MISSING_VARS+=("$key")
   fi
 done
 
-echo ""
-echo "🔍 Validating required secrets..."
-
-# Validate all required secrets are set
-MISSING_SECRETS=()
-for secret in "${REQUIRED_SECRETS[@]}"; do
-  if ! grep -q "^${secret}=" .env.production || grep -q "^${secret}=$" .env.production || grep -q "^${secret}=\"\"" .env.production; then
-    MISSING_SECRETS+=("$secret")
-  fi
-done
-
-if [ ${#MISSING_SECRETS[@]} -ne 0 ]; then
-  echo "❌ Error: Missing required secrets in .env.production:"
-  for secret in "${MISSING_SECRETS[@]}"; do
-    echo "  - $secret"
+if [[ ${#MISSING_VARS[@]} -ne 0 ]]; then
+  echo "❌ Error: Missing required values in $ENV_FILE:"
+  for key in "${MISSING_VARS[@]}"; do
+    echo "  - $key"
   done
   exit 1
 fi
@@ -106,47 +142,44 @@ fi
 echo "✅ All required secrets are set"
 echo ""
 
-# Source .env.production to get values (but we'll unset CLOUDFLARE_API_TOKEN for wrangler)
-export $(grep -v '^#' .env.production | xargs)
-
-# Save the CLOUDFLARE_API_TOKEN value for later (to upload as a secret)
-# but unset it from environment so wrangler can use OAuth for deployment
-SAVED_CLOUDFLARE_API_TOKEN="$CLOUDFLARE_API_TOKEN"
-unset CLOUDFLARE_API_TOKEN
-
-# Add production-specific overrides
-export MC_BACKEND_MODE=aws
-export ENABLE_DEV_LOGIN=false
-
-# Check if wrangler is authenticated for deployment
-echo "🔐 Checking Cloudflare authentication..."
-if ! pnpm exec wrangler whoami &>/dev/null; then
-  echo ""
-  echo "⚠️  You need to authenticate with Cloudflare to deploy Workers."
-  echo ""
-  echo "Important: wrangler login uses OAuth for deployment (full permissions)."
-  echo "This is different from CLOUDFLARE_API_TOKEN which is only for runtime DNS updates."
-  echo ""
-  echo "Running: wrangler login"
-  echo ""
-  
-  if ! pnpm exec wrangler login; then
-    echo ""
-    echo "❌ Error: Failed to authenticate with Cloudflare"
-    echo "Please try running 'pnpm exec wrangler login' manually"
-    exit 1
-  fi
-fi
-echo "✅ Authenticated with Cloudflare"
-echo ""
+NEXT_PUBLIC_APP_URL="$(get_env_value "NEXT_PUBLIC_APP_URL")"
 
 # Extract domain from NEXT_PUBLIC_APP_URL
-# e.g., https://mc.shane-bishop.com -> mc.shane-bishop.com
+# e.g., https://panel.example.com -> panel.example.com
 DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
 
 # Extract zone name (base domain)
-# e.g., mc.shane-bishop.com -> shane-bishop.com
+# e.g., panel.shane-bishop.com -> shane-bishop.com
 ZONE_NAME=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
+
+echo "🔐 Checking Cloudflare deployment authentication..."
+if ! wrangler secret list --format pretty >/dev/null 2>&1; then
+  echo ""
+  echo "⚠️  Wrangler is not authenticated for Workers operations (secrets/deploy)."
+  echo "We'll try to fix this by logging you in via OAuth."
+  echo ""
+
+  # Clear any existing wrangler session (token-mode sessions can block OAuth).
+  wrangler logout >/dev/null 2>&1 || true
+
+  # OAuth login (opens browser). Note: some wrangler failures can return exit code 0,
+  # so we always verify after attempting login.
+  wrangler login || true
+
+  if ! wrangler secret list --format pretty >/dev/null 2>&1; then
+    echo ""
+    echo "❌ Error: Still not authenticated for Workers operations."
+    echo "Try this manually, then re-run this script:"
+    echo "  1) pnpm exec wrangler logout"
+    echo "  2) pnpm exec wrangler login"
+    echo ""
+    echo "If you have CLOUDFLARE_API_TOKEN exported in your shell profile, remove it."
+    exit 1
+  fi
+fi
+
+echo "✅ Authenticated with Cloudflare"
+echo ""
 
 echo "🚀 Deploying to Cloudflare Workers..."
 echo "   Domain: $DOMAIN"
@@ -161,36 +194,44 @@ echo ""
 echo "🔑 Uploading secrets from .env.production..."
 
 SECRET_COUNT=0
-while IFS='=' read -r key value; do
+while IFS= read -r line || [[ -n "$line" ]]; do
   # Skip empty lines and comments
-  [[ -z "$key" || "$key" =~ ^#.* ]] && continue
-  
-  # Remove quotes from value if present
+  [[ -z "$line" ]] && continue
+  [[ "$line" =~ ^#.* ]] && continue
+
+  # Only KEY=VALUE lines
+  if [[ "$line" != *=* ]]; then
+    continue
+  fi
+
+  key="${line%%=*}"
+  value="${line#*=}"
+
+  # Skip empty keys
+  [[ -z "$key" ]] && continue
+
+  # Strip surrounding quotes
   value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-  
+
   # Skip if value is empty
   [[ -z "$value" ]] && continue
-  
-  # Use saved value for CLOUDFLARE_API_TOKEN (since we unset it from environment)
-  if [[ "$key" == "CLOUDFLARE_API_TOKEN" ]]; then
-    value="$SAVED_CLOUDFLARE_API_TOKEN"
-  fi
-  
+
   echo "  Setting: $key"
-  if ! echo "$value" | pnpm exec wrangler secret put "$key"; then
+  if ! echo "$value" | wrangler secret put "$key"; then
     echo ""
     echo "❌ Error: Failed to set secret: $key (see error above)"
+    echo "Hint: If you see '/memberships' auth errors, run: env -u CLOUDFLARE_API_TOKEN pnpm exec wrangler login"
     exit 1
   fi
   ((SECRET_COUNT++))
-done < .env.production
+done < "$ENV_FILE"
 
 echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
 echo ""
 
 # Build the Next.js app
 echo "📦 Building Next.js app..."
-if ! pnpm build; then
+if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm build; then
   echo ""
   echo "❌ Error: Failed to build Next.js app"
   exit 1
@@ -200,7 +241,7 @@ echo ""
 
 # Deploy with wrangler using route flags
 echo "🌐 Deploying to Cloudflare..."
-if ! pnpm exec wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
+if ! wrangler deploy --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
   echo ""
   echo "❌ Error: Failed to deploy to Cloudflare Workers"
   exit 1
