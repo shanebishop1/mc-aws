@@ -12,6 +12,7 @@ import {
 } from "@aws-sdk/client-ssm";
 import { env } from "../env";
 import type { BackupInfo } from "../types";
+import { getAwsClientConfig } from "./aws-client-config";
 import { resolveInstanceId } from "./instance-resolver";
 
 // Lazy initialization of SSM client
@@ -26,7 +27,7 @@ export const ssm: SSMClient = new Proxy({} as SSMClient, {
     if (!_ssmClient) {
       const region = getRegion();
       console.log(`[AWS Config] Initializing SSM client in region: ${region}`);
-      _ssmClient = new SSMClient({ region });
+      _ssmClient = new SSMClient(getAwsClientConfig(region));
     }
     return _ssmClient[prop as keyof SSMClient];
   },

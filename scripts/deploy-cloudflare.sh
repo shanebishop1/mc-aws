@@ -205,20 +205,57 @@ cf_api() {
 
   local url="https://api.cloudflare.com/client/v4${path}"
 
+  local tmp
+  tmp="$(mktemp)"
+  local http_code=""
+
+  # -q disables reading ~/.curlrc, which can inject flags (like `-i`) and break JSON parsing.
+  # We capture the HTTP status code separately and always emit the response body.
   if [[ -n "$json_body" ]]; then
-    curl -sS \
+    if ! http_code=$(curl -sS -q \
+      -o "$tmp" \
+      -w "%{http_code}" \
       -X "$method" \
       -H "Authorization: Bearer ${CF_DNS_API_TOKEN}" \
       -H "Content-Type: application/json" \
+      -H "Accept: application/json" \
       --data "$json_body" \
-      "$url"
+      "$url"); then
+      echo "❌ Error: Cloudflare API request failed (curl)" >&2
+      rm -f "$tmp"
+      return 1
+    fi
   else
-    curl -sS \
+    if ! http_code=$(curl -sS -q \
+      -o "$tmp" \
+      -w "%{http_code}" \
       -X "$method" \
       -H "Authorization: Bearer ${CF_DNS_API_TOKEN}" \
       -H "Content-Type: application/json" \
-      "$url"
+      -H "Accept: application/json" \
+      "$url"); then
+      echo "❌ Error: Cloudflare API request failed (curl)" >&2
+      rm -f "$tmp"
+      return 1
+    fi
   fi
+
+  local bytes
+  bytes=$(wc -c < "$tmp" | tr -d ' ')
+  if [[ "$bytes" -eq 0 ]]; then
+    echo "❌ Error: Cloudflare API returned an empty response (HTTP ${http_code})" >&2
+    rm -f "$tmp"
+    return 1
+  fi
+
+  cat "$tmp"
+  rm -f "$tmp"
+
+  if [[ ! "$http_code" =~ ^2 ]]; then
+    echo "❌ Error: Cloudflare API returned HTTP ${http_code}" >&2
+    return 1
+  fi
+  return 0
 }
 
 cf_parse_dns_record() {
@@ -228,15 +265,28 @@ cf_parse_dns_record() {
   # - 1: not found
   # - 2: invalid JSON
   # - 3: Cloudflare API error (prints messages to stderr)
-  node - <<'NODE'
+  node -e "$(cat <<'NODE'
 const fs = require("node:fs");
 
-const raw = fs.readFileSync(0, "utf8");
+const rawAll = fs.readFileSync(0, "utf8");
+const raw = rawAll.trim();
+
+// Some curl configs can prepend HTTP headers; find the first JSON object.
+const start = raw.indexOf("{");
+if (start === -1) {
+  const preview = raw.slice(0, 200).replace(/\n/g, "\\n");
+  console.error("❌ Error: Failed to parse Cloudflare API response as JSON (no '{' found)");
+  console.error("Response preview:", JSON.stringify(preview));
+  process.exit(2);
+}
+
 let data;
 try {
-  data = JSON.parse(raw);
+  data = JSON.parse(raw.slice(start));
 } catch {
+  const preview = raw.slice(0, 200).replace(/\n/g, "\\n");
   console.error("❌ Error: Failed to parse Cloudflare API response as JSON");
+  console.error("Response preview:", JSON.stringify(preview));
   process.exit(2);
 }
 
@@ -244,7 +294,7 @@ if (!data.success) {
   const errors = Array.isArray(data.errors) ? data.errors : [];
   if (errors.length > 0) {
     for (const err of errors) {
-      console.error(`❌ Cloudflare API: ${err.message || JSON.stringify(err)}`);
+      console.error("❌ Cloudflare API: " + (err.message || JSON.stringify(err)));
     }
   } else {
     console.error("❌ Error: Cloudflare API request failed");
@@ -268,6 +318,51 @@ process.stdout.write(
   ].join("\t"),
 );
 NODE
+)"
+}
+
+cf_assert_success() {
+  # Exit codes:
+  # - 0: success
+  # - 2: invalid JSON
+  # - 3: Cloudflare API error (prints messages to stderr)
+  node -e "$(cat <<'NODE'
+const fs = require("node:fs");
+
+const rawAll = fs.readFileSync(0, "utf8");
+const raw = rawAll.trim();
+
+const start = raw.indexOf("{");
+if (start === -1) {
+  const preview = raw.slice(0, 200).replace(/\n/g, "\\n");
+  console.error("❌ Error: Cloudflare API returned a non-JSON response");
+  console.error("Response preview:", JSON.stringify(preview));
+  process.exit(2);
+}
+
+let data;
+try {
+  data = JSON.parse(raw.slice(start));
+} catch {
+  const preview = raw.slice(0, 200).replace(/\n/g, "\\n");
+  console.error("❌ Error: Failed to parse Cloudflare API response as JSON");
+  console.error("Response preview:", JSON.stringify(preview));
+  process.exit(2);
+}
+
+if (!data.success) {
+  const errors = Array.isArray(data.errors) ? data.errors : [];
+  if (errors.length > 0) {
+    for (const err of errors) {
+      console.error("❌ Cloudflare API: " + (err.message || JSON.stringify(err)));
+    }
+  } else {
+    console.error("❌ Error: Cloudflare API request failed");
+  }
+  process.exit(3);
+}
+NODE
+)"
 }
 
 ensure_panel_dns() {
@@ -275,7 +370,10 @@ ensure_panel_dns() {
   echo "   (Workers routes do not create DNS records; the hostname must exist + be proxied.)"
 
   local resp
-  resp="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${DOMAIN}&per_page=100")"
+  if ! resp="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${DOMAIN}&per_page=100")"; then
+    echo "❌ Error: Failed to query Cloudflare DNS records"
+    exit 1
+  fi
 
   local record_line
   local record_id
@@ -284,13 +382,13 @@ ensure_panel_dns() {
   local record_content
   local record_proxied
 
-  if record_line="$(echo "$resp" | cf_parse_dns_record)"; then
+  if record_line="$(printf "%s" "$resp" | cf_parse_dns_record)"; then
     IFS=$'\t' read -r record_id record_type record_name record_content record_proxied <<< "$record_line"
 
     echo "✅ DNS record found: ${record_type} ${record_name} (proxied=${record_proxied})"
     if [[ "$record_proxied" != "true" ]]; then
       echo "🔧 Enabling Cloudflare proxy (orange cloud) for ${record_name}..."
-      if ! cf_api PATCH "/zones/${CF_ZONE_ID}/dns_records/${record_id}" '{"proxied":true}' >/dev/null; then
+      if ! cf_api PATCH "/zones/${CF_ZONE_ID}/dns_records/${record_id}" '{"proxied":true}' | cf_assert_success >/dev/null; then
         echo "❌ Error: Failed to enable proxy for DNS record ${record_name}"
         exit 1
       fi
@@ -307,7 +405,7 @@ ensure_panel_dns() {
 {"type":"A","name":"${DOMAIN}","content":"192.0.2.1","ttl":1,"proxied":true}
 EOF
 )
-      if ! cf_api POST "/zones/${CF_ZONE_ID}/dns_records" "$create_body" >/dev/null; then
+      if ! cf_api POST "/zones/${CF_ZONE_ID}/dns_records" "$create_body" | cf_assert_success >/dev/null; then
         echo "❌ Error: Failed to create DNS record for ${DOMAIN}"
         exit 1
       fi

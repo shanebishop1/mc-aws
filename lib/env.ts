@@ -56,6 +56,9 @@ export const env = {
   AWS_REGION: getEnv("AWS_REGION", true) || process.env.CDK_DEFAULT_REGION || "",
   AWS_ACCOUNT_ID: getEnv("AWS_ACCOUNT_ID", true) || process.env.CDK_DEFAULT_ACCOUNT || "",
   INSTANCE_ID: getEnv("INSTANCE_ID", true),
+  AWS_ACCESS_KEY_ID: getEnv("AWS_ACCESS_KEY_ID", true),
+  AWS_SECRET_ACCESS_KEY: getEnv("AWS_SECRET_ACCESS_KEY", true),
+  AWS_SESSION_TOKEN: getEnv("AWS_SESSION_TOKEN", true),
 
   // Cloudflare Configuration
   CLOUDFLARE_ZONE_ID: getEnv("CLOUDFLARE_ZONE_ID"),

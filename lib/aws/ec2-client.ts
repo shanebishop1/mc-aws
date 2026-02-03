@@ -5,6 +5,7 @@
 import { DescribeInstancesCommand, EC2Client, StartInstancesCommand, StopInstancesCommand } from "@aws-sdk/client-ec2";
 import { env } from "../env";
 import { ServerState } from "../types";
+import { getAwsClientConfig } from "./aws-client-config";
 import { findInstanceId, resolveInstanceId } from "./instance-resolver";
 
 // Re-export for backwards compatibility
@@ -22,7 +23,7 @@ export const ec2: EC2Client = new Proxy({} as EC2Client, {
     if (!_ec2Client) {
       const region = getRegion();
       console.log(`[AWS Config] Initializing EC2 client in region: ${region}`);
-      _ec2Client = new EC2Client({ region });
+      _ec2Client = new EC2Client(getAwsClientConfig(region));
     }
     return _ec2Client[prop as keyof EC2Client];
   },
