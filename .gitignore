@@ -61,4 +61,5 @@ tests/*-results.txt
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+.open-next
 frontend/.next
