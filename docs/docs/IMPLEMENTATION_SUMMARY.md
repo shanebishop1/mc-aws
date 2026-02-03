@@ -149,7 +149,7 @@ INSTANCE_ID=i-1234567890abcdef0
 CLOUDFLARE_ZONE_ID=abc123xyz789
 CLOUDFLARE_RECORD_ID=record123xyz
 CLOUDFLARE_MC_DOMAIN=minecraft.example.com
-CLOUDFLARE_API_TOKEN=your-api-token-here
+CLOUDFLARE_DNS_API_TOKEN=your-api-token-here
 
 # Google Drive (optional for future use)
 GDRIVE_REMOTE=gdrive

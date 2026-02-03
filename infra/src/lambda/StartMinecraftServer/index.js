@@ -186,7 +186,7 @@ function validateEnvironment() {
   const zone = process.env.CLOUDFLARE_ZONE_ID;
   const record = process.env.CLOUDFLARE_RECORD_ID;
   const domain = process.env.CLOUDFLARE_MC_DOMAIN;
-  const cfToken = process.env.CLOUDFLARE_API_TOKEN;
+  const cfToken = process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
 
   if (!instanceId || !process.env.VERIFIED_SENDER || !zone || !record || !domain || !cfToken) {
     console.error("Missing required environment variables.");
