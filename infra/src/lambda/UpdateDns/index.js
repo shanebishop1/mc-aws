@@ -54,7 +54,7 @@ exports.handler = async (event) => {
   const zone = process.env.CLOUDFLARE_ZONE_ID;
   const record = process.env.CLOUDFLARE_RECORD_ID;
   const domain = process.env.CLOUDFLARE_MC_DOMAIN;
-  const token = process.env.CLOUDFLARE_API_TOKEN;
+  const token = process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
 
   if (!instanceId || !zone || !record || !domain || !token) {
     throw new Error("Missing Cloudflare or instance configuration");

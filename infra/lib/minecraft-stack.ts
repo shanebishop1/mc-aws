@@ -195,7 +195,7 @@ export class MinecraftStack extends cdk.Stack {
         CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID || "",
         CLOUDFLARE_RECORD_ID: process.env.CLOUDFLARE_RECORD_ID || "",
         CLOUDFLARE_MC_DOMAIN: process.env.CLOUDFLARE_MC_DOMAIN || "",
-        CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN || "",
+        CLOUDFLARE_DNS_API_TOKEN: process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "",
         VERIFIED_SENDER: process.env.VERIFIED_SENDER || "",
         START_KEYWORD: process.env.START_KEYWORD || "start",
         NOTIFICATION_EMAIL: notificationEmail,
@@ -242,7 +242,7 @@ export class MinecraftStack extends cdk.Stack {
         CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID || "",
         CLOUDFLARE_RECORD_ID: process.env.CLOUDFLARE_RECORD_ID || "",
         CLOUDFLARE_MC_DOMAIN: process.env.CLOUDFLARE_MC_DOMAIN || "",
-        CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN || "",
+        CLOUDFLARE_DNS_API_TOKEN: process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "",
       },
       timeout: cdk.Duration.seconds(300),
     });

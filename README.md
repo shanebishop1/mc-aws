@@ -495,7 +495,7 @@ If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create
     ```bash
     # Cloudflare (from Prerequisites section above)
     CLOUDFLARE_ZONE_ID="your-zone-id"
-    CLOUDFLARE_API_TOKEN="your-api-token"
+    CLOUDFLARE_DNS_API_TOKEN="your-api-token"
     CLOUDFLARE_RECORD_ID="your-record-id"
     CLOUDFLARE_MC_DOMAIN="mc.yourdomain.com"
 
@@ -1113,7 +1113,7 @@ cp .env.example .env.production
 | `ADMIN_EMAIL` | Your email for admin access | Your email address |
 | `NEXT_PUBLIC_APP_URL` | Your deployed URL | `https://mc.yourdomain.com` |
 | `AWS_REGION` | AWS region | `us-west-1` (or your region) |
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token | From Cloudflare dashboard |
+| `CLOUDFLARE_DNS_API_TOKEN` | Cloudflare DNS API token | From Cloudflare dashboard |
 | `CLOUDFLARE_ZONE_ID` | Cloudflare zone ID | From Cloudflare dashboard |
 | `INSTANCE_ID` | EC2 instance ID | From AWS Console or CDK output |
 
