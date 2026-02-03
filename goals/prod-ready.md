@@ -36,7 +36,7 @@ This PRD defines the minimal set of changes to make the app production-ready on 
 ## Current Issues (Must Fix)
 
 1. **Critical secret leak to client bundle**
-   - `next.config.ts` uses `NextConfig.env` to expose server-only env vars, including `CLOUDFLARE_API_TOKEN` and `INSTANCE_ID`.
+   - `next.config.ts` uses `NextConfig.env` to expose server-only env vars, including `CLOUDFLARE_DNS_API_TOKEN` and `INSTANCE_ID`.
    - This can leak secrets into the browser.
 2. **Command injection**
    - `app/api/resume/route.ts` interpolates unsanitized `backupName` into an SSM shell command.
@@ -135,7 +135,7 @@ Even if build-time checks are bypassed, never run production auth with an empty 
 
 - `next.config.ts`
   - Remove `env` entries for server-only vars:
-    - `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`
+    - `CLOUDFLARE_DNS_API_TOKEN`, `CLOUDFLARE_ZONE_ID`, `CLOUDFLARE_RECORD_ID`
     - `INSTANCE_ID`
     - `GDRIVE_*` (not public)
     - `AWS_REGION`, `AWS_ACCOUNT_ID` (keep server-only unless truly needed client-side)
@@ -246,7 +246,7 @@ Even if build-time checks are bypassed, never run production auth with an empty 
 
 ## Definition of Done
 
-- No secrets are exposed client-side (verify bundle does not include `CLOUDFLARE_API_TOKEN`).
+- No secrets are exposed client-side (verify bundle does not include `CLOUDFLARE_DNS_API_TOKEN`).
 - All long operations work on Cloudflare Workers without timeouts.
 - `backupName` injection path removed.
 - Locking prevents concurrent operations reliably across UI + email triggers.

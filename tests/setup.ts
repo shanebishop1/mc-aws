@@ -90,7 +90,7 @@ vi.mock("@/lib/env", () => ({
     CLOUDFLARE_ZONE_ID: "zone123",
     CLOUDFLARE_RECORD_ID: "record123",
     CLOUDFLARE_MC_DOMAIN: "mc.example.com",
-    CLOUDFLARE_API_TOKEN: "token123",
+    CLOUDFLARE_DNS_API_TOKEN: "token123",
     GDRIVE_REMOTE: "gdrive",
     GDRIVE_ROOT: "mc-backups",
     MC_BACKEND_MODE: "aws",

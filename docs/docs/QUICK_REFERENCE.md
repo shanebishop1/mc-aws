@@ -139,11 +139,11 @@ See [../MOCK_MODE_DEVELOPER_GUIDE.md](../MOCK_MODE_DEVELOPER_GUIDE.md) for compr
    AWS_REGION=us-east-1
    AWS_ACCOUNT_ID=123456789012
    INSTANCE_ID=i-1234567890abcdef0
-   CLOUDFLARE_ZONE_ID=zone123
-   CLOUDFLARE_RECORD_ID=record123
-   CLOUDFLARE_MC_DOMAIN=minecraft.example.com
-   CLOUDFLARE_API_TOKEN=token123
-   ```
+CLOUDFLARE_ZONE_ID=zone123
+    CLOUDFLARE_RECORD_ID=record123
+    CLOUDFLARE_MC_DOMAIN=minecraft.example.com
+    CLOUDFLARE_DNS_API_TOKEN=token123
+    ```
 
 3. **Start development server:**
    ```bash

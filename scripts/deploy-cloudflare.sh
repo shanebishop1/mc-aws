@@ -4,11 +4,11 @@
 # IMPORTANT: Cloudflare authentication modes
 # - Deployment (wrangler): use OAuth via `wrangler login` (recommended)
 # - Runtime DNS updates (your app/Lambda): use a LIMITED Cloudflare API token
-#   stored as the Worker secret `CLOUDFLARE_API_TOKEN` (typically "Edit zone DNS")
+#   stored as the Worker secret `CLOUDFLARE_DNS_API_TOKEN` (typically "Edit zone DNS")
 #
 # Why this matters:
 # - A DNS-scoped API token is not sufficient for Workers deployments / secret management.
-# - If your shell exports CLOUDFLARE_API_TOKEN, wrangler will switch into API-token auth mode
+# - If your shell exports CLOUDFLARE_DNS_API_TOKEN, wrangler will switch into API-token auth mode
 #   and `wrangler login` will refuse to run.
 
 set -euo pipefail
@@ -22,7 +22,7 @@ fi
 
 # Never allow the runtime DNS token to affect wrangler auth.
 # We still upload it as a Worker secret from $ENV_FILE.
-unset CLOUDFLARE_API_TOKEN
+unset CLOUDFLARE_DNS_API_TOKEN
 
 WRANGLER_BIN="./node_modules/.bin/wrangler"
 if [[ ! -x "$WRANGLER_BIN" ]]; then
@@ -30,14 +30,21 @@ if [[ ! -x "$WRANGLER_BIN" ]]; then
   exit 1
 fi
 
+# Use an isolated HOME for wrangler so any existing API-token based state in the
+# user's real HOME cannot block OAuth login (and so we don't care if they export
+# CLOUDFLARE_DNS_API_TOKEN globally).
+WRANGLER_HOME_DIR="${HOME}/.config/mc-aws/wrangler-home"
+mkdir -p "$WRANGLER_HOME_DIR"
+chmod 700 "$WRANGLER_HOME_DIR" || true
+
 wrangler() {
-  # Run wrangler in a scrubbed environment so an exported CLOUDFLARE_API_TOKEN
+  # Run wrangler in a scrubbed environment so an exported CLOUDFLARE_DNS_API_TOKEN
   # (DNS token) cannot interfere with OAuth deployment auth.
   #
   # Keep PATH/HOME so node, browser launcher, and wrangler config still work.
   env -i \
     PATH="$PATH" \
-    HOME="$HOME" \
+    HOME="$WRANGLER_HOME_DIR" \
     XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-}" \
     TERM="${TERM:-}" \
     "$WRANGLER_BIN" "$@"
@@ -81,7 +88,7 @@ REQUIRED_VARS=(
   "AWS_ACCESS_KEY_ID"
   "AWS_SECRET_ACCESS_KEY"
   "INSTANCE_ID"
-  "CLOUDFLARE_API_TOKEN"
+  "CLOUDFLARE_DNS_API_TOKEN"
   "CLOUDFLARE_ZONE_ID"
   "CLOUDFLARE_RECORD_ID"
   "CLOUDFLARE_MC_DOMAIN"
@@ -173,7 +180,7 @@ if ! wrangler secret list --format pretty >/dev/null 2>&1; then
     echo "  1) pnpm exec wrangler logout"
     echo "  2) pnpm exec wrangler login"
     echo ""
-    echo "If you have CLOUDFLARE_API_TOKEN exported in your shell profile, remove it."
+    echo "If you have CLOUDFLARE_DNS_API_TOKEN exported in your shell profile, remove it."
     exit 1
   fi
 fi
@@ -220,7 +227,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   if ! echo "$value" | wrangler secret put "$key"; then
     echo ""
     echo "❌ Error: Failed to set secret: $key (see error above)"
-    echo "Hint: If you see '/memberships' auth errors, run: env -u CLOUDFLARE_API_TOKEN pnpm exec wrangler login"
+    echo "Hint: If you see '/memberships' auth errors, run: env -u CLOUDFLARE_DNS_API_TOKEN pnpm exec wrangler login"
     exit 1
   fi
   ((SECRET_COUNT++))

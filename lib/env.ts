@@ -61,7 +61,18 @@ export const env = {
   CLOUDFLARE_ZONE_ID: getEnv("CLOUDFLARE_ZONE_ID"),
   CLOUDFLARE_RECORD_ID: getEnv("CLOUDFLARE_RECORD_ID"),
   CLOUDFLARE_MC_DOMAIN: getEnv("CLOUDFLARE_MC_DOMAIN"),
-  CLOUDFLARE_API_TOKEN: getEnv("CLOUDFLARE_API_TOKEN"),
+  CLOUDFLARE_DNS_API_TOKEN: (() => {
+    const newToken = getEnv("CLOUDFLARE_DNS_API_TOKEN", true);
+    const oldToken = getEnv("CLOUDFLARE_API_TOKEN", true);
+    if (newToken) return newToken;
+    if (oldToken) {
+      console.warn(
+        "[DEPRECATION] CLOUDFLARE_API_TOKEN is deprecated. Please rename to CLOUDFLARE_DNS_API_TOKEN in your .env files."
+      );
+      return oldToken;
+    }
+    return getEnv("CLOUDFLARE_DNS_API_TOKEN"); // Will warn about missing required var
+  })(),
 
   // Google Drive Configuration (optional)
   GDRIVE_REMOTE: getEnv("GDRIVE_REMOTE", true),

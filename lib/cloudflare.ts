@@ -49,7 +49,7 @@ async function updateCloudflareDnsReal(ip: string): Promise<void> {
     const response = await fetch(cfUrl, {
       method: "PUT",
       headers: {
-        Authorization: `Bearer ${env.CLOUDFLARE_API_TOKEN}`,
+        Authorization: `Bearer ${env.CLOUDFLARE_DNS_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify(cfPayload),

@@ -522,7 +522,7 @@ The API requires the following environment variables:
 | `CLOUDFLARE_ZONE_ID` | Yes | Cloudflare zone ID |
 | `CLOUDFLARE_RECORD_ID` | Yes | Cloudflare DNS record ID |
 | `CLOUDFLARE_MC_DOMAIN` | Yes | Minecraft server domain |
-| `CLOUDFLARE_API_TOKEN` | Yes | Cloudflare API token |
+| `CLOUDFLARE_DNS_API_TOKEN` | Yes | Cloudflare DNS API token |
 | `NOTIFICATION_EMAIL` | Yes | Admin notification email |
 | `GDRIVE_REMOTE` | Yes | rclone remote name for Google Drive |
 | `GDRIVE_ROOT` | Yes | Google Drive folder path |

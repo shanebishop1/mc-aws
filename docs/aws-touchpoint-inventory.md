@@ -155,7 +155,7 @@ This document catalogs all external service dependencies across the mc-aws appli
 | `updateCloudflareDns` | PUT | `https://api.cloudflare.com/client/v4/zones/{zone_id}/dns_records/{record_id}` | Update A record with new IP | start, restore, resume |
 
 **Environment Variables Required:**
-- `CLOUDFLARE_API_TOKEN`
+- `CLOUDFLARE_DNS_API_TOKEN`
 - `CLOUDFLARE_ZONE_ID`
 - `CLOUDFLARE_RECORD_ID`
 - `CLOUDFLARE_MC_DOMAIN`
