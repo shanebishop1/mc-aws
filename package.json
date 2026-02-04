@@ -33,7 +33,6 @@
     "validate:dev-login": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true tsx scripts/validate-dev-login.ts",
     "preview:cf": "opennextjs-cloudflare build && wrangler dev",
     "deploy:cf": "./scripts/deploy-cloudflare.sh",
-
     "cdk:version": "cd infra && cdk --version",
     "cdk:list": "cd infra && cdk list",
     "cdk:synth": "cd infra && cdk synth",
@@ -50,6 +49,7 @@
     "@aws-sdk/client-ec2": "^3.547.0",
     "@aws-sdk/client-lambda": "^3.980.0",
     "@aws-sdk/client-ssm": "^3.547.0",
+    "@smithy/fetch-http-handler": "5.3.9",
     "arctic": "^3.7.0",
     "clsx": "^2.1.1",
     "framer-motion": "^12.24.10",

@@ -124,7 +124,22 @@ async function pollInstanceForIp(instanceId, attempt) {
       return { ip: publicIp };
     }
 
-    if (["stopping", "stopped", "terminated", "shutting-down"].includes(instanceState)) {
+    if (["terminated", "shutting-down"].includes(instanceState)) {
+      console.error(`Instance ${instanceId} entered terminal state ${instanceState} while waiting for IP.`);
+      return { error: new Error(`Instance entered unexpected state: ${instanceState}`) };
+    }
+
+    // If we just issued a start, DescribeInstances can briefly lag. Treat early "stopped/stopping"
+    // as a transient observation and keep polling for a short grace window.
+    if (["stopping", "stopped"].includes(instanceState)) {
+      const graceAttempts = 10;
+      if (attempt <= graceAttempts) {
+        console.warn(
+          `Instance ${instanceId} is ${instanceState} while waiting for IP (attempt ${attempt}/${MAX_POLL_ATTEMPTS}); continuing...`
+        );
+        return {};
+      }
+
       console.error(`Instance ${instanceId} entered unexpected state ${instanceState} while waiting for IP.`);
       return { error: new Error(`Instance entered unexpected state: ${instanceState}`) };
     }
