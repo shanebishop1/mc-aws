@@ -4,7 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { findInstanceId, getInstanceState, stopInstance, withServerActionLock } from "@/lib/aws";
+import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -21,75 +21,61 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   }
 
   try {
-    return await withServerActionLock("stop", async () => {
-      let instanceId: string | undefined;
-      try {
-        const body = await request.clone().json();
-        instanceId = body?.instanceId;
-      } catch {
-        // Empty or invalid body is fine, fallback to finding instance ID
-      }
+    let instanceId: string | undefined;
+    try {
+      const body = await request.json();
+      instanceId = body?.instanceId;
+    } catch {
+      // Empty or invalid body is fine, fallback to finding instance ID
+    }
 
-      const resolvedId = instanceId || (await findInstanceId());
-      console.log("[STOP] Stopping server instance:", resolvedId);
+    const resolvedId = instanceId || (await findInstanceId());
+    console.log("[STOP] Stopping server instance:", resolvedId);
 
-      // Check current state
-      const currentState = await getInstanceState(resolvedId);
-      console.log("[STOP] Current state:", currentState);
+    // Check current state
+    const currentState = await getInstanceState(resolvedId);
+    console.log("[STOP] Current state:", currentState);
 
-      // If already stopped, return error (per requirement)
-      if (currentState === ServerState.Stopped || currentState === ServerState.Hibernating) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "Server is already stopped",
-            timestamp: new Date().toISOString(),
-          },
-          { status: 400 }
-        );
-      }
-
-      if (currentState !== ServerState.Running && currentState !== ServerState.Pending) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: `Cannot stop server in state: ${currentState}`,
-            timestamp: new Date().toISOString(),
-          },
-          { status: 400 }
-        );
-      }
-
-      // Send stop command
-      console.log("[STOP] Sending stop command...");
-      await stopInstance(resolvedId);
-
-      const response: ApiResponse<StopServerResponse> = {
-        success: true,
-        data: {
-          instanceId: resolvedId,
-          message: "Server stop command sent successfully",
-        },
-        timestamp: new Date().toISOString(),
-      };
-
-      return NextResponse.json(response);
-    });
-  } catch (error) {
-    console.error("[STOP] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    // If the error is about another action in progress, return 409 Conflict
-    if (errorMessage.includes("Another operation is in progress")) {
+    // If already stopped, return error (per requirement)
+    if (currentState === ServerState.Stopped || currentState === ServerState.Hibernating) {
       return NextResponse.json(
         {
           success: false,
-          error: errorMessage,
+          error: "Server is already stopped",
           timestamp: new Date().toISOString(),
         },
-        { status: 409 }
+        { status: 400 }
       );
     }
+
+    if (currentState !== ServerState.Running && currentState !== ServerState.Pending) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: `Cannot stop server in state: ${currentState}`,
+          timestamp: new Date().toISOString(),
+        },
+        { status: 400 }
+      );
+    }
+
+    // Send stop command
+    console.log("[STOP] Sending stop command...");
+    await stopInstance(resolvedId);
+
+    const response: ApiResponse<StopServerResponse> = {
+      success: true,
+      data: {
+        instanceId: resolvedId,
+        message: "Server stop command sent successfully",
+      },
+      timestamp: new Date().toISOString(),
+    };
+
+    return NextResponse.json(response);
+  } catch (error) {
+    console.error("[STOP] Error:", error);
+    const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
     return NextResponse.json(
       {

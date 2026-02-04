@@ -16,7 +16,8 @@ describe("GET /api/status", () => {
 
     expect(body.success).toBe(true);
     expect(body.data?.state).toBe(ServerState.Running);
-    expect(body.data?.publicIp).toBe(publicIp);
+    // Domain is returned instead of raw IP when CLOUDFLARE_MC_DOMAIN is set
+    expect(body.data?.publicIp).toBe("mc.example.com");
     expect(body.data?.instanceId).toBe("i-1234567890abcdef0");
   });
 

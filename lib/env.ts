@@ -92,7 +92,7 @@ export const env = {
   // Google OAuth (required in production for real auth)
   GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", true),
   GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", true),
-  NEXT_PUBLIC_APP_URL: getEnv("NEXT_PUBLIC_APP_URL", true) || "http://localhost:3000",
+  NEXT_PUBLIC_APP_URL: getEnv("NEXT_PUBLIC_APP_URL", true) || "http://localhost:3001",
 
   // Development
   ENABLE_DEV_LOGIN: getEnv("ENABLE_DEV_LOGIN", true),

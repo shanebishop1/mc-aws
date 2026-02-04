@@ -5,7 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { acquireServerAction, findInstanceId, getInstanceState, invokeLambda, releaseServerAction } from "@/lib/aws";
+import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
@@ -66,28 +66,6 @@ function validateHibernateState(currentState: string): NextResponse<ApiResponse<
 }
 
 /**
- * Acquire server action lock with conflict handling
- */
-async function acquireHibernateLock(): Promise<NextResponse<ApiResponse<HibernateResponse>> | null> {
-  try {
-    await acquireServerAction("hibernate");
-    return null;
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message.includes("Another operation is in progress")) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
-    }
-    throw error;
-  }
-}
-
-/**
  * Invoke hibernate Lambda and return response
  */
 async function invokeHibernateLambda(
@@ -118,7 +96,6 @@ async function invokeHibernateLambda(
     );
   } catch (error) {
     console.error("[HIBERNATE] Lambda invocation failed:", error);
-    await releaseServerAction();
     throw error;
   }
 }
@@ -184,12 +161,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const stateError = validateHibernateState(currentState);
     if (stateError) {
       return stateError;
-    }
-
-    // Acquire server action lock
-    const lockError = await acquireHibernateLock();
-    if (lockError) {
-      return lockError;
     }
 
     // Invoke Lambda for hibernate

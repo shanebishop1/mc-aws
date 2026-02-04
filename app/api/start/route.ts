@@ -6,7 +6,7 @@
  */
 
 import { type AuthUser, requireAllowed } from "@/lib/api-auth";
-import { acquireServerAction, findInstanceId, getInstanceState, invokeLambda, releaseServerAction } from "@/lib/aws";
+import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -52,23 +52,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    // Set the server-action lock before invoking Lambda
-    try {
-      await acquireServerAction("start");
-    } catch (error: unknown) {
-      if (error instanceof Error && error.message.includes("Another operation is in progress")) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: error.message,
-            timestamp: new Date().toISOString(),
-          },
-          { status: 409 }
-        );
-      }
-      throw error;
-    }
-
     // Invoke the Lambda function asynchronously
     try {
       console.log("[START] Invoking StartMinecraftServer Lambda");
@@ -94,7 +77,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return NextResponse.json(response);
     } catch (error) {
       console.error("[START] Lambda invocation failed:", error);
-      await releaseServerAction();
       throw error;
     }
   } catch (error) {

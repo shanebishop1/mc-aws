@@ -293,14 +293,6 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Allow the start lambda to clear the app's action lock marker
-    startLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["ssm:DeleteParameter"],
-        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`],
-      })
-    );
-
     // Grant Lambda permission to run SSM commands on EC2 (scoped to Minecraft instance only)
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
