@@ -39,7 +39,8 @@ describe("GET /api/status (Mock Mode)", () => {
 
       expect(body.success).toBe(true);
       expect(body.data?.state).toBe(ServerState.Running);
-      expect(body.data?.publicIp).toBe("203.0.113.42");
+      // Domain is returned instead of raw IP when CLOUDFLARE_MC_DOMAIN is set
+      expect(body.data?.publicIp).toBe("mc.example.com");
       expect(body.data?.instanceId).toBeDefined();
       expect(body.data?.hasVolume).toBe(true);
       expect(body.data?.lastUpdated).toBeDefined();
@@ -352,7 +353,8 @@ describe("GET /api/status (Mock Mode)", () => {
       res = await GET(req);
       body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(res);
       expect(body.data?.state).toBe(ServerState.Running);
-      expect(body.data?.publicIp).toBe("203.0.113.42");
+      // Domain is returned instead of raw IP when CLOUDFLARE_MC_DOMAIN is set
+      expect(body.data?.publicIp).toBe("mc.example.com");
 
       // Change to pending
       await stateStore.updateInstanceState("pending" as ServerState);
