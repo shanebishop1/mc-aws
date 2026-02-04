@@ -2,6 +2,7 @@
 
 import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
 import { useAuth } from "@/components/auth/auth-provider";
+import { RestoreDialog } from "@/components/backup/RestoreDialog";
 import { BackupDialog } from "@/components/ui/BackupDialog";
 import { LuxuryButton } from "@/components/ui/Button";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
@@ -51,7 +52,7 @@ export const ControlsSection = ({
 
   const [showHibernateConfirm, setShowHibernateConfirm] = useState(false);
   const [showBackupDialog, setShowBackupDialog] = useState(false);
-  const [showRestoreConfirm, setShowRestoreConfirm] = useState(false);
+  const [showRestoreDialog, setShowRestoreDialog] = useState(false);
   const [showGDrivePrompt, setShowGDrivePrompt] = useState(false);
   const [pendingAction, setPendingAction] = useState<{ action: string; endpoint: string } | null>(null);
   const [gdriveError, setGdriveError] = useState<string | null>(null);
@@ -70,7 +71,7 @@ export const ControlsSection = ({
   const handleRestoreClick = async () => {
     const gdriveConfigured = await checkGDriveStatus();
     if (gdriveConfigured) {
-      setShowRestoreConfirm(true);
+      setShowRestoreDialog(true);
     } else {
       setPendingAction({ action: "Restore", endpoint: "/api/restore" });
       setShowGDrivePrompt(true);
@@ -80,8 +81,11 @@ export const ControlsSection = ({
   const handleGDriveSetupComplete = () => {
     setShowGDrivePrompt(false);
     setGdriveError(null);
-    if (pendingAction) {
-      void handleAction(pendingAction.action, pendingAction.endpoint);
+    if (pendingAction?.action === "Restore") {
+      setShowRestoreDialog(true);
+      setPendingAction(null);
+    } else if (pendingAction?.action === "Backup") {
+      setShowBackupDialog(true);
       setPendingAction(null);
     }
   };
@@ -211,17 +215,11 @@ export const ControlsSection = ({
 
           <ConfirmationDialogs
             showHibernateConfirm={showHibernateConfirm}
-            showRestoreConfirm={showRestoreConfirm}
             isActionPending={isActionPending}
             onHibernateClose={() => setShowHibernateConfirm(false)}
-            onRestoreClose={() => setShowRestoreConfirm(false)}
             onHibernateConfirm={() => {
               setShowHibernateConfirm(false);
               void handleAction("Hibernate", "/api/hibernate");
-            }}
-            onRestoreConfirm={() => {
-              setShowRestoreConfirm(false);
-              void handleAction("Restore", "/api/restore");
             }}
           />
 
@@ -233,6 +231,15 @@ export const ControlsSection = ({
               void handleAction("Backup", "/api/backup", { name: backupName });
             }}
             isLoading={isActionPending}
+          />
+
+          <RestoreDialog
+            open={showRestoreDialog}
+            onOpenChange={setShowRestoreDialog}
+            onConfirm={(backupName) => {
+              setShowRestoreDialog(false);
+              void handleAction("Restore", "/api/restore", { backupName });
+            }}
           />
 
           <GoogleDriveSetupPrompt
@@ -427,22 +434,16 @@ const PrimaryActionButton = ({
 
 interface ConfirmationDialogsProps {
   showHibernateConfirm: boolean;
-  showRestoreConfirm: boolean;
   isActionPending: boolean;
   onHibernateClose: () => void;
-  onRestoreClose: () => void;
   onHibernateConfirm: () => void;
-  onRestoreConfirm: () => void;
 }
 
 const ConfirmationDialogs = ({
   showHibernateConfirm,
-  showRestoreConfirm,
   isActionPending,
   onHibernateClose,
-  onRestoreClose,
   onHibernateConfirm,
-  onRestoreConfirm,
 }: ConfirmationDialogsProps) => (
   <>
     <ConfirmationDialog
@@ -454,15 +455,6 @@ const ConfirmationDialogs = ({
       description="This will backup your server, stop the instance, and delete the volume to save costs. You can resume later."
       confirmText="Hibernate"
       variant="danger"
-    />
-    <ConfirmationDialog
-      isOpen={showRestoreConfirm}
-      onClose={onRestoreClose}
-      onConfirm={onRestoreConfirm}
-      isLoading={isActionPending}
-      title="Restore Server"
-      description="This will restore your server from a backup on Google Drive, overwriting the current server state. Any unsaved progress will be lost."
-      confirmText="Restore"
     />
   </>
 );
