@@ -25,7 +25,8 @@ async function handleRefreshBackups(instanceId) {
     console.log(`Listing backups from Google Drive (${gdriveRemote}:${gdriveRoot})...`);
 
     // p - path, s - size, t - modification time
-    const command = `rclone lsf ${gdriveRemote}:${gdriveRoot}/ --format "pst" --separator "|"`;
+    // RCLONE_CONFIG must be set because SSM runs as root, not the minecraft user
+    const command = `RCLONE_CONFIG=/opt/setup/rclone/rclone.conf rclone lsf ${gdriveRemote}:${gdriveRoot}/ --format "pst" --separator "|"`;
     const output = await executeSSMCommand(instanceId, [command]);
 
     // Parse output - each line is name|size|date
