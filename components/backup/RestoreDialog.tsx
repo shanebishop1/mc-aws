@@ -221,7 +221,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
               )}
 
               {/* Backup Selection List */}
-              {backups.length > 0 && (
+              {(backups.length > 0 || isLoading) && (
                 <div className="mb-6">
                   <div className="block font-sans text-xs tracking-widest text-charcoal/60 uppercase mb-2">
                     Available Backups
@@ -311,9 +311,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
                     "border-green text-green hover:bg-green hover:text-white"
                   )}
                 >
-                  <span className="relative z-10">
-                    {backupName.trim() ? `Restore "${backupName.trim()}"` : "Select Backup"}
-                  </span>
+                  <span className="relative z-10">Restore</span>
                   {!isConfirmDisabled && (
                     <motion.div
                       className="absolute inset-0 bg-green"
