@@ -201,6 +201,8 @@ export class MinecraftStack extends cdk.Stack {
         NOTIFICATION_EMAIL: notificationEmail,
         ADMIN_EMAIL: (process.env.ADMIN_EMAIL || "").trim().toLowerCase(),
         ALLOWED_EMAILS: allowedEmails.join(","),
+        GDRIVE_REMOTE: driveRemote,
+        GDRIVE_ROOT: driveRoot,
       },
       timeout: cdk.Duration.seconds(60), // 60 seconds for start operation
     });
@@ -290,6 +292,22 @@ export class MinecraftStack extends cdk.Stack {
       new iam.PolicyStatement({
         actions: ["ssm:GetParameter", "ssm:PutParameter"],
         resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`],
+      })
+    );
+
+    // Grant Lambda permission to read/write backups cache in SSM
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/backups-cache`],
+      })
+    );
+
+    // Grant Lambda permission to manage server-action lock parameter
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`],
       })
     );
 
