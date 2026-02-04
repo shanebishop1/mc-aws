@@ -118,7 +118,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
     };
 
     const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
+      if (e.key === "Escape" && !isLoading) {
         onOpenChange(false);
       }
     };
@@ -130,10 +130,10 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
       document.removeEventListener("keydown", handleTab);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [open, onOpenChange]);
+  }, [open, onOpenChange, isLoading]);
 
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) {
+    if (e.target === e.currentTarget && !isLoading) {
       onOpenChange(false);
     }
   };
