@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export default function Home() {
   const { isAdmin, isAuthenticated } = useAuth();
-  const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus, setStatus } = useServerStatus();
+  const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus, setPendingAction } = useServerStatus();
   const { stackExists, isLoading: stackLoading, error: stackError } = useStackStatus();
 
   const [instanceId] = useState<string | undefined>(undefined);
@@ -85,12 +85,14 @@ export default function Home() {
   const updateOptimisticStatus = useCallback(
     (action: string) => {
       if (action === "Start" || action === "Resume") {
-        setStatus(ServerState.Pending);
-      } else if (action === "Stop" || action === "Hibernate") {
-        setStatus(ServerState.Stopping);
+        setPendingAction("start");
+      } else if (action === "Stop") {
+        setPendingAction("stop");
+      } else if (action === "Hibernate") {
+        setPendingAction("hibernate");
       }
     },
-    [setStatus]
+    [setPendingAction]
   );
 
   // Helper to schedule status refresh
