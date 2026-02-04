@@ -23,7 +23,7 @@ async function handleRefreshBackups(instanceId) {
     }
 
     console.log(`Listing backups from Google Drive (${gdriveRemote}:${gdriveRoot})...`);
-    
+
     // p - path, s - size, t - modification time
     const command = `rclone lsf ${gdriveRemote}:${gdriveRoot}/ --format "pst" --separator "|"`;
     const output = await executeSSMCommand(instanceId, [command]);
@@ -47,7 +47,7 @@ async function handleRefreshBackups(instanceId) {
 
     const cachePayload = JSON.stringify({
       backups,
-      cachedAt: Date.now()
+      cachedAt: Date.now(),
     });
 
     await putParameter("/minecraft/backups-cache", cachePayload, "String");

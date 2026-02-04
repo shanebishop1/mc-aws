@@ -18,14 +18,6 @@ export interface InstanceDetails {
 }
 
 /**
- * Server action lock information
- */
-export interface ServerActionLock {
-  action: string;
-  timestamp: number;
-}
-
-/**
  * Player count information
  */
 export interface PlayerCount {
@@ -75,13 +67,6 @@ export interface AwsProvider {
   getEmailAllowlist(): Promise<string[]>;
   updateEmailAllowlist(emails: string[]): Promise<void>;
   getPlayerCount(): Promise<PlayerCount>;
-  getServerAction(): Promise<ServerActionLock | null>;
-  setServerAction(action: string): Promise<void>;
-
-  // SSM - Action Lock
-  withServerActionLock<T>(actionName: string, fn: () => Promise<T>): Promise<T>;
-  acquireServerAction(action: string): Promise<void>;
-  releaseServerAction(): Promise<void>;
 
   // Cost Explorer
   getCosts(periodType?: "current-month" | "last-month" | "last-30-days"): Promise<CostData>;

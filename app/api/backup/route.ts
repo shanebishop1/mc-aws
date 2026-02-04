@@ -5,7 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { acquireServerAction, findInstanceId, getInstanceState, invokeLambda, releaseServerAction } from "@/lib/aws";
+import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
@@ -51,28 +51,6 @@ async function validateBackupState(instanceId: string): Promise<NextResponse<Api
 }
 
 /**
- * Acquire server action lock with conflict handling
- */
-async function acquireBackupLock(): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
-  try {
-    await acquireServerAction("backup");
-    return null;
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message.includes("Another operation is in progress")) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
-    }
-    throw error;
-  }
-}
-
-/**
  * Invoke backup Lambda and return response
  */
 async function invokeBackupLambda(
@@ -104,7 +82,6 @@ async function invokeBackupLambda(
     );
   } catch (error) {
     console.error("[BACKUP] Lambda invocation failed:", error);
-    await releaseServerAction();
     throw error;
   }
 }
@@ -115,18 +92,6 @@ async function invokeBackupLambda(
 function buildBackupErrorResponse(error: unknown): NextResponse<ApiResponse<BackupResponse>> {
   console.error("[BACKUP] Error:", error);
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-  // If the error is about another action in progress, return 409 Conflict
-  if (errorMessage.includes("Another operation is in progress")) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 409 }
-    );
-  }
 
   return NextResponse.json(
     {
@@ -165,12 +130,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const stateError = await validateBackupState(resolvedId);
     if (stateError) {
       return stateError;
-    }
-
-    // Acquire server action lock
-    const lockError = await acquireBackupLock();
-    if (lockError) {
-      return lockError;
     }
 
     // Invoke Lambda for backup

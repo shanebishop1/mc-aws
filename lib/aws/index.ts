@@ -8,7 +8,7 @@ import { getProvider } from "./provider-selector";
 
 // Re-export types for backward compatibility
 export type { CostBreakdown } from "./cost-client";
-export type { AwsProvider, InstanceDetails, ServerActionLock, PlayerCount, BackupInfo } from "./types";
+export type { AwsProvider, InstanceDetails, PlayerCount, BackupInfo } from "./types";
 
 // Re-export constants for backward compatibility
 export { MAX_POLL_ATTEMPTS, POLL_INTERVAL_MS } from "./ec2-client";
@@ -88,26 +88,6 @@ export async function putParameter(name: string, value: string, type?: "String" 
 
 export async function deleteParameter(name: string): Promise<void> {
   return getProvider().deleteParameter(name);
-}
-
-export async function getServerAction(): Promise<{ action: string; timestamp: number } | null> {
-  return getProvider().getServerAction();
-}
-
-export async function setServerAction(action: string): Promise<void> {
-  return getProvider().setServerAction(action);
-}
-
-export async function withServerActionLock<T>(actionName: string, fn: () => Promise<T>): Promise<T> {
-  return getProvider().withServerActionLock(actionName, fn);
-}
-
-export async function acquireServerAction(action: string): Promise<void> {
-  return getProvider().acquireServerAction(action);
-}
-
-export async function releaseServerAction(): Promise<void> {
-  return getProvider().releaseServerAction();
 }
 
 // Volume operations

@@ -9,16 +9,12 @@ const mocks = vi.hoisted(() => ({
   invokeLambda: vi.fn(),
   getInstanceState: vi.fn(),
   findInstanceId: vi.fn().mockResolvedValue("i-1234"),
-  acquireServerAction: vi.fn(),
-  releaseServerAction: vi.fn(),
 }));
 
 vi.mock("@/lib/aws", () => ({
   invokeLambda: mocks.invokeLambda,
   getInstanceState: mocks.getInstanceState,
   findInstanceId: mocks.findInstanceId,
-  acquireServerAction: mocks.acquireServerAction,
-  releaseServerAction: mocks.releaseServerAction,
 }));
 
 // Mock requireAdmin to return a fake admin user
@@ -39,7 +35,6 @@ describe("POST /api/resume", () => {
   it("should resume successfully from hibernating state", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Hibernating);
-    mocks.acquireServerAction.mockResolvedValue(undefined); // Success
 
     const req = createMockNextRequest("http://localhost/api/resume", { method: "POST" });
     const res = await POST(req);
@@ -50,7 +45,6 @@ describe("POST /api/resume", () => {
     expect(body.data?.message).toContain("asynchronously");
     expect(body.data?.publicIp).toBe("pending");
 
-    expect(mocks.acquireServerAction).toHaveBeenCalledWith("resume");
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
       command: "resume",
@@ -72,14 +66,12 @@ describe("POST /api/resume", () => {
     expect(body.success).toBe(false);
     expect(body.error).toContain("already running");
 
-    expect(mocks.acquireServerAction).not.toHaveBeenCalled();
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("should pass backupName to Lambda when provided", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Hibernating);
-    mocks.acquireServerAction.mockResolvedValue(undefined);
 
     const req = createMockNextRequest("http://localhost/api/resume", {
       method: "POST",
@@ -103,27 +95,9 @@ describe("POST /api/resume", () => {
     });
   });
 
-  it("should return 409 when another action is in progress", async () => {
-    // Setup state - acquireServerAction throws error (conflict)
-    mocks.getInstanceState.mockResolvedValue(ServerState.Hibernating);
-    mocks.acquireServerAction.mockRejectedValue(new Error("Another operation is in progress: start"));
-
-    const req = createMockNextRequest("http://localhost/api/resume", { method: "POST" });
-    const res = await POST(req);
-
-    expect(res.status).toBe(409);
-    const body = await parseNextResponse<ApiResponse<unknown>>(res);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("Another operation is in progress");
-
-    expect(mocks.acquireServerAction).toHaveBeenCalledWith("resume");
-    expect(mocks.invokeLambda).not.toHaveBeenCalled();
-  });
-
-  it("should release lock if lambda invocation fails", async () => {
+  it("should handle lambda invocation failures", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Hibernating);
-    mocks.acquireServerAction.mockResolvedValue(undefined);
     mocks.invokeLambda.mockRejectedValue(new Error("Lambda failure"));
 
     const req = createMockNextRequest("http://localhost/api/resume", { method: "POST" });
@@ -134,8 +108,6 @@ describe("POST /api/resume", () => {
     expect(body.success).toBe(false);
     expect(body.error).toBe("Lambda failure");
 
-    expect(mocks.acquireServerAction).toHaveBeenCalledWith("resume");
     expect(mocks.invokeLambda).toHaveBeenCalled();
-    expect(mocks.releaseServerAction).toHaveBeenCalled();
   });
 });

@@ -4,7 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { acquireServerAction, findInstanceId, invokeLambda, releaseServerAction } from "@/lib/aws";
+import { findInstanceId, invokeLambda } from "@/lib/aws";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -18,28 +18,6 @@ async function parseRestoreBody(request: NextRequest): Promise<RestoreRequest> {
   } catch {
     // Empty body is valid - will use latest backup
     return {};
-  }
-}
-
-/**
- * Acquire server action lock with conflict handling
- */
-async function acquireRestoreLock(): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
-  try {
-    await acquireServerAction("restore");
-    return null;
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message.includes("Another operation is in progress")) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
-    }
-    throw error;
   }
 }
 
@@ -76,7 +54,6 @@ async function invokeRestoreLambda(
     );
   } catch (error) {
     console.error("[RESTORE] Lambda invocation failed:", error);
-    await releaseServerAction();
     throw error;
   }
 }
@@ -87,18 +64,6 @@ async function invokeRestoreLambda(
 function buildRestoreErrorResponse(error: unknown): NextResponse<ApiResponse<RestoreResponse>> {
   console.error("[RESTORE] Error:", error);
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-  // If the error is about another action in progress, return 409 Conflict
-  if (errorMessage.includes("Another operation is in progress")) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 409 }
-    );
-  }
 
   return NextResponse.json(
     {
@@ -127,12 +92,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     // Validate backup name if provided
     if (backupName) {
       sanitizeBackupName(backupName);
-    }
-
-    // Check atomic lock
-    const lockError = await acquireRestoreLock();
-    if (lockError) {
-      return lockError;
     }
 
     // Invoke Lambda for restore

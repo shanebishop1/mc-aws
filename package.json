@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "ENABLE_DEV_LOGIN=true next dev",
     "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev",
     "setup": "./setup.sh",
     "prebuild": "tsx scripts/validate-env.ts",

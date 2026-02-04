@@ -5,7 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { acquireServerAction, findInstanceId, getInstanceState, invokeLambda, releaseServerAction } from "@/lib/aws";
+import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, ResumeResponse } from "@/lib/types";
@@ -50,28 +50,6 @@ function checkAlreadyRunning(currentState: string): NextResponse<ApiResponse<Res
 }
 
 /**
- * Acquire server action lock with conflict handling
- */
-async function acquireResumeLock(): Promise<NextResponse<ApiResponse<ResumeResponse>> | null> {
-  try {
-    await acquireServerAction("resume");
-    return null;
-  } catch (error: unknown) {
-    if (error instanceof Error && error.message.includes("Another operation is in progress")) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: error.message,
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
-    }
-    throw error;
-  }
-}
-
-/**
  * Invoke resume Lambda and return response
  */
 async function invokeResumeLambda(
@@ -105,7 +83,6 @@ async function invokeResumeLambda(
     );
   } catch (error) {
     console.error("[RESUME] Lambda invocation failed:", error);
-    await releaseServerAction();
     throw error;
   }
 }
@@ -156,12 +133,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     // Validate backup name (defense in depth)
     if (backupName) {
       sanitizeBackupName(backupName);
-    }
-
-    // Acquire server action lock
-    const lockError = await acquireResumeLock();
-    if (lockError) {
-      return lockError;
     }
 
     // Invoke Lambda for resume
