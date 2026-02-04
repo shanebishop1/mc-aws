@@ -56,3 +56,17 @@ export async function checkStackExists(stackName = "MinecraftStack"): Promise<bo
   const stack = await getStackStatus(stackName);
   return stack !== null;
 }
+
+/**
+ * Get an output value from a CloudFormation stack.
+ */
+export async function getStackOutputValue(outputKey: string, stackName?: string): Promise<string | null> {
+  const resolvedStackName = stackName || env.CLOUDFORMATION_STACK_NAME || "MinecraftStack";
+  const stack = await getStackStatus(resolvedStackName);
+  if (!stack?.Outputs || stack.Outputs.length === 0) {
+    return null;
+  }
+
+  const match = stack.Outputs.find((o) => o.OutputKey === outputKey);
+  return match?.OutputValue || null;
+}
