@@ -60,6 +60,9 @@ export const env = {
   AWS_SECRET_ACCESS_KEY: getEnv("AWS_SECRET_ACCESS_KEY", true),
   AWS_SESSION_TOKEN: getEnv("AWS_SESSION_TOKEN", true),
 
+  // CloudFormation
+  CLOUDFORMATION_STACK_NAME: getEnv("CLOUDFORMATION_STACK_NAME", true) || getEnv("STACK_NAME", true),
+
   // Cloudflare Configuration
   CLOUDFLARE_ZONE_ID: getEnv("CLOUDFLARE_ZONE_ID"),
   CLOUDFLARE_RECORD_ID: getEnv("CLOUDFLARE_RECORD_ID"),

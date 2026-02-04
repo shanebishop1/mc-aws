@@ -1,8 +1,6 @@
 // AWS SDK clients and commands
-import { StartInstancesCommand, ec2 } from "./clients.js";
-
 // EC2 operations
-import { getPublicIp } from "./ec2.js";
+import { ensureInstanceRunning, getPublicIp } from "./ec2.js";
 
 // Cloudflare DNS
 import { updateCloudflareDns } from "./cloudflare.js";
@@ -62,7 +60,12 @@ async function handleApiInvocation(event) {
     console.error(`[API] Command '${command}' failed:`, error);
   } finally {
     console.log("[API] Clearing server-action lock...");
-    await deleteParameter("/minecraft/server-action");
+    try {
+      await deleteParameter("/minecraft/server-action");
+    } catch (error) {
+      // Do not fail the entire invocation because the lock couldn't be cleared.
+      console.error("[API] Failed to clear server-action lock:", error);
+    }
   }
 
   return { statusCode: 202, body: `Async command '${command}' accepted` };
@@ -304,7 +307,7 @@ async function handleStartCommand(instanceId, senderEmail, notificationEmail, { 
   }
 
   await handleResume(instanceId);
-  await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+  await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
   await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
 
@@ -329,7 +332,7 @@ async function handleResumeCommand(
   }
 
   await handleResume(instanceId);
-  await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+  await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
   const resumeOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-resume.sh"]);
   await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
