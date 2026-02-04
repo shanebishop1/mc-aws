@@ -7,7 +7,7 @@ import { executeSSMCommand } from "../ssm.js";
 /**
  * Handle restore command - runs restore script via SSM and updates DNS
  * @param {string} instanceId - The EC2 instance ID
- * @param {string[]} args - Command arguments (required backup name)
+ * @param {string[]} args - Command arguments (optional backup name; if missing, restores latest)
  * @param {string} adminEmail - Admin email for notifications
  * @param {Object} cloudflareConfig - Cloudflare configuration { zone, record, domain, cfToken }
  * @returns {Promise<string>} The restore result message
@@ -21,22 +21,31 @@ export async function handleRestore(instanceId, args, adminEmail, cloudflareConf
     adminEmail
   );
 
-  if (!args || !args[0]) {
-    console.error("ERROR in handleRestore: Restore command requires a backup name argument");
-    throw new Error("Restore command requires a backup name argument");
-  }
-
   try {
     // Ensure instance is running before attempting SSM command
     console.log("Step 1: Ensuring instance is running...");
     await ensureInstanceRunning(instanceId);
     console.log("Step 1 complete: Instance is running");
 
-    // Sanitize backup name to prevent command injection
-    const backupName = sanitizeBackupName(args[0]);
-    const command = `/usr/local/bin/mc-restore.sh ${backupName}`;
+    // Determine if restoring specific backup or latest
+    const backupName = args?.[0]?.trim() ?? "";
+    const isLatest = !backupName;
 
-    console.log("Step 2: Executing restore command for backup:", backupName);
+    if (isLatest) {
+      console.log("Step 2: Restoring latest backup (no specific name provided)");
+    } else {
+      console.log("Step 2: Restoring specific backup:", backupName);
+    }
+
+    // Build command: if backup name provided, sanitize it; otherwise run with no arg for latest
+    let command;
+    if (isLatest) {
+      command = "/usr/local/bin/mc-restore.sh";
+    } else {
+      const sanitizedBackupName = sanitizeBackupName(backupName);
+      command = `/usr/local/bin/mc-restore.sh ${sanitizedBackupName}`;
+    }
+
     const output = await executeSSMCommand(instanceId, [command]);
     console.log("Step 2 complete: Restore command executed");
 
@@ -55,7 +64,8 @@ export async function handleRestore(instanceId, args, adminEmail, cloudflareConf
       console.log("Step 3 complete: DNS updated to", publicIp);
     }
 
-    const message = `Restore completed successfully (${backupName}).${publicIp ? `\nDNS updated to ${publicIp}` : ""}\n\nOutput:\n${output}`;
+    const backupDescription = isLatest ? "latest backup" : `backup: ${backupName}`;
+    const message = `Restore completed successfully (${backupDescription}).${publicIp ? `\nDNS updated to ${publicIp}` : ""}\n\nOutput:\n${output}`;
 
     if (adminEmail) {
       console.log("Step 4: Sending notification email...");

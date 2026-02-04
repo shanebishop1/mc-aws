@@ -147,12 +147,11 @@ echo "SUCCESS: Backup ${BACKUP_NAME}.tar.gz uploaded to Google Drive"
 ```bash
 #!/usr/bin/env bash
 # Restore Minecraft server from Google Drive
-# Usage: mc-restore.sh <backup-name>
+# Usage: mc-restore.sh [<backup-name>]
 
-BACKUP_NAME="$1"
+BACKUP_NAME="${1:-}"
 if [[ -z "$BACKUP_NAME" ]]; then
-  echo "ERROR: Backup name required"
-  exit 1
+  log "Backup name not provided, finding latest backup..."
 fi
 
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
