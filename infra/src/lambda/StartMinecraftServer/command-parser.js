@@ -19,14 +19,11 @@ export function parseCommand(subject, startKeyword) {
     return { command: "backup", args };
   }
 
-  // Check for restore command (required: restore name)
+  // Check for restore command (optional: restore name)
   if (lowerSubject.includes("restore")) {
-    const match = lowerSubject.match(/restore\s+(\S+)/);
-    if (!match || !match[1]) {
-      console.warn("Restore command requires a backup name argument");
-      return null;
-    }
-    return { command: "restore", args: [match[1]] };
+    const match = lowerSubject.match(/restore\s+(\S+)?/);
+    const args = match?.[1] ? [match[1]] : [];
+    return { command: "restore", args };
   }
 
   // Check for hibernate command
