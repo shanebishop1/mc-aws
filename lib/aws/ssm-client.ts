@@ -266,8 +266,18 @@ export async function getServerAction(): Promise<{ action: string; timestamp: nu
   try {
     const parsed = JSON.parse(value) as { action: string; timestamp: number };
 
-    // Check if the action is stale (older than 30 minutes)
-    const expirationMs = 30 * 60 * 1000;
+    // Check if the action is stale.
+    // SSM Parameter Store has no TTL, so we encode a timestamp and self-heal.
+    // Different actions can have different expected durations.
+    const expirationMsByAction: Record<string, number> = {
+      start: 5 * 60 * 1000,
+      stop: 5 * 60 * 1000,
+      resume: 10 * 60 * 1000,
+      hibernate: 10 * 60 * 1000,
+      backup: 60 * 60 * 1000,
+      restore: 60 * 60 * 1000,
+    };
+    const expirationMs = expirationMsByAction[parsed.action] ?? 30 * 60 * 1000;
     if (Date.now() - parsed.timestamp > expirationMs) {
       console.log("[ACTION] Found stale action marker, clearing it:", parsed.action);
       await deleteParameter("/minecraft/server-action");
