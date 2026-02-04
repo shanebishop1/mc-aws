@@ -76,26 +76,82 @@ test.describe("Backup and Restore", () => {
 
   test("restore with confirmation", async ({ page }) => {
     await setupRunningScenario(page);
+
+    // Set mock backups cache with sample backups
+    const mockBackups = {
+      backups: [
+        { name: "minecraft-backup-2025-01-15" },
+        { name: "minecraft-backup-2025-01-20" },
+        { name: "minecraft-backup-2025-02-01" },
+      ],
+      cachedAt: Date.now(),
+    };
+    await setMockParameter(page, "/minecraft/backups-cache", JSON.stringify(mockBackups), "String");
+
     await page.goto("/");
     await waitForPageLoad(page);
 
     // Wait for the restore button to be visible
     await page.getByRole("button", { name: /restore/i }).waitFor({ state: "visible" });
 
+    // Click the main restore button
     await page.getByRole("button", { name: /restore/i }).click();
 
-    // Should show confirmation dialog
-    await expect(page.getByText(/Restore Server/i)).toBeVisible();
-    await expect(page.getByText(/This will restore your server from a backup on Google Drive/i)).toBeVisible();
-    await expect(page.getByText(/Any unsaved progress will be lost/i)).toBeVisible();
+    // Should show restore dialog with backup selection
+    await expect(page.getByTestId("restore-dialog")).toBeVisible();
+    await expect(page.getByText(/Restore Backup/i)).toBeVisible();
+    await expect(page.getByText(/Select a backup to restore from Google Drive/i)).toBeVisible();
 
-    // Confirm the action (scoped to the dialog)
-    await page
-      .getByRole("dialog")
-      .getByRole("button", { name: /restore/i })
-      .click();
+    // Wait for backup list to load
+    await expect(page.getByTestId("backup-selection-list")).toBeVisible({ timeout: 5000 });
+
+    // Select a backup from the list
+    await page.getByText("minecraft-backup-2025-01-20").click();
+
+    // Verify the selected backup name is visible in the input
+    const backupInput = page.getByTestId("restore-backup-input");
+    await expect(backupInput).toHaveValue("minecraft-backup-2025-01-20");
+
+    // Verify the confirmation summary shows the selected backup
+    await expect(page.getByText(/Restore backup: minecraft-backup-2025-01-20/i)).toBeVisible();
+
+    // Click the restore confirm button
+    await page.getByTestId("restore-confirm").click();
 
     // Verify success message (restore is now asynchronous)
+    await expectSuccessMessage(page, /Restore started asynchronously/i);
+  });
+
+  test("restore with manual input when listing fails", async ({ page }) => {
+    await setupRunningScenario(page);
+
+    // Set empty/invalid backups cache to simulate listing failure
+    await setMockParameter(page, "/minecraft/backups-cache", "", "String");
+
+    await page.goto("/");
+    await waitForPageLoad(page);
+
+    // Wait for the restore button to be visible
+    await page.getByRole("button", { name: /restore/i }).waitFor({ state: "visible" });
+
+    // Click the main restore button
+    await page.getByRole("button", { name: /restore/i }).click();
+
+    // Should show restore dialog
+    await expect(page.getByTestId("restore-dialog")).toBeVisible();
+    await expect(page.getByText(/Restore Backup/i)).toBeVisible();
+
+    // Type a backup name manually
+    const backupInput = page.getByTestId("restore-backup-input");
+    await backupInput.fill("manual-backup-2025-02-03");
+
+    // Verify the confirmation summary shows the typed backup
+    await expect(page.getByText(/Restore backup: manual-backup-2025-02-03/i)).toBeVisible();
+
+    // Click the restore confirm button
+    await page.getByTestId("restore-confirm").click();
+
+    // Verify success message
     await expectSuccessMessage(page, /Restore started asynchronously/i);
   });
 
@@ -111,13 +167,13 @@ test.describe("Backup and Restore", () => {
 
     await page.getByRole("button", { name: /restore/i }).click();
 
-    // Should show Google Drive setup prompt (not confirmation dialog)
+    // Should show Google Drive setup prompt (not restore dialog)
     await expect(page.getByTestId("gdrive-setup-prompt")).toBeVisible({ timeout: 5000 });
     await expect(page.getByText(/Google Drive Required/i)).toBeVisible();
     await expect(page.getByText(/Connect Google Drive to restore backups/i)).toBeVisible();
 
-    // Should NOT show confirmation dialog
-    await expect(page.getByText(/Restore Server/i)).not.toBeVisible();
+    // Should NOT show restore dialog
+    await expect(page.getByTestId("restore-dialog")).not.toBeVisible();
   });
 
   test("restore blocked without Google Drive setup", async ({ page }) => {
@@ -185,17 +241,18 @@ test.describe("Backup and Restore", () => {
 
     await page.getByRole("button", { name: /restore/i }).click();
 
-    // Should show confirmation dialog
-    await expect(page.getByText(/Restore Server/i)).toBeVisible();
+    // Should show restore dialog
+    await expect(page.getByTestId("restore-dialog")).toBeVisible();
+    await expect(page.getByText(/Restore Backup/i)).toBeVisible();
 
     // Cancel the dialog
     await page
-      .getByRole("dialog")
+      .getByTestId("restore-dialog")
       .getByRole("button", { name: /cancel/i })
       .click();
 
     // Dialog should close
-    await expect(page.getByText(/Restore Server/i)).not.toBeVisible();
+    await expect(page.getByTestId("restore-dialog")).not.toBeVisible();
 
     // No success message should appear
     await expect(page.getByText(/restore completed successfully/i)).not.toBeVisible();
