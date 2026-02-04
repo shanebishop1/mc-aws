@@ -7,7 +7,7 @@
 import type { Stack } from "@aws-sdk/client-cloudformation";
 import { type CostData, ServerState } from "../types";
 import { getMockStateStore } from "./mock-state-store";
-import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount, ServerActionLock } from "./types";
+import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount } from "./types";
 
 // Re-export scenario engine functions for convenience
 export {
@@ -507,99 +507,6 @@ export const mockProvider: AwsProvider = {
       count,
       lastUpdated: new Date().toISOString(),
     };
-  },
-
-  getServerAction: async (): Promise<ServerActionLock | null> => {
-    await applyFaultInjection("getServerAction");
-    console.log("[MOCK] getServerAction called");
-    const stateStore = getMockStateStore();
-    const value = await stateStore.getParameter("/minecraft/server-action");
-
-    if (!value) {
-      return null;
-    }
-
-    try {
-      const parsed = JSON.parse(value) as { action: string; timestamp: number };
-
-      // Check if the action is stale (older than 30 minutes)
-      const expirationMs = 30 * 60 * 1000;
-      if (Date.now() - parsed.timestamp > expirationMs) {
-        console.log("[MOCK] Found stale action marker, clearing it:", parsed.action);
-        await stateStore.deleteParameter("/minecraft/server-action");
-        return null;
-      }
-
-      return parsed;
-    } catch {
-      // Invalid format, treat as no action
-      return null;
-    }
-  },
-
-  setServerAction: async (action: string): Promise<void> => {
-    await applyFaultInjection("setServerAction");
-    console.log("[MOCK] setServerAction called with:", action);
-    const stateStore = getMockStateStore();
-    const value = JSON.stringify({
-      action,
-      timestamp: Date.now(),
-    });
-    await stateStore.setParameter("/minecraft/server-action", value, "String");
-  },
-
-  acquireServerAction: async (action: string): Promise<void> => {
-    await applyFaultInjection("acquireServerAction");
-    console.log("[MOCK] acquireServerAction called for:", action);
-
-    const currentAction = await mockProvider.getServerAction();
-    if (currentAction) {
-      throw new Error(`Cannot start ${action}. Another operation is in progress: ${currentAction.action}`);
-    }
-
-    await mockProvider.setServerAction(action);
-    console.log(`[MOCK] [ACTION] Acquired lock: ${action}`);
-  },
-
-  releaseServerAction: async (): Promise<void> => {
-    await applyFaultInjection("releaseServerAction");
-    console.log("[MOCK] releaseServerAction called");
-    try {
-      await mockProvider.deleteParameter("/minecraft/server-action");
-      console.log("[MOCK] [ACTION] Released lock");
-    } catch (error) {
-      console.warn("[MOCK] Failed to release lock:", error);
-    }
-  },
-
-  // SSM - Action Lock
-  withServerActionLock: async <T>(actionName: string, fn: () => Promise<T>): Promise<T> => {
-    console.log("[MOCK] withServerActionLock called for:", actionName);
-
-    // Check if an action is already in progress
-    const currentAction = await mockProvider.getServerAction();
-    if (currentAction) {
-      throw new Error(`Cannot start ${actionName}. Another operation is in progress: ${currentAction.action}`);
-    }
-
-    // Set this action as in progress
-    await mockProvider.setServerAction(actionName);
-    console.log(`[MOCK] [ACTION] Started: ${actionName}`);
-
-    try {
-      // Execute the action
-      const result = await fn();
-      console.log(`[MOCK] [ACTION] Completed: ${actionName}`);
-      return result;
-    } finally {
-      // Always clear the action marker
-      try {
-        await mockProvider.deleteParameter("/minecraft/server-action");
-        console.log(`[MOCK] [ACTION] Cleared marker for: ${actionName}`);
-      } catch (error) {
-        console.error(`[MOCK] [ACTION] Failed to clear marker for: ${actionName}`, error);
-      }
-    }
   },
 
   // Cost Explorer

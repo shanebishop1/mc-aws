@@ -5,11 +5,10 @@
 
 import type { Stack } from "@aws-sdk/client-cloudformation";
 import type { CostData } from "../types";
-import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount, ServerActionLock } from "./types";
+import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount } from "./types";
 
 import { checkStackExists, getStackStatus } from "./cloudformation-client";
 import { getCosts } from "./cost-client";
-import { invokeLambda } from "./lambda-client";
 // Import all existing AWS client functions
 import {
   findInstanceId,
@@ -22,20 +21,16 @@ import {
   waitForInstanceRunning,
   waitForInstanceStopped,
 } from "./ec2-client";
+import { invokeLambda } from "./lambda-client";
 import {
   deleteParameter,
   executeSSMCommand,
   getEmailAllowlist,
   getParameter,
   getPlayerCount,
-  getServerAction,
   listBackups,
   putParameter,
-  setServerAction,
   updateEmailAllowlist,
-  withServerActionLock,
-  acquireServerAction,
-  releaseServerAction,
 } from "./ssm-client";
 import { detachAndDeleteVolumes, handleResume } from "./volume-client";
 
@@ -72,13 +67,6 @@ export const awsProvider: AwsProvider = {
   getEmailAllowlist,
   updateEmailAllowlist,
   getPlayerCount,
-  getServerAction,
-  setServerAction,
-
-  // SSM - Action Lock
-  withServerActionLock,
-  acquireServerAction,
-  releaseServerAction,
 
   // Cost Explorer
   getCosts,
@@ -86,7 +74,7 @@ export const awsProvider: AwsProvider = {
   // CloudFormation
   getStackStatus,
   checkStackExists,
-  
+
   // Lambda
   invokeLambda,
 };

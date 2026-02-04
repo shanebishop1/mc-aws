@@ -12,10 +12,10 @@ import {
 } from "@aws-sdk/client-ec2";
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import {
+  DeleteParameterCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
-  DeleteParameterCommand,
   SSMClient,
   SendCommandCommand,
 } from "@aws-sdk/client-ssm";

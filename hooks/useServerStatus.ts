@@ -1,7 +1,7 @@
 "use client";
 
 import { ServerState } from "@/lib/types";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 interface UseServerStatusReturn {
   status: ServerState;
@@ -33,22 +33,27 @@ export function useServerStatus(): UseServerStatusReturn {
   const [ip, setIp] = useState<string | undefined>(undefined);
   const [playerCount, setPlayerCount] = useState<number | undefined>(undefined);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const prevStatusRef = useRef<ServerState>(ServerState.Unknown);
 
   const fetchStatus = useCallback(async () => {
     try {
       const res = await fetch("/api/status");
       if (res.ok) {
         const data = await res.json();
-        setStatus(data.data.state);
+        const newState = data.data.state;
+        setStatus(newState);
         setHasVolume(data.data.hasVolume ?? false);
         // Only update IP if running
-        setIp(data.data.state === ServerState.Running ? data.data.publicIp : undefined);
+        setIp(newState === ServerState.Running ? data.data.publicIp : undefined);
 
-        if (data.data.state === ServerState.Running) {
-          await fetchPlayerCount(setPlayerCount);
-        } else {
+        // Only fetch player count when state changes to running (or on initial load)
+        const justBecameRunning = newState === ServerState.Running && prevStatusRef.current !== ServerState.Running;
+        if (justBecameRunning) {
+          fetchPlayerCount(setPlayerCount);
+        } else if (newState !== ServerState.Running) {
           setPlayerCount(undefined);
         }
+        prevStatusRef.current = newState;
       }
     } catch (error) {
       console.error("Failed to fetch status", error);
