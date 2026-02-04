@@ -343,7 +343,8 @@ async function handleResumeCommand(
     try {
       // Helper to run restore which handles its own DNS update and notifications
       await handleRestore(instanceId, args, notificationEmail, { zone, record, domain, cfToken });
-      restoreMsg = `\n\nRestored from backup: ${args[0]}`;
+      const backupDescription = args[0] ? `backup: ${args[0]}` : "latest backup";
+      restoreMsg = `\n\nRestored from ${backupDescription}`;
     } catch (e) {
       console.error("Resume succeeded but restore failed:", e);
       restoreMsg = `\n\nWARNING: Restore failed: ${e.message}`;
