@@ -20,20 +20,19 @@ SERVER_DIR="/opt/minecraft/server"
 BACKUP_NAME="${1:-}"
 if [[ -z "$BACKUP_NAME" ]]; then
   log "Backup name not provided, finding latest backup..."
-  # Get latest .tar.gz file from GDrive
-  BACKUP_FILE=$(rclone lsf "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" --sort time --reverse --files-only | grep "\.tar\.gz$" | head -n 1)
+  # Get latest backup file from GDrive (supports .tar.gz and .gz)
+  BACKUP_FILE=$(rclone lsf "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" --sort time --reverse --files-only | grep -E "\.(tar\.gz|gz)$" | head -n 1)
   if [[ -z "$BACKUP_FILE" ]]; then
     log "ERROR: No backups found in ${GDRIVE_REMOTE}:${GDRIVE_ROOT}/"
     exit 1
   fi
-  BACKUP_NAME="${BACKUP_FILE%.tar.gz}"
-  log "Found latest backup: $BACKUP_NAME"
+  log "Found latest backup: $BACKUP_FILE"
 else
-  # Strip extension if provided to avoid double extension
-  BACKUP_NAME="${BACKUP_NAME%.tar.gz}"
+  # Use the backup name as-is (it includes the extension from the UI)
+  BACKUP_FILE="$BACKUP_NAME"
 fi
 
-log "Starting restore from: $BACKUP_NAME"
+log "Starting restore from: $BACKUP_FILE"
 
 # Stop server
 log "Stopping Minecraft server..."
@@ -41,7 +40,7 @@ systemctl stop minecraft || log "Warning: Failed to stop minecraft service"
 
 # Download from Google Drive
 log "Downloading backup from Google Drive..."
-rclone copy "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/${BACKUP_NAME}.tar.gz" /tmp/ || {
+rclone copy "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/${BACKUP_FILE}" /tmp/ || {
   log "ERROR: Failed to download from Google Drive"
   systemctl start minecraft || log "Warning: Failed to restart minecraft service"
   exit 1
@@ -56,9 +55,9 @@ fi
 # Extract backup
 log "Extracting backup..."
 cd /opt/minecraft
-tar -xzf "/tmp/${BACKUP_NAME}.tar.gz" || {
+tar -xzf "/tmp/${BACKUP_FILE}" || {
   log "ERROR: Failed to extract backup"
-  rm -f "/tmp/${BACKUP_NAME}.tar.gz"
+  rm -f "/tmp/${BACKUP_FILE}"
   systemctl start minecraft || log "Warning: Failed to restart minecraft service"
   exit 1
 }
@@ -69,10 +68,10 @@ chown -R minecraft:minecraft "$SERVER_DIR" || log "Warning: Failed to set permis
 
 # Cleanup
 log "Cleaning up temporary files..."
-rm -f "/tmp/${BACKUP_NAME}.tar.gz"
+rm -f "/tmp/${BACKUP_FILE}"
 
 # Start server
 log "Starting Minecraft server..."
 systemctl start minecraft || log "Warning: Failed to start minecraft service"
 
-log "SUCCESS: Restored from ${BACKUP_NAME}.tar.gz"
+log "SUCCESS: Restored from ${BACKUP_FILE}"
