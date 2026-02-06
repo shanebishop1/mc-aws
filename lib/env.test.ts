@@ -105,7 +105,6 @@ describe("Environment Variables", () => {
       vi.stubEnv("MC_BACKEND_MODE", "aws");
       vi.stubEnv("AWS_REGION", "");
       vi.stubEnv("AWS_ACCOUNT_ID", "");
-      vi.stubEnv("INSTANCE_ID", "");
 
       expect(() => validateAwsCredentials()).toThrow("Missing required AWS credentials in AWS mode");
     });
@@ -114,7 +113,7 @@ describe("Environment Variables", () => {
       vi.stubEnv("MC_BACKEND_MODE", "aws");
       vi.stubEnv("AWS_REGION", "us-east-1");
       vi.stubEnv("AWS_ACCOUNT_ID", "123456789012");
-      vi.stubEnv("INSTANCE_ID", "i-1234567890abcdef0");
+      // INSTANCE_ID is optional - dynamic discovery via findInstanceId() is preferred
 
       expect(() => validateAwsCredentials()).not.toThrow();
     });

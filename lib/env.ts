@@ -164,7 +164,6 @@ export function validateAwsCredentials(): void {
   const requiredCreds = {
     AWS_REGION: env.AWS_REGION,
     AWS_ACCOUNT_ID: env.AWS_ACCOUNT_ID,
-    INSTANCE_ID: env.INSTANCE_ID,
   };
 
   const missing = Object.entries(requiredCreds)
