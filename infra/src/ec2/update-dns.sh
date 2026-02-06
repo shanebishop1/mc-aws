@@ -6,18 +6,20 @@ set -euo pipefail
 
 log() { echo "[$(date -Is)] $*"; }
 
-# Get public IP from IMDSv2
-log "Getting instance public IP..."
+# Get instance metadata from IMDSv2
+log "Getting instance metadata..."
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
 PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/public-ipv4")
+AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/placement/region")
 log "Public IP: $PUBLIC_IP"
+log "AWS Region: $AWS_REGION"
 
 # Fetch Cloudflare credentials and SNS topic from SSM
 log "Fetching Cloudflare credentials from SSM..."
-ZONE_ID=$(aws ssm get-parameter --name /minecraft/cloudflare-zone-id --query 'Parameter.Value' --output text --region us-east-1)
-DOMAIN=$(aws ssm get-parameter --name /minecraft/cloudflare-domain --query 'Parameter.Value' --output text --region us-east-1)
-API_TOKEN=$(aws ssm get-parameter --name /minecraft/cloudflare-api-token --with-decryption --query 'Parameter.Value' --output text --region us-east-1)
-SNS_TOPIC_ARN=$(aws ssm get-parameter --name /minecraft/sns-topic-arn --query 'Parameter.Value' --output text --region us-east-1)
+ZONE_ID=$(aws ssm get-parameter --name /minecraft/cloudflare-zone-id --query 'Parameter.Value' --output text --region "$AWS_REGION")
+DOMAIN=$(aws ssm get-parameter --name /minecraft/cloudflare-domain --query 'Parameter.Value' --output text --region "$AWS_REGION")
+API_TOKEN=$(aws ssm get-parameter --name /minecraft/cloudflare-api-token --with-decryption --query 'Parameter.Value' --output text --region "$AWS_REGION")
+SNS_TOPIC_ARN=$(aws ssm get-parameter --name /minecraft/sns-topic-arn --query 'Parameter.Value' --output text --region "$AWS_REGION")
 
 # Validate required parameters
 if [[ -z "$ZONE_ID" || -z "$DOMAIN" || -z "$API_TOKEN" || -z "$SNS_TOPIC_ARN" ]]; then
@@ -77,7 +79,7 @@ aws sns publish \
   --topic-arn "$SNS_TOPIC_ARN" \
   --subject "Minecraft DNS Updated" \
   --message "DNS record ${DOMAIN} updated to ${PUBLIC_IP}" \
-  --region us-east-1 || log "Warning: Failed to send SNS notification"
+  --region "$AWS_REGION" || log "Warning: Failed to send SNS notification"
 
 # Clear sensitive variables
 unset API_TOKEN
