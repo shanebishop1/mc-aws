@@ -6,7 +6,7 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 ExecStart=/usr/local/bin/update-dns.sh
-RemainAfterExit=no
+RemainAfterExit=yes
 StandardOutput=journal
 StandardError=journal
 
