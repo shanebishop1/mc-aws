@@ -59,7 +59,7 @@ mkdir -p /opt/setup
 chown -R minecraft:minecraft /opt/minecraft
 chown minecraft:minecraft /opt/setup
 
-# 7. Clone this repo (using a GitHub PAT stored in SSM Parameter Store)
+# 7. Clone this repo and configure runtime git auth for service pulls
 GITHUB_USERNAME=$(aws ssm get-parameter --name /minecraft/github-user --query Parameter.Value --output text)
 REPO_NAME=$(aws ssm get-parameter --name /minecraft/github-repo --query Parameter.Value --output text)
 GITHUB_TOKEN=$(aws ssm get-parameter \
@@ -67,48 +67,59 @@ GITHUB_TOKEN=$(aws ssm get-parameter \
   --with-decryption \
   --query Parameter.Value --output text)
 
-if [[ ! -d "/opt/setup/.git" ]]; then
-  log "Cloning setup repo into /opt/setup..."
-  # Create temporary credential helper to avoid embedding token in URL or logs
-  CREDENTIAL_HELPER_FILE=$(mktemp)
-  chmod 700 "$CREDENTIAL_HELPER_FILE"
-  cat > "$CREDENTIAL_HELPER_FILE" <<HELPER_EOF
+# Install a reusable credential helper used by clone and runtime git pull
+CREDENTIAL_HELPER_FILE="/usr/local/bin/git-credential-minecraft"
+cat > "$CREDENTIAL_HELPER_FILE" <<'HELPER_EOF'
 #!/usr/bin/env bash
-# Git credential helper that reads credentials from environment variables
-# Git sends key=value pairs on stdin; we must consume ALL input before responding
+set -euo pipefail
+
+action="${1:-}"
+if [[ "$action" != "get" ]]; then
+  exit 0
+fi
+
 protocol=
 host=
 while IFS='=' read -r key value; do
-  case "\$key" in
-    protocol) protocol="\$value" ;;
-    host) host="\$value" ;;
+  case "$key" in
+    protocol) protocol="$value" ;;
+    host) host="$value" ;;
   esac
 done
 
-# Only respond for github.com HTTPS requests
-if [[ "\$protocol" == "https" && "\$host" == "github.com" ]]; then
-  echo "username=${GITHUB_USERNAME}"
-  echo "password=${GITHUB_TOKEN}"
+if [[ "$protocol" == "https" && "$host" == "github.com" ]]; then
+  if [[ -n "${GITHUB_USERNAME:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
+    echo "username=${GITHUB_USERNAME}"
+    echo "password=${GITHUB_TOKEN}"
+  fi
 fi
 HELPER_EOF
+chmod 755 "$CREDENTIAL_HELPER_FILE"
 
-  # Make helper executable and runnable by minecraft user
-  chmod 755 "$CREDENTIAL_HELPER_FILE"
+# Persist credentials for systemd runtime environment (ExecStartPre git pull)
+cat > /etc/default/minecraft <<EOF
+GITHUB_USERNAME=${GITHUB_USERNAME}
+GITHUB_TOKEN=${GITHUB_TOKEN}
+EOF
+chmod 600 /etc/default/minecraft
 
+if [[ ! -d "/opt/setup/.git" ]]; then
+  log "Cloning setup repo into /opt/setup..."
   # Clone using credential helper (runs as minecraft user with env vars passed explicitly)
   if ! sudo -u minecraft \
     GITHUB_USERNAME="$GITHUB_USERNAME" \
     GITHUB_TOKEN="$GITHUB_TOKEN" \
     bash -c "git -c credential.helper='$CREDENTIAL_HELPER_FILE' clone https://github.com/$GITHUB_USERNAME/$REPO_NAME.git /opt/setup"; then
     log "ERROR: Failed to clone repository from GitHub"
-    rm -f "$CREDENTIAL_HELPER_FILE"
     exit 1
   fi
-
-  # Clean up credential helper immediately
-  rm -f "$CREDENTIAL_HELPER_FILE"
-  unset GITHUB_TOKEN
 fi
+
+# Ensure runtime pulls for /opt/setup always use the credential helper
+if [[ -d "/opt/setup/.git" ]]; then
+  sudo -u minecraft git -C /opt/setup config credential.helper "$CREDENTIAL_HELPER_FILE"
+fi
+unset GITHUB_TOKEN
 
 if [[ ! -d "/opt/setup" ]]; then
   log "/opt/setup not present after clone; aborting."
