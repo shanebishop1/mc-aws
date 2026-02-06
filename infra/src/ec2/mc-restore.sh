@@ -72,6 +72,16 @@ rm -f "/tmp/${BACKUP_FILE}"
 
 # Start server
 log "Starting Minecraft server..."
-systemctl start minecraft || log "Warning: Failed to start minecraft service"
+if ! systemctl start minecraft; then
+  log "ERROR: Failed to start minecraft service"
+  exit 1
+fi
+
+sleep 3
+if ! systemctl is-active --quiet minecraft; then
+  log "ERROR: Minecraft service is not active after restore"
+  systemctl status minecraft --no-pager -l || true
+  exit 1
+fi
 
 log "SUCCESS: Restored from ${BACKUP_FILE}"

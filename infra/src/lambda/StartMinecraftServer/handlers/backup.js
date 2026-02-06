@@ -2,6 +2,7 @@ import { ensureInstanceRunning } from "../ec2.js";
 import { getSanitizedErrorMessage, sendNotification } from "../notifications.js";
 import { sanitizeBackupName } from "../sanitization.js";
 import { executeSSMCommand } from "../ssm.js";
+import { handleRefreshBackups } from "./backups.js";
 
 /**
  * Handle backup command - runs backup script via SSM
@@ -32,12 +33,23 @@ async function handleBackup(instanceId, args, adminEmail) {
     const output = await executeSSMCommand(instanceId, [command]);
     console.log("Step 2 complete: Backup command executed");
 
-    const message = `Backup completed successfully${backupName ? ` (${backupName})` : ""}.\n\nOutput:\n${output}`;
+    let cacheRefreshWarning = "";
+    try {
+      console.log("Step 3: Refreshing backup cache...");
+      await handleRefreshBackups(instanceId);
+      console.log("Step 3 complete: Backup cache refreshed");
+    } catch (cacheError) {
+      console.error("WARNING: Backup completed but cache refresh failed:", cacheError);
+      cacheRefreshWarning =
+        "\n\nWarning: Backup cache refresh failed. New backup may not appear in restore list immediately.";
+    }
+
+    const message = `Backup completed successfully${backupName ? ` (${backupName})` : ""}.\n\nOutput:\n${output}${cacheRefreshWarning}`;
 
     if (adminEmail) {
-      console.log("Step 3: Sending notification email...");
+      console.log("Step 4: Sending notification email...");
       await sendNotification(adminEmail, "Minecraft Backup Completed", message);
-      console.log("Step 3 complete: Notification sent");
+      console.log("Step 4 complete: Notification sent");
     }
 
     return message;
