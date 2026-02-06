@@ -97,6 +97,15 @@ vi.mock("@/lib/env", () => ({
     AUTH_SECRET: "test-secret-key-for-jwt-signing-12345678",
     ADMIN_EMAIL: "admin@example.com",
   },
+  getEnv: (name: string, optional = false) => {
+    const value = process.env[name];
+    if (!value && !optional) {
+      console.warn(`[WARN] Missing required environment variable: ${name}`);
+      return "";
+    }
+    return value || "";
+  },
+  getNodeEnv: () => process.env.NODE_ENV,
   getBackendMode: () => {
     const mode = process.env.MC_BACKEND_MODE;
     if (!mode) {
@@ -105,6 +114,12 @@ vi.mock("@/lib/env", () => ({
     const normalizedValue = mode.toLowerCase().trim();
     if (normalizedValue !== "aws" && normalizedValue !== "mock") {
       throw new Error(`Invalid MC_BACKEND_MODE value: "${mode}". Must be "aws" or "mock".`);
+    }
+    // Hard-fail if mock mode is enabled in production
+    if (normalizedValue === "mock" && process.env.NODE_ENV === "production") {
+      throw new Error(
+        'MC_BACKEND_MODE="mock" is not allowed in production. Set MC_BACKEND_MODE="aws" or unset NODE_ENV.'
+      );
     }
     return normalizedValue as "aws" | "mock";
   },
@@ -115,6 +130,20 @@ vi.mock("@/lib/env", () => ({
   isAwsMode: () => {
     const mode = process.env.MC_BACKEND_MODE;
     return !mode || mode.toLowerCase().trim() === "aws";
+  },
+  validateAwsCredentials: () => {
+    // Skip validation in mock mode (mocked in tests that need specific behavior)
+    const mode = process.env.MC_BACKEND_MODE;
+    if (mode?.toLowerCase().trim() === "mock") {
+      return;
+    }
+    // In AWS mode, check required credentials
+    if (!process.env.AWS_REGION && !process.env.CDK_DEFAULT_REGION) {
+      throw new Error("Missing required AWS credentials in AWS mode: AWS_REGION");
+    }
+    if (!process.env.INSTANCE_ID) {
+      throw new Error("Missing required AWS credentials in AWS mode: INSTANCE_ID");
+    }
   },
 }));
 
