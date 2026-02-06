@@ -8,7 +8,10 @@ import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { putParameter } from "@/lib/aws/ssm-client";
 import { env } from "@/lib/env";
 import { isMockMode } from "@/lib/env";
+import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
+
+const OAUTH_STATE_COOKIE = "gdrive_oauth_state";
 
 /**
  * Handle mock OAuth flow for testing
@@ -32,7 +35,12 @@ async function handleMockOAuth(): Promise<NextResponse> {
   await mockStore.setParameter("/minecraft/gdrive-token", JSON.stringify(mockRcloneToken), "SecureString");
 
   console.log("[MOCK-GDRIVE] Mock token stored successfully");
-  return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=success`);
+
+  // Clear OAuth state cookie
+  const response = NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=success`, 302);
+  response.cookies.delete(OAUTH_STATE_COOKIE);
+
+  return response;
 }
 
 /**
@@ -101,7 +109,11 @@ async function handleRealOAuth(code: string): Promise<NextResponse> {
   const tokens = await exchangeCodeForTokens(code);
   await storeToken(tokens);
 
-  return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=success`);
+  // Clear OAuth state cookie on success
+  const response = NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=success`, 302);
+  response.cookies.delete(OAUTH_STATE_COOKIE);
+
+  return response;
 }
 
 /**
@@ -109,7 +121,12 @@ async function handleRealOAuth(code: string): Promise<NextResponse> {
  */
 function handleOAuthError(error: string): NextResponse {
   console.error("[GDRIVE-CALLBACK] Google OAuth error:", error);
-  return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(error)}`);
+  const response = NextResponse.redirect(
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(error)}`,
+    302
+  );
+  response.cookies.delete(OAUTH_STATE_COOKIE);
+  return response;
 }
 
 /**
@@ -117,9 +134,12 @@ function handleOAuthError(error: string): NextResponse {
  */
 function handleMissingCode(): NextResponse {
   console.error("[GDRIVE-CALLBACK] No code provided in callback");
-  return NextResponse.redirect(
-    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("No code provided")}`
+  const response = NextResponse.redirect(
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("No code provided")}`,
+    302
   );
+  response.cookies.delete(OAUTH_STATE_COOKIE);
+  return response;
 }
 
 /**
@@ -129,7 +149,25 @@ function handleError(error: unknown): NextResponse {
   console.error("[GDRIVE-CALLBACK] Error:", error);
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
-  return NextResponse.redirect(`${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(errorMessage)}`);
+  const response = NextResponse.redirect(
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(errorMessage)}`,
+    302
+  );
+  response.cookies.delete(OAUTH_STATE_COOKIE);
+  return response;
+}
+
+/**
+ * Handle state validation errors
+ */
+function handleStateError(message: string): NextResponse {
+  console.error("[GDRIVE-CALLBACK] State validation error:", message);
+  const response = NextResponse.redirect(
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(message)}`,
+    302
+  );
+  response.cookies.delete(OAUTH_STATE_COOKIE);
+  return response;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
@@ -137,6 +175,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const user = await requireAdmin(request);
     console.log("[GDRIVE-CALLBACK] Admin action by:", user.email);
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    void user;
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse;
@@ -147,10 +187,11 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   const { searchParams } = new URL(request.url);
   const code = searchParams.get("code");
   const errorParam = searchParams.get("error");
-  const mock = searchParams.get("mock");
+  const state = searchParams.get("state");
 
   // Mock mode: Simulate successful OAuth without calling Google
-  if (isMockMode() || mock === "true") {
+  // Only allow mock mode if isMockMode() is true, ignore ?mock=true override
+  if (isMockMode()) {
     return handleMockOAuth();
   }
 
@@ -158,6 +199,29 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
   if (errorParam) {
     return handleOAuthError(errorParam);
   }
+
+  // Validate state parameter is present
+  if (!state) {
+    console.error("[GDRIVE-CALLBACK] Missing state parameter");
+    return handleStateError("Missing OAuth state parameter");
+  }
+
+  // Retrieve and validate state from cookie
+  const cookieStore = await cookies();
+  const oauthState = cookieStore.get(OAUTH_STATE_COOKIE)?.value;
+
+  if (!oauthState) {
+    console.error("[GDRIVE-CALLBACK] Missing OAuth state cookie");
+    return handleStateError("OAuth state cookie not found");
+  }
+
+  // Validate state matches
+  if (state !== oauthState) {
+    console.error("[GDRIVE-CALLBACK] State mismatch:", { state, oauthState });
+    return handleStateError("OAuth state mismatch");
+  }
+
+  console.log("[GDRIVE-CALLBACK] State validated successfully");
 
   if (!code) {
     return handleMissingCode();
