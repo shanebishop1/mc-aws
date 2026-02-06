@@ -25,9 +25,7 @@ function getRegion(): string {
 export const ssm: SSMClient = new Proxy({} as SSMClient, {
   get(_target, prop) {
     if (!_ssmClient) {
-      const region = getRegion();
-      console.log(`[AWS Config] Initializing SSM client in region: ${region}`);
-      _ssmClient = new SSMClient(getAwsClientConfig(region));
+      _ssmClient = new SSMClient(getAwsClientConfig(getRegion()));
     }
     return _ssmClient[prop as keyof SSMClient];
   },

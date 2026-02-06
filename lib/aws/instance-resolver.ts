@@ -16,9 +16,7 @@ function getRegion(): string {
 
 function getResolverEc2Client(): EC2Client {
   if (!_resolverEc2Client) {
-    const region = getRegion();
-    console.log(`[AWS Config] Initializing EC2 resolver client in region: ${region}`);
-    _resolverEc2Client = new EC2Client(getAwsClientConfig(region));
+    _resolverEc2Client = new EC2Client(getAwsClientConfig(getRegion()));
   }
   return _resolverEc2Client;
 }
