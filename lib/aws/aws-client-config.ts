@@ -211,8 +211,6 @@ export function getAwsClientConfig(region: string): AwsClientConfig {
 
     const procEnv = getProcessEnv();
     if (procEnv) {
-      const awsProfilePresent = Boolean(procEnv.AWS_PROFILE);
-
       // If AWS_PROFILE is set, the AWS SDK may prefer profile/ini providers even when static env creds exist.
       // That triggers filesystem reads and crashes in Workers.
       for (const key of [
@@ -236,25 +234,8 @@ export function getAwsClientConfig(region: string): AwsClientConfig {
       procEnv.AWS_EC2_METADATA_DISABLED ??= "true";
       procEnv.AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE ??= "IPv4";
       procEnv.AWS_EC2_METADATA_SERVICE_ENDPOINT ??= "http://169.254.169.254";
-
-      console.log(
-        `[AWS Config] workersEnvSanitized={awsProfileRemoved:${awsProfilePresent}} awsSdkDefaults={AWS_DEFAULTS_MODE:${procEnv.AWS_DEFAULTS_MODE},AWS_RETRY_MODE:${procEnv.AWS_RETRY_MODE},AWS_MAX_ATTEMPTS:${procEnv.AWS_MAX_ATTEMPTS},AWS_SDK_UA_APP_ID:${procEnv.AWS_SDK_UA_APP_ID},AWS_EC2_METADATA_DISABLED:${procEnv.AWS_EC2_METADATA_DISABLED},AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE:${procEnv.AWS_EC2_METADATA_SERVICE_ENDPOINT_MODE}}`
-      );
     }
   }
-
-  const processAccessKeyIdPresent = Boolean(env.AWS_ACCESS_KEY_ID);
-  const processSecretAccessKeyPresent = Boolean(env.AWS_SECRET_ACCESS_KEY);
-  const processSessionTokenPresent = Boolean(env.AWS_SESSION_TOKEN);
-
-  const ctxAccessKeyIdPresent = Boolean(getCloudflareContextEnvString("AWS_ACCESS_KEY_ID"));
-  const ctxSecretAccessKeyPresent = Boolean(getCloudflareContextEnvString("AWS_SECRET_ACCESS_KEY"));
-  const ctxSessionTokenPresent = Boolean(getCloudflareContextEnvString("AWS_SESSION_TOKEN"));
-
-  // Safe diagnostics: log presence only, never values.
-  console.log(
-    `[AWS Config] runtime=${isWorkers ? "cloudflare" : "node"} region=${region} processEnvCreds={accessKeyId:${processAccessKeyIdPresent},secretAccessKey:${processSecretAccessKeyPresent},sessionToken:${processSessionTokenPresent}} cloudflareCtxCreds={accessKeyId:${ctxAccessKeyIdPresent},secretAccessKey:${ctxSecretAccessKeyPresent},sessionToken:${ctxSessionTokenPresent}}`
-  );
 
   const credentials = getEnvAwsCredentials() ?? getCloudflareContextAwsCredentials();
   if (credentials) {
