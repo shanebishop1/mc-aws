@@ -69,9 +69,45 @@ GITHUB_TOKEN=$(aws ssm get-parameter \
 
 if [[ ! -d "/opt/setup/.git" ]]; then
   log "Cloning setup repo into /opt/setup..."
-  sudo -u minecraft git clone \
-    "https://${GITHUB_USERNAME}:${GITHUB_TOKEN}@github.com/${GITHUB_USERNAME}/${REPO_NAME}.git" \
-    /opt/setup
+  # Create temporary credential helper to avoid embedding token in URL or logs
+  CREDENTIAL_HELPER_FILE=$(mktemp)
+  chmod 700 "$CREDENTIAL_HELPER_FILE"
+  cat > "$CREDENTIAL_HELPER_FILE" <<HELPER_EOF
+#!/usr/bin/env bash
+# Git credential helper that reads credentials from environment variables
+# Git sends key=value pairs on stdin; we must consume ALL input before responding
+protocol=
+host=
+while IFS='=' read -r key value; do
+  case "\$key" in
+    protocol) protocol="\$value" ;;
+    host) host="\$value" ;;
+  esac
+done
+
+# Only respond for github.com HTTPS requests
+if [[ "\$protocol" == "https" && "\$host" == "github.com" ]]; then
+  echo "username=${GITHUB_USERNAME}"
+  echo "password=${GITHUB_TOKEN}"
+fi
+HELPER_EOF
+
+  # Make helper executable and runnable by minecraft user
+  chmod 755 "$CREDENTIAL_HELPER_FILE"
+
+  # Clone using credential helper (runs as minecraft user with env vars passed explicitly)
+  if ! sudo -u minecraft \
+    GITHUB_USERNAME="$GITHUB_USERNAME" \
+    GITHUB_TOKEN="$GITHUB_TOKEN" \
+    bash -c "git -c credential.helper='$CREDENTIAL_HELPER_FILE' clone https://github.com/$GITHUB_USERNAME/$REPO_NAME.git /opt/setup"; then
+    log "ERROR: Failed to clone repository from GitHub"
+    rm -f "$CREDENTIAL_HELPER_FILE"
+    exit 1
+  fi
+
+  # Clean up credential helper immediately
+  rm -f "$CREDENTIAL_HELPER_FILE"
+  unset GITHUB_TOKEN
 fi
 
 if [[ ! -d "/opt/setup" ]]; then
