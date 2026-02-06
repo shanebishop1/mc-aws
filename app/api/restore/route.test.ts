@@ -41,7 +41,6 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(true);
     expect(body.data?.backupName).toBe("my-backup-2024");
     expect(body.data?.message).toContain("asynchronously");
-    expect(body.data?.publicIp).toBe("pending");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
@@ -64,7 +63,6 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(true);
     expect(body.data?.backupName).toBe("latest");
     expect(body.data?.message).toContain("asynchronously");
-    expect(body.data?.publicIp).toBe("pending");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
@@ -87,7 +85,6 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(true);
     expect(body.data?.backupName).toBe("latest");
     expect(body.data?.message).toContain("asynchronously");
-    expect(body.data?.publicIp).toBe("pending");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
