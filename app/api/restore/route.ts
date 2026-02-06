@@ -4,6 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, invokeLambda } from "@/lib/aws";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
@@ -61,17 +62,7 @@ async function invokeRestoreLambda(
  * Build error response for restore endpoint
  */
 function buildRestoreErrorResponse(error: unknown): NextResponse<ApiResponse<RestoreResponse>> {
-  console.error("[RESTORE] Error:", error);
-  const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-  return NextResponse.json(
-    {
-      success: false,
-      error: errorMessage,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 500 }
-  );
+  return formatApiErrorResponse<RestoreResponse>(error, "restore");
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
@@ -86,7 +77,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     // Parse request body
     const body = await parseRestoreBody(request);
     const backupName = body.backupName || body.name;
-    const resolvedId = body.instanceId || (await findInstanceId());
+    const resolvedId = await findInstanceId();
 
     // Validate backup name if provided
     if (backupName) {

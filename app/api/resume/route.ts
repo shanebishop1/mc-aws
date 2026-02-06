@@ -5,6 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
@@ -13,7 +14,6 @@ import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 interface ResumeRequestBody {
-  instanceId?: string;
   backupName?: string;
 }
 
@@ -24,7 +24,6 @@ async function parseResumeBody(request: NextRequest): Promise<ResumeRequestBody>
   try {
     const body = await request.clone().json();
     return {
-      instanceId: body?.instanceId,
       backupName: body?.backupName,
     };
   } catch {
@@ -90,16 +89,7 @@ async function invokeResumeLambda(
  * Build error response for resume endpoint
  */
 function buildResumeErrorResponse(error: unknown): NextResponse<ApiResponse<ResumeResponse>> {
-  console.error("[RESUME] Error:", error);
-  const errorMessage = error instanceof Error ? error.message : "Unknown error";
-  return NextResponse.json(
-    {
-      success: false,
-      error: errorMessage,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 500 }
-  );
+  return formatApiErrorResponse<ResumeResponse>(error, "resume");
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<ResumeResponse>>> {
@@ -116,9 +106,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
-    // Parse body for optional instance ID and backup name
-    const { instanceId, backupName } = await parseResumeBody(request);
-    const resolvedId = instanceId || (await findInstanceId());
+    // Parse body for optional backup name
+    const { backupName } = await parseResumeBody(request);
+    const resolvedId = await findInstanceId();
 
     // Check current state
     const currentState = await getInstanceState(resolvedId);

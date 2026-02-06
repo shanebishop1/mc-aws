@@ -48,7 +48,6 @@ export interface BackupResponse {
 export interface RestoreRequest {
   backupName?: string;
   name?: string; // For backward compatibility
-  instanceId?: string;
 }
 
 export interface RestoreResponse {

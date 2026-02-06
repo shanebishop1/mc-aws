@@ -6,6 +6,7 @@
  */
 
 import { requireAllowed } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { applyScenario, getAvailableScenarios, getCurrentScenario } from "@/lib/aws/mock-scenarios";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
@@ -39,13 +40,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error getting scenario information:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to get scenario information");
   }
 }
 
@@ -89,12 +84,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error applying scenario:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to apply scenario");
   }
 }
