@@ -241,21 +241,11 @@ export class MinecraftStack extends cdk.Stack {
       new Set([notificationEmail, adminEmail, ...allowedEmails].filter(Boolean))
     ).join(",");
 
-    // SNS Topic for Notifications
-    const notificationTopic = new sns.Topic(this, "MinecraftNotificationTopic", {
-      displayName: "Minecraft Server Notifications",
-    });
-
-    // Add email subscription to notification topic
-    if (notificationEmail) {
-      notificationTopic.addSubscription(new subscriptions.EmailSubscription(notificationEmail));
-    }
-
-    // SSM Parameters (Notifications)
-    new ssm.StringParameter(this, "SnsTopicArn", {
-      parameterName: "/minecraft/sns-topic-arn",
-      stringValue: notificationTopic.topicArn,
-      description: "SNS topic ARN for server notifications",
+    // SSM Parameters for EC2 DNS notifications
+    new ssm.StringParameter(this, "VerifiedSender", {
+      parameterName: "/minecraft/verified-sender",
+      stringValue: process.env.VERIFIED_SENDER || "",
+      description: "Verified SES sender email for notifications",
     });
 
     new ssm.StringParameter(this, "NotificationEmail", {
@@ -264,12 +254,12 @@ export class MinecraftStack extends cdk.Stack {
       description: "Email address for server notifications",
     });
 
-    // Allow EC2 to publish to notification topic
+    // Allow EC2 to send emails via SES
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         effect: iam.Effect.ALLOW,
-        actions: ["sns:Publish"],
-        resources: [notificationTopic.topicArn],
+        actions: ["ses:SendEmail", "ses:SendRawEmail"],
+        resources: ["*"],
       })
     );
 

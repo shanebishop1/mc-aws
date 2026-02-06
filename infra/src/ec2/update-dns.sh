@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Update Cloudflare DNS to point to this EC2 instance's public IP
-# Runs on EC2 startup and sends SNS notification when DNS is updated
+# Runs on EC2 startup and sends email notification via SES when DNS is updated
 
 set -euo pipefail
 
@@ -14,15 +14,16 @@ AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.2
 log "Public IP: $PUBLIC_IP"
 log "AWS Region: $AWS_REGION"
 
-# Fetch Cloudflare credentials and SNS topic from SSM
+# Fetch Cloudflare credentials and email config from SSM
 log "Fetching Cloudflare credentials from SSM..."
 ZONE_ID=$(aws ssm get-parameter --name /minecraft/cloudflare-zone-id --query 'Parameter.Value' --output text --region "$AWS_REGION")
 DOMAIN=$(aws ssm get-parameter --name /minecraft/cloudflare-domain --query 'Parameter.Value' --output text --region "$AWS_REGION")
 API_TOKEN=$(aws ssm get-parameter --name /minecraft/cloudflare-api-token --with-decryption --query 'Parameter.Value' --output text --region "$AWS_REGION")
-SNS_TOPIC_ARN=$(aws ssm get-parameter --name /minecraft/sns-topic-arn --query 'Parameter.Value' --output text --region "$AWS_REGION")
+VERIFIED_SENDER=$(aws ssm get-parameter --name /minecraft/verified-sender --query 'Parameter.Value' --output text --region "$AWS_REGION")
+NOTIFICATION_EMAIL=$(aws ssm get-parameter --name /minecraft/notification-email --query 'Parameter.Value' --output text --region "$AWS_REGION")
 
 # Validate required parameters
-if [[ -z "$ZONE_ID" || -z "$DOMAIN" || -z "$API_TOKEN" || -z "$SNS_TOPIC_ARN" ]]; then
+if [[ -z "$ZONE_ID" || -z "$DOMAIN" || -z "$API_TOKEN" ]]; then
   log "ERROR: Missing required SSM parameters"
   exit 1
 fi
@@ -73,13 +74,17 @@ fi
 
 log "DNS record updated successfully"
 
-# Send SNS notification (non-critical)
-log "Sending SNS notification..."
-aws sns publish \
-  --topic-arn "$SNS_TOPIC_ARN" \
-  --subject "Minecraft DNS Updated" \
-  --message "DNS record ${DOMAIN} updated to ${PUBLIC_IP}" \
-  --region "$AWS_REGION" || log "Warning: Failed to send SNS notification"
+# Send email notification via SES (non-critical)
+if [[ -n "$VERIFIED_SENDER" && -n "$NOTIFICATION_EMAIL" ]]; then
+  log "Sending email notification..."
+  aws ses send-email \
+    --from "$VERIFIED_SENDER" \
+    --destination "ToAddresses=$NOTIFICATION_EMAIL" \
+    --message "Subject={Data='Server started, DNS updated to ${PUBLIC_IP}'},Body={Text={Data='Server started, DNS updated to ${PUBLIC_IP}'}}" \
+    --region "$AWS_REGION" || log "Warning: Failed to send email notification"
+else
+  log "Skipping notification: email not configured"
+fi
 
 # Clear sensitive variables
 unset API_TOKEN
