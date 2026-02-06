@@ -10,6 +10,7 @@
  */
 
 import { env } from "@/lib/env";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { Google, generateCodeVerifier, generateState } from "arctic";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
@@ -18,10 +19,26 @@ const OAUTH_STATE_COOKIE = "oauth_state";
 const OAUTH_CODE_VERIFIER_COOKIE = "oauth_code_verifier";
 const OAUTH_POPUP_COOKIE = "oauth_popup";
 const OAUTH_COOKIE_EXPIRY = 600; // 10 minutes in seconds
+const LOGIN_RATE_LIMIT_WINDOW_MS = 60_000;
+const LOGIN_RATE_LIMIT_MAX_REQUESTS = 6;
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     console.log("[LOGIN] Initiating OAuth flow");
+
+    const clientIp = getClientIp(request.headers);
+    const rateLimit = checkRateLimit({
+      key: `auth:login:${clientIp}`,
+      limit: LOGIN_RATE_LIMIT_MAX_REQUESTS,
+      windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
+    });
+
+    if (!rateLimit.allowed) {
+      console.warn("[LOGIN] Rate limit exceeded for IP:", clientIp);
+      const response = NextResponse.redirect(new URL("/?error=oauth_rate_limited", request.url));
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return response;
+    }
 
     const clientId = env.GOOGLE_CLIENT_ID;
     const clientSecret = env.GOOGLE_CLIENT_SECRET;

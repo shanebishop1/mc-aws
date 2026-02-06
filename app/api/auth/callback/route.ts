@@ -5,6 +5,7 @@
 
 import { createSession, createSessionCookie } from "@/lib/auth";
 import { env } from "@/lib/env";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { Google, type OAuth2Tokens } from "arctic";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
@@ -12,6 +13,8 @@ import { type NextRequest, NextResponse } from "next/server";
 const OAUTH_STATE_COOKIE = "oauth_state";
 const OAUTH_CODE_VERIFIER_COOKIE = "oauth_code_verifier";
 const OAUTH_POPUP_COOKIE = "oauth_popup";
+const CALLBACK_RATE_LIMIT_WINDOW_MS = 60_000;
+const CALLBACK_RATE_LIMIT_MAX_REQUESTS = 6;
 
 interface GoogleUserInfo {
   email: string;
@@ -22,6 +25,20 @@ interface GoogleUserInfo {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     console.log("[CALLBACK] Processing OAuth callback");
+
+    const clientIp = getClientIp(request.headers);
+    const rateLimit = checkRateLimit({
+      key: `auth:callback:${clientIp}`,
+      limit: CALLBACK_RATE_LIMIT_MAX_REQUESTS,
+      windowMs: CALLBACK_RATE_LIMIT_WINDOW_MS,
+    });
+
+    if (!rateLimit.allowed) {
+      console.warn("[CALLBACK] Rate limit exceeded for IP:", clientIp);
+      const response = NextResponse.redirect(new URL("/?error=oauth_rate_limited", request.url));
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      return response;
+    }
 
     const url = new URL(request.url);
     const code = url.searchParams.get("code");
