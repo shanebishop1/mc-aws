@@ -263,35 +263,6 @@ describe("GET /api/status (Mock Mode)", () => {
       expect(body.error).toBeDefined();
       expect(body.timestamp).toBeDefined();
     });
-
-    it("should handle getPublicIp failure gracefully", async () => {
-      const stateStore = getMockStateStore();
-
-      // Set instance to running
-      await stateStore.updateInstanceState("running" as ServerState);
-      await stateStore.setPublicIp("203.0.113.42");
-
-      // Configure fault injection for getPublicIp
-      await stateStore.setOperationFailure("getPublicIp", {
-        failNext: true,
-        alwaysFail: false,
-        errorMessage: "Failed to get public IP",
-        errorCode: "GetPublicIpError",
-      });
-
-      // Create mock request
-      const req = createMockNextRequest("http://localhost/api/status");
-
-      // Call the route handler
-      const res = await GET(req);
-      const body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(res);
-
-      // Should still return 200, but without public IP
-      expect(res.status).toBe(200);
-      expect(body.success).toBe(true);
-      expect(body.data?.state).toBe(ServerState.Running);
-      expect(body.data?.publicIp).toBeUndefined();
-    });
   });
 
   describe("Provider isolation", () => {

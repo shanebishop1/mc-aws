@@ -4,7 +4,7 @@
  */
 
 import { getAuthUser } from "@/lib/api-auth";
-import { findInstanceId, getInstanceDetails, getInstanceState, getPublicIp } from "@/lib/aws";
+import { findInstanceId, getInstanceDetails } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
@@ -13,6 +13,15 @@ import { type NextRequest, NextResponse } from "next/server";
 export const dynamic = "force-dynamic";
 
 const noStoreHeaders = { "Cache-Control": "no-store" } as const;
+
+function mapEc2StateToServerState(state: string | undefined): ServerState {
+  if (state === "running") return ServerState.Running;
+  if (state === "stopped") return ServerState.Stopped;
+  if (state === "pending") return ServerState.Pending;
+  if (state === "stopping") return ServerState.Stopping;
+  if (state === "terminated") return ServerState.Terminated;
+  return ServerState.Unknown;
+}
 
 /**
  * Determine display state based on server state
@@ -31,25 +40,6 @@ function determineDisplayState(state: ServerState, hasVolume: boolean): ServerSt
   }
 
   return displayState;
-}
-
-/**
- * Get public IP with timeout
- */
-async function getServerPublicIp(instanceId: string, state: string): Promise<string | undefined> {
-  // Only try to get public IP if running
-  if (state !== "running") {
-    return undefined;
-  }
-
-  try {
-    // Use a short timeout for status checks (2 seconds) to avoid hanging
-    return await getPublicIp(instanceId, 2);
-  } catch (error) {
-    console.warn("[STATUS] Could not get public IP:", error);
-    // Continue without IP - it might still be assigning
-    return undefined;
-  }
 }
 
 /**
@@ -112,12 +102,9 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const instanceId = queryId || (await findInstanceId());
     console.log("[STATUS] Getting server status for instance:", instanceId);
 
-    const { blockDeviceMappings } = await getInstanceDetails(instanceId);
-    const state = await getInstanceState(instanceId);
+    const { blockDeviceMappings, publicIp, state: ec2State } = await getInstanceDetails(instanceId);
+    const state = mapEc2StateToServerState(ec2State);
     const hasVolume = blockDeviceMappings.length > 0;
-
-    // Get public IP if running
-    const publicIp = await getServerPublicIp(instanceId, state);
 
     // Determine display state
     const displayState = determineDisplayState(state, hasVolume);
