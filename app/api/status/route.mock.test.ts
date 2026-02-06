@@ -24,9 +24,8 @@ describe("GET /api/status (Mock Mode)", () => {
     it("should return running status when instance is running", async () => {
       const stateStore = getMockStateStore();
 
-      // Set instance to running with a public IP
+      // Set instance to running
       await stateStore.updateInstanceState("running" as ServerState);
-      await stateStore.setPublicIp("203.0.113.42");
 
       // Create mock request
       const req = createMockNextRequest("http://localhost/api/status");
@@ -39,20 +38,18 @@ describe("GET /api/status (Mock Mode)", () => {
 
       expect(body.success).toBe(true);
       expect(body.data?.state).toBe(ServerState.Running);
-      // Domain is returned instead of raw IP when CLOUDFLARE_MC_DOMAIN is set
-      expect(body.data?.publicIp).toBe("mc.example.com");
+      expect(body.data?.domain).toBe("mc.example.com");
       expect(body.data?.instanceId).toBeDefined();
       expect(body.data?.hasVolume).toBe(true);
       expect(body.data?.lastUpdated).toBeDefined();
       expect(body.timestamp).toBeDefined();
     });
 
-    it("should return running status without public IP if not yet assigned", async () => {
+    it("should return running status with domain even when no public IP is assigned", async () => {
       const stateStore = getMockStateStore();
 
-      // Set instance to running but without IP
+      // Set instance to running
       await stateStore.updateInstanceState("running" as ServerState);
-      await stateStore.setInstance({ publicIp: undefined });
 
       // Create mock request
       const req = createMockNextRequest("http://localhost/api/status");
@@ -63,7 +60,7 @@ describe("GET /api/status (Mock Mode)", () => {
 
       expect(body.success).toBe(true);
       expect(body.data?.state).toBe(ServerState.Running);
-      expect(body.data?.publicIp).toBeUndefined();
+      expect(body.data?.domain).toBe("mc.example.com");
     });
   });
 
@@ -83,7 +80,7 @@ describe("GET /api/status (Mock Mode)", () => {
 
       expect(body.success).toBe(true);
       expect(body.data?.state).toBe(ServerState.Stopped);
-      expect(body.data?.publicIp).toBeUndefined();
+      expect(body.data?.domain).toBeUndefined();
       expect(body.data?.hasVolume).toBe(true);
     });
   });
@@ -153,7 +150,6 @@ describe("GET /api/status (Mock Mode)", () => {
 
       // Set instance to running
       await stateStore.updateInstanceState("running" as ServerState);
-      await stateStore.setPublicIp("203.0.113.42");
 
       // Create mock request with instanceId query parameter
       const req = createMockNextRequest("http://localhost/api/status?instanceId=i-custom123");
@@ -207,7 +203,7 @@ describe("GET /api/status (Mock Mode)", () => {
       // Verify data structure
       expect(body.data).toHaveProperty("state");
       expect(body.data).toHaveProperty("instanceId");
-      expect(body.data).toHaveProperty("publicIp");
+      expect(body.data).toHaveProperty("domain");
       expect(body.data).toHaveProperty("hasVolume");
       expect(body.data).toHaveProperty("lastUpdated");
 
@@ -318,14 +314,12 @@ describe("GET /api/status (Mock Mode)", () => {
 
       // Change to running
       await stateStore.updateInstanceState("running" as ServerState);
-      await stateStore.setPublicIp("203.0.113.42");
 
       // Second request - running
       res = await GET(req);
       body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(res);
       expect(body.data?.state).toBe(ServerState.Running);
-      // Domain is returned instead of raw IP when CLOUDFLARE_MC_DOMAIN is set
-      expect(body.data?.publicIp).toBe("mc.example.com");
+      expect(body.data?.domain).toBe("mc.example.com");
 
       // Change to pending
       await stateStore.updateInstanceState("pending" as ServerState);

@@ -48,19 +48,17 @@ function determineDisplayState(state: ServerState, hasVolume: boolean): ServerSt
 function buildStatusResponse(
   displayState: ServerState,
   instanceId: string,
-  publicIp: string | undefined,
   hasVolume: boolean,
   user: import("@/lib/api-auth").AuthUser | null
 ): NextResponse<ApiResponse<ServerStatusResponse>> {
-  // Show domain instead of raw IP when server is running
-  const displayAddress = publicIp && env.CLOUDFLARE_MC_DOMAIN ? env.CLOUDFLARE_MC_DOMAIN : publicIp;
+  const domain = displayState === ServerState.Running ? env.CLOUDFLARE_MC_DOMAIN : undefined;
 
   const response: ApiResponse<ServerStatusResponse> = {
     success: true,
     data: {
       state: displayState,
       instanceId: user ? instanceId : "redacted",
-      publicIp: displayAddress,
+      domain,
       hasVolume,
       lastUpdated: new Date().toISOString(),
     },
@@ -102,14 +100,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const instanceId = queryId || (await findInstanceId());
     console.log("[STATUS] Getting server status for instance:", instanceId);
 
-    const { blockDeviceMappings, publicIp, state: ec2State } = await getInstanceDetails(instanceId);
+    const { blockDeviceMappings, state: ec2State } = await getInstanceDetails(instanceId);
     const state = mapEc2StateToServerState(ec2State);
     const hasVolume = blockDeviceMappings.length > 0;
 
     // Determine display state
     const displayState = determineDisplayState(state, hasVolume);
 
-    return buildStatusResponse(displayState, instanceId, publicIp, hasVolume, user);
+    return buildStatusResponse(displayState, instanceId, hasVolume, user);
   } catch (error) {
     return buildStatusErrorResponse(error);
   }

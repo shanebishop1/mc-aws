@@ -58,7 +58,7 @@ async function handleStatus() {
     console.log("\n--- Server Status ---");
     console.log(`State:      ${res.data.state}`);
     console.log(`Instance:   ${res.data.instanceId}`);
-    console.log(`IP:         ${res.data.publicIp || "N/A"}`);
+    console.log(`Domain:     ${res.data.domain || "N/A"}`);
     console.log(`Volume:     ${res.data.hasVolume ? "Attached" : "Detached"}`);
     console.log(`Updated:    ${res.data.lastUpdated}`);
     console.log("---------------------\n");

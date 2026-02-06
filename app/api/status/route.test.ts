@@ -5,8 +5,7 @@ import { GET } from "./route";
 
 describe("GET /api/status", () => {
   it("should return running status when instance is running", async () => {
-    const publicIp = "1.2.3.4";
-    setupInstanceState("running", publicIp);
+    setupInstanceState("running");
 
     const req = createMockNextRequest("http://localhost/api/status");
     const res = await GET(req);
@@ -16,8 +15,7 @@ describe("GET /api/status", () => {
 
     expect(body.success).toBe(true);
     expect(body.data?.state).toBe(ServerState.Running);
-    // Domain is returned instead of raw IP when CLOUDFLARE_MC_DOMAIN is set
-    expect(body.data?.publicIp).toBe("mc.example.com");
+    expect(body.data?.domain).toBe("mc.example.com");
     expect(body.data?.instanceId).toBe("i-1234567890abcdef0");
   });
 

@@ -43,7 +43,6 @@ describe("POST /api/resume", () => {
     const body = await parseNextResponse<ApiResponse<ResumeResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("asynchronously");
-    expect(body.data?.publicIp).toBe("pending");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
@@ -83,7 +82,6 @@ describe("POST /api/resume", () => {
     const body = await parseNextResponse<ApiResponse<ResumeResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("asynchronously");
-    expect(body.data?.publicIp).toBe("pending");
     expect(body.data?.restoreOutput).toBe("Restore requested: my-backup-2024");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
