@@ -204,8 +204,27 @@ for script in mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh; do
   fi
 done
 
+# 12.5. Deploy DNS update service
+log "Installing DNS update service..."
+if [[ -f /opt/setup/infra/src/ec2/update-dns.sh ]]; then
+  cp /opt/setup/infra/src/ec2/update-dns.sh /usr/local/bin/update-dns.sh
+  chmod +x /usr/local/bin/update-dns.sh
+  log "Deployed update-dns.sh"
+else
+  log "Warning: update-dns.sh missing; DNS auto-update will not work."
+fi
+
+if [[ -f /opt/setup/infra/src/ec2/minecraft-dns.service ]]; then
+  cp /opt/setup/infra/src/ec2/minecraft-dns.service /etc/systemd/system/
+  log "Deployed minecraft-dns.service"
+else
+  log "Warning: minecraft-dns.service missing; DNS auto-update will not work."
+fi
+
 # 13. Enable & start the Minecraft service
 systemctl daemon-reload
+# Enable DNS service (runs before minecraft.service on each boot)
+systemctl enable minecraft-dns.service
 systemctl enable minecraft.service
 if ! systemctl is-active --quiet minecraft.service; then
   systemctl start minecraft.service
