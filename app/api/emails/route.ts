@@ -1,3 +1,4 @@
+import { invalidateAllowlistCache } from "@/lib/allowlist-cache";
 import { requireAdmin } from "@/lib/api-auth";
 import { getEmailAllowlist, updateEmailAllowlist } from "@/lib/aws";
 import { env, getAllowedEmails } from "@/lib/env";
@@ -67,6 +68,7 @@ export async function GET(
     // If the parameter is missing/empty, seed it so email/Lambda behavior matches the UI allow list.
     if (storedAllowlist.length === 0 && baselineAllowlist.length > 0) {
       await updateEmailAllowlist(allowlist);
+      invalidateAllowlistCache();
     }
 
     const timestamp = Date.now();
