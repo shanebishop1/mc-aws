@@ -17,9 +17,7 @@ function getRegion(): string {
 export const lambda: LambdaClient = new Proxy({} as LambdaClient, {
   get(_target, prop) {
     if (!_lambdaClient) {
-      const region = getRegion();
-      console.log(`[AWS Config] Initializing Lambda client in region: ${region}`);
-      _lambdaClient = new LambdaClient(getAwsClientConfig(region));
+      _lambdaClient = new LambdaClient(getAwsClientConfig(getRegion()));
     }
     return _lambdaClient[prop as keyof LambdaClient];
   },

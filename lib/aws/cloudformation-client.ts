@@ -16,9 +16,7 @@ function getRegion(): string {
 export const cloudformation: CloudFormationClient = new Proxy({} as CloudFormationClient, {
   get(_target, prop) {
     if (!_cloudformationClient) {
-      const region = getRegion();
-      console.log(`[AWS Config] Initializing CloudFormation client in region: ${region}`);
-      _cloudformationClient = new CloudFormationClient(getAwsClientConfig(region));
+      _cloudformationClient = new CloudFormationClient(getAwsClientConfig(getRegion()));
     }
     return _cloudformationClient[prop as keyof CloudFormationClient];
   },
