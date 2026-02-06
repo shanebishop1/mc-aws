@@ -223,8 +223,10 @@ fi
 
 # 13. Enable & start the Minecraft service
 systemctl daemon-reload
-# Enable DNS service (runs before minecraft.service on each boot)
+# Enable DNS service (will auto-start on subsequent boots)
 systemctl enable minecraft-dns.service
+# Start DNS service now (updates DNS for initial boot)
+systemctl start minecraft-dns.service
 systemctl enable minecraft.service
 if ! systemctl is-active --quiet minecraft.service; then
   systemctl start minecraft.service
