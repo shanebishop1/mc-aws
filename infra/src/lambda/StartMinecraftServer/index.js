@@ -2,9 +2,6 @@
 // EC2 operations
 import { ensureInstanceRunning, getPublicIp } from "./ec2.js";
 
-// Cloudflare DNS
-import { updateCloudflareDns } from "./cloudflare.js";
-
 // Notifications
 import { getSanitizedErrorMessage, sendNotification } from "./notifications.js";
 
@@ -52,10 +49,9 @@ async function handleApiInvocation(event) {
   if (envResult.error) return envResult.error;
 
   const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").toLowerCase();
-  const cloudflareConfig = createCloudflareConfig(envResult);
 
   try {
-    await executeApiCommand(command, instanceId, userEmail, notificationEmail, cloudflareConfig, args);
+    await executeApiCommand(command, instanceId, userEmail, notificationEmail, args);
   } catch (error) {
     console.error(`[API] Command '${command}' failed:`, error);
   } finally {
@@ -74,12 +70,12 @@ async function handleApiInvocation(event) {
 /**
  * Execute API command based on command type
  */
-async function executeApiCommand(command, instanceId, userEmail, notificationEmail, cloudflareConfig, args) {
+async function executeApiCommand(command, instanceId, userEmail, notificationEmail, args) {
   const handlers = {
-    start: () => handleStartCommand(instanceId, userEmail, notificationEmail, cloudflareConfig),
-    resume: () => handleResumeCommand(instanceId, userEmail, notificationEmail, cloudflareConfig, args),
+    start: () => handleStartCommand(instanceId, userEmail, notificationEmail),
+    resume: () => handleResumeCommand(instanceId, userEmail, notificationEmail, args),
     backup: () => handleBackup(instanceId, args || [], notificationEmail),
-    restore: () => handleRestore(instanceId, args || [], notificationEmail, cloudflareConfig),
+    restore: () => handleRestore(instanceId, args || [], notificationEmail),
     hibernate: () => handleHibernate(instanceId, args || [], notificationEmail),
     refreshBackups: () => handleRefreshBackups(instanceId),
   };
@@ -90,18 +86,6 @@ async function executeApiCommand(command, instanceId, userEmail, notificationEma
   }
 
   await handler();
-}
-
-/**
- * Create Cloudflare config from environment result
- */
-function createCloudflareConfig(envResult) {
-  return {
-    zone: envResult.zone,
-    record: envResult.record,
-    domain: envResult.domain,
-    cfToken: envResult.cfToken,
-  };
 }
 
 /**
@@ -139,8 +123,7 @@ async function handleEmailInvocation(event) {
   if (!commandResult.command) return { statusCode: 200, body: "No valid command found." };
 
   // Execute command
-  const cloudflareConfig = createCloudflareConfig(envResult);
-  return executeCommand(commandResult.command, envResult.instanceId, senderEmail, cloudflareConfig);
+  return executeCommand(commandResult.command, envResult.instanceId, senderEmail);
 }
 
 /**
@@ -186,16 +169,12 @@ async function handleAllowlistUpdate(senderEmail, body, notificationEmail, admin
 
 function validateEnvironment() {
   const instanceId = process.env.INSTANCE_ID;
-  const zone = process.env.CLOUDFLARE_ZONE_ID;
-  const record = process.env.CLOUDFLARE_RECORD_ID;
-  const domain = process.env.CLOUDFLARE_MC_DOMAIN;
-  const cfToken = process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN;
 
-  if (!instanceId || !process.env.VERIFIED_SENDER || !zone || !record || !domain || !cfToken) {
+  if (!instanceId || !process.env.VERIFIED_SENDER) {
     console.error("Missing required environment variables.");
     return { error: { statusCode: 500, body: "Configuration error." } };
   }
-  return { instanceId, zone, record, domain, cfToken };
+  return { instanceId };
 }
 
 async function parseAndAuthorizeCommand(subject, isAdmin, senderEmail) {
@@ -255,24 +234,24 @@ function getBaselineAllowlist(adminEmails) {
   return uniqueEmails([...(adminEmails || []), ...getAllowedEmailsFromEnv()]);
 }
 
-async function executeCommand(parsedCommand, instanceId, senderEmail, cloudflareConfig) {
+async function executeCommand(parsedCommand, instanceId, senderEmail) {
   const notificationEmail = process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL;
 
   try {
     switch (parsedCommand.command) {
       case "start":
-        return await handleStartCommand(instanceId, senderEmail, notificationEmail, cloudflareConfig);
+        return await handleStartCommand(instanceId, senderEmail, notificationEmail);
       case "backup":
         return { statusCode: 200, body: await handleBackup(instanceId, parsedCommand.args, notificationEmail) };
       case "restore":
         return {
           statusCode: 200,
-          body: await handleRestore(instanceId, parsedCommand.args, notificationEmail, cloudflareConfig),
+          body: await handleRestore(instanceId, parsedCommand.args, notificationEmail),
         };
       case "hibernate":
         return { statusCode: 200, body: await handleHibernate(instanceId, parsedCommand.args, notificationEmail) };
       case "resume":
-        return await handleResumeCommand(instanceId, senderEmail, notificationEmail, cloudflareConfig);
+        return await handleResumeCommand(instanceId, senderEmail, notificationEmail);
       default:
         return { statusCode: 400, body: `Unknown command: ${parsedCommand.command}` };
     }
@@ -299,7 +278,7 @@ async function executeCommand(parsedCommand, instanceId, senderEmail, cloudflare
   }
 }
 
-async function handleStartCommand(instanceId, senderEmail, notificationEmail, { zone, record, domain, cfToken }) {
+async function handleStartCommand(instanceId, senderEmail, notificationEmail) {
   console.log(`Starting instance ${instanceId} triggered by ${senderEmail}`);
 
   if (notificationEmail) {
@@ -309,22 +288,15 @@ async function handleStartCommand(instanceId, senderEmail, notificationEmail, { 
   await handleResume(instanceId);
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
-  await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
 
   if (notificationEmail) {
-    await sendNotification(notificationEmail, "Minecraft Server Started", `Server started, DNS updated to ${publicIp}`);
+    await sendNotification(notificationEmail, "Minecraft Server Started", `Server started at IP: ${publicIp}`);
   }
 
-  return { statusCode: 200, body: `Instance started, DNS updated to ${publicIp}` };
+  return { statusCode: 200, body: `Instance started at IP: ${publicIp}` };
 }
 
-async function handleResumeCommand(
-  instanceId,
-  senderEmail,
-  notificationEmail,
-  { zone, record, domain, cfToken },
-  args
-) {
+async function handleResumeCommand(instanceId, senderEmail, notificationEmail, args) {
   console.log(`Resuming instance ${instanceId} triggered by ${senderEmail}`);
 
   if (notificationEmail) {
@@ -335,14 +307,13 @@ async function handleResumeCommand(
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
   const resumeOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-resume.sh"]);
-  await updateCloudflareDns(zone, record, publicIp, domain, cfToken);
 
   let restoreMsg = "";
   if (args && args.length > 0) {
     console.log(`[RESUME] Restore requested with args: ${args.join(" ")}`);
     try {
-      // Helper to run restore which handles its own DNS update and notifications
-      await handleRestore(instanceId, args, notificationEmail, { zone, record, domain, cfToken });
+      // Helper to run restore which handles its own notifications
+      await handleRestore(instanceId, args, notificationEmail);
       const backupDescription = args[0] ? `backup: ${args[0]}` : "latest backup";
       restoreMsg = `\n\nRestored from ${backupDescription}`;
     } catch (e) {
@@ -355,9 +326,9 @@ async function handleResumeCommand(
     await sendNotification(
       notificationEmail,
       "Minecraft Server Resumed",
-      `Resumed, DNS: ${publicIp}\n\n${resumeOutput}${restoreMsg}`
+      `Resumed at IP: ${publicIp}\n\n${resumeOutput}${restoreMsg}`
     );
   }
 
-  return { statusCode: 200, body: `Instance resumed, DNS updated to ${publicIp}${restoreMsg}` };
+  return { statusCode: 200, body: `Instance resumed at IP: ${publicIp}${restoreMsg}` };
 }
