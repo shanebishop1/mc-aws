@@ -58,9 +58,12 @@ export class MinecraftStack extends cdk.Stack {
           Name: "/minecraft/github-pat",
         },
       },
-      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
-        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
-      }),
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
+          resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/github-pat`],
+        }),
+      ]),
     });
 
     // 1. VPC
@@ -83,10 +86,16 @@ export class MinecraftStack extends cdk.Stack {
     );
 
     // Add permission to decrypt (needed for SecureString)
+    // Narrowed to account-level KMS keys with encryption context limiting to /minecraft/* SSM parameters
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         actions: ["kms:Decrypt"],
-        resources: ["*"], // Scope this down if you have a specific KMS key
+        resources: [`arn:aws:kms:${this.region}:${this.account}:key/*`],
+        conditions: {
+          StringEquals: {
+            "kms:EncryptionContext:PARAMETER_ARN": `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`,
+          },
+        },
       })
     );
 
@@ -357,9 +366,12 @@ export class MinecraftStack extends cdk.Stack {
           RuleSetName: null, // Deactivate on destroy
         },
       },
-      policy: cr.AwsCustomResourcePolicy.fromSdkCalls({
-        resources: cr.AwsCustomResourcePolicy.ANY_RESOURCE,
-      }),
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ["ses:SetActiveReceiptRuleSet"],
+          resources: ["*"], // SES API requires wildcard resource for this action
+        }),
+      ]),
     });
 
     mcRuleSet.addRule("StartServerRule", {
