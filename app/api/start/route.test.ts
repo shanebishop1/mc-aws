@@ -62,7 +62,7 @@ describe("POST /api/start", () => {
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
-  it("should use instanceId from request body if provided", async () => {
+  it("should ignore instanceId from request body and use server-side resolution", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Stopped);
 
@@ -75,13 +75,14 @@ describe("POST /api/start", () => {
     expect(res.status).toBe(200);
     const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
     expect(body.success).toBe(true);
-    expect(body.data?.instanceId).toBe("i-custom-id");
+    // Should use the server-side resolved ID, not the caller-provided one
+    expect(body.data?.instanceId).toBe("i-1234");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
       command: "start",
       userEmail: "test@example.com",
-      instanceId: "i-custom-id",
+      instanceId: "i-1234", // Server-side resolved ID
     });
   });
 
@@ -96,7 +97,7 @@ describe("POST /api/start", () => {
     expect(res.status).toBe(500);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Lambda failure");
+    expect(body.error).toBe("Failed to start server");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });

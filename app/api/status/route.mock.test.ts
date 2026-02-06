@@ -145,13 +145,13 @@ describe("GET /api/status (Mock Mode)", () => {
   });
 
   describe("Query parameters", () => {
-    it("should use instanceId from query parameter if provided", async () => {
+    it("should ignore instanceId from query parameter and use server-side resolution", async () => {
       const stateStore = getMockStateStore();
 
       // Set instance to running
       await stateStore.updateInstanceState("running" as ServerState);
 
-      // Create mock request with instanceId query parameter
+      // Create mock request with instanceId query parameter (should be ignored)
       const req = createMockNextRequest("http://localhost/api/status?instanceId=i-custom123");
 
       // Call the route handler
@@ -159,10 +159,13 @@ describe("GET /api/status (Mock Mode)", () => {
       const body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(res);
 
       expect(body.success).toBe(true);
-      expect(body.data?.instanceId).toBe("i-custom123");
+      // Should use the server-side resolved ID, not the query parameter
+      expect(body.data?.instanceId).toBeDefined();
+      expect(body.data?.instanceId).toMatch(/^i-/);
+      expect(body.data?.instanceId).not.toBe("i-custom123");
     });
 
-    it("should discover instance ID if not provided in query", async () => {
+    it("should always use server-side resolution for instance ID", async () => {
       const stateStore = getMockStateStore();
 
       // Set instance to running

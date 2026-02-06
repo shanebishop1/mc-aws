@@ -4,6 +4,7 @@
  * Only available in mock mode
  */
 
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { resetMockStateStore, resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
@@ -41,12 +42,6 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error resetting state:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to reset mock state");
   }
 }

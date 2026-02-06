@@ -119,7 +119,7 @@ describe("GET /api/gdrive/setup", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
 
     expect(body.success).toBe(false);
-    expect(body.error).toContain("GOOGLE_CLIENT_ID is not configured");
+    expect(body.error).toBe("Failed to initiate Google Drive setup");
   });
 
   it("should include all required OAuth parameters in auth URL", async () => {

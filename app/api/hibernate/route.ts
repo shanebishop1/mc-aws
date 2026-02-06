@@ -5,25 +5,22 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse, formatApiErrorResponseWithStatus } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-interface HibernateRequestBody {
-  instanceId?: string;
-}
-
 /**
  * Parse request body for hibernate endpoint
  */
-async function parseHibernateBody(request: NextRequest): Promise<HibernateRequestBody> {
+async function parseHibernateBody(request: NextRequest): Promise<void> {
   try {
-    const body = await request.clone().json();
-    return { instanceId: body?.instanceId };
+    await request.clone().json();
+    // We don't use any body parameters, just consume it
   } catch {
-    return {};
+    // Empty or invalid body is fine
   }
 }
 
@@ -104,29 +101,19 @@ async function invokeHibernateLambda(
  * Build error response for hibernate endpoint
  */
 function buildHibernateErrorResponse(error: unknown): NextResponse<ApiResponse<HibernateResponse>> {
-  console.error("[HIBERNATE] Error:", error);
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
   // If the error is about another action in progress, return 409 Conflict
+  // This is a specific business logic error that should be preserved
   if (errorMessage.includes("Another operation is in progress")) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 409 }
+    return formatApiErrorResponseWithStatus<HibernateResponse>(
+      error,
+      409,
+      "Another operation is in progress. Please wait for it to complete."
     );
   }
 
-  return NextResponse.json(
-    {
-      success: false,
-      error: errorMessage,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 500 }
-  );
+  return formatApiErrorResponse<HibernateResponse>(error, "hibernate");
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
@@ -143,9 +130,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
-    // Parse body for optional instance ID
-    const { instanceId } = await parseHibernateBody(request);
-    const resolvedId = instanceId || (await findInstanceId());
+    // Parse body (we don't use any parameters, just consume it)
+    await parseHibernateBody(request);
+    const resolvedId = await findInstanceId();
 
     // Check current state
     const currentState = await getInstanceState(resolvedId);

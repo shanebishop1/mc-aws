@@ -4,6 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { env } from "@/lib/env";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
@@ -84,12 +85,6 @@ export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ 
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[GDRIVE-SETUP] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<{ authUrl: string }>(error, "gdriveSetup");
   }
 }

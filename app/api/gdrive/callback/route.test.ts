@@ -89,7 +89,7 @@ describe("GET /api/gdrive/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=error");
-      expect(res.headers.get("location")).toContain("OAuth%20state%20cookie%20not%20found");
+      expect(res.headers.get("location")).toContain("OAuth%20state%20validation%20failed");
     });
 
     it("should reject when state parameter does not match cookie", async () => {
@@ -100,7 +100,7 @@ describe("GET /api/gdrive/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=error");
-      expect(res.headers.get("location")).toContain("OAuth%20state%20mismatch");
+      expect(res.headers.get("location")).toContain("OAuth%20state%20validation%20failed");
     });
 
     it("should accept when state parameter matches cookie", async () => {
@@ -163,7 +163,7 @@ describe("GET /api/gdrive/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=error");
-      expect(res.headers.get("location")).toContain("access_denied");
+      expect(res.headers.get("location")).toContain("Google%20OAuth%20authorization%20failed");
     });
 
     it("should handle missing code parameter", async () => {
@@ -174,7 +174,7 @@ describe("GET /api/gdrive/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=error");
-      expect(res.headers.get("location")).toContain("No%20code%20provided");
+      expect(res.headers.get("location")).toContain("No%20authorization%20code%20provided");
     });
 
     it("should handle token exchange failures", async () => {
