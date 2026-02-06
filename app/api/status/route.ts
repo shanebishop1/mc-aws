@@ -4,6 +4,7 @@
  */
 
 import { getAuthUser } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
@@ -72,17 +73,11 @@ function buildStatusResponse(
  * Build error response for status endpoint
  */
 function buildStatusErrorResponse(error: unknown): NextResponse<ApiResponse<ServerStatusResponse>> {
-  console.error("[STATUS] Error:", error);
-  const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-  return NextResponse.json(
-    {
-      success: false,
-      error: errorMessage,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 500, headers: noStoreHeaders }
-  );
+  const response = formatApiErrorResponse<ServerStatusResponse>(error, "status");
+  // Add no-store headers to the error response
+  const headers = response.headers;
+  headers.set("Cache-Control", "no-store");
+  return response;
 }
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
@@ -90,14 +85,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   console.log("[STATUS] Access by:", user?.email ?? "anonymous");
 
   try {
-    // Status implies discovery/verification, so we always verify
-    // unless passed explicitly via query for speed (optional optimization)
-    const url = new URL(request.url);
-    const queryId = url.searchParams.get("instanceId");
-
-    // If we have a query ID, use it, otherwise discover
-    // But actually, status check IS the discovery mechanism, so it should probably always verify existence via AWS
-    const instanceId = queryId || (await findInstanceId());
+    // Always resolve instance ID server-side - do not trust caller input
+    const instanceId = await findInstanceId();
     console.log("[STATUS] Getting server status for instance:", instanceId);
 
     const { blockDeviceMappings, state: ec2State } = await getInstanceDetails(instanceId);

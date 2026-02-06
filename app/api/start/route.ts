@@ -6,6 +6,7 @@
  */
 
 import { type AuthUser, requireAllowed } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
@@ -24,16 +25,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   }
 
   try {
-    // Try to get ID from body to avoid discovery overhead
-    let instanceId: string | undefined;
-    try {
-      const body = await request.json();
-      instanceId = body?.instanceId;
-    } catch {
-      // Body parsing failed or empty
-    }
-
-    const resolvedId = instanceId || (await findInstanceId());
+    // Always resolve instance ID server-side - do not trust caller input
+    const resolvedId = await findInstanceId();
     console.log("[START] Starting server instance:", resolvedId);
 
     // Check current state
@@ -79,16 +72,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
   } catch (error) {
-    console.error("[START] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<StartServerResponse>(error, "start");
   }
 }

@@ -4,6 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
@@ -21,15 +22,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   }
 
   try {
-    let instanceId: string | undefined;
-    try {
-      const body = await request.json();
-      instanceId = body?.instanceId;
-    } catch {
-      // Empty or invalid body is fine, fallback to finding instance ID
-    }
-
-    const resolvedId = instanceId || (await findInstanceId());
+    // Always resolve instance ID server-side - do not trust caller input
+    const resolvedId = await findInstanceId();
     console.log("[STOP] Stopping server instance:", resolvedId);
 
     // Check current state
@@ -74,16 +68,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     return NextResponse.json(response);
   } catch (error) {
-    console.error("[STOP] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<StopServerResponse>(error, "stop");
   }
 }

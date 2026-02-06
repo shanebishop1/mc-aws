@@ -1,5 +1,6 @@
 import { invalidateAllowlistCache } from "@/lib/allowlist-cache";
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { getEmailAllowlist, updateEmailAllowlist } from "@/lib/aws";
 import { env, getAllowedEmails } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
@@ -81,16 +82,6 @@ export async function GET(
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[EMAILS] Failed to get emails:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>(error, "emails");
   }
 }

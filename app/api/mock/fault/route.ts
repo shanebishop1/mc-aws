@@ -7,6 +7,7 @@
  */
 
 import { requireAllowed } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { clearAllFaults, clearFault, getFaultConfig, injectFault, setGlobalLatency } from "@/lib/aws/mock-scenarios";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { isMockMode } from "@/lib/env";
@@ -47,13 +48,7 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error getting fault configuration:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to get fault configuration");
   }
 }
 
@@ -106,13 +101,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error configuring fault injection:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to configure fault injection");
   }
 }
 
@@ -172,12 +161,6 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error clearing fault injection:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to clear fault injection");
   }
 }

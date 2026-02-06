@@ -3,6 +3,7 @@
  * Clears the user's session cookie
  */
 
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { clearSessionCookie } from "@/lib/auth";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -26,16 +27,6 @@ export async function POST(_request: NextRequest): Promise<NextResponse> {
 
     return response;
   } catch (error) {
-    console.error("[LOGOUT] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<Record<string, never>>(error, "logout");
   }
 }

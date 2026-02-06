@@ -95,7 +95,7 @@ describe("POST /api/restore", () => {
     });
   });
 
-  it("should use instanceId from request body if provided", async () => {
+  it("should ignore instanceId from request body and use server-side resolution", async () => {
     const req = createMockNextRequest("http://localhost/api/restore", {
       method: "POST",
       body: JSON.stringify({ backupName: "my-backup-2024", instanceId: "i-custom-id" }),
@@ -107,10 +107,11 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(true);
     expect(body.data?.backupName).toBe("my-backup-2024");
 
+    // Should use the server-side resolved ID, not the caller-provided one
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
       command: "restore",
-      instanceId: "i-custom-id",
+      instanceId: "i-1234", // Server-side resolved ID
       userEmail: "admin@example.com",
       args: ["my-backup-2024"],
     });
@@ -128,7 +129,7 @@ describe("POST /api/restore", () => {
     expect(res.status).toBe(500);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Lambda failure");
+    expect(body.error).toBe("Failed to restore backup");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });

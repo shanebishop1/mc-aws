@@ -75,7 +75,7 @@ describe("POST /api/hibernate", () => {
     expect(res.status).toBe(500);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Lambda failure");
+    expect(body.error).toBe("Failed to hibernate server");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });
