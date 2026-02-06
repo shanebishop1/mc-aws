@@ -5,6 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
@@ -12,7 +13,6 @@ import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 interface BackupRequestBody {
-  instanceId?: string;
   name?: string;
 }
 
@@ -23,7 +23,6 @@ async function parseBackupBody(request: NextRequest): Promise<BackupRequestBody>
   try {
     const body = await request.json();
     return {
-      instanceId: body?.instanceId,
       name: body?.name,
     };
   } catch {
@@ -90,17 +89,7 @@ async function invokeBackupLambda(
  * Build error response for backup endpoint
  */
 function buildBackupErrorResponse(error: unknown): NextResponse<ApiResponse<BackupResponse>> {
-  console.error("[BACKUP] Error:", error);
-  const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-  return NextResponse.json(
-    {
-      success: false,
-      error: errorMessage,
-      timestamp: new Date().toISOString(),
-    },
-    { status: 500 }
-  );
+  return formatApiErrorResponse<BackupResponse>(error, "backup");
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<BackupResponse>>> {
@@ -118,8 +107,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Parse body for backup name
-    const { instanceId, name: backupName } = await parseBackupBody(request);
-    const resolvedId = instanceId || (await findInstanceId());
+    const { name: backupName } = await parseBackupBody(request);
+    const resolvedId = await findInstanceId();
 
     // Validate backup name (defense in depth)
     if (backupName) {

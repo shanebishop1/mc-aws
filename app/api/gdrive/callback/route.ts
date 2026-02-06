@@ -122,7 +122,7 @@ async function handleRealOAuth(code: string): Promise<NextResponse> {
 function handleOAuthError(error: string): NextResponse {
   console.error("[GDRIVE-CALLBACK] Google OAuth error:", error);
   const response = NextResponse.redirect(
-    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(error)}`,
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("Google OAuth authorization failed")}`,
     302
   );
   response.cookies.delete(OAUTH_STATE_COOKIE);
@@ -135,7 +135,7 @@ function handleOAuthError(error: string): NextResponse {
 function handleMissingCode(): NextResponse {
   console.error("[GDRIVE-CALLBACK] No code provided in callback");
   const response = NextResponse.redirect(
-    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("No code provided")}`,
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("No authorization code provided")}`,
     302
   );
   response.cookies.delete(OAUTH_STATE_COOKIE);
@@ -147,10 +147,8 @@ function handleMissingCode(): NextResponse {
  */
 function handleError(error: unknown): NextResponse {
   console.error("[GDRIVE-CALLBACK] Error:", error);
-  const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
   const response = NextResponse.redirect(
-    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(errorMessage)}`,
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("Failed to complete Google Drive setup")}`,
     302
   );
   response.cookies.delete(OAUTH_STATE_COOKIE);
@@ -162,8 +160,10 @@ function handleError(error: unknown): NextResponse {
  */
 function handleStateError(message: string): NextResponse {
   console.error("[GDRIVE-CALLBACK] State validation error:", message);
+  // Map internal state errors to safe messages
+  const safeMessage = message.includes("Missing") ? "Missing OAuth state parameter" : "OAuth state validation failed";
   const response = NextResponse.redirect(
-    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(message)}`,
+    `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent(safeMessage)}`,
     302
   );
   response.cookies.delete(OAUTH_STATE_COOKIE);

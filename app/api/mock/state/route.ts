@@ -4,6 +4,7 @@
  * Only available in mock mode
  */
 
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
@@ -43,12 +44,6 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[MOCK-CONTROL] Error getting mock state:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<unknown>(error, "status", "Failed to get mock state");
   }
 }

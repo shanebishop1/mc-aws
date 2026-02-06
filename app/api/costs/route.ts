@@ -1,4 +1,5 @@
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { getCosts } from "@/lib/aws";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse, CostData } from "@/lib/types";
@@ -55,16 +56,6 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
-    console.error("[COSTS] Failed to get costs:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
-    );
+    return formatApiErrorResponse<CostData & { cachedAt?: number }>(error, "costs");
   }
 }

@@ -4,6 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { getParameter } from "@/lib/aws/ssm-client";
 import { isMockMode } from "@/lib/env";
@@ -61,16 +62,10 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
       { headers: noStoreHeaders }
     );
   } catch (error) {
-    console.error("[GDRIVE-STATUS] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500, headers: noStoreHeaders }
-    );
+    const response = formatApiErrorResponse<GDriveStatusResponse>(error, "gdriveStatus");
+    // Add no-store headers to the error response
+    const headers = response.headers;
+    headers.set("Cache-Control", "no-store");
+    return response;
   }
 }
