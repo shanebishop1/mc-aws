@@ -5,6 +5,9 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 // How long to show optimistic state before giving up (2 minutes)
 const PENDING_ACTION_TIMEOUT_MS = 2 * 60 * 1000;
+const STATUS_POLL_INTERVAL_MS = 5000;
+const USER_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
+const ACTIVITY_DEBOUNCE_MS = 1000;
 
 // Maps pending action to expected final state
 const ACTION_TARGET_STATES: Record<string, ServerState[]> = {
@@ -126,19 +129,18 @@ export function useServerStatus(): UseServerStatusReturn {
     }
   }, [updatePlayerCount]);
 
-  // Poll status every 5 seconds, only when tab is visible
+  // Poll status only when user is actively engaged with this page
   useEffect(() => {
-    const handleFetchStatus = async () => {
-      await fetchStatus();
-    };
-
-    handleFetchStatus();
-
     let intervalId: NodeJS.Timeout | null = null;
+    let inactivityTimeoutId: NodeJS.Timeout | null = null;
+    let isUserIdle = false;
+    let lastActivityAt = 0;
 
     const startPolling = () => {
       if (intervalId === null) {
-        intervalId = setInterval(handleFetchStatus, 5000);
+        intervalId = setInterval(() => {
+          void fetchStatus();
+        }, STATUS_POLL_INTERVAL_MS);
       }
     };
 
@@ -149,24 +151,93 @@ export function useServerStatus(): UseServerStatusReturn {
       }
     };
 
+    const clearInactivityTimeout = () => {
+      if (inactivityTimeoutId !== null) {
+        clearTimeout(inactivityTimeoutId);
+        inactivityTimeoutId = null;
+      }
+    };
+
+    const scheduleInactivityTimeout = () => {
+      clearInactivityTimeout();
+      inactivityTimeoutId = setTimeout(() => {
+        isUserIdle = true;
+        stopPolling();
+      }, USER_INACTIVITY_TIMEOUT_MS);
+    };
+
+    const canPoll = () => {
+      return document.visibilityState === "visible" && document.hasFocus() && !isUserIdle;
+    };
+
+    const handleUserActivity = () => {
+      const now = Date.now();
+      if (!isUserIdle && now - lastActivityAt < ACTIVITY_DEBOUNCE_MS) {
+        return;
+      }
+
+      const wasIdle = isUserIdle;
+      const wasPolling = intervalId !== null;
+
+      lastActivityAt = now;
+      isUserIdle = false;
+      scheduleInactivityTimeout();
+
+      if (canPoll() && (wasIdle || !wasPolling)) {
+        void fetchStatus();
+        startPolling();
+        return;
+      }
+
+      if (!canPoll()) {
+        stopPolling();
+      }
+    };
+
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
-        handleFetchStatus(); // Refresh immediately when tab becomes visible
-        startPolling();
+        handleUserActivity();
       } else {
         stopPolling();
       }
     };
 
-    // Start polling initially
-    startPolling();
+    const handleWindowFocus = () => {
+      handleUserActivity();
+    };
 
-    // Listen for visibility changes
+    const handleWindowBlur = () => {
+      stopPolling();
+    };
+
+    const activityEvents: Array<keyof DocumentEventMap> = [
+      "pointerdown",
+      "keydown",
+      "mousemove",
+      "scroll",
+      "touchstart",
+    ];
+
+    // Initial fetch when page loads
+    handleUserActivity();
+
+    // Listen for engagement and focus changes
     document.addEventListener("visibilitychange", handleVisibilityChange);
+    window.addEventListener("focus", handleWindowFocus);
+    window.addEventListener("blur", handleWindowBlur);
+    for (const eventName of activityEvents) {
+      document.addEventListener(eventName, handleUserActivity);
+    }
 
     return () => {
       stopPolling();
+      clearInactivityTimeout();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
+      window.removeEventListener("focus", handleWindowFocus);
+      window.removeEventListener("blur", handleWindowBlur);
+      for (const eventName of activityEvents) {
+        document.removeEventListener(eventName, handleUserActivity);
+      }
     };
   }, [fetchStatus]);
 
