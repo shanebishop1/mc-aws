@@ -70,16 +70,26 @@ async function setupDLMSnapshots() {
 }
 
 (async () => {
-  const token = process.env.GITHUB_TOKEN;
-  if (!token) {
+  const githubToken = process.env.GITHUB_TOKEN;
+  if (!githubToken) {
     console.error("Error: GITHUB_TOKEN not found in .env file.");
     console.error('Please add GITHUB_TOKEN="ghp_..." to your .env file.');
     process.exit(1);
   }
 
+  const cloudflareToken = process.env.CLOUDFLARE_DNS_API_TOKEN;
+  if (!cloudflareToken) {
+    console.error("Error: CLOUDFLARE_DNS_API_TOKEN not found in .env file.");
+    console.error('Please add CLOUDFLARE_DNS_API_TOKEN="..." to your .env file.');
+    process.exit(1);
+  }
+
   console.log("Deploying Minecraft Stack...");
   try {
-    execSync(`cdk deploy --parameters GithubTokenParam="${token}" --require-approval never`, { stdio: "inherit" });
+    execSync(
+      `pnpm cdk deploy --parameters GithubTokenParam="${githubToken}" --parameters CloudflareTokenParam="${cloudflareToken}" --require-approval never`,
+      { stdio: "inherit" }
+    );
   } catch (_error) {
     process.exit(1);
   }

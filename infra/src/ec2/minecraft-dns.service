@@ -1,0 +1,16 @@
+[Unit]
+Description=Update Cloudflare DNS for Minecraft server
+After=network-online.target
+Wants=network-online.target
+Before=minecraft.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/update-dns.sh
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

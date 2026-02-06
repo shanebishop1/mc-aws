@@ -66,6 +66,53 @@ export class MinecraftStack extends cdk.Stack {
       ]),
     });
 
+    // 0.5 SSM Parameters (Cloudflare Credentials for EC2 DNS updates)
+    new ssm.StringParameter(this, "CloudflareZoneId", {
+      parameterName: "/minecraft/cloudflare-zone-id",
+      stringValue: process.env.CLOUDFLARE_ZONE_ID || "error-missing-zone-id",
+      description: "Cloudflare Zone ID for DNS updates",
+    });
+
+    new ssm.StringParameter(this, "CloudflareDomain", {
+      parameterName: "/minecraft/cloudflare-domain",
+      stringValue: process.env.CLOUDFLARE_MC_DOMAIN || "error-missing-domain",
+      description: "Domain name to update (e.g., mc.example.com)",
+    });
+
+    // Cloudflare API Token (SecureString via Custom Resource)
+    const cloudflareTokenParam = new cdk.CfnParameter(this, "CloudflareTokenParam", {
+      type: "String",
+      description: "Cloudflare API Token for DNS updates",
+      noEcho: true,
+    });
+
+    new cr.AwsCustomResource(this, "CloudflareTokenSecureParam", {
+      onUpdate: {
+        service: "SSM",
+        action: "putParameter",
+        parameters: {
+          Name: "/minecraft/cloudflare-api-token",
+          Value: cloudflareTokenParam.valueAsString,
+          Type: "SecureString",
+          Overwrite: true,
+        },
+        physicalResourceId: cr.PhysicalResourceId.of("CloudflareTokenSecureParam"),
+      },
+      onDelete: {
+        service: "SSM",
+        action: "deleteParameter",
+        parameters: {
+          Name: "/minecraft/cloudflare-api-token",
+        },
+      },
+      policy: cr.AwsCustomResourcePolicy.fromStatements([
+        new iam.PolicyStatement({
+          actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
+          resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/cloudflare-api-token`],
+        }),
+      ]),
+    });
+
     // 1. VPC
     const vpc = ec2.Vpc.fromLookup(this, "DefaultVpc", {
       isDefault: true,
@@ -194,17 +241,44 @@ export class MinecraftStack extends cdk.Stack {
       new Set([notificationEmail, adminEmail, ...allowedEmails].filter(Boolean))
     ).join(",");
 
+    // SNS Topic for Notifications
+    const notificationTopic = new sns.Topic(this, "MinecraftNotificationTopic", {
+      displayName: "Minecraft Server Notifications",
+    });
+
+    // Add email subscription to notification topic
+    if (notificationEmail) {
+      notificationTopic.addSubscription(new subscriptions.EmailSubscription(notificationEmail));
+    }
+
+    // SSM Parameters (Notifications)
+    new ssm.StringParameter(this, "SnsTopicArn", {
+      parameterName: "/minecraft/sns-topic-arn",
+      stringValue: notificationTopic.topicArn,
+      description: "SNS topic ARN for server notifications",
+    });
+
+    new ssm.StringParameter(this, "NotificationEmail", {
+      parameterName: "/minecraft/notification-email",
+      stringValue: notificationEmail || "",
+      description: "Email address for server notifications",
+    });
+
+    // Allow EC2 to publish to notification topic
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        effect: iam.Effect.ALLOW,
+        actions: ["sns:Publish"],
+        resources: [notificationTopic.topicArn],
+      })
+    );
+
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: "index.handler",
       code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/StartMinecraftServer")),
       environment: {
         INSTANCE_ID: instance.instanceId,
-        // These need to be provided via context or manually set after deploy if not hardcoded
-        CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID || "",
-        CLOUDFLARE_RECORD_ID: process.env.CLOUDFLARE_RECORD_ID || "",
-        CLOUDFLARE_MC_DOMAIN: process.env.CLOUDFLARE_MC_DOMAIN || "",
-        CLOUDFLARE_DNS_API_TOKEN: process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "",
         VERIFIED_SENDER: process.env.VERIFIED_SENDER || "",
         START_KEYWORD: process.env.START_KEYWORD || "start",
         NOTIFICATION_EMAIL: notificationEmail,
@@ -242,37 +316,6 @@ export class MinecraftStack extends cdk.Stack {
     new cdk.CustomResource(this, "SeedEmailAllowlist", {
       serviceToken: seedEmailAllowlistProvider.serviceToken,
     });
-
-    // Lambda to update DNS during deploy (no email trigger needed)
-    const updateDnsLambda = new lambda.Function(this, "UpdateDnsLambda", {
-      runtime: lambda.Runtime.NODEJS_20_X,
-      handler: "index.handler",
-      code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/UpdateDns")),
-      environment: {
-        INSTANCE_ID: instance.instanceId,
-        CLOUDFLARE_ZONE_ID: process.env.CLOUDFLARE_ZONE_ID || "",
-        CLOUDFLARE_RECORD_ID: process.env.CLOUDFLARE_RECORD_ID || "",
-        CLOUDFLARE_MC_DOMAIN: process.env.CLOUDFLARE_MC_DOMAIN || "",
-        CLOUDFLARE_DNS_API_TOKEN: process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "",
-      },
-      timeout: cdk.Duration.seconds(300),
-    });
-
-    updateDnsLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["ec2:DescribeInstances"],
-        resources: ["*"],
-      })
-    );
-
-    const updateDnsProvider = new cr.Provider(this, "UpdateDnsProvider", {
-      onEventHandler: updateDnsLambda,
-    });
-
-    const updateDnsResource = new cdk.CustomResource(this, "UpdateDnsOnDeploy", {
-      serviceToken: updateDnsProvider.serviceToken,
-    });
-    updateDnsResource.node.addDependency(instance);
 
     // Grant Lambda permissions (scoped to specific instance where possible)
     startLambda.addToRolePolicy(
