@@ -67,7 +67,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         success: true,
         data: {
           instanceId: resolvedId,
-          publicIp: "pending", // IP is not known yet
           domain: env.CLOUDFLARE_MC_DOMAIN,
           message: "Server start initiated. This may take 1-2 minutes.",
         },

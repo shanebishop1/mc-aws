@@ -44,7 +44,6 @@ async function invokeRestoreLambda(
         success: true,
         data: {
           backupName: backupName || "latest",
-          publicIp: "pending",
           message: "Restore started asynchronously. You will receive an email upon completion.",
           output: "",
         },

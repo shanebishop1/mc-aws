@@ -103,7 +103,6 @@ async function showCurrentState(): Promise<void> {
     // Instance state
     log("Instance:", "yellow");
     log(`  State: ${state.instance.state}`);
-    log(`  Public IP: ${state.instance.publicIp || "N/A"}`);
     log(`  Has Volume: ${state.instance.hasVolume ? "Yes" : "No"}`);
 
     // Scenario
