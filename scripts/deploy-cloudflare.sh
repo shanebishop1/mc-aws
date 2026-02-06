@@ -526,6 +526,7 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   # Skip if value is empty
   [[ -z "$value" ]] && continue
 
+  echo ""
   echo "  Setting: $key"
 
   put_secret() {
