@@ -6,6 +6,7 @@ After=network.target
 # Treat the screen process as the long-running process; don't expect a fork/PID file
 Type=simple
 User=minecraft
+EnvironmentFile=-/etc/default/minecraft
 
 WorkingDirectory=/opt/minecraft/server
 PermissionsStartOnly=true
