@@ -39,13 +39,32 @@ function validateBackendMode(value: string): BackendMode {
 /**
  * Get the backend mode from environment variable
  * Defaults to "aws" if not specified
+ * @throws Error if MC_BACKEND_MODE is "mock" and NODE_ENV is "production"
  */
 export function getBackendMode(): BackendMode {
   const mode = getEnv("MC_BACKEND_MODE", true);
   if (!mode) {
     return "aws"; // Default to aws mode
   }
-  return validateBackendMode(mode);
+  const validatedMode = validateBackendMode(mode);
+
+  // Hard-fail if mock mode is enabled in production
+  // Use a function to get NODE_ENV to allow for test mocking
+  if (validatedMode === "mock" && getNodeEnv() === "production") {
+    throw new Error(
+      'MC_BACKEND_MODE="mock" is not allowed in production. Set MC_BACKEND_MODE="aws" or unset NODE_ENV.'
+    );
+  }
+
+  return validatedMode;
+}
+
+/**
+ * Get NODE_ENV value
+ * Exported as function to allow test mocking
+ */
+export function getNodeEnv(): string | undefined {
+  return process.env.NODE_ENV;
 }
 
 export const env = {
