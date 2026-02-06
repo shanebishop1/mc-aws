@@ -1,3 +1,4 @@
+import { invalidateAllowlistCache } from "@/lib/allowlist-cache";
 import { requireAdmin } from "@/lib/api-auth";
 import { updateEmailAllowlist } from "@/lib/aws";
 import { env, getAllowedEmails } from "@/lib/env";
@@ -86,6 +87,9 @@ export async function PUT(request: NextRequest): Promise<NextResponse<ApiRespons
     const effectiveAllowlist = uniqueEmails([...normalizedEmails, ...baselineAllowlist]);
 
     await updateEmailAllowlist(effectiveAllowlist);
+
+    // Force auth allowlist cache refresh after admin mutations.
+    invalidateAllowlistCache();
 
     // Invalidate /api/emails cache so the next GET is fresh
     globalThis.__mc_cachedEmails = null;

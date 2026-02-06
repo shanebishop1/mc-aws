@@ -88,12 +88,10 @@ export async function verifySession(token: string): Promise<{ email: string; rol
     const email = payload.email as string | undefined;
     if (!email) return null;
 
-    // Fetch fresh allowlist to ensure permission changes take effect relatively quickly
     const allowlist = await getCachedAllowlist();
 
     return {
       email,
-      // Role is derived from the current environment (SSM), so allowlist changes take effect immediately.
       role: getUserRole(email, allowlist),
     };
   } catch {
