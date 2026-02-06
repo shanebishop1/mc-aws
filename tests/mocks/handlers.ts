@@ -52,7 +52,6 @@ function createErrorResponse(message: string): ApiResponse {
  * Mock data helpers
  */
 const mockInstanceId = "i-1234567890abcdef0";
-const mockPublicIp = "192.0.2.1";
 const mockDomain = "mc.example.com";
 
 function getServerStatus(scenario: MockScenario): ServerStatusResponse {
@@ -66,7 +65,7 @@ function getServerStatus(scenario: MockScenario): ServerStatusResponse {
   return {
     state,
     instanceId: mockInstanceId,
-    publicIp: state === ServerState.Running ? mockPublicIp : undefined,
+    domain: state === ServerState.Running ? mockDomain : undefined,
     hasVolume: true,
     lastUpdated: new Date().toISOString(),
   };
@@ -167,7 +166,6 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
     } else {
       const data: StartServerResponse = {
         instanceId: mockInstanceId,
-        publicIp: "pending", // Async start returns pending IP
         domain: mockDomain,
         message: "Server start initiated. This may take 1-2 minutes.",
       };
@@ -233,7 +231,6 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
     } else {
       const data: ResumeResponse = {
         instanceId: mockInstanceId,
-        publicIp: mockPublicIp,
         domain: mockDomain,
         message: "Resuming server from hibernation",
       };
@@ -363,7 +360,6 @@ export async function setupMocks(page: Page, scenarios: MockScenario[]) {
         backupName: "backup-2025-01-09.tar.gz",
         message: "Restore completed successfully",
         output: "Restoring from backup...",
-        publicIp: mockPublicIp,
       };
       await route.fulfill({
         status: 200,

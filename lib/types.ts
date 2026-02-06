@@ -15,7 +15,7 @@ export enum ServerState {
 export interface ServerStatusResponse {
   state: ServerState;
   instanceId: string;
-  publicIp?: string;
+  domain?: string;
   hasVolume?: boolean;
   lastUpdated: string;
   serverAction?: { action: string; timestamp: number } | null;
@@ -30,7 +30,6 @@ export interface ApiResponse<T = unknown> {
 
 export interface StartServerResponse {
   instanceId: string;
-  publicIp: string;
   domain: string;
   message: string;
 }
@@ -56,7 +55,6 @@ export interface RestoreResponse {
   backupName: string;
   message: string;
   output: string;
-  publicIp?: string;
 }
 
 export interface HibernateResponse {
@@ -67,7 +65,6 @@ export interface HibernateResponse {
 
 export interface ResumeResponse {
   instanceId: string;
-  publicIp: string;
   domain: string;
   message: string;
   restoreOutput?: string;

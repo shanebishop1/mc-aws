@@ -17,7 +17,7 @@ import { useCallback, useEffect, useState } from "react";
 
 export default function Home() {
   const { isAdmin, isAuthenticated } = useAuth();
-  const { status, ip, hasVolume, playerCount, isInitialLoad, fetchStatus, setPendingAction } = useServerStatus();
+  const { status, domain, hasVolume, playerCount, isInitialLoad, fetchStatus, setPendingAction } = useServerStatus();
   const { stackExists, isLoading: stackLoading, error: stackError } = useStackStatus();
 
   const [instanceId] = useState<string | undefined>(undefined);
@@ -264,7 +264,7 @@ export default function Home() {
         <div className="flex-1 flex flex-col justify-center items-center w-full">
           {/* Status Section */}
           <section className="flex flex-col justify-center items-center w-full">
-            <ServerStatus state={status} ip={ip} playerCount={playerCount} isLoading={isInitialLoad} />
+            <ServerStatus state={status} domain={domain} playerCount={playerCount} isLoading={isInitialLoad} />
           </section>
         </div>
 

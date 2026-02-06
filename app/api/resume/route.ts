@@ -73,7 +73,6 @@ async function invokeResumeLambda(
         data: {
           message: "Resume started asynchronously. You will receive an email upon completion.",
           instanceId: instanceId,
-          publicIp: "pending",
           domain: env.CLOUDFLARE_MC_DOMAIN,
           restoreOutput: backupName ? `Restore requested: ${backupName}` : undefined,
         },

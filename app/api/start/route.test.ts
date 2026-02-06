@@ -38,7 +38,6 @@ describe("POST /api/start", () => {
     const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("initiated");
-    expect(body.data?.publicIp).toBe("pending");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",

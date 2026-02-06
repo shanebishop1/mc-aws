@@ -32,7 +32,7 @@ interface PendingAction {
 
 interface UseServerStatusReturn {
   status: ServerState;
-  ip: string | undefined;
+  domain: string | undefined;
   hasVolume: boolean;
   playerCount: number | undefined;
   isInitialLoad: boolean;
@@ -57,7 +57,7 @@ const fetchPlayerCount = async (setPlayerCount: (count: number | undefined) => v
 export function useServerStatus(): UseServerStatusReturn {
   const [actualStatus, setActualStatus] = useState<ServerState>(ServerState.Unknown);
   const [hasVolume, setHasVolume] = useState<boolean>(false);
-  const [ip, setIp] = useState<string | undefined>(undefined);
+  const [domain, setDomain] = useState<string | undefined>(undefined);
   const [playerCount, setPlayerCount] = useState<number | undefined>(undefined);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const [pendingAction, setPendingActionState] = useState<PendingAction | null>(null);
@@ -119,7 +119,7 @@ export function useServerStatus(): UseServerStatusReturn {
         const newState = data.data.state;
         setActualStatus(newState);
         setHasVolume(data.data.hasVolume ?? false);
-        setIp(newState === ServerState.Running ? data.data.publicIp : undefined);
+        setDomain(newState === ServerState.Running ? data.data.domain : undefined);
         updatePlayerCount(newState);
       }
     } catch (error) {
@@ -243,7 +243,7 @@ export function useServerStatus(): UseServerStatusReturn {
 
   return {
     status,
-    ip,
+    domain,
     hasVolume,
     playerCount,
     isInitialLoad,

@@ -8,13 +8,13 @@ import { ServerState } from "@/lib/types";
 
 interface ServerStatusProps {
   state: ServerState;
-  ip?: string;
+  domain?: string;
   playerCount?: number;
   className?: string;
   isLoading?: boolean;
 }
 
-export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: ServerStatusProps) => {
+export const ServerStatus = ({ state, domain, playerCount, className, isLoading }: ServerStatusProps) => {
   const stateLabels: Record<ServerState, string> = {
     [ServerState.Running]: "Online",
     [ServerState.Stopped]: "Stopped",
@@ -98,12 +98,12 @@ export const ServerStatus = ({ state, ip, playerCount, className, isLoading }: S
         </h2>
 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
-          {/* IP address - always reserve space to prevent layout shift */}
+          {/* Domain - always reserve space to prevent layout shift */}
           <div className="h-6 flex items-center justify-center">
-            {!isLoading && ip ? (
-              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/50 uppercase">{ip}</span>
+            {!isLoading && domain ? (
+              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/50 uppercase">{domain}</span>
             ) : (
-              <span className="font-sans text-xs tracking-[0.2em] text-transparent uppercase">0.0.0.0</span>
+              <span className="font-sans text-xs tracking-[0.2em] text-transparent uppercase">mc.example.com</span>
             )}
           </div>
           {/* Player count - always reserve space to prevent layout shift */}
