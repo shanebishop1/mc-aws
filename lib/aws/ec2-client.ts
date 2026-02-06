@@ -21,9 +21,7 @@ function getRegion(): string {
 export const ec2: EC2Client = new Proxy({} as EC2Client, {
   get(_target, prop) {
     if (!_ec2Client) {
-      const region = getRegion();
-      console.log(`[AWS Config] Initializing EC2 client in region: ${region}`);
-      _ec2Client = new EC2Client(getAwsClientConfig(region));
+      _ec2Client = new EC2Client(getAwsClientConfig(getRegion()));
     }
     return _ec2Client[prop as keyof EC2Client];
   },
