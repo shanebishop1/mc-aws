@@ -26,14 +26,21 @@ async function handleRefreshBackups(instanceId) {
 
     // p - path, s - size, t - modification time
     // RCLONE_CONFIG must be set because SSM runs as root, not the minecraft user.
-    // Important: SSM stdout is size-limited; sort newest-first and cap lines so recent backups don't get truncated.
-    const command =
+    // Important:
+    // - SSM stdout is size-limited, so we must cap output.
+    // - `rclone lsf` doesn't support `--sort` on older rclone versions, so sort in shell.
+    // - Use `bash -lc` with `pipefail` so rclone failures don't get masked by `head`.
+    const listScript =
+      `set -euo pipefail; ` +
       `RCLONE_CONFIG=/opt/setup/rclone/rclone.conf ` +
       `rclone lsf "${gdriveRemote}:${gdriveRoot}/" ` +
+      `--max-depth 1 ` +
       `--files-only ` +
       `--format "pst" --separator "|" ` +
       `--include "*.tar.gz" --include "*.gz" --exclude "*" ` +
-      `--sort time --reverse | head -n 200`;
+      `| sort -t"|" -k3,3r ` +
+      `| head -n 200`;
+    const command = `bash -lc ${JSON.stringify(listScript)}`;
     const output = await executeSSMCommand(instanceId, [command]);
 
     // Parse output - each line is name|size|date
