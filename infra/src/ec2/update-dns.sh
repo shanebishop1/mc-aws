@@ -22,6 +22,9 @@ API_TOKEN=$(aws ssm get-parameter --name /minecraft/cloudflare-api-token --with-
 VERIFIED_SENDER=$(aws ssm get-parameter --name /minecraft/verified-sender --query 'Parameter.Value' --output text --region "$AWS_REGION")
 NOTIFICATION_EMAIL=$(aws ssm get-parameter --name /minecraft/notification-email --query 'Parameter.Value' --output text --region "$AWS_REGION")
 
+# Get sender email if available (set by Lambda when startup is triggered)
+TRIGGERED_BY=$(aws ssm get-parameter --name /minecraft/startup-triggered-by --query 'Parameter.Value' --output text --region "$AWS_REGION" 2>/dev/null || echo "")
+
 # Validate required parameters
 if [[ -z "$ZONE_ID" || -z "$DOMAIN" || -z "$API_TOKEN" ]]; then
   log "ERROR: Missing required SSM parameters"
@@ -74,14 +77,31 @@ fi
 
 log "DNS record updated successfully"
 
-# Send email notification via SES (non-critical)
+# Send consolidated email notification via SES (non-critical)
 if [[ -n "$VERIFIED_SENDER" && -n "$NOTIFICATION_EMAIL" ]]; then
   log "Sending email notification..."
+  
+  # Build email body with all information
+  EMAIL_SUBJECT="Minecraft Server Started"
+  EMAIL_BODY="Server started at IP: ${PUBLIC_IP}
+DNS updated to: ${PUBLIC_IP}"
+  
+  # Add triggered-by info if available
+  if [[ -n "$TRIGGERED_BY" ]]; then
+    EMAIL_BODY="Startup triggered by: ${TRIGGERED_BY}
+${EMAIL_BODY}"
+  fi
+  
   aws ses send-email \
     --from "$VERIFIED_SENDER" \
     --destination "ToAddresses=$NOTIFICATION_EMAIL" \
-    --message "Subject={Data='Server started, DNS updated to ${PUBLIC_IP}'},Body={Text={Data='Server started, DNS updated to ${PUBLIC_IP}'}}" \
+    --message "Subject={Data='${EMAIL_SUBJECT}'},Body={Text={Data='${EMAIL_BODY}'}}" \
     --region "$AWS_REGION" || log "Warning: Failed to send email notification"
+  
+  # Clean up the trigger parameter after sending notification
+  if [[ -n "$TRIGGERED_BY" ]]; then
+    aws ssm delete-parameter --name /minecraft/startup-triggered-by --region "$AWS_REGION" 2>/dev/null || true
+  fi
 else
   log "Skipping notification: email not configured"
 fi
