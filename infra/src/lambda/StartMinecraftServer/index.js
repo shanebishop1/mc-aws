@@ -6,7 +6,7 @@ import { ensureInstanceRunning, getPublicIp } from "./ec2.js";
 import { getSanitizedErrorMessage, sendNotification } from "./notifications.js";
 
 // SSM command execution
-import { deleteParameter, executeSSMCommand } from "./ssm.js";
+import { deleteParameter, executeSSMCommand, putParameter } from "./ssm.js";
 
 // Allowlist management
 import { extractEmails, getAllowlist, updateAllowlist } from "./allowlist.js";
