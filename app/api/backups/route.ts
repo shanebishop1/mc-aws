@@ -12,6 +12,35 @@ export const dynamic = "force-dynamic";
 
 const noStoreHeaders = { "Cache-Control": "no-store" } as const;
 
+const BACKUPS_CACHE_PARAM = "/minecraft/backups-cache";
+const AUTO_REFRESH_CACHE_AGE_MS = 60_000; // Keep cache fresh-ish without blocking on rclone/SSM
+
+type BackupsCachePayload = {
+  backups: unknown;
+  cachedAt?: unknown;
+};
+
+function parseBackupsCache(raw: string): { backups: ListBackupsResponse["backups"]; cachedAt?: number } | null {
+  try {
+    const parsed = JSON.parse(raw) as BackupsCachePayload;
+    if (!parsed || !Array.isArray(parsed.backups)) return null;
+
+    const cachedAt = typeof parsed.cachedAt === "number" ? parsed.cachedAt : undefined;
+    return { backups: parsed.backups as ListBackupsResponse["backups"], cachedAt };
+  } catch {
+    return null;
+  }
+}
+
+async function triggerRefresh(instanceId: string, userEmail: string): Promise<void> {
+  await invokeLambda("StartMinecraftServer", {
+    invocationType: "api",
+    command: "refreshBackups",
+    instanceId,
+    userEmail,
+  });
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ListBackupsResponse>>> {
   try {
     const authResult = await requireAdmin(request).catch((e) => e);
@@ -25,81 +54,52 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     const resolvedId = instanceId || (await findInstanceId());
 
-    // If refresh requested, trigger Lambda and return 202
-    if (shouldRefresh) {
-        console.log("[BACKUPS] Refresh requested by:", authResult.email);
-        await invokeLambda("StartMinecraftServer", {
-            invocationType: "api",
-            command: "refreshBackups",
-            instanceId: resolvedId,
-            userEmail: authResult.email
-        });
-        
-        return NextResponse.json(
-            {
-                success: true,
-                data: {
-                    backups: [],
-                    count: 0,
-                    status: "caching"
-                },
-                timestamp: new Date().toISOString(),
-                // Add message to standard response structure? 
-                // Currently ApiResponse doesn't have message at top level usually, 
-                // but ListBackupsResponse data doesn't have message either.
-                // Front end assumes data has backups.
-                // We return empty backups + caching status.
-            },
-            { status: 202, headers: noStoreHeaders }
-        );
-    }
-    
-    // Try to read from cache
-    const cached = await getParameter("/minecraft/backups-cache");
-    if (cached) {
-        try {
-            const data = JSON.parse(cached);
-            // Verify structure
-            if (Array.isArray(data.backups)) {
-                return NextResponse.json(
-                    {
-                        success: true,
-                        data: {
-                            backups: data.backups,
-                            count: data.backups.length,
-                            cachedAt: data.cachedAt,
-                            status: "listing"
-                        },
-                        timestamp: new Date().toISOString()
-                    },
-                    { headers: noStoreHeaders }
-                );
-            }
-        } catch (e) {
-            console.warn("[BACKUPS] Invalid cache format:", e);
-        }
+    const cachedRaw = await getParameter(BACKUPS_CACHE_PARAM);
+    const cached = cachedRaw ? parseBackupsCache(cachedRaw) : null;
+
+    const cacheAgeMs = cached?.cachedAt ? Date.now() - cached.cachedAt : Number.POSITIVE_INFINITY;
+    const shouldAutoRefresh = cacheAgeMs > AUTO_REFRESH_CACHE_AGE_MS;
+
+    if (shouldRefresh || !cached || shouldAutoRefresh) {
+      console.log(
+        "[BACKUPS] Triggering refresh:",
+        JSON.stringify({
+          requestedBy: authResult.email,
+          shouldRefresh,
+          hasCache: Boolean(cached),
+          cacheAgeMs: Number.isFinite(cacheAgeMs) ? cacheAgeMs : null,
+        })
+      );
+
+      await triggerRefresh(resolvedId, authResult.email);
+
+      return NextResponse.json(
+        {
+          success: true,
+          data: {
+            backups: cached?.backups ?? [],
+            count: cached?.backups?.length ?? 0,
+            cachedAt: cached?.cachedAt,
+            status: "caching",
+          },
+          timestamp: new Date().toISOString(),
+        },
+        { status: 202, headers: noStoreHeaders }
+      );
     }
 
-    // No valid cache found, trigger auto-refresh
-    console.log("[BACKUPS] Cache missing or invalid, triggering auto-refresh");
-    await invokeLambda("StartMinecraftServer", {
-        invocationType: "api",
-        command: "refreshBackups", // Make sure this matches Lambda handler
-        instanceId: resolvedId,
-        userEmail: authResult.email
-    });
-    
     return NextResponse.json(
-        {
-            success: true,
-            data: {
-                backups: [],
-                count: 0,
-                status: "caching"
-            },
-            timestamp: new Date().toISOString()
+      {
+        success: true,
+        data: {
+          backups: cached.backups,
+          count: cached.backups.length,
+          cachedAt: cached.cachedAt,
+          status: "listing",
         },
-        { headers: noStoreHeaders }
+        timestamp: new Date().toISOString(),
+      },
+      { headers: noStoreHeaders }
     );
 
   } catch (error) {
