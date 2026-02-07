@@ -281,17 +281,16 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
 async function handleStartCommand(instanceId, senderEmail, notificationEmail) {
   console.log(`Starting instance ${instanceId} triggered by ${senderEmail}`);
 
-  if (notificationEmail) {
-    await sendNotification(notificationEmail, "Minecraft Startup", `Startup triggered by: ${senderEmail}`);
+  // Store sender email in SSM for EC2 to include in consolidated notification
+  if (senderEmail) {
+    await putParameter("/minecraft/startup-triggered-by", senderEmail, "String");
   }
 
   await handleResume(instanceId);
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
 
-  if (notificationEmail) {
-    await sendNotification(notificationEmail, "Minecraft Server Started", `Server started at IP: ${publicIp}`);
-  }
+  // Email notification now sent by EC2 after DNS update (consolidated)
 
   return { statusCode: 200, body: `Instance started at IP: ${publicIp}` };
 }
@@ -299,8 +298,9 @@ async function handleStartCommand(instanceId, senderEmail, notificationEmail) {
 async function handleResumeCommand(instanceId, senderEmail, notificationEmail, args) {
   console.log(`Resuming instance ${instanceId} triggered by ${senderEmail}`);
 
-  if (notificationEmail) {
-    await sendNotification(notificationEmail, "Minecraft Resume", `Resume triggered by: ${senderEmail}`);
+  // Store sender email in SSM for EC2 to include in consolidated notification
+  if (senderEmail) {
+    await putParameter("/minecraft/startup-triggered-by", senderEmail, "String");
   }
 
   await handleResume(instanceId);

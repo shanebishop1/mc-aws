@@ -124,10 +124,10 @@ export class MinecraftStack extends cdk.Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")],
     });
 
-    // Add permissions to read/write SSM parameters (GitHub credentials, player count)
+    // Add permissions to read/write SSM parameters (GitHub credentials, player count, startup trigger)
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
         resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`],
       })
     );
@@ -345,11 +345,14 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Grant Lambda permission to manage server-action lock parameter
+    // Grant Lambda permission to manage server-action lock and startup-triggered-by parameters
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
-        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/startup-triggered-by`,
+        ],
       })
     );
 
