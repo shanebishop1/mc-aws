@@ -5,7 +5,7 @@
 
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
-import { findInstanceId, invokeLambda } from "@/lib/aws";
+import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -19,6 +19,57 @@ async function parseRestoreBody(request: NextRequest): Promise<RestoreRequest> {
   } catch {
     // Empty body is valid - will use latest backup
     return {};
+  }
+}
+
+/**
+ * Validate server state for restore
+ */
+async function validateRestoreState(instanceId: string): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
+  const currentState = await getInstanceState(instanceId);
+  if (currentState !== "running") {
+    return NextResponse.json(
+      {
+        success: false,
+        error: `Cannot restore when server is ${currentState}. Server must be running.`,
+        timestamp: new Date().toISOString(),
+      },
+      { status: 400 }
+    );
+  }
+  return null;
+}
+
+/**
+ * Validate Minecraft service is ready for restore
+ */
+async function validateServiceReady(instanceId: string): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
+  try {
+    console.log("[RESTORE] Checking Minecraft service status on instance:", instanceId);
+    const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
+    const trimmedOutput = output.trim();
+
+    if (trimmedOutput !== "active") {
+      console.log("[RESTORE] Minecraft service not ready, status:", trimmedOutput);
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Minecraft service is still initializing. Please wait a moment.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
+    console.log("[RESTORE] Minecraft service is active and ready");
+    return null;
+  } catch (error) {
+    console.error("[RESTORE] Error checking Minecraft service status:", error);
+    // If we can't check the service status, allow the restore to proceed
+    // This prevents blocking restores due to transient SSM issues
+    console.warn("[RESTORE] Proceeding with restore despite service check failure");
+
+    return null;
   }
 }
 
@@ -82,6 +133,18 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     // Validate backup name if provided
     if (backupName) {
       sanitizeBackupName(backupName);
+    }
+
+    // Check current state - must be running
+    const stateError = await validateRestoreState(resolvedId);
+    if (stateError) {
+      return stateError;
+    }
+
+    // Check Minecraft service is ready
+    const serviceError = await validateServiceReady(resolvedId);
+    if (serviceError) {
+      return serviceError;
     }
 
     // Invoke Lambda for restore

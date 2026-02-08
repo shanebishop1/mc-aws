@@ -30,16 +30,7 @@ async function handleRefreshBackups(instanceId) {
     // - SSM stdout is size-limited, so we must cap output.
     // - `rclone lsf` doesn't support `--sort` on older rclone versions, so sort in shell.
     // - Use `bash -lc` with `pipefail` so rclone failures don't get masked by `head`.
-    const listScript =
-      `set -euo pipefail; ` +
-      `RCLONE_CONFIG=/opt/setup/rclone/rclone.conf ` +
-      `rclone lsf "${gdriveRemote}:${gdriveRoot}/" ` +
-      `--max-depth 1 ` +
-      `--files-only ` +
-      `--format "pst" --separator "|" ` +
-      `--include "*.tar.gz" --include "*.gz" --exclude "*" ` +
-      `| sort -t"|" -k3,3r ` +
-      `| head -n 200`;
+    const listScript = `set -euo pipefail; RCLONE_CONFIG=/opt/setup/rclone/rclone.conf rclone lsf "${gdriveRemote}:${gdriveRoot}/" --max-depth 1 --files-only --format "pst" --separator "|" --include "*.tar.gz" --include "*.gz" --exclude "*" | sort -t"|" -k3,3r | head -n 200`;
     const command = `bash -lc ${JSON.stringify(listScript)}`;
     const output = await executeSSMCommand(instanceId, [command]);
 
