@@ -7,11 +7,15 @@ import { POST } from "./route";
 const mocks = vi.hoisted(() => ({
   invokeLambda: vi.fn(),
   findInstanceId: vi.fn().mockResolvedValue("i-1234"),
+  getInstanceState: vi.fn().mockResolvedValue("running"),
+  executeSSMCommand: vi.fn().mockResolvedValue("active"),
 }));
 
 vi.mock("@/lib/aws", () => ({
   invokeLambda: mocks.invokeLambda,
   findInstanceId: mocks.findInstanceId,
+  getInstanceState: mocks.getInstanceState,
+  executeSSMCommand: mocks.executeSSMCommand,
 }));
 
 // Mock requireAdmin to return a fake admin user

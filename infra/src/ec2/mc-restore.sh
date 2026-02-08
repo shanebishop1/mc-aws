@@ -8,10 +8,18 @@ log() { echo "[$(date -Is)] $*"; }
 
 export RCLONE_CONFIG="/opt/setup/rclone/rclone.conf"
 
+# Create operation lock to prevent concurrent backup/restore operations
+OPERATION_LOCK="/tmp/mc-operation.lock"
+if [[ -f "$OPERATION_LOCK" ]]; then
+  log "ERROR: Another operation is in progress"
+  exit 1
+fi
+echo "$$" > "$OPERATION_LOCK"
+
 # Create maintenance lock to prevent idle shutdown during restore
 MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
 touch "$MAINTENANCE_LOCK"
-trap "rm -f $MAINTENANCE_LOCK" EXIT
+trap "rm -f $OPERATION_LOCK $MAINTENANCE_LOCK" EXIT
 
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
