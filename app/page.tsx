@@ -23,6 +23,7 @@ export default function Home() {
   const [instanceId] = useState<string | undefined>(undefined);
   const [_isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [serviceActive, setServiceActive] = useState<boolean | undefined>(undefined);
 
   // Debug: Log message changes
   useEffect(() => {
@@ -64,10 +65,46 @@ export default function Home() {
       });
   }, [isAdmin]);
 
+  // Poll service status when instance is running
+  useEffect(() => {
+    // Only poll when instance is running
+    if (status !== ServerState.Running) {
+      setServiceActive(undefined);
+      return;
+    }
+
+    const fetchServiceStatus = async () => {
+      try {
+        const res = await fetch("/api/service-status");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.data) {
+            setServiceActive(data.data.serviceActive);
+          }
+        }
+      } catch (error) {
+        console.error("[PAGE] Failed to fetch service status:", error);
+      }
+    };
+
+    // Initial fetch
+    void fetchServiceStatus();
+
+    // Poll every 5 seconds (same interval as status polling)
+    const intervalId = setInterval(() => {
+      void fetchServiceStatus();
+    }, 5000);
+
+    return () => {
+      clearInterval(intervalId);
+    };
+  }, [status]);
+
   // Use custom hook to derive button visibility state
   const { showResume, showStart, showStop, showHibernate, showBackupRestore, actionsEnabled } = useButtonVisibility(
     status,
-    hasVolume
+    hasVolume,
+    serviceActive
   );
 
   const buildRequestBody = useCallback(
@@ -279,6 +316,9 @@ export default function Home() {
           actionsEnabled={actionsEnabled}
           onAction={handleAction}
           onOpenResume={handleResumeClick}
+          onRestoreStateChange={(_isRestoring, message) => {
+            setMessage(message);
+          }}
         />
 
         {/* Footer - Fixed Small Height */}

@@ -6,7 +6,7 @@
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
-import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
@@ -47,6 +47,39 @@ async function validateBackupState(instanceId: string): Promise<NextResponse<Api
     );
   }
   return null;
+}
+
+/**
+ * Validate Minecraft service is ready for backup
+ */
+async function validateServiceReady(instanceId: string): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
+  try {
+    console.log("[BACKUP] Checking Minecraft service status on instance:", instanceId);
+    const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
+    const trimmedOutput = output.trim();
+
+    if (trimmedOutput !== "active") {
+      console.log("[BACKUP] Minecraft service not ready, status:", trimmedOutput);
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Minecraft service is still initializing. Please wait a moment.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
+    console.log("[BACKUP] Minecraft service is active and ready");
+    return null;
+  } catch (error) {
+    console.error("[BACKUP] Error checking Minecraft service status:", error);
+    // If we can't check the service status, allow the backup to proceed
+    // This prevents blocking backups due to transient SSM issues
+    console.warn("[BACKUP] Proceeding with backup despite service check failure");
+
+    return null;
+  }
 }
 
 /**
@@ -119,6 +152,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const stateError = await validateBackupState(resolvedId);
     if (stateError) {
       return stateError;
+    }
+
+    // Check Minecraft service is ready
+    const serviceError = await validateServiceReady(resolvedId);
+    if (serviceError) {
+      return serviceError;
     }
 
     // Invoke Lambda for backup

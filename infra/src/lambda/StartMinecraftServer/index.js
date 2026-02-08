@@ -278,7 +278,7 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
   }
 }
 
-async function handleStartCommand(instanceId, senderEmail, notificationEmail) {
+async function handleStartCommand(instanceId, senderEmail, _notificationEmail) {
   console.log(`Starting instance ${instanceId} triggered by ${senderEmail}`);
 
   // Store sender email in SSM for EC2 to include in consolidated notification

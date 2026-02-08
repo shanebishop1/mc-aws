@@ -7,7 +7,7 @@ import { BackupDialog } from "@/components/ui/BackupDialog";
 import { LuxuryButton } from "@/components/ui/Button";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { motion } from "framer-motion";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 interface ControlsSectionProps {
   status: string;
@@ -19,6 +19,7 @@ interface ControlsSectionProps {
   actionsEnabled: boolean;
   onAction: (action: string, endpoint: string, body?: Record<string, string>) => Promise<void>;
   onOpenResume: () => void;
+  onRestoreStateChange?: (isRestoring: boolean, message: string | null) => void;
 }
 
 const checkGDriveStatus = async (): Promise<boolean> => {
@@ -42,6 +43,7 @@ export const ControlsSection = ({
   actionsEnabled,
   onAction,
   onOpenResume,
+  onRestoreStateChange,
 }: ControlsSectionProps) => {
   const { isAdmin, isAllowed, isAuthenticated, refetch } = useAuth();
 
@@ -57,6 +59,34 @@ export const ControlsSection = ({
   const [pendingAction, setPendingAction] = useState<{ action: string; endpoint: string } | null>(null);
   const [gdriveError, setGdriveError] = useState<string | null>(null);
   const [isActionPending, setIsActionPending] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
+
+  // Monitor restore state - clear when server becomes running
+  useEffect(() => {
+    if (isRestoring && status === "running") {
+      // Server is running again, restore operation completed
+      setIsRestoring(false);
+      setRestoreMessage(null);
+      onRestoreStateChange?.(false, null);
+    }
+  }, [status, isRestoring, onRestoreStateChange]);
+
+  // Set a timeout to clear restore state (2 minutes max)
+  useEffect(() => {
+    if (!isRestoring) return;
+
+    const timeoutId = setTimeout(
+      () => {
+        setIsRestoring(false);
+        setRestoreMessage(null);
+        onRestoreStateChange?.(false, null);
+      },
+      2 * 60 * 1000
+    ); // 2 minutes
+
+    return () => clearTimeout(timeoutId);
+  }, [isRestoring, onRestoreStateChange]);
 
   const handleBackupClick = async () => {
     const gdriveConfigured = await checkGDriveStatus();
@@ -206,6 +236,7 @@ export const ControlsSection = ({
             isAllowed={isAllowed}
             isAuthenticated={isAuthenticated}
             isActionPending={isActionPending}
+            isRestoring={isRestoring}
             onAction={onAction}
             onPrimaryAction={handlePrimaryAction}
             onHibernateClick={() => setShowHibernateConfirm(true)}
@@ -238,6 +269,9 @@ export const ControlsSection = ({
             onOpenChange={setShowRestoreDialog}
             onConfirm={(backupName) => {
               setShowRestoreDialog(false);
+              setIsRestoring(true);
+              setRestoreMessage("Restoring backup... server will restart");
+              onRestoreStateChange?.(true, "Restoring backup... server will restart");
               void handleAction("Restore", "/api/restore", { backupName });
             }}
           />
@@ -251,9 +285,10 @@ export const ControlsSection = ({
           />
 
           {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGdriveError(null)} />}
+          {restoreMessage && <RestoreStatusMessage message={restoreMessage} />}
         </>
       ) : (
-        <section className="w-full max-w-4xl flex items-center justify-center">
+        <section className="w-full max-w-4xl flex flex-col items-center justify-center gap-3">
           <PrimaryActionButton
             status={status}
             showStop={false}
@@ -263,9 +298,15 @@ export const ControlsSection = ({
             isAllowed={isAllowed}
             isAuthenticated={isAuthenticated}
             isActionPending={isActionPending}
+            isRestoring={false}
             onAction={onAction}
             onPrimaryAction={handlePrimaryAction}
           />
+          {showResume && (
+            <p className="font-sans text-xs text-charcoal/60 tracking-wide">
+              Contact your admin to wake the server from hibernation
+            </p>
+          )}
         </section>
       )}
     </motion.div>
@@ -286,6 +327,7 @@ interface ControlsGridProps {
   isAllowed: boolean;
   isAuthenticated: boolean;
   isActionPending: boolean;
+  isRestoring: boolean;
   onAction: (action: string, endpoint: string) => void;
   onPrimaryAction: () => void;
   onHibernateClick: () => void;
@@ -328,6 +370,7 @@ const ControlsGrid = ({
   isAllowed,
   isAuthenticated,
   isActionPending,
+  isRestoring,
   onAction,
   onPrimaryAction,
   onHibernateClick,
@@ -337,7 +380,7 @@ const ControlsGrid = ({
   if (status === "unknown") return null;
 
   const adminButtonTitle = getAdminButtonTitle(isAdmin, isActionPending);
-  const isDisabled = !actionsEnabled || !isAdmin || isActionPending;
+  const isDisabled = !actionsEnabled || !isAdmin || isActionPending || isRestoring;
 
   return (
     <section className="w-full max-w-4xl grid grid-cols-3 md:grid-cols-[1fr_auto_1fr] md:grid-rows-[auto_auto] gap-4 md:gap-x-8 md:gap-y-4 items-center md:items-center justify-items-center">
@@ -357,6 +400,7 @@ const ControlsGrid = ({
           isAllowed={isAllowed}
           isAuthenticated={isAuthenticated}
           isActionPending={isActionPending}
+          isRestoring={isRestoring}
           onAction={onAction}
           onPrimaryAction={onPrimaryAction}
         />
@@ -386,6 +430,7 @@ interface PrimaryActionButtonProps {
   isAllowed: boolean;
   isAuthenticated: boolean;
   isActionPending: boolean;
+  isRestoring: boolean;
   onAction: (action: string, endpoint: string) => void;
   onPrimaryAction: () => void;
 }
@@ -398,6 +443,7 @@ const PrimaryActionButton = ({
   isAllowed,
   isAuthenticated,
   isActionPending,
+  isRestoring,
   onAction,
   onPrimaryAction,
 }: PrimaryActionButtonProps) => {
@@ -405,7 +451,7 @@ const PrimaryActionButton = ({
     return (
       <LuxuryButton
         onClick={() => onAction("Stop", "/api/stop")}
-        disabled={!actionsEnabled || !isAllowed || isActionPending}
+        disabled={!actionsEnabled || !isAllowed || isActionPending || isRestoring}
         title={!isAllowed ? "Allowed or admin privileges required" : undefined}
       >
         Stop Server
@@ -415,7 +461,7 @@ const PrimaryActionButton = ({
 
   if (showStart || showResume) {
     // When logged out, we keep the button enabled so it can trigger sign-in.
-    const disabled = !actionsEnabled || (isAuthenticated && !isAllowed) || isActionPending;
+    const disabled = !actionsEnabled || (isAuthenticated && !isAllowed) || isActionPending || isRestoring;
     const title = !isAuthenticated
       ? "Sign in to start the server"
       : !isAllowed
@@ -487,6 +533,25 @@ const GDriveErrorToast = ({ message, onDismiss }: { message: string; onDismiss: 
           />
         </svg>
       </button>
+    </div>
+  </div>
+);
+
+const RestoreStatusMessage = ({ message }: { message: string }) => (
+  <div className="fixed bottom-4 right-4 max-w-md bg-green/10 border border-green/30 rounded-sm p-4 shadow-xl z-50">
+    <div className="flex items-start gap-3">
+      <svg className="w-5 h-5 text-green flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+        />
+      </svg>
+      <div className="flex-1">
+        <p className="text-sm font-medium text-charcoal">Restore in Progress</p>
+        <p className="text-sm text-charcoal/70 mt-1">{message}</p>
+      </div>
     </div>
   </div>
 );
