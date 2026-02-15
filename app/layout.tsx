@@ -1,12 +1,44 @@
 import { IOSViewportFix } from "@/components/IOSViewportFix";
 import { AuthProvider } from "@/components/auth/auth-provider";
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
 
 export const metadata: Metadata = {
   title: "mc-aws",
   description: "Minecraft Server Management Interface",
+  applicationName: "mc-aws",
+  manifest: "/manifest.webmanifest",
+  appleWebApp: {
+    capable: true,
+    title: "mc-aws",
+    statusBarStyle: "default",
+  },
+  formatDetection: {
+    telephone: false,
+  },
+  icons: {
+    apple: [
+      {
+        url: "/apple-icon",
+        sizes: "180x180",
+        type: "image/png",
+      },
+    ],
+    icon: [
+      {
+        url: "/icon.svg",
+        type: "image/svg+xml",
+      },
+    ],
+  },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#f5f1e8",
+  width: "device-width",
+  initialScale: 1,
+  viewportFit: "cover",
 };
 
 const inter = Inter({
