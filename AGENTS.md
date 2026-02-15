@@ -5,6 +5,7 @@ This document provides guidelines for AI coding agents working in the mc-aws rep
 ## Project Overview
 
 A Minecraft server management system on AWS with:
+
 - **Infrastructure**: AWS CDK (TypeScript) for EC2, Lambda, SES, SNS, SSM
 - **Frontend**: Next.js 15 with App Router, React 19, Tailwind CSS
 - **Backend**: Next.js API routes + AWS Lambda functions
@@ -15,7 +16,7 @@ A Minecraft server management system on AWS with:
 ```
 mc-aws/
 ├── app/                    # Next.js App Router pages and API routes
-│   └── api/                # REST API endpoints (23 routes)
+│   └── api/                # REST API endpoints (28 routes)
 ├── components/             # React components
 │   ├── ui/                 # Reusable UI components
 │   ├── auth/               # Authentication components
@@ -23,9 +24,39 @@ mc-aws/
 │   ├── cost/               # Cost tracking components
 │   └── backup/             # Backup components
 ├── hooks/                  # React hooks
+│   ├── useButtonVisibility.ts
+│   ├── useServerStatus.ts
+│   ├── useEmailData.ts
+│   ├── useCostData.ts
+│   ├── useStackStatus.ts
+│   └── useGDriveStatus.ts
 ├── lib/                    # Shared utilities and types
-│   └── aws/                # AWS SDK clients (EC2, SSM, Cost, etc.)
-├── scripts/                # CLI utilities (TypeScript)
+│   ├── aws/                # AWS SDK clients with provider pattern
+│   │   ├── aws-provider.ts # Main AWS provider implementation
+│   │   ├── mock-provider.ts # Mock backend provider for testing
+│   │   ├── provider-selector.ts # Selects AWS or mock based on config
+│   │   ├── ec2-client.ts
+│   │   ├── ssm-client.ts
+│   │   ├── cost-client.ts
+│   │   ├── lambda-client.ts
+│   │   ├── cloudformation-client.ts
+│   │   ├── volume-client.ts
+│   │   ├── instance-resolver.ts
+│   │   ├── mock-state-store.ts
+│   │   └── mock-scenarios.ts
+│   ├── auth.ts             # Authentication utilities
+│   ├── env.ts              # Environment validation
+│   ├── types.ts            # Shared type definitions
+│   └── utils.ts            # Utility functions
+├── scripts/                # CLI utilities (TypeScript + Bash)
+│   ├── server-cli.ts       # Server management (start/stop/backup/etc)
+│   ├── mock-cli.ts         # Mock backend control
+│   ├── validate-env.ts     # Environment validation
+│   ├── validate-dev-login.ts
+│   ├── deploy-cloudflare.sh
+│   ├── setup-wizard.sh
+│   ├── upload-secrets.sh
+│   └── verify-mock-state-store.sh
 ├── tests/                  # E2E tests (Playwright) and mocks
 ├── config/                 # Minecraft server config (server.properties, whitelist.json)
 ├── docs/                   # Documentation and PRDs
@@ -48,22 +79,32 @@ mc-aws/
 ```bash
 # Package manager: pnpm
 pnpm dev                # Start development server
+pnpm dev:mock           # Start with mock backend
 pnpm build              # Production build
 pnpm start              # Start production server
 pnpm lint               # Run Biome linter
 pnpm format             # Format code with Biome
 pnpm check              # Run both lint and format with auto-fix
+pnpm typecheck          # Run TypeScript type checking
 pnpm test               # Run Vitest unit tests
+pnpm test:watch         # Run tests in watch mode
+pnpm test:coverage      # Run tests with coverage
+pnpm test:mock          # Run tests with mock backend
 pnpm test:e2e           # Run Playwright E2E tests
+pnpm test:e2e:mock     # Run E2E tests with mock backend
+pnpm test:e2e:ui       # Run E2E tests with UI
+pnpm preview:cf         # Preview Cloudflare deployment
+pnpm deploy:cf          # Deploy to Cloudflare Workers
 ```
 
-### CDK Infrastructure (infra/)
+### CDK Infrastructure
 
 ```bash
-# Package manager: pnpm (run from infra/ directory)
-pnpm cdk synth          # Synthesize CloudFormation template
-pnpm cdk diff           # Show infrastructure changes
-pnpm cdk deploy         # Deploy CDK stack
+# CDK commands run from root (cdk:* aliases)
+pnpm cdk:synth          # Synthesize CloudFormation template
+pnpm cdk:diff           # Show infrastructure changes
+pnpm cdk:deploy         # Deploy CDK stack
+pnpm cdk:destroy        # Destroy CDK stack
 ```
 
 ## Code Style Guidelines
@@ -126,23 +167,32 @@ All API routes follow this consistent structure:
 import type { ApiResponse, ResponseType } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ResponseType>>> {
+export async function GET(
+  request: NextRequest,
+): Promise<NextResponse<ApiResponse<ResponseType>>> {
   try {
     // Implementation
     console.log("[ENDPOINT] Descriptive log message");
-    
+
     return NextResponse.json({
       success: true,
-      data: { /* response data */ },
+      data: {
+        /* response data */
+      },
       timestamp: new Date().toISOString(),
     });
   } catch (error) {
     console.error("[ENDPOINT] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
-    
+    const errorMessage =
+      error instanceof Error ? error.message : "Unknown error";
+
     return NextResponse.json(
-      { success: false, error: errorMessage, timestamp: new Date().toISOString() },
-      { status: 500 }
+      {
+        success: false,
+        error: errorMessage,
+        timestamp: new Date().toISOString(),
+      },
+      { status: 500 },
     );
   }
 }
@@ -158,6 +208,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 ### Logging
 
 Use bracketed prefixes for log categorization:
+
 ```typescript
 console.log("[STATUS] Getting server status for instance:", instanceId);
 console.warn("[STATUS] Could not get public IP:", error);
@@ -167,7 +218,7 @@ console.error("[START] Failed to start instance:", error);
 ### React Components
 
 ```typescript
-"use client";  // Only when needed (hooks, event handlers, browser APIs)
+"use client"; // Only when needed (hooks, event handlers, browser APIs)
 
 import { useState, useEffect } from "react";
 import type { ServerState } from "@/lib/types";
@@ -210,8 +261,14 @@ Use AWS SDK v3 with modular imports:
 import { EC2Client, DescribeInstancesCommand } from "@aws-sdk/client-ec2";
 
 const client = new EC2Client({ region: env.AWS_REGION });
-const response = await client.send(new DescribeInstancesCommand({ InstanceIds: [id] }));
+const response = await client.send(
+  new DescribeInstancesCommand({ InstanceIds: [id] }),
+);
 ```
+
+### Mock Backend
+
+The application supports a mock backend for development and testing. Set `MC_BACKEND_MODE=mock` to use the mock provider instead of real AWS calls. The mock provider implements the same interface as the real AWS provider, allowing full E2E testing without AWS credentials.
 
 ## Environment Variables
 
@@ -222,6 +279,7 @@ const response = await client.send(new DescribeInstancesCommand({ InstanceIds: [
 ## Type Definitions
 
 All shared types are in `lib/types.ts`:
+
 - `ServerState`: Union type for instance states
 - `ApiResponse<T>`: Standard API response wrapper
 - `*Response` interfaces: Specific endpoint response types
@@ -230,18 +288,20 @@ All shared types are in `lib/types.ts`:
 
 - Stack defined in `infra/lib/minecraft-stack.ts`
 - Uses CDK v2 with `aws-cdk-lib`
-- Environment variables for configuration (GDRIVE_*, GITHUB_*, etc.)
+- Environment variables for configuration (GDRIVE*\*, GITHUB*\*, etc.)
 - Secrets stored in SSM Parameter Store (SecureString)
 
 ## Key Files Reference
 
-| Purpose | Location |
-|---------|----------|
-| CDK Entry | `infra/bin/mc-aws.ts` |
-| CDK Stack | `infra/lib/minecraft-stack.ts` |
-| API Routes | `app/api/*/route.ts` |
-| AWS Clients | `lib/aws/` |
-| Type Definitions | `lib/types.ts` |
-| Environment | `lib/env.ts` |
-| Lambda Handlers | `infra/src/lambda/*/index.js` |
-| EC2 Scripts | `infra/src/ec2/*.sh` |
+| Purpose          | Location                       |
+| ---------------- | ------------------------------ |
+| CDK Entry        | `infra/bin/mc-aws.ts`          |
+| CDK Stack        | `infra/lib/minecraft-stack.ts` |
+| API Routes       | `app/api/*/route.ts`           |
+| AWS Clients      | `lib/aws/`                     |
+| Mock Provider    | `lib/aws/mock-provider.ts`     |
+| Type Definitions | `lib/types.ts`                 |
+| Environment      | `lib/env.ts`                   |
+| Lambda Handlers  | `infra/src/lambda/*/index.js`  |
+| EC2 Scripts      | `infra/src/ec2/*.sh`           |
+| React Hooks      | `hooks/`                       |
