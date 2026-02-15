@@ -72,6 +72,7 @@ For local auth, you can use either:
 - View AWS cost breakdown
 - Manage email allowlist from the panel
 - Open AWS console shortcuts (admin)
+- Add to iOS home screen for quick access (PWA support)
 
 ### Authorization model
 

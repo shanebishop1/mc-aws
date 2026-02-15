@@ -101,7 +101,6 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       },
       { headers: noStoreHeaders }
     );
-
   } catch (error) {
     console.error("[BACKUPS] Error:", error);
     const errorMessage = error instanceof Error ? error.message : "Unknown error";
