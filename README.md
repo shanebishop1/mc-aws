@@ -2,1192 +2,248 @@
 
 <p align="center"><img width="320" height="320" alt="mc-aws-image" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
-Most Minecraft server hosting solutions cost ~$10 a month. If you are only using the server occasionally, that's a lot of wasted money. Self-hosting is free, but if you want any of your friends to be able to join your server at any time, then you, the host, must either:
+Most Minecraft hosts charge a flat monthly fee whether anyone is playing or not. This project takes a different path: run your own AWS-backed server, manage it from a web control panel, and keep idle cost near zero by hibernating when you're done.
 
-- **A.** keep the server online 24/7, or
-- **B.** manually spin it up/down whenever somebody wants to hop on
+The control panel is the primary interface. CLI, API, and manual shell access are available for advanced operations.
 
-This project offers a more flexible alternative: an EC2 setup that costs **$0.00/month** when you aren't using it, and only pennies per hour when you are.
+## Overview
 
-It achieves this by **hibernating** (downloading your server data to your local machine/Google Drive) and deleting the cloud infrastructure when you're done for the season. When you want to play again, a single command spins the infra back up. Then, any of your friends can email the startup email to trigger server startup. The server will automatically close following inactivity.
+- **Primary interface:** Next.js frontend control panel (`pnpm dev` locally, Cloudflare Workers in production)
+- **Infrastructure:** AWS CDK stack for EC2, Lambda, SES, SNS, SSM
+- **Operational options:** UI first, with optional CLI/API/manual shell scripts for advanced workflows
 
-You can interact with the system via **Web UI**, **CLI commands**, or **REST API**—all powered by the same backend.
+## Fast Path (Recommended)
 
-Key features:
-
-- **API-First Architecture:** Web UI, CLI, and REST API for maximum flexibility
-- **Zero Idle Cost:** Hibernate your server when not in use.
-- **On-Demand:** Spin up via email, web UI, CLI, or API.
-- **Auto-Shutdown:** Server turns itself off when nobody is playing.
-
-**NOTE: This setup requires some initial configuration (AWS account, Cloudflare), but once set up, it requires very little maintenance.**
-
-## Table of Contents
-
-- [Usage](#usage)
-- [Local Development with Mock Mode](#local-development-with-mock-mode)
-- [Background](#background)
-- [How It Works](#how-it-works)
-- [Repo Structure](#repo-structure)
-- [Setup Guide](#setup-guide)
-- [Connecting to the Server](#connecting-to-the-server)
-- [Google Drive Backups](#google-drive-optional-backupstransfers)
-- [Weekly EBS Snapshots](#weekly-ebs-snapshots-optional)
-- [How to Manage It](#how-to-manage-it)
-- [Hibernation](#hibernation-zero-storage-cost)
-- [Authentication](#authentication)
-- [Production Deployment](#production-deployment)
-
-## Usage
-
-You can interact with your Minecraft server through three interfaces:
-
-### Web UI
-
-The web interface provides a dashboard for server status, cost tracking, and management operations.
+If you want the shortest path from clone to working panel + infrastructure:
 
 ```bash
-pnpm dev
-# Open http://localhost:3000
-```
-
-### CLI Commands
-
-Run these commands from the project root:
-
-| Command                 | Description                               |
-| :---------------------- | :---------------------------------------- |
-| `pnpm server:status`    | Check server state                        |
-| `pnpm server:start`     | Start the server                          |
-| `pnpm server:stop`      | Stop the server                           |
-| `pnpm server:hibernate` | Backup + stop + delete volume (zero cost) |
-| `pnpm server:resume`    | Create volume + start                     |
-| `pnpm server:backup`    | Manual backup to Google Drive             |
-| `pnpm server:restore`   | Restore from backup                       |
-| `pnpm server:backups`   | List available backups                    |
-
-### REST API
-
-All API endpoints are prefixed with `/api/`. Base URL is your deployed frontend URL.
-
-| Endpoint         | Method | Description                               |
-| :--------------- | :----- | :---------------------------------------- |
-| `/api/status`    | GET    | Server state and info                     |
-| `/api/start`     | POST   | Start server                              |
-| `/api/stop`      | POST   | Stop server                               |
-| `/api/hibernate` | POST   | Hibernate (backup + stop + delete volume) |
-| `/api/resume`    | POST   | Resume from hibernation                   |
-| `/api/backup`    | POST   | Trigger backup                            |
-| `/api/restore`   | POST   | Restore from backup                       |
-| `/api/backups`   | GET    | List available backups                    |
-| `/api/players`   | GET    | Player count                              |
-| `/api/costs`     | GET    | Cost tracking                             |
-
-## Local Development with Mock Mode
-
-Mock mode allows you to develop and test the application without requiring AWS resources, credentials, or infrastructure. It's perfect for:
-
-- **Offline development**: No network or AWS dependencies
-- **Fast iteration**: Instant responses, no API latency
-- **Deterministic testing**: Predefined scenarios for consistent test runs
-- **Error handling**: Test edge cases and failure scenarios
-
-### Quick Start (5 minutes)
-
-```bash
-# 1. Copy the minimal mock mode configuration
-cp .env.example .env.local
-
-# 2. Start dev server in mock mode with dev login enabled
-pnpm dev:mock
-
-# 3. Open browser and authenticate
-open http://localhost:3001/api/auth/dev-login
-
-# 4. Start developing!
-open http://localhost:3001
-```
-
-**For detailed instructions:** See [docs/QUICK_START_MOCK_MODE.md](docs/QUICK_START_MOCK_MODE.md)
-
-### Common Commands
-
-```bash
-# Start dev server in mock mode
-pnpm dev:mock
-
-# Run E2E tests in mock mode
-pnpm test:e2e:mock
-
-# Run unit tests in mock mode
-pnpm test:mock
-
-# Validate dev login is working
-pnpm validate:dev-login
-
-# Reset mock state
-pnpm mock:reset
-
-# List available scenarios
-pnpm mock:scenario
-
-# Apply a specific scenario
-pnpm mock:scenario running
-```
-
-### Mock Mode Scripts
-
-| Command            | Description                                    |
-| :----------------- | :--------------------------------------------- |
-| `pnpm dev:mock`    | Start dev server in mock mode                  |
-| `pnpm test:e2e:mock` | Run E2E tests in mock mode                    |
-| `pnpm test:mock`   | Run unit tests in mock mode                    |
-| `pnpm mock:reset`  | Reset mock state to defaults                   |
-| `pnpm mock:scenario` | List available scenarios                      |
-| `pnpm mock:scenario <name>` | Apply a specific scenario              |
-
-### Environment Variables
-
-Mock mode is controlled by the following environment variables:
-
-| Variable            | Description                                      | Default  |
-| :------------------ | :----------------------------------------------- | :------- |
-| `MC_BACKEND_MODE`   | Backend mode: `aws` or `mock`                    | `aws`    |
-| `ENABLE_DEV_LOGIN`  | Enable dev login route for local auth testing    | `false`  |
-| `MOCK_STATE_PATH`   | Optional path for mock state persistence file    | (none)   |
-| `MOCK_SCENARIO`     | Optional default scenario to apply on startup    | (none)   |
-
-### Available Scenarios
-
-Mock mode includes 10 built-in scenarios for testing different states:
-
-| Scenario      | Description                                          |
-| :------------ | :--------------------------------------------------- |
-| `default`     | Normal operation, instance stopped with defaults     |
-| `running`     | Instance is running with public IP and players       |
-| `starting`    | Instance is in pending state (mid-start)             |
-| `stopping`    | Instance is in stopping state (mid-stop)             |
-| `hibernated`  | Instance stopped without volumes (zero cost)         |
-| `high-cost`   | Instance with high monthly costs for testing alerts  |
-| `no-backups`  | No backups available for testing error handling      |
-| `many-players`| Instance running with high player count              |
-| `stack-creating` | CloudFormation stack in CREATE_IN_PROGRESS state  |
-| `errors`      | All operations fail with errors                      |
-
-**Example usage:**
-
-```bash
-# Apply the "running" scenario
-pnpm mock:scenario running
-
-# Apply the "errors" scenario to test error handling
-pnpm mock:scenario errors
-
-# Reset to default state
-pnpm mock:reset
-```
-
-### Mock Control API
-
-When running in mock mode, you can control the mock state via HTTP endpoints:
-
-| Endpoint              | Method | Description                              |
-| :-------------------- | :----- | :--------------------------------------- |
-| `/api/mock/state`     | GET    | Get current mock state                   |
-| `/api/mock/scenario`  | GET    | List available scenarios                 |
-| `/api/mock/scenario`  | POST   | Apply a scenario (body: `{scenario}`)    |
-| `/api/mock/reset`     | POST   | Reset mock state to defaults             |
-| `/api/mock/fault`     | POST   | Inject faults for testing                |
-
-**Example: Apply scenario via API**
-
-```bash
-curl -X POST http://localhost:3001/api/mock/scenario \
-  -H "Content-Type: application/json" \
-  -d '{"scenario": "running"}'
-```
-
-### Testing Workflows
-
-**Testing start/stop flows:**
-
-```bash
-# Apply "stopped" scenario
-pnpm mock:scenario default
-
-# Start dev server
-pnpm dev:mock
-
-# Use the web UI or API to start the server
-# The mock will transition from stopped → pending → running
-
-# Check the state
-curl http://localhost:3001/api/mock/state
-```
-
-**Testing error scenarios:**
-
-```bash
-# Apply the "errors" scenario
-pnpm mock:scenario errors
-
-# All operations will now fail with errors
-# Test your error handling UI and logic
-
-# Reset when done
-pnpm mock:reset
-```
-
-**Testing UI states:**
-
-```bash
-# Apply "high-cost" scenario
-pnpm mock:scenario high-cost
-
-# Start dev server
-pnpm dev:mock
-
-# Verify cost alerts and warnings display correctly
-```
-
-### Persistence
-
-Mock state can optionally be persisted to a JSON file for debugging:
-
-```bash
-# Enable persistence in .env.local
-MOCK_STATE_PATH=./mock-state.json
-
-# State will be saved to this file on every change
-# Useful for debugging and reproducing issues
-```
-
-### For More Information
-
-See [docs/MOCK_MODE_DEVELOPER_GUIDE.md](docs/MOCK_MODE_DEVELOPER_GUIDE.md) for comprehensive documentation including:
-
-- Detailed scenario descriptions
-- Fault injection techniques
-- Troubleshooting common issues
-- Advanced usage patterns
-
-## Legacy Scripts
-
-Shell scripts in `legacy/bin/` are deprecated in favor of the web UI, CLI, and REST API. The following utilities remain available for specific use cases:
-
-- **`legacy/bin/connect.sh`** — Interactive SSH access to the EC2 instance via AWS Systems Manager
-- **`legacy/bin/console.sh`** — Direct access to the Minecraft console screen session
-
-All other shell scripts for backup, restore, hibernate, and resume are superseded by the CLI commands and API endpoints.
-
-## Background
-
-### Cost
-
-Traditional hosting providers charge a flat monthly fee. By moving to AWS and using this project's scripts, you only pay for what you use.
-
-| Cost Component           | **Hibernated** (Deep Storage) | **Standby** (Quick Start) | **Active** (Playing)   |
-| :----------------------- | :---------------------------- | :------------------------ | :--------------------- |
-| **Compute (RAM/CPU)**    | $0.00 / month                 | $0.00 / month             | ~$0.03 / hour          |
-| **Storage (World Data)** | $0.00 / month \*              | ~$0.75 / month            | (Included)             |
-| **Total Cost**           | **$0.00 / month**             | **~$0.75 / month**        | **~$0.03-0.04 / hour** |
-
-\* _Assuming you hibernate to local disk or free cloud storage (e.g. Google Drive)._
-
-### Example: Light usage
-
-If you play for **8 hours** in a specific month and hibernate the server for the rest of the time:
-
-- **Compute:** 8 hours \* ~$0.03/hr = **$0.24**
-- **Storage:** $0.00 (Hibernated)
-- **Total:** **$0.24 for the entire month**
-
-**Unless you are playing for many hours, this setup is significantly cheaper than using a traditional, dedicated provider.**
-
-### Rationale
-
-There do exist on-demand hosting providers such as Exarotron\* and ServerWave\*\*. These options are definitely cheaper for many use cases. Not to mention, they'll give you a bunch of extra features and are infinitely easier to set up and use. However, if you want complete flexibility, this setup is the best because:
-
-1. If you want to extend this project, you can. You have complete control of the server and its lifecycle, configuration, etc. You could set up a Discord connection, or a simple webapp that triggers the server startup.
-2. Anyone who knows your start keyword and email address can easily spin the server up by sending an email. This means that anybody can play, whether you're available or not. With self-hosting, you would have to be there to turn on the server. With a traditional on-demand provider, you would have to log in to a control panel to spin the server up.
-3. You only pay for what you use, at per-second increments (no pre-paying for usage or hourly rounding up).
-
-\*_Exarotron specifically does offer a Discord bot that you could grant access to in order to start the server, but setting up Discord is another step for your non-technical/non-gamer friends to handle. Conversely, everybody has email. Exarotron also requires that you buy credits in ~$3.00 increments, which limits spending flexibility. If you want to play for a couple months and then stop, anything left over from your last ~$3.00 increment will be wasted. Also, technically, using a t3.medium EC2 instance with 4GB of RAM costs $0.04 per hour, which is ever-so-slightly cheaper than the €0.04 per hour for a similar 4G server on Exarotron._
-
-\*\*_ServerWave requires that you pay **per-hour** of usage, not per-second._
-
-At this point, we're talking about pennies. In some cases, you'll save a few pennies with this setup, and in other cases, you'll lose a few. However, this setup exists not just to save money, but to enable independence from any third-party services (besides our almighty cloud providers, of course, upon which the rest of the observable software universe is but a wrapper). And because it's fun to build/scaffold/tinker/control.
-
-## How It Works
-
-1.  **Startup:** Send an email with the secret keyword (default "start") in the **subject** to your trigger address (e.g., `start@mydomain.com`).
-2.  **Trigger:** AWS SES catches the email and executes a Lambda function.
-3.  **Authorization:** The Lambda checks if the sender is authorized (admin email or in the allowlist, if configured).
-4.  **Launch:** The Lambda starts the EC2 instance and updates your Cloudflare DNS record to point to the new IP.
-5.  **Config Sync:** On boot, the server automatically pulls the latest `server.properties` and `whitelist.json` from your GitHub repo.
-6.  **Auto-Shutdown:** A script runs every minute checking for players. After 15 minutes idle, it stops the Minecraft service and shuts down the EC2 instance.
-
-## Repo Structure
-
-```
-mc-aws/
-├── app/                    # Next.js App Router (pages & API routes)
-├── components/             # React components
-├── lib/                    # Shared utilities, AWS clients, types
-├── hooks/                  # React hooks
-├── scripts/                # CLI scripts (server-cli.ts)
-├── tests/                  # Unit and E2E tests
-├── infra/                  # AWS CDK infrastructure
-│   ├── bin/                # CDK entry point
-│   ├── lib/                # CDK stack definitions
-│   └── src/                # EC2 and Lambda code
-├── config/                 # Minecraft server config
-├── legacy/                 # Deprecated shell scripts
-│   └── bin/                # Old CLI scripts
-└── docs/                   # Documentation and PRDs
-```
-
-## Setup Guide
-
-This project uses AWS CDK to automate the entire setup process. Follow these steps to deploy your on-demand Minecraft server.
-
-### Quick Start (One Command Setup)
-
-Want to get up and running as fast as possible? The automated `setup.sh` script handles everything for you:
-
-- ✅ Installs [mise](https://mise.jdx.dev/) (the modern tool manager)
-- ✅ Installs Node.js and pnpm via mise
-- ✅ Collects all required credentials (AWS, Cloudflare, GitHub, etc.)
-- ✅ Configures environment variables
-- ✅ Deploys your Minecraft server infrastructure
-
-**Prerequisites:**
-- A GitHub account (for the fork)
-- An AWS account (free tier works)
-- A Cloudflare account with a domain
-
-**Run the setup:**
-
-```bash
-# 1. Clone the repository
 git clone https://github.com/you/mc-aws.git
 cd mc-aws
-
-# 2. Run the automated setup
-./setup.sh
+pnpm setup
 ```
 
-The script will guide you through each step, prompting for any required information. When complete, your server will be ready to use!
+`pnpm setup` runs `./setup.sh`, which:
 
-> **Note:** If you prefer manual control over each step, or if the automated script encounters issues, see the detailed [Prerequisites](#prerequisites) and [Deployment Steps](#deployment-steps) below.
+1. Verifies local tooling (`mise`, Node, pnpm, AWS CLI, CDK)
+2. Launches the interactive setup wizard for required credentials
+3. Deploys AWS infrastructure with CDK
+4. Captures stack outputs (including `INSTANCE_ID`)
+5. Deploys the frontend to Cloudflare Workers
 
-### Prerequisites
+If you prefer step-by-step manual control, jump to [Manual and Advanced Operations](#manual-and-advanced-operations).
 
-Before you begin, ensure you have the following:
+## Required Account Setup (AWS + Cloudflare + Google)
 
-#### 1. Local Tools
+You need all three providers for a full production setup:
 
-- **Node.js** installed (v18+)
-- **AWS CLI** installed and configured:
-  ```bash
-  aws configure
-  ```
-  Enter your AWS Access Key ID, Secret Access Key, default region (e.g., `us-west-1`), and default output format (`json`).
-- **Session Manager Plugin** (for connecting to the server):
-  ```bash
-  brew install --cask session-manager-plugin
-  ```
+- **AWS**: infrastructure + runtime operations
+- **Cloudflare**: DNS + Workers deployment
+- **Google OAuth**: authentication for the control panel
 
-#### 2. Cloudflare Domain Setup
+Use these guides before (or during) `pnpm setup`:
 
-You need a domain managed by **Cloudflare** for dynamic DNS updates. If you don't have one, register a domain (typically <$1/month) and point it to Cloudflare's nameservers.
+- [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md)
+- [Cloudflare Setup](docs/CLOUDFLARE_SETUP.md)
+- [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md)
 
-You'll need three pieces of information from Cloudflare:
+## Frontend-First Daily Usage
 
-**A. Zone ID:**
-
-- Log in to Cloudflare and select your domain
-- Open the "Overview" section
-- Scroll down to the "API" section on the right sidebar
-- Copy your **Zone ID**
-
-**B. API Token:**
-
-- Go to **Manage account** > **Account API tokens**
-- Click **Create Token**
-- Choose the **Edit Zone DNS** template (or create custom with Zone > DNS > Edit permissions)
-- **Zone Resources:** Include > Specific zone > Your Domain
-- Click **Continue to Summary** → **Create Token**
-- **Copy the token immediately** (you won't see it again)
-
-**C. DNS Record ID:**
-
-- Go to **DNS** > **Records** on the left sidebar
-- Create an **A** record for your Minecraft subdomain (e.g., `mc`). Point it to `1.1.1.1` (placeholder; it will be updated automatically)
-- To get the **Record ID**, use the Cloudflare API:
-  ```bash
-  curl -X GET "https://api.cloudflare.com/client/v4/zones/<ZONE_ID>/dns_records" \
-       -H "Authorization: Bearer <YOUR_API_TOKEN>" \
-       -H "Content-Type: application/json"
-  ```
-- Find your DNS record in the JSON output and copy its `id` field. You'll need to use this for the `CLOUDFLARE_RECORD_ID` field in `.env`
-
-#### 3. AWS SES Email Verification
-
-AWS SES requires email verification before you can send/receive emails.
-
-1. Go to **AWS Console** → **Amazon SES** → **Identities**
-2. Click **Create identity**
-3. Select **Domain** and enter your domain (e.g., `yourdomain.com`)
-4. Follow the verification steps (add DNS records to Cloudflare)
-   - You'll need to copy the 3 DKIM CNAME records to the Cloudflare DNS for your domain
-   - Then, you'll need to add an MX record (with the root domain as the name, and `inbound-smtp.us-west-1.amazonaws.com` for the mail server, if in the West region). You can set priority to `10`.
-5. **Important:** If you're in SES Sandbox mode, you must also verify:
-   - The **sender email** (the email you'll send the "start" command from, e.g., `start@yourdomain.com`)
-   - The **notification email** (where you want to receive server alerts, if different from sender)
-
-#### 4. AWS EC2 Key Pair (Optional, but Recommended for File Uploads)
-
-If you want to use SSH for file uploads (the `restore-to-ec2.sh` script), create an EC2 key pair:
-
-1. Go to **AWS Console** → **EC2** → **Key Pairs**
-2. Click **Create key pair**
-   - Name: `mc-aws`
-   - Format: `.pem`
-3. Download the file and move it to your local SSH directory:
-   ```bash
-   mv ~/Downloads/mc-aws.pem ~/.ssh/mc-aws.pem
-   chmod 400 ~/.ssh/mc-aws.pem
-   ```
-4. You'll add this key pair name to your `.env` file in the next step
-
-### Deployment Steps
-
-1.  **Fork and Clone:**
-    - Fork [shanebishop1/mc-aws](https://github.com/shanebishop1/mc-aws).
-    - Clone your fork and open the repo
-
-2.  **Install Dependencies:**
-
-    ```bash
-    npm install
-    ```
-
-3.  **Bootstrap CDK:**
-
-    ```bash
-    npx cdk bootstrap
-    ```
-
-4.  **Configure Environment:**
-
-    Copy the environment template:
-
-    ```bash
-    cp .env.example .env.local
-    ```
-
-    The `.env.local` file contains your credentials. Environment-specific settings (mock mode, dev login, localhost URL) are automatically set by the `pnpm dev` or `pnpm dev:mock` commands.
-    ```
-
-    Then edit `.env` with your specific values:
-
-    ```bash
-    # Cloudflare (from Prerequisites section above)
-    CLOUDFLARE_ZONE_ID="your-zone-id"
-    CLOUDFLARE_DNS_API_TOKEN="your-api-token"
-    CLOUDFLARE_RECORD_ID="your-record-id"
-    CLOUDFLARE_MC_DOMAIN="mc.yourdomain.com"
-
-    # AWS SES (verified emails from Prerequisites section above)
-    VERIFIED_SENDER="start@yourdomain.com"           # SES address: receives start emails + sends notifications (From)
-    NOTIFICATION_EMAIL="you@yourdomain.com"          # (Optional) Where to receive alerts
-    START_KEYWORD="start"                            # (Optional) Word that triggers server start
-
-    # GitHub (for server to pull config on boot)
-    GITHUB_USER="your-github-username"
-    GITHUB_REPO="mc-aws"                             # or your fork name
-    GITHUB_TOKEN="ghp_..."                           # See step 5 below
-
-    # AWS
-    AWS_ACCOUNT_ID="123456789012"
-    AWS_REGION="us-west-1"
-
-    # EC2 Key Pair (Optional, for SSH file uploads)
-    KEY_PAIR_NAME="mc-aws"                           # Leave blank if not using SSH
-
-     # Google Drive (Optional, for cloud backups/transfers)
-     # Note: Token is auto-setup on first use, stored in SSM Parameter Store (FREE)
-     # GDRIVE_REMOTE="gdrive"
-     # GDRIVE_ROOT="mc-backups"
-    ```
-
-5.  **Create a GitHub Personal Access Token (PAT):**
-
-    The EC2 instance needs to pull config files from your GitHub repo on each boot. To do this securely, you need a GitHub PAT:
-    1. Go to [GitHub Settings → Developer settings → Personal access tokens → Tokens (classic)](https://github.com/settings/tokens)
-    2. Click **Generate new token (classic)**
-    3. Give it a descriptive name (e.g., `mc-aws-server`)
-    4. Set an expiration (or "No expiration" if you prefer)
-    5. Select the **`repo`** scope (required for private repos; for public repos, no scopes are needed)
-    6. Click **Generate token**
-    7. **Copy the token immediately** (you won't see it again)
-    8. Add it to your `.env` file:
-       ```bash
-       GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
-       ```
-
-    **How it works:** When you run `npm run deploy`, the deploy script reads `GITHUB_TOKEN` from your `.env` and securely stores it in AWS SSM Parameter Store as an encrypted SecureString. The EC2 instance fetches this token on boot to clone/pull your repo.
-
-6.  **Deploy:**
-
-    ```bash
-    npm run deploy
-    ```
-
-    The deploy script will:
-    - Create the EC2 instance, Lambda function, IAM roles, and SES rules
-    - **Automatically activate** the SES Rule Set
-    - Ask if you want to enable weekly EBS snapshots via DLM
-
-    **Note on Google Drive (optional):** Google Drive backups are optional and auto-configured on first use. Just run `./bin/backup-from-ec2.sh --mode drive` or `./bin/restore-to-ec2.sh --mode drive` when you want to use it—the OAuth flow will run automatically.
-
-7.  **Wait for Setup:**
-
-    The deployment typically takes 3-5 minutes. Once complete, your server is ready to use!
-
-### Email Allowlist
-
-Email commands are default-deny: only the admin email(s) (`NOTIFICATION_EMAIL` / `ADMIN_EMAIL`) and any emails in `ALLOWED_EMAILS` can trigger `start`.
-
-**How it works:**
-
-- Baseline allowed senders: `NOTIFICATION_EMAIL` (fallback: `ADMIN_EMAIL`) + `ALLOWED_EMAILS`
-- Additional allowed senders are stored in AWS SSM at `/minecraft/email-allowlist`
-- Admin can update the stored allowlist by listing emails in the email **body** (baseline senders always remain allowed)
-- No redeployment needed - updates happen via email
-
-**To add additional emails:**
-
-Send an email to your trigger address (e.g., `start@yourdomain.com`) from your admin email with the authorized email addresses in the **body** (one per line):
-
-```
-Subject: (anything, can be empty)
-Body:
-friend1@example.com
-friend2@gmail.com
-teammate@company.com
-```
-
-You'll receive a confirmation email showing the updated allowlist. After this, those emails (plus the baseline allowlist) can start the server by putting the keyword in the **subject**.
-
-**To update the allowlist:**
-
-Send another email from your admin address with the new list in the body. It replaces the stored allowlist (baseline emails from env always remain allowed).
-
-### Server Management Commands (Admin Only)
-
-The admin email(s) (set in `NOTIFICATION_EMAIL` / `ADMIN_EMAIL`) can manage the server by sending emails with specific commands in the **subject line**. Only the admin email(s) can use backup, restore, hibernate, and resume commands.
-
-**Available Commands:**
-
-- **`start`** - Start the server
-  - Subject: `start`
-  - Anyone on the allowlist can use this
-
-- **`backup`** - Backup server to Google Drive with auto-generated name
-  - Subject: `backup`
-  - Admin only
-
-- **`backup <name>`** - Backup with custom name
-  - Subject: `backup my-world-jan-2026`
-  - Admin only
-
-- **`restore <name>`** - Restore from Google Drive backup
-  - Subject: `restore my-world-jan-2026`
-  - Admin only
-  - Restores the server to a previous backup
-
-- **`hibernate`** - Backup to Drive, stop EC2, delete EBS to save costs
-  - Subject: `hibernate`
-  - Admin only
-  - Deletes the EBS volume for zero storage cost (~$0.75/month saved)
-  - Requires a backup to be created first
-
-- **`resume`** - Start EC2, restore latest backup
-  - Subject: `resume`
-  - Admin only
-  - Creates a new EBS volume and restores the most recent backup
-
-- **`resume <name>`** - Start EC2, restore specific backup
-  - Subject: `resume my-world-jan-2026`
-  - Admin only
-  - Creates a new EBS volume and restores a specific backup
-
-**How It Works:**
-
-- Commands go in the **email subject line** (body is ignored)
-- Confirmation emails are sent for all operations
-- All backups are stored in **Google Drive** (requires Google Drive setup from the deployment section)
-- **Hibernate** deletes the EBS volume, reducing idle costs to $0.00/month
-- **Resume** creates a new EBS volume and restores from your backup
-- Only the admin email (`NOTIFICATION_EMAIL`) can use backup, restore, hibernate, and resume commands
-- The `start` command can be used by anyone on the allowlist
-
-### First-Time Server Startup
-
-To start your server for the first time:
-
-1. Send an email with your start keyword (default: `start`) in the **subject** to your verified sender email (e.g., `start@yourdomain.com`)
-2. Wait ~60 seconds for the server to boot
-3. Connect to your Minecraft server using the domain you configured (e.g., `mc.yourdomain.com`)
-
----
-
-## Connecting to the Server
-
-You have two ways to connect to your EC2.
-
-### Method 1: The Modern Way (Recommended)
-
-This uses AWS Systems Manager (SSM). No SSH keys or open ports required.
-
-- **Connect to Shell:**
-
-  ```bash
-  ./bin/connect.sh
-  ```
-
-  This drops you into a root shell on the server.
-
-- **Connect to Minecraft Console:**
-  ```bash
-  ./bin/console.sh
-  ```
-  This connects you directly to the running Minecraft screen session.
-
-### Method 2: SSH Key (Required for File Uploads)
-
-SSH access is needed for the `restore-to-ec2.sh` script and traditional SFTP/rsync.
-
-**One-Time Setup:**
-
-1.  **Create a Key Pair:**
-    Go to [EC2 Console → Key Pairs](https://console.aws.amazon.com/ec2/home#KeyPairs) → Create Key Pair.
-    - Name it `mc-aws`
-    - Format: `.pem`
-    - Click Create — the file downloads automatically
-    - **Important:** You can only download this file once! If you lose it, delete the key pair and create a new one.
-
-2.  **Move the file:**
-
-    ```bash
-    mv ~/Downloads/mc-aws.pem ~/.ssh/mc-aws.pem
-    chmod 400 ~/.ssh/mc-aws.pem
-    ```
-
-3.  **Add to your `.env`:**
-
-    ```bash
-    KEY_PAIR_NAME="mc-aws"
-    ```
-
-4.  **Redeploy:**
-    ```bash
-    npm run deploy
-    ```
-
-**Usage:**
+### Run the panel locally against AWS
 
 ```bash
-# SSH manually
-ssh -i ~/.ssh/mc-aws.pem ec2-user@<SERVER_IP>
-
-# Upload local server folder to replace EC2 server folder
-./bin/upload-server.sh ./server/
-```
-
----
-
-## Google Drive (Optional) Backups/Transfers
-
-You can backup/transfer server data via Google Drive using `rclone`. The Google Drive token is auto-configured on first use and stored securely in AWS SSM Parameter Store. We use Google Drive to transfer data between your your machine and EC2 because it's more reliable than trying to upload/download directly.
-
-### First-time setup
-
-Just use Google Drive mode in one of the scripts and authenticate when prompted:
-
-```bash
-# First time: Opens browser for Google OAuth, stores token in SSM, then backs up
-./bin/backup-from-ec2.sh --mode drive
-
-# Or for restoring via Drive:
-./bin/restore-to-ec2.sh --mode drive
-```
-
-The OAuth flow runs automatically on first use. Subsequent runs use the stored token.
-
-### Using Drive in scripts
-
-**Backup (EC2 → Google Drive):**
-
-```bash
-./bin/backup-from-ec2.sh --mode drive
-```
-
-Tars server data on EC2 and uploads to Google Drive (no local download).
-
-**Restore (local/Drive → EC2):**
-
-```bash
-./bin/restore-to-ec2.sh --mode drive
-```
-
-Restores server data from Google Drive to EC2.
-
-**Local mode (default):**
-
-```bash
-./bin/backup-from-ec2.sh            # EC2 → local (rsync)
-./bin/restore-to-ec2.sh ./server/   # local → EC2 (rsync)
-```
-
-### Notes
-
-- Google Drive token is stored in AWS SSM Parameter Store (`/minecraft/gdrive-token`) with SecureString encryption—no cost
-- Idle-check is disabled during backup/restore operations and re-enabled afterward
-- Optional environment variables (defaults shown):
-  - `GDRIVE_REMOTE="gdrive"` — rclone remote name
-  - `GDRIVE_ROOT="mc-backups"` — folder name on Google Drive
-
-## Weekly EBS Snapshots (Optional)
-
-During deployment, you were asked if you want to enable weekly EBS snapshots via AWS Data Lifecycle Manager (DLM). This is optional but good practice for additional data protection.
-
-**Cost:** ~$0.05 per snapshot (typically 1-2 snapshots retained at a time = ~$0.10/month extra)
-
-**If you enabled snapshots during deploy:**
-
-- Your EBS volume is automatically tagged with `Backup: weekly`
-- DLM creates snapshots every Sunday at 2 AM UTC
-- Snapshots are retained for 4 weeks, then automatically deleted
-- You can restore from a snapshot if needed (via AWS Console → EC2 → Snapshots)
-
-**If you want to enable/disable snapshots later:**
-
-- Go to **EC2** > **Volumes** and select your server's volume
-- Add or remove the tag: Key=`Backup`, Value=`weekly`
-- The DLM policy will automatically pick up the change
-
-## How to Manage It
-
-**Playing:**
-Send an email with your start keyword (default "start") in the **subject** to your trigger address. Wait ~60 seconds, then connect your server from Minecraft.
-
-**Managing Players:**
-
-1.  **Find UUIDs:** Use a tool like [mcuuid.net](https://mcuuid.net/) to find the UUID for each player you want to allow.
-2.  **Edit Config:** Update `config/whitelist.json` in this repo. It should look like this:
-    ```json
-    [
-      {
-        "uuid": "a1b2c3d4-e5f6-7890-1234-567890abcdef",
-        "name": "PlayerOne"
-      },
-      {
-        "uuid": "f1e2d3c4-b5a6-9780-4321-098765fedcba",
-        "name": "PlayerTwo"
-      }
-    ]
-    ```
-3.  **Push:** Commit and push your changes to GitHub.
-4.  **Sync:** The next time the server starts, it will automatically pull the latest changes.
-
-**Updating Properties:**
-
-1.  Edit `config/server.properties` in your local repo.
-2.  Commit and push to GitHub.
-3.  Restart the server (or wait for next boot) to apply changes.
-
-## Hibernation (Zero Storage Cost)
-
-If you're not going to play for an extended period (weeks/months), you can completely eliminate the ~$0.75/month storage cost by deleting the EBS volume. When you want to play again, you can restore it from your local backup.
-
-### Hibernating Your Server
-
-**Prerequisites:** Make sure you have a local backup of your world first!
-
-1.  **Backup Your World:**
-
-    ```bash
-    ./bin/backup-from-ec2.sh
-    ```
-
-    This saves your world to a local directory with a timestamp.
-
-2.  **Hibernate (Delete EBS):**
-    ```bash
-    ./bin/hibernate.sh
-    ```
-    This will:
-    - Stop your EC2 instance
-    - Optionally create an AWS snapshot backup (for extra safety)
-    - Detach and delete the EBS volume
-    - **Result: $0.00/month idle cost** (no storage charges)
-
-### Resuming Your Server
-
-When you want to play again:
-
-1.  **Resume (Create Fresh EBS):**
-
-    ```bash
-    ./bin/resume.sh
-    ```
-
-    This will:
-    - Create a new 8GB GP3 volume from the latest Amazon Linux 2023 AMI
-    - Attach it to your EC2 instance
-    - Start the instance
-    - Auto-configure the server (via user_data script)
-
-2.  **Wait for Setup:**
-    Wait ~2 minutes for the user_data script to install Java, Paper, and configure everything.
-
-3.  **Restore Your World:**
-
-    ```bash
-    ./bin/restore-to-ec2.sh /path/to/your/downloaded/server
-    ```
-
-    This uploads your world data back to the server.
-
-4.  **Play**
-    Connect to your Minecraft server as usual, using your domain and port.
-
-### Cost Comparison
-
-| Scenario                                     | Monthly Cost          |
-| -------------------------------------------- | --------------------- |
-| **Normal (Server stopped, EBS attached)**    | ~$0.75/month          |
-| **Hibernated (Server stopped, EBS deleted)** | **$0.00/month**       |
-| **Playing (Server running)**                 | ~$0.03/hour + storage |
-
-**When to Hibernate:**
-
-- You won't play for 2+ weeks
-- You want absolute minimum cost
-- You have reliable local backups
-
-**When NOT to Hibernate:**
-
-- You play regularly (weekly)
-- You want instant startup via email trigger
-- You don't want to manage local backups
-
-## Authentication
-
-The web UI uses Google OAuth to control who can perform actions. Authentication works the same way in all environments—no code bypasses.
-
-### Authorization Tiers
-
-| Role                    | Can View Status | Can Start | Can Backup/Restore/Hibernate |
-| ----------------------- | --------------- | -------------- | ---------------------------- |
-| Public (not logged in)  | ✅              | ❌             | ❌                           |
-| Allowed (on allow list) | ✅              | ✅             | ❌                           |
-| Admin                   | ✅              | ✅             | ✅                           |
-
-### Environment Configuration
-
-This project uses separate environment files for development and production:
-
-| File              | Purpose               | Loaded When               |
-| ----------------- | --------------------- | ------------------------- |
-| `.env.local`      | Local development     | `pnpm dev`                |
-| `.env.production` | Production deployment | `pnpm build` / Cloudflare |
-
-**Setup:**
-
-```bash
-# For local development
 cp .env.example .env.local
-
-# For production
-cp .env.example .env.production
+pnpm dev
 ```
 
-### Local Development Authentication
+Open `http://localhost:3000`.
 
-Instead of bypassing auth in development, use the dev-login route to get a real session cookie:
+For local auth, you can use either:
 
-1. Add `ENABLE_DEV_LOGIN=true` to `.env.local`
-2. Run `pnpm dev`
-3. Visit `http://localhost:3000/api/auth/dev-login`
-4. You're logged in with a real cookie for 30 days
+- Google sign-in (if OAuth env vars are configured), or
+- Dev login route: `http://localhost:3000/api/auth/dev-login`
 
-To test different roles, edit `role` in `app/api/auth/dev-login/route.ts`:
+### What you can do in the UI
 
-- `"admin"` - Full access
-- `"allowed"` - Can start server
-- `"public"` - View only
+- View server state, domain, player count, and service health
+- Start or stop the server
+- Resume from hibernated state
+- Hibernate (backup + stop + detach/delete volume flow)
+- Trigger backups and restores
+- View AWS cost breakdown
+- Manage email allowlist from the panel
+- Open AWS console shortcuts (admin)
 
-**Why this approach?**
+### Authorization model
 
-- Your local environment behaves exactly like production
-- Auth bugs are caught during development, not in production
-- Easy to test different permission levels
+- **Admin (`ADMIN_EMAIL`)**: full control
+- **Allowed (`ALLOWED_EMAILS`)**: status + start
+- **Public (signed in but not listed)**: status only
 
-**For mock mode authentication:**
+### Other interfaces (optional)
 
-When using `MC_BACKEND_MODE=mock`, dev login is the recommended authentication method. See [Authentication in Mock Mode](docs/MOCK_MODE_DEVELOPER_GUIDE.md#authentication-in-mock-mode) for detailed documentation including:
+The same backend is also available through CLI and API.
 
-- How dev login works in mock mode
-- Security features and safeguards
-- Testing different user roles
-- Troubleshooting common auth issues
-- E2E testing with dev login
-
-**Quick start for mock mode:**
+#### CLI (optional)
 
 ```bash
-# Use the convenience script (sets both MC_BACKEND_MODE and ENABLE_DEV_LOGIN)
+pnpm server:status
+pnpm server:start
+pnpm server:stop
+pnpm server:resume
+pnpm server:hibernate
+pnpm server:backup
+pnpm server:backups
+pnpm server:restore <backup-name>
+```
+
+#### API (optional)
+
+Main routes live in [`app/api`](app/api). Core endpoints include:
+
+- `GET /api/status`
+- `POST /api/start`
+- `POST /api/stop`
+- `POST /api/resume`
+- `POST /api/hibernate`
+- `POST /api/backup`
+- `POST /api/restore`
+- `GET /api/backups`
+- `GET /api/costs`
+- `GET /api/emails`
+- `PUT /api/emails/allowlist`
+
+#### Email trigger path (optional)
+
+If SES is configured, email commands are supported through the `StartMinecraftServer` Lambda flow (`start`, `backup`, `restore`, `hibernate`, `resume`).
+
+## Local Development With Mock Mode
+
+Use mock mode when you want frontend/API development without real AWS resources.
+
+```bash
 pnpm dev:mock
-
-# Visit dev login endpoint
-open http://localhost:3000/api/auth/dev-login
+pnpm test:mock
+pnpm test:e2e:mock
+pnpm mock:scenario
+pnpm mock:scenario running
+pnpm mock:reset
+pnpm validate:dev-login
 ```
 
-See [`.env.example`](.env.example) for the minimal mock mode configuration (no AWS credentials needed).
+Detailed docs:
 
-### Mock Mode Testing
+- [Quick Start Mock Mode](docs/QUICK_START_MOCK_MODE.md)
+- [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
 
-For local development and testing without AWS resources, use mock mode:
+## Manual And Advanced Operations
+
+These paths are optional, but fully supported.
+
+### Manual shell access to the EC2 instance
+
+Prerequisites:
+
+- AWS CLI installed and authenticated
+- AWS Session Manager plugin installed
+- Minecraft instance currently running
 
 ```bash
-# Enable mock mode in .env.local
-MC_BACKEND_MODE=mock
-ENABLE_DEV_LOGIN=true
+./bin/connect.sh
+./bin/console.sh
 ```
 
-Mock mode provides:
-- **Offline testing**: No AWS credentials or infrastructure required
-- **Deterministic scenarios**: Predefined states (running, stopped, starting, etc.)
-- **Fault injection**: Test error handling by injecting failures
-- **Fast feedback**: No network latency or AWS API calls
+- `bin/connect.sh`: starts a standard SSM session to the instance
+- `bin/console.sh`: attaches to the Minecraft `screen` session directly
 
-**Run E2E tests in mock mode:**
+### Advanced deployment and infra commands
 
-```bash
-pnpm test:e2e tests/mock-mode-e2e.spec.ts
-```
-
-See [tests/MOCK_MODE_E2E.md](tests/MOCK_MODE_E2E.md) for detailed documentation on mock mode testing.
-
-### How Authentication Works
-
-1. User clicks "Sign in with Google" in the header
-2. Redirected to Google OAuth consent screen
-3. After approval, redirected back with a session cookie
-4. Session lasts 7 days
-5. API routes check the session and enforce authorization based on user's role
-
-### Web UI Allow List (Control Panel)
-
-This is a separate allow list from the **Email Allowlist** (used for SES email triggers), but they share the same baseline emails.
-
-**Email Allowlist behavior (SES triggers):**
-
-- Baseline allowed senders come from env: `NOTIFICATION_EMAIL` (fallback: `ADMIN_EMAIL`) + `ALLOWED_EMAILS`
-- Additional allowed senders are stored in AWS Systems Manager (SSM) Parameter Store as a comma-separated string at `/minecraft/email-allowlist`
-- CDK deploy seeds `/minecraft/email-allowlist` if it doesn't exist, and the control panel keeps the baseline emails present
-- If both the baseline list and the SSM list are empty, only the admin email(s) can trigger commands via email (default deny)
-
-**Set the Email Allowlist (before or after deploy):**
-
-1. AWS Console: Systems Manager -> Parameter Store -> create/update `/minecraft/email-allowlist` in the same region as your stack
-2. AWS CLI:
+Use these when you want direct control instead of `pnpm setup`:
 
 ```bash
-aws ssm put-parameter \
-  --name "/minecraft/email-allowlist" \
-  --type "String" \
-  --value "friend1@gmail.com,friend2@gmail.com" \
-  --overwrite \
-  --region "${AWS_REGION}"
-```
-
-3. Control panel (admin-only): use the Email Management panel to add/remove emails (writes the same SSM parameter)
-
-The control panel allow list is controlled by environment variables and is enforced server-side.
-
-- `ADMIN_EMAIL`: the one email that always gets `admin` role
-- `ALLOWED_EMAILS` (optional): comma-separated list of emails that get `allowed` role
-- Any authenticated email not in either list gets `public` role
-
-**Example:**
-
-```bash
-ADMIN_EMAIL=you@gmail.com
-ALLOWED_EMAILS=friend1@gmail.com,friend2@gmail.com
-```
-
-**How it works:**
-
-1. User signs in with Google
-2. Server maps their email to a role in `lib/auth.ts` (`admin` / `allowed` / `public`)
-3. API routes enforce permissions with guards in `lib/api-auth.ts` (`requireAdmin`, `requireAllowed`, `requireAuth`)
-
-**Updating the control panel allow list:**
-
-- Local dev: edit `.env.local` then restart `pnpm dev`
-- Cloudflare Workers: update `wrangler.jsonc` `vars.ALLOWED_EMAILS` then redeploy
-
-## Production Deployment
-
-This application deploys to **Cloudflare Workers** using the OpenNext adapter. The deployment process is fully automated—just configure your `.env.production` file and run one command.
-
-### Quick Start
-
-```bash
-# Copy the same template (just fill in production URL)
-cp .env.example .env.production
-
-# Edit only NEXT_PUBLIC_APP_URL - everything else is identical to .env.local
-vim .env.production
-```
-
-The deploy script automatically sets `MC_BACKEND_MODE=aws` and `ENABLE_DEV_LOGIN=false` for production.
-
-The deployment script will:
-- ✅ Auto-generate `AUTH_SECRET` if missing
-- ✅ Validate all required secrets are set
-- ✅ Upload all secrets to Cloudflare Workers
-- ✅ Extract route from your `NEXT_PUBLIC_APP_URL`
-- ✅ Build and deploy to Cloudflare
-
-### Prerequisites
-
-1. [Cloudflare account](https://dash.cloudflare.com/sign-up)
-2. [Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/install-and-update/) authenticated: `wrangler login`
-3. Google OAuth credentials → **[Setup Guide](docs/GOOGLE_OAUTH_SETUP.md)**
-4. AWS credentials → **[Setup Guide](docs/AWS_CREDENTIALS_SETUP.md)**
-5. Domain configured in Cloudflare DNS
-
-### DNS Configuration
-
-The control panel runs on the same domain as your Minecraft server:
-
-- **HTTP/HTTPS (ports 80/443):** Cloudflare Workers serves the web panel
-- **TCP (port 25565):** Proxied to your EC2 instance for Minecraft
-
-**Example: `mc.yourdomain.com`**
-- `https://mc.yourdomain.com` → Web control panel
-- `mc.yourdomain.com:25565` → Minecraft server
-
-**Setup:**
-
-1. Go to Cloudflare Dashboard → DNS
-2. Add an A record:
-   - Name: `mc`
-   - Content: Your EC2 public IP (placeholder, auto-updated)
-   - Proxy status: **Proxied** (☁️ orange cloud)
-3. The deploy script automatically configures the Workers route from your `NEXT_PUBLIC_APP_URL`
-
-### Environment Setup
-
-**All secrets stay in `.env.production` (gitignored)** - no manual `wrangler secret put` commands needed!
-
-```bash
-# Copy template
-cp .env.example .env.production
-```
-
-**Required variables (see setup guides for values):**
-
-| Variable | Description | Setup Guide |
-|----------|-------------|-------------|
-| `GOOGLE_CLIENT_ID` | Google OAuth client ID | [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md) |
-| `GOOGLE_CLIENT_SECRET` | Google OAuth client secret | [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md) |
-| `AWS_ACCESS_KEY_ID` | AWS access key | [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md) |
-| `AWS_SECRET_ACCESS_KEY` | AWS secret key | [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md) |
-| `ADMIN_EMAIL` | Your email for admin access | Your email address |
-| `NEXT_PUBLIC_APP_URL` | Your deployed URL | `https://mc.yourdomain.com` |
-| `AWS_REGION` | AWS region | `us-west-1` (or your region) |
-| `CLOUDFLARE_DNS_API_TOKEN` | Cloudflare DNS API token | From Cloudflare dashboard |
-| `CLOUDFLARE_ZONE_ID` | Cloudflare zone ID | From Cloudflare dashboard |
-| `INSTANCE_ID` | EC2 instance ID | From AWS Console or CDK output |
-
-**Optional variables:**
-- `AUTH_SECRET` - Auto-generated if missing (48-byte random)
-- `ALLOWED_EMAILS` - Comma-separated list of allowed users
-- Other Cloudflare/GitHub/Google Drive settings
-
-See `.env.example` for all available variables.
-
-### Deploy to Cloudflare
-
-```bash
-# One command deployment
+pnpm install
+pnpm cdk:synth
+pnpm cdk:diff
+pnpm cdk:deploy
 pnpm deploy:cf
 ```
 
-This script automatically:
-1. Generates `AUTH_SECRET` if needed
-2. Validates all required secrets are set
-3. Uploads secrets to Cloudflare Workers
-4. Builds the Next.js app
-5. Deploys with the correct route (extracted from `NEXT_PUBLIC_APP_URL`)
+Useful extras:
 
-**Preview locally first (optional):**
 ```bash
+pnpm cdk:list
+pnpm cdk:destroy
+pnpm cdk:destroy:force
 pnpm preview:cf
 ```
 
-### Build Validation
+## Production Deployment (Cloudflare Workers)
 
-The build automatically validates that all required environment variables are set:
+For normal updates after initial setup:
 
-- **Development**: Warns about missing variables but continues
-- **Production**: Fails the build if any required variables are missing
-
-### Post-Deployment
-
-**1. Update Google OAuth Redirect URI:**
-
-Go to [Google Cloud Console](https://console.cloud.google.com/apis/credentials) and add:
-```
-https://mc.yourdomain.com/api/auth/callback/google
-```
-
-**2. Test Your Deployment:**
 ```bash
-# Visit your control panel
-open https://mc.yourdomain.com
-
-# Sign in with Google
-# Test server start/stop functionality
+cp .env.example .env.production
+# fill in real values
+wrangler login
+pnpm deploy:cf
 ```
 
-**3. Check Logs (if issues):**
-```bash
-wrangler tail
+`pnpm deploy:cf` runs `scripts/deploy-cloudflare.sh`, which:
+
+1. Validates required values in `.env.production`
+2. Generates `AUTH_SECRET` if needed
+3. Uploads secrets/vars to Workers
+4. Builds and deploys the app
+5. Configures route details from `NEXT_PUBLIC_APP_URL`
+
+Cloudflare details and token setup are documented in [Cloudflare Setup](docs/CLOUDFLARE_SETUP.md).
+
+## Troubleshooting
+
+### `pnpm setup` fails before deployment
+
+- Confirm `mise`, AWS CLI, and dependencies are installed
+- Re-run `pnpm install`
+- Check `.env.local` for missing required values
+
+### Google sign-in fails with redirect mismatch
+
+- Verify OAuth redirect URIs include:
+  - `http://localhost:3000/api/auth/callback`
+  - `https://<your-domain>/api/auth/callback`
+- Make sure `NEXT_PUBLIC_APP_URL` matches the deployed domain
+
+### Cloudflare deploy auth issues
+
+- Run `wrangler login` (OAuth) for deployment auth
+- Keep DNS runtime token in env files as `CLOUDFLARE_DNS_API_TOKEN`
+- Do not export DNS token globally in your shell for Wrangler auth
+
+### Manual shell scripts fail
+
+- Ensure the server is running
+- Check AWS CLI profile/credentials and region
+- Confirm Session Manager plugin is installed
+
+## Source-Of-Truth Docs
+
+- [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md)
+- [Cloudflare Setup](docs/CLOUDFLARE_SETUP.md)
+- [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md)
+- [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md)
+- [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
+- [API Reference](docs/docs/API.md)
+
+## Repo Structure (Quick View)
+
+```text
+mc-aws/
+├── app/              # Next.js app + API routes
+├── components/       # Frontend components
+├── hooks/            # Frontend hooks
+├── lib/              # Shared AWS/auth/types utilities
+├── scripts/          # Setup/deploy/dev helper scripts
+├── bin/              # Manual EC2 shell/console scripts
+├── infra/            # AWS CDK stack + Lambda/EC2 assets
+├── docs/             # Setup guides and deeper docs
+└── tests/            # Vitest + Playwright tests
 ```
-
-### Troubleshooting
-
-**Deployment fails with "Missing required secrets":**
-- Check `.env.production` has all required values
-- Make sure no values are still placeholders (`your-*`)
-
-**OAuth redirect error:**
-- Verify redirect URI in Google Console matches your `NEXT_PUBLIC_APP_URL`
-- Should be: `https://mc.yourdomain.com/api/auth/callback/google`
-
-**Can't connect to AWS:**
-- Verify IAM user has required permissions
-- Check `AWS_REGION` matches where your instance is deployed
-
-For more help, see:
-- [Google OAuth Setup Guide](docs/GOOGLE_OAUTH_SETUP.md)
-- [AWS Credentials Setup Guide](docs/AWS_CREDENTIALS_SETUP.md)
-- [Full Deployment Guide](DEPLOYMENT.md)
