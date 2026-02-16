@@ -113,7 +113,7 @@ describe("Environment Variables", () => {
       vi.stubEnv("MC_BACKEND_MODE", "aws");
       vi.stubEnv("AWS_REGION", "us-east-1");
       vi.stubEnv("AWS_ACCOUNT_ID", "123456789012");
-      // INSTANCE_ID is optional - dynamic discovery via findInstanceId() is preferred
+      // INSTANCE_ID is required - must be set in .env file
 
       expect(() => validateAwsCredentials()).not.toThrow();
     });

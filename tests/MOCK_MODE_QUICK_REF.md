@@ -63,11 +63,11 @@ await authenticateAsDev(page);
 
 **Tests fail with "Mock control endpoints are only available in mock mode"**
 - Playwright config automatically sets `MC_BACKEND_MODE=mock`
-- Check `.env.local` has `MC_BACKEND_MODE=mock`
+- Check `.env` has `MC_BACKEND_MODE=mock`
 
 **Tests fail with "Dev login is disabled"**
 - Playwright config automatically sets `ENABLE_DEV_LOGIN=true`
-- Check `.env.local` has `ENABLE_DEV_LOGIN=true`
+- Check `.env` has `ENABLE_DEV_LOGIN=true`
 
 **Tests timeout**
 - Ensure port 3001 is not blocked

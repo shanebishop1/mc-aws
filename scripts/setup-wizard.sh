@@ -207,24 +207,24 @@ write_env() {
   mv "$tmp" "$env_file"
 }
 
-# Check if .env.local exists and offer to resume
+  # Check if .env exists and offer to resume
 check_resume() {
-  local env_file=".env.local"
+  local env_file=".env"
 
   if [[ -f "$env_file" ]]; then
     section "Existing Configuration Found"
-    log "Found existing .env.local file with some credentials already set."
+    log "Found existing .env file with some credentials already set."
     log "Tip: when you see a value in brackets, press Enter to keep it."
     echo ""
     echo "You can either:"
     echo "  1. Continue and update missing credentials"
-    echo "  2. Start fresh (will overwrite existing .env.local and .env.production)"
+      echo "  2. Start fresh (will overwrite existing .env)"
     echo ""
     prompt choice "Choose option" "1"
 
     if [[ "$choice" == "2" ]]; then
       log_warning "Removing existing configuration files..."
-      rm -f .env.local .env.production
+      rm -f .env
       log_success "Starting fresh setup"
       return 1
     else
@@ -236,9 +236,9 @@ check_resume() {
   return 1
 }
 
-# Load existing values from .env.local
+  # Load existing values from .env
 load_existing() {
-  local env_file=".env.local"
+  local env_file=".env"
 
   if [[ -f "$env_file" ]]; then
     while IFS='=' read -r key value; do
@@ -452,17 +452,17 @@ collect_aws_core() {
   CDK_DEFAULT_REGION="$AWS_REGION"
 
   # Write to env files
-  write_env ".env.local" "AWS_REGION" "$AWS_REGION"
-  write_env ".env.local" "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
-  write_env ".env.local" "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
-  write_env ".env.local" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
-  write_env ".env.local" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
+  write_env ".env" "AWS_REGION" "$AWS_REGION"
+  write_env ".env" "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
+  write_env ".env" "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
+  write_env ".env" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
+  write_env ".env" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
 
-  write_env ".env.production" "AWS_REGION" "$AWS_REGION"
-  write_env ".env.production" "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
-  write_env ".env.production" "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
-  write_env ".env.production" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
-  write_env ".env.production" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
+  write_env ".env" "AWS_REGION" "$AWS_REGION"
+  write_env ".env" "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
+  write_env ".env" "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
+  write_env ".env" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
+  write_env ".env" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
 
   log_success "AWS Core credentials saved"
 }
@@ -489,8 +489,8 @@ collect_ec2_access() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "KEY_PAIR_NAME" "$KEY_PAIR_NAME"
-  write_env ".env.production" "KEY_PAIR_NAME" "$KEY_PAIR_NAME"
+  write_env ".env" "KEY_PAIR_NAME" "$KEY_PAIR_NAME"
+  write_env ".env" "KEY_PAIR_NAME" "$KEY_PAIR_NAME"
 
   log_success "EC2 access credentials saved"
 }
@@ -530,10 +530,10 @@ collect_google_oauth() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_ID"
-  write_env ".env.local" "GOOGLE_CLIENT_SECRET" "$GOOGLE_CLIENT_SECRET"
-  write_env ".env.production" "GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_ID"
-  write_env ".env.production" "GOOGLE_CLIENT_SECRET" "$GOOGLE_CLIENT_SECRET"
+  write_env ".env" "GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_ID"
+  write_env ".env" "GOOGLE_CLIENT_SECRET" "$GOOGLE_CLIENT_SECRET"
+  write_env ".env" "GOOGLE_CLIENT_ID" "$GOOGLE_CLIENT_ID"
+  write_env ".env" "GOOGLE_CLIENT_SECRET" "$GOOGLE_CLIENT_SECRET"
 
   log_success "Google OAuth credentials saved"
 }
@@ -578,10 +578,10 @@ collect_authorization() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "ADMIN_EMAIL" "$ADMIN_EMAIL"
-  write_env ".env.local" "ALLOWED_EMAILS" "$ALLOWED_EMAILS"
-  write_env ".env.production" "ADMIN_EMAIL" "$ADMIN_EMAIL"
-  write_env ".env.production" "ALLOWED_EMAILS" "$ALLOWED_EMAILS"
+  write_env ".env" "ADMIN_EMAIL" "$ADMIN_EMAIL"
+  write_env ".env" "ALLOWED_EMAILS" "$ALLOWED_EMAILS"
+  write_env ".env" "ADMIN_EMAIL" "$ADMIN_EMAIL"
+  write_env ".env" "ALLOWED_EMAILS" "$ALLOWED_EMAILS"
 
   log_success "Authorization settings saved"
 }
@@ -666,14 +666,14 @@ collect_cloudflare() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "CLOUDFLARE_DNS_API_TOKEN" "$CLOUDFLARE_DNS_API_TOKEN"
-  write_env ".env.local" "CLOUDFLARE_ZONE_ID" "$CLOUDFLARE_ZONE_ID"
-  write_env ".env.local" "CLOUDFLARE_RECORD_ID" "$CLOUDFLARE_RECORD_ID"
-  write_env ".env.local" "CLOUDFLARE_MC_DOMAIN" "$CLOUDFLARE_MC_DOMAIN"
-  write_env ".env.production" "CLOUDFLARE_DNS_API_TOKEN" "$CLOUDFLARE_DNS_API_TOKEN"
-  write_env ".env.production" "CLOUDFLARE_ZONE_ID" "$CLOUDFLARE_ZONE_ID"
-  write_env ".env.production" "CLOUDFLARE_RECORD_ID" "$CLOUDFLARE_RECORD_ID"
-  write_env ".env.production" "CLOUDFLARE_MC_DOMAIN" "$CLOUDFLARE_MC_DOMAIN"
+  write_env ".env" "CLOUDFLARE_DNS_API_TOKEN" "$CLOUDFLARE_DNS_API_TOKEN"
+  write_env ".env" "CLOUDFLARE_ZONE_ID" "$CLOUDFLARE_ZONE_ID"
+  write_env ".env" "CLOUDFLARE_RECORD_ID" "$CLOUDFLARE_RECORD_ID"
+  write_env ".env" "CLOUDFLARE_MC_DOMAIN" "$CLOUDFLARE_MC_DOMAIN"
+  write_env ".env" "CLOUDFLARE_DNS_API_TOKEN" "$CLOUDFLARE_DNS_API_TOKEN"
+  write_env ".env" "CLOUDFLARE_ZONE_ID" "$CLOUDFLARE_ZONE_ID"
+  write_env ".env" "CLOUDFLARE_RECORD_ID" "$CLOUDFLARE_RECORD_ID"
+  write_env ".env" "CLOUDFLARE_MC_DOMAIN" "$CLOUDFLARE_MC_DOMAIN"
 
   log_success "Cloudflare credentials saved"
 }
@@ -702,8 +702,8 @@ collect_production_url() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "NEXT_PUBLIC_APP_URL" "$NEXT_PUBLIC_APP_URL"
-  write_env ".env.production" "NEXT_PUBLIC_APP_URL" "$NEXT_PUBLIC_APP_URL"
+  write_env ".env" "NEXT_PUBLIC_APP_URL" "$NEXT_PUBLIC_APP_URL"
+  write_env ".env" "NEXT_PUBLIC_APP_URL" "$NEXT_PUBLIC_APP_URL"
 
   log_success "Production URL saved"
 }
@@ -776,12 +776,12 @@ collect_email_settings() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "VERIFIED_SENDER" "$VERIFIED_SENDER"
-  write_env ".env.local" "NOTIFICATION_EMAIL" "$NOTIFICATION_EMAIL"
-  write_env ".env.local" "START_KEYWORD" "$START_KEYWORD"
-  write_env ".env.production" "VERIFIED_SENDER" "$VERIFIED_SENDER"
-  write_env ".env.production" "NOTIFICATION_EMAIL" "$NOTIFICATION_EMAIL"
-  write_env ".env.production" "START_KEYWORD" "$START_KEYWORD"
+  write_env ".env" "VERIFIED_SENDER" "$VERIFIED_SENDER"
+  write_env ".env" "NOTIFICATION_EMAIL" "$NOTIFICATION_EMAIL"
+  write_env ".env" "START_KEYWORD" "$START_KEYWORD"
+  write_env ".env" "VERIFIED_SENDER" "$VERIFIED_SENDER"
+  write_env ".env" "NOTIFICATION_EMAIL" "$NOTIFICATION_EMAIL"
+  write_env ".env" "START_KEYWORD" "$START_KEYWORD"
 
   log_success "Email settings saved"
 }
@@ -829,12 +829,12 @@ collect_github_settings() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "GITHUB_USER" "$GITHUB_USER"
-  write_env ".env.local" "GITHUB_REPO" "$GITHUB_REPO"
-  write_env ".env.local" "GITHUB_TOKEN" "$GITHUB_TOKEN"
-  write_env ".env.production" "GITHUB_USER" "$GITHUB_USER"
-  write_env ".env.production" "GITHUB_REPO" "$GITHUB_REPO"
-  write_env ".env.production" "GITHUB_TOKEN" "$GITHUB_TOKEN"
+  write_env ".env" "GITHUB_USER" "$GITHUB_USER"
+  write_env ".env" "GITHUB_REPO" "$GITHUB_REPO"
+  write_env ".env" "GITHUB_TOKEN" "$GITHUB_TOKEN"
+  write_env ".env" "GITHUB_USER" "$GITHUB_USER"
+  write_env ".env" "GITHUB_REPO" "$GITHUB_REPO"
+  write_env ".env" "GITHUB_TOKEN" "$GITHUB_TOKEN"
 
   log_success "GitHub settings saved"
 }
@@ -866,10 +866,10 @@ collect_gdrive_settings() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "GDRIVE_REMOTE" "$GDRIVE_REMOTE"
-  write_env ".env.local" "GDRIVE_ROOT" "$GDRIVE_ROOT"
-  write_env ".env.production" "GDRIVE_REMOTE" "$GDRIVE_REMOTE"
-  write_env ".env.production" "GDRIVE_ROOT" "$GDRIVE_ROOT"
+  write_env ".env" "GDRIVE_REMOTE" "$GDRIVE_REMOTE"
+  write_env ".env" "GDRIVE_ROOT" "$GDRIVE_ROOT"
+  write_env ".env" "GDRIVE_REMOTE" "$GDRIVE_REMOTE"
+  write_env ".env" "GDRIVE_ROOT" "$GDRIVE_ROOT"
 
   log_success "Google Drive settings saved"
 }
@@ -886,8 +886,8 @@ generate_auth_secret() {
   echo ""
 
   # Write to env files
-  write_env ".env.local" "AUTH_SECRET" "$AUTH_SECRET"
-  write_env ".env.production" "AUTH_SECRET" "$AUTH_SECRET"
+  write_env ".env" "AUTH_SECRET" "$AUTH_SECRET"
+  write_env ".env" "AUTH_SECRET" "$AUTH_SECRET"
 
   log_success "AUTH_SECRET saved"
 }
@@ -899,8 +899,8 @@ generate_auth_secret() {
 main() {
   section "Welcome"
   log "This wizard will guide you through ${WIZARD_TOTAL} steps and write:"
-  echo "  • .env.local"
-  echo "  • .env.production"
+  echo "  • .env"
+  echo "  • .env"
   echo ""
 
   if is_tty; then
@@ -931,15 +931,15 @@ main() {
   log_success "All credentials have been collected and saved!"
   echo ""
   echo "Configuration files created:"
-  echo "  • .env.local      (for local development)"
-  echo "  • .env.production (for production deployment)"
+  echo "  • .env      (for local development)"
+  echo "  • .env (for production deployment)"
   echo ""
   if [[ -n "${MC_AWS_SETUP_RETURN_TO_SETUP_SH:-}" ]]; then
     echo "Returning to setup.sh to deploy infrastructure..."
     echo ""
   else
     echo "Next steps:"
-    echo "  1. Review your credentials in .env.local"
+    echo "  1. Review your credentials in .env"
     echo "  2. Run './setup.sh' to deploy AWS infrastructure and Cloudflare"
     echo ""
   fi

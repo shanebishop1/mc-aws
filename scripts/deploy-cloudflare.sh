@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-ENV_FILE=".env.production"
+ENV_FILE=".env"
 WRANGLER_CONFIG_FILE="wrangler.jsonc"
 
 if [[ ! -f "$ENV_FILE" ]]; then
@@ -114,7 +114,7 @@ is_placeholder() {
   return 1
 }
 
-# Define required env vars from .env.production
+# Define required env vars from .env
 REQUIRED_VARS=(
   "NEXT_PUBLIC_APP_URL"
   "GOOGLE_CLIENT_ID"
@@ -142,11 +142,11 @@ if grep -q "AUTH_SECRET=your-secret-here" "$ENV_FILE" || grep -q "AUTH_SECRET=de
     NEW_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64'))")
   else
     echo "❌ Error: Neither openssl nor node found. Cannot generate AUTH_SECRET."
-    echo "Please install OpenSSL or Node.js, or manually add a strong random string to AUTH_SECRET in .env.production"
+    echo "Please install OpenSSL or Node.js, or manually add a strong random string to AUTH_SECRET in .env"
     exit 1
   fi
   
-  # Update or add AUTH_SECRET in .env.production
+  # Update or add AUTH_SECRET in .env
   if grep -q "^AUTH_SECRET=" "$ENV_FILE"; then
     # Replace existing placeholder
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -479,10 +479,10 @@ fi
 echo "✅ Deploy successful"
 echo ""
 
-# Upload secrets from .env.production
+# Upload secrets from .env
 # Note: MC_BACKEND_MODE and ENABLE_DEV_LOGIN are exported above for the build process
 # but are NOT uploaded as Cloudflare secrets - they default correctly at runtime.
-echo "🔑 Uploading secrets from .env.production..."
+echo "🔑 Uploading secrets from .env..."
 
 SECRET_COUNT=0
 LINE_NO=0

@@ -1,11 +1,8 @@
 /**
  * Environment variable validation and retrieval
  *
- * Environment files:
- * - .env.local: Development config (ENABLE_DEV_LOGIN=true for local auth)
- * - .env.production: Production config (requires Google OAuth)
- *
- * Next.js automatically loads the appropriate file based on NODE_ENV
+ * Environment variables are loaded from .env
+ * Environment-specific behavior (dev/prod) is handled by package.json scripts
  */
 
 /**

@@ -60,7 +60,7 @@ Mock mode provides a streamlined authentication experience that doesn't require 
 
 In mock mode, you can use the **dev login** feature to authenticate instantly:
 
-1. Set `ENABLE_DEV_LOGIN=true` in your `.env.local` file
+1. Set `ENABLE_DEV_LOGIN=true` in your `.env` file
 2. Visit `http://localhost:3000/api/auth/dev-login` in your browser
 3. You're automatically logged in with a real session cookie (valid for 30 days)
 
@@ -124,10 +124,10 @@ pnpm dev:mock
 
 1. Copy the example configuration:
    ```bash
-   cp .env.local.example .env.local
+   cp .env.example .env
    ```
 
-2. The `.env.local.example` file already has the minimal mock mode configuration:
+2. The `.env.example` file already has the minimal mock mode configuration:
    ```bash
    MC_BACKEND_MODE=mock
    ENABLE_DEV_LOGIN=true
@@ -173,7 +173,7 @@ curl -X POST http://localhost:3000/api/auth/logout
 ### Common Issues
 
 **Dev login returns 403:**
-- Ensure `ENABLE_DEV_LOGIN=true` is set in `.env.local`
+- Ensure `ENABLE_DEV_LOGIN=true` is set in `.env`
 - Restart the dev server after changing environment variables
 
 **Dev login returns 404:**
@@ -186,7 +186,7 @@ curl -X POST http://localhost:3000/api/auth/logout
 
 **Protected routes still block access:**
 - Verify the session cookie was set (check browser dev tools → Application → Cookies)
-- Check that `AUTH_SECRET` is set in `.env.local`
+- Check that `AUTH_SECRET` is set in `.env`
 
 ### E2E Testing with Dev Login
 
@@ -212,7 +212,7 @@ This ensures tests are fast, deterministic, and don't require real Google OAuth 
 
 ## Environment Variables
 
-Mock mode is controlled by environment variables. These can be set in `.env.local` for local development.
+Mock mode is controlled by environment variables. These can be set in `.env` for local development.
 
 ### Required Variables
 
@@ -230,7 +230,7 @@ Mock mode is controlled by environment variables. These can be set in `.env.loca
 | `MOCK_STATE_PATH`   | Path for mock state persistence file             | `./mock-state.json`  |
 | `MOCK_SCENARIO`     | Default scenario to apply on startup             | `running`             |
 
-### Example `.env.local`
+### Example `.env`
 
 ```bash
 # Enable mock mode
@@ -769,7 +769,7 @@ Mock state can optionally be persisted to a JSON file for debugging and issue re
 
 ### Enable Persistence
 
-Add to `.env.local`:
+Add to `.env`:
 
 ```bash
 MOCK_STATE_PATH=./mock-state.json
@@ -787,7 +787,7 @@ The state will be automatically saved to this file on every change.
 
 ```bash
 # Enable persistence
-echo "MOCK_STATE_PATH=./mock-state.json" >> .env.local
+echo "MOCK_STATE_PATH=./mock-state.json" >> .env
 
 # Apply a scenario
 pnpm mock:scenario running
@@ -847,7 +847,7 @@ pnpm dev:mock
 **Solution:** Enable dev login:
 
 ```bash
-# Add to .env.local
+# Add to .env
 ENABLE_DEV_LOGIN=true
 
 # Restart the dev server
@@ -867,8 +867,8 @@ open http://localhost:3001/api/auth/dev-login
 # Check that ENABLE_DEV_LOGIN is set
 echo $ENABLE_DEV_LOGIN
 
-# If not set, add to .env.local and restart dev server
-echo "ENABLE_DEV_LOGIN=true" >> .env.local
+# If not set, add to .env and restart dev server
+echo "ENABLE_DEV_LOGIN=true" >> .env
 pnpm dev:mock
 ```
 
@@ -894,11 +894,11 @@ pnpm dev:mock
 **Solution:** Check AUTH_SECRET:
 
 ```bash
-# Ensure AUTH_SECRET is set in .env.local
-grep AUTH_SECRET .env.local
+# Ensure AUTH_SECRET is set in .env
+grep AUTH_SECRET .env
 
 # If missing, add it:
-echo "AUTH_SECRET=dev-secret-change-in-production" >> .env.local
+echo "AUTH_SECRET=dev-secret-change-in-production" >> .env
 
 # Restart dev server
 pnpm dev:mock
@@ -934,7 +934,7 @@ Then restart dev server and visit `/api/auth/dev-login` again.
 **Solution:** Enable persistence:
 
 ```bash
-# Add to .env.local
+# Add to .env
 MOCK_STATE_PATH=./mock-state.json
 
 # Restart the dev server
