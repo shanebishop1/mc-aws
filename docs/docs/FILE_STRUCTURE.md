@@ -122,7 +122,7 @@ export async function updateCloudflareDns(ip: string): Promise<void>
 
 ## Environment Variables
 
-Required in `.env` (or `.env.local` for frontend/.env.local):
+Required in `.env` (or `.env` for frontend/.env):
 
 ```
 AWS_REGION

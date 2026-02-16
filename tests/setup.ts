@@ -141,7 +141,7 @@ vi.mock("@/lib/env", () => ({
     if (!process.env.AWS_REGION && !process.env.CDK_DEFAULT_REGION) {
       throw new Error("Missing required AWS credentials in AWS mode: AWS_REGION");
     }
-    // INSTANCE_ID is optional - dynamic discovery via findInstanceId() is preferred
+    // INSTANCE_ID is required - must be set in .env file
   },
 }));
 

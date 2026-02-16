@@ -54,7 +54,7 @@ Find your `mc` record and copy its `id` as `CLOUDFLARE_RECORD_ID`.
 
 ## 5) Set env values
 
-Set these in `.env.local` and `.env.production`:
+Set these in `.env`:
 
 ```bash
 CLOUDFLARE_DNS_API_TOKEN=...
@@ -91,7 +91,7 @@ The deploy script validates env, uploads secrets, builds, and deploys the Worker
 
 - Remove exported `CLOUDFLARE_DNS_API_TOKEN` from your shell session.
 - Re-run `wrangler login`.
-- Use `.env.production` for DNS token storage instead of global shell exports.
+- Use `.env` for DNS token storage instead of global shell exports.
 
 ### DNS is not updating after server start
 

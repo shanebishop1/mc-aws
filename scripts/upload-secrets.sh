@@ -1,18 +1,18 @@
 #!/bin/bash
-# Upload all secrets to Cloudflare Workers from .env.production
+# Upload all secrets to Cloudflare Workers from .env
 # Usage: ./scripts/upload-secrets.sh
 
 set -e
 
-if [ ! -f ".env.production" ]; then
-  echo "❌ Error: .env.production file not found"
+if [ ! -f ".env" ]; then
+  echo "❌ Error: .env file not found"
   exit 1
 fi
 
-echo "📤 Uploading secrets from .env.production to Cloudflare Workers..."
+echo "📤 Uploading secrets from .env to Cloudflare Workers..."
 echo ""
 
-# Read .env.production and upload each non-empty, non-comment line as a secret
+# Read .env and upload each non-empty, non-comment line as a secret
 while IFS='=' read -r key value; do
   # Skip empty lines and comments
   [[ -z "$key" || "$key" =~ ^#.* ]] && continue
@@ -25,7 +25,7 @@ while IFS='=' read -r key value; do
   
   echo "Setting: $key"
   echo "$value" | wrangler secret put "$key" --env production
-done < .env.production
+done < .env
 
 echo ""
 echo "✅ All secrets uploaded successfully!"

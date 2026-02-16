@@ -5,14 +5,11 @@ import * as path from "node:path";
 
 import * as dotenv from "dotenv";
 
-// Prefer repo-root .env.local for CDK deploys run from infra/
-const rootEnvLocalPath = path.resolve(__dirname, "../../.env.local");
+// Load environment from repo-root .env for CDK deploys
 const rootEnvPath = path.resolve(__dirname, "../../.env");
 
-if (fs.existsSync(rootEnvLocalPath)) {
-  // override=true so a blank env var doesn't block values from .env.local
-  dotenv.config({ path: rootEnvLocalPath, override: true });
-} else if (fs.existsSync(rootEnvPath)) {
+if (fs.existsSync(rootEnvPath)) {
+  // override=true so a blank env var doesn't block values from .env
   dotenv.config({ path: rootEnvPath, override: true });
 } else {
   dotenv.config();

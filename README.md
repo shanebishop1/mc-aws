@@ -51,7 +51,7 @@ Use these guides before (or during) `pnpm setup`:
 ### Run the panel locally against AWS
 
 ```bash
-cp .env.example .env.local
+cp .env.example .env
 pnpm dev
 ```
 
@@ -182,7 +182,7 @@ pnpm preview:cf
 For normal updates after initial setup:
 
 ```bash
-cp .env.example .env.production
+cp .env.example .env
 # fill in real values
 wrangler login
 pnpm deploy:cf
@@ -190,7 +190,7 @@ pnpm deploy:cf
 
 `pnpm deploy:cf` runs `scripts/deploy-cloudflare.sh`, which:
 
-1. Validates required values in `.env.production`
+1. Validates required values in `.env`
 2. Generates `AUTH_SECRET` if needed
 3. Uploads secrets/vars to Workers
 4. Builds and deploys the app
@@ -204,7 +204,7 @@ Cloudflare details and token setup are documented in [Cloudflare Setup](docs/CLO
 
 - Confirm `mise`, AWS CLI, and dependencies are installed
 - Re-run `pnpm install`
-- Check `.env.local` for missing required values
+- Check `.env` for missing required values
 
 ### Google sign-in fails with redirect mismatch
 

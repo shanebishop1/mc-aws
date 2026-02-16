@@ -1,0 +1,7 @@
+[tools]
+node = "22"
+pnpm = "10"
+
+[env]
+# Add node_modules/.bin to PATH for local CLI tools (biome, vitest, wrangler, tsx, etc.)
+_.path = ["{{config_root}}/node_modules/.bin"]
