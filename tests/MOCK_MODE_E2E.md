@@ -13,7 +13,7 @@ The mock mode E2E tests validate the full UI workflow using the mock control API
 
 ## Prerequisites
 
-1. **Environment Variables**: Set up your `.env.local` file:
+1. **Environment Variables**: Set up your `.env` file:
 
 ```bash
 # Enable mock backend mode
@@ -207,13 +207,13 @@ test("Test name", async ({ page }) => {
 ### Tests fail with "Mock control endpoints are only available in mock mode"
 
 **Solution**: The Playwright config should automatically set `MC_BACKEND_MODE=mock`. If you're still seeing this error, check that:
-1. Your `.env.local` file has `MC_BACKEND_MODE=mock`
+1. Your `.env` file has `MC_BACKEND_MODE=mock`
 2. The dev server is starting with the correct environment variables
 
 ### Tests fail with "Dev login is disabled"
 
 **Solution**: The Playwright config should automatically set `ENABLE_DEV_LOGIN=true`. If you're still seeing this error, check that:
-1. Your `.env.local` file has `ENABLE_DEV_LOGIN=true`
+1. Your `.env` file has `ENABLE_DEV_LOGIN=true`
 2. The dev server is starting with the correct environment variables
 
 ### Tests timeout waiting for state transitions

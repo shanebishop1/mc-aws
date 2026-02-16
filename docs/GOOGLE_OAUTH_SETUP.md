@@ -30,13 +30,13 @@ Replace `mc.yourdomain.com` with your production panel URL.
 
 ## Add values to env files
 
-Set these in `.env.local` and `.env.production`:
+Set these in `.env`:
 
 ```bash
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
 NEXT_PUBLIC_APP_URL=http://localhost:3000   # local
-# .env.production should use your real domain, e.g. https://mc.yourdomain.com
+# .env should use your real domain, e.g. https://mc.yourdomain.com
 ```
 
 Also set role emails:
@@ -60,7 +60,7 @@ Then:
 
 ## Production notes
 
-Before deploying, confirm `.env.production` has:
+Before deploying, confirm `.env` has:
 
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`

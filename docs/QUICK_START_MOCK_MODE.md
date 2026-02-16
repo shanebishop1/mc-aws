@@ -24,10 +24,10 @@ pnpm install
 Copy the minimal mock mode configuration:
 
 ```bash
-cp .env.local.example .env.local
+cp .env.example .env
 ```
 
-The `.env.local` file now contains the minimal configuration needed for mock mode:
+The `.env` file now contains the minimal configuration needed for mock mode:
 
 ```bash
 MC_BACKEND_MODE=mock
@@ -87,8 +87,8 @@ Now you can:
 ## Troubleshooting
 
 **Dev login returns 403:**
-- Ensure `ENABLE_DEV_LOGIN=true` is in `.env.local`
-- Restart the dev server after changing `.env.local`
+- Ensure `ENABLE_DEV_LOGIN=true` is in `.env`
+- Restart the dev server after changing `.env`
 
 **Dev login returns 404:**
 - Check that `NODE_ENV` is not set to `production`
@@ -113,7 +113,7 @@ Now you can:
 
 When you're ready to use real AWS infrastructure:
 
-1. Update `.env.local`:
+1. Update `.env`:
    ```bash
    MC_BACKEND_MODE=aws
    ENABLE_DEV_LOGIN=false

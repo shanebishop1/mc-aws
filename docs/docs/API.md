@@ -518,7 +518,7 @@ The API requires the following environment variables:
 |----------|----------|-------------|
 | `AWS_REGION` | Yes | AWS region (e.g., `us-east-1`) |
 | `AWS_ACCOUNT_ID` | Yes | AWS account ID |
-| `INSTANCE_ID` | No* | EC2 instance ID (*auto-discovers if not set) |
+| `INSTANCE_ID` | Yes | EC2 instance ID (set by setup.sh during deploy) |
 | `CLOUDFLARE_ZONE_ID` | Yes | Cloudflare zone ID |
 | `CLOUDFLARE_RECORD_ID` | Yes | Cloudflare DNS record ID |
 | `CLOUDFLARE_MC_DOMAIN` | Yes | Minecraft server domain |

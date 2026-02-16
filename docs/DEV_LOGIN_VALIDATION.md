@@ -118,7 +118,7 @@ This document summarizes the validation of the `ENABLE_DEV_LOGIN` feature in moc
 
 ### ✅ Documentation
 
-- [x] **`.env.local.example`**
+- [x] **`.env.example`**
   - Minimal mock mode configuration
   - Clearly documents required variables
   - Shows optional variables
@@ -134,7 +134,7 @@ This document summarizes the validation of the `ENABLE_DEV_LOGIN` feature in moc
 - [x] **`README.md`**
   - Updated mock mode section with quick start
   - Cross-references detailed documentation
-  - Links to `.env.local.example`
+  - Links to `.env.example`
 
 - [x] **`docs/QUICK_START_MOCK_MODE.md`**
   - New quick start guide for new developers
@@ -246,7 +246,7 @@ Expected output:
 ### Minimal Mock Mode Configuration
 
 ```bash
-# .env.local
+# .env
 MC_BACKEND_MODE=mock
 ENABLE_DEV_LOGIN=true
 AUTH_SECRET=dev-secret-change-in-production
@@ -256,7 +256,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 ### With Optional Features
 
 ```bash
-# .env.local
+# .env
 MC_BACKEND_MODE=mock
 ENABLE_DEV_LOGIN=true
 AUTH_SECRET=dev-secret-change-in-production
@@ -320,7 +320,7 @@ The `ENABLE_DEV_LOGIN` feature is fully implemented and validated for mock mode.
 **All acceptance criteria met:**
 
 - ✅ Dev login works end-to-end in mock mode
-- ✅ `.env.local.example` shows minimal mock mode config
+- ✅ `.env.example` shows minimal mock mode config
 - ✅ Documentation explains auth in mock mode
 - ✅ No AWS credentials required for mock mode
 - ✅ Clear instructions for new developers

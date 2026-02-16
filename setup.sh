@@ -132,8 +132,7 @@ ensure_auth_secret() {
     return 1
   fi
 
-  write_env ".env.local" "AUTH_SECRET" "$AUTH_SECRET"
-  write_env ".env.production" "AUTH_SECRET" "$AUTH_SECRET"
+  write_env ".env" "AUTH_SECRET" "$AUTH_SECRET"
   return 0
 }
 
@@ -157,23 +156,21 @@ ensure_cdk_defaults() {
     return 1
   fi
 
-  write_env ".env.local" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
-  write_env ".env.local" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
-  write_env ".env.production" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
-  write_env ".env.production" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
+  write_env ".env" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
+  write_env ".env" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
   return 0
 }
 
 maybe_confirm_existing_credentials() {
   SKIP_WIZARD="0"
 
-  if [[ ! -f ".env.local" ]]; then
+  if [[ ! -f ".env" ]]; then
     return 0
   fi
 
-  load_env_file ".env.local" || true
+  load_env_file ".env" || true
 
-  # Only offer skipping the wizard when the repo already has .env.local.
+  # Only offer skipping the wizard when the repo already has .env.
   local missing
   missing="$(get_missing_required_credentials | tr '\n' ' ')"
 
@@ -183,7 +180,7 @@ maybe_confirm_existing_credentials() {
 
   screen_clear
   step "Configuration Detected"
-  log "All required credentials appear to already be set in .env.local."
+  log "All required credentials appear to already be set in .env."
   log "Press Enter to accept them and deploy (AWS + Cloudflare), or type 'wizard' to review/update."
   echo ""
   log "Detected:"
@@ -252,33 +249,84 @@ main() {
 
   maybe_confirm_existing_credentials
 
-  # Step 1: Check for mise
-  step "Checking for mise installation"
-  if ! command_exists mise; then
-    error_exit "mise is not installed!
+  # Step 1: Ensure mise is installed and configured
+  step "Setting up mise (version manager)"
 
-Please install mise to manage Node.js and pnpm versions:
+  local mise_install_dir="$HOME/.local/bin"
+  local mise_executable="$mise_install_dir/mise"
+  local zshrc_file="$HOME/.zshrc"
 
-  macOS:
-    brew install mise
+  # Check if mise is already available in PATH
+  if command_exists mise; then
+    success "mise is already installed: $(mise --version)"
+    info "mise will automatically activate when you cd into this directory"
+  else
+    # Check if mise is installed but not in PATH
+    if [[ -f "$mise_executable" ]]; then
+      info "mise is installed at $mise_executable but not in PATH"
+      info "Adding mise to PATH for this session..."
+      export PATH="$mise_install_dir:$PATH"
+      success "mise is now available: $(mise --version)"
+    else
+      # Install mise
+      info "mise is not installed. Installing now..."
+      log "Running: curl https://mise.run | sh"
+      if curl https://mise.run | sh; then
+        success "mise installed successfully to $mise_install_dir"
+        export PATH="$mise_install_dir:$PATH"
+      else
+        error_exit "Failed to install mise. Please install manually and try again."
+      fi
+    fi
 
-  Linux:
-    curl https://mise.run | sh
+    # Check and update ~/.zshrc
+    if [[ -f "$zshrc_file" ]]; then
+      local mise_path_added="0"
+      local mise_activate_added="0"
 
-  Windows (WSL):
-    curl https://mise.run | sh
+      # Check if PATH export for mise is already in zshrc
+      if grep -q 'export PATH="\$HOME/\.local/bin:\$PATH"' "$zshrc_file" 2>/dev/null; then
+        mise_path_added="1"
+      fi
 
-After installation, restart your terminal and run this script again.
+      # Check if mise activate is already in zshrc
+      if grep -q 'mise activate' "$zshrc_file" 2>/dev/null; then
+        mise_activate_added="1"
+      fi
 
-For more information, visit: https://mise.jdx.dev/"
+      # Add mise to PATH if not present
+      if [[ "$mise_path_added" == "0" ]]; then
+        info "Adding mise to PATH in ~/.zshrc..."
+        echo '' >> "$zshrc_file"
+        echo '# mise version manager' >> "$zshrc_file"
+        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$zshrc_file"
+        success "Added mise to PATH in ~/.zshrc"
+      fi
+
+      # Add mise activation if not present
+      if [[ "$mise_activate_added" == "0" ]]; then
+        info "Adding mise activation to ~/.zshrc..."
+        echo 'eval "$(~/.local/bin/mise activate zsh)"' >> "$zshrc_file"
+        success "Added mise activation to ~/.zshrc"
+      fi
+
+      if [[ "$mise_path_added" == "0" ]] || [[ "$mise_activate_added" == "0" ]]; then
+        echo ""
+        info "⚠️  Your ~/.zshrc has been updated."
+        info "   Please restart your terminal or run: source ~/.zshrc"
+        echo ""
+      fi
+    else
+      info "Note: ~/.zshrc not found. You may need to manually add mise to your shell configuration."
+    fi
   fi
-  success "mise is installed: $(mise --version)"
 
   # Step 2: Install tools with mise
   step "Installing Node.js and pnpm with mise"
   log "Running 'mise install' to ensure correct versions..."
   mise install
   success "Node.js and pnpm are ready"
+  info "mise will automatically activate Node.js 22 and pnpm 10 when you cd into this directory"
 
   # Step 3: Install project dependencies
   step "Installing project dependencies"
@@ -299,12 +347,9 @@ For more information, visit: https://mise.jdx.dev/"
   # Step 5: Run setup wizard (unless credentials already present)
   if [[ "${SKIP_WIZARD}" == "1" ]]; then
     step "Skipping interactive setup wizard"
-    success "Using credentials from .env.local"
+    success "Using credentials from .env"
 
-    if [[ ! -f ".env.production" ]]; then
-      cp .env.local .env.production
-      success "Created .env.production from .env.local"
-    fi
+    # .env file is already in place
   else
     step "Starting interactive setup wizard"
     log "Launching scripts/setup-wizard.sh..."
@@ -320,7 +365,7 @@ For more information, visit: https://mise.jdx.dev/"
   fi
 
   # Reload env for the deploy steps below
-  load_env_file ".env.local" || true
+  load_env_file ".env" || true
 
   # Step 6: Deploy AWS infrastructure (CDK)
   step "Deploying AWS infrastructure (CDK)"
@@ -344,8 +389,7 @@ For more information, visit: https://mise.jdx.dev/"
   success "INSTANCE_ID=$INSTANCE_ID"
 
   # Update env files with INSTANCE_ID for Cloudflare deploy
-  write_env ".env.local" "INSTANCE_ID" "$INSTANCE_ID"
-  write_env ".env.production" "INSTANCE_ID" "$INSTANCE_ID"
+  write_env ".env" "INSTANCE_ID" "$INSTANCE_ID"
 
   # Step 8: Deploy Cloudflare Workers frontend
   step "Deploying Cloudflare Workers frontend"
