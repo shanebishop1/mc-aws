@@ -12,7 +12,7 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "mc-aws",
-    statusBarStyle: "default",
+    statusBarStyle: "black-translucent",
   },
   formatDetection: {
     telephone: false,
@@ -35,7 +35,10 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#1A4222",
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#1A4222" },
+    { media: "(prefers-color-scheme: dark)", color: "#1A4222" },
+  ],
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
@@ -60,10 +63,18 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en">
+      <head>
+        <meta name="theme-color" content="#1A4222" />
+        <meta name="apple-mobile-web-app-capable" content="yes" />
+        <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+        <meta name="mobile-web-app-capable" content="yes" />
+      </head>
       <body
         data-testid="root-layout"
         className={`${inter.variable} ${playfair.variable} antialiased bg-cream text-charcoal font-sans`}
       >
+        <div id="safe-area-top" aria-hidden="true" />
+        <div id="safe-area-bottom" aria-hidden="true" />
         <IOSViewportFix />
         <div id="app-root">
           <AuthProvider>{children}</AuthProvider>
