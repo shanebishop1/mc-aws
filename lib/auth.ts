@@ -9,7 +9,7 @@ import { env } from "./env";
 export type UserRole = "admin" | "allowed" | "public";
 
 export const SESSION_COOKIE_NAME = "mc_session";
-const SEVEN_DAYS_IN_SECONDS = 7 * 24 * 60 * 60;
+const THIRTY_DAYS_IN_SECONDS = 30 * 24 * 60 * 60;
 
 /**
  * Determines the user role based on email
@@ -56,7 +56,7 @@ export async function createSession(email: string): Promise<string> {
   const allowlist = await getCachedAllowlist();
   const role = getUserRole(email, allowlist);
   const now = Math.floor(Date.now() / 1000);
-  const exp = now + SEVEN_DAYS_IN_SECONDS;
+  const exp = now + THIRTY_DAYS_IN_SECONDS;
 
   const secretKey = env.AUTH_SECRET;
   if (!secretKey || (process.env.NODE_ENV === "production" && secretKey.length < 32)) {
@@ -114,7 +114,7 @@ export function createSessionCookie(token: string) {
     secure: isProduction,
     sameSite: "lax" as const,
     path: "/",
-    maxAge: SEVEN_DAYS_IN_SECONDS,
+    maxAge: THIRTY_DAYS_IN_SECONDS,
   };
 }
 
