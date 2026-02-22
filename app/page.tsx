@@ -209,7 +209,7 @@ export default function Home() {
   // Error state - AWS connection failed
   if (stackError) {
     return (
-      <main className="h-full flex flex-col items-center justify-center px-6 py-6 bg-cream">
+      <main className="h-full flex flex-col items-center justify-center px-6 py-6 relative bg-cream">
         <ArtDecoBorder />
         <div className="flex flex-col items-center gap-4 max-w-md text-center">
           <div className="w-16 h-16 rounded-full bg-red-100 flex items-center justify-center">
@@ -237,7 +237,7 @@ export default function Home() {
     return (
       <main
         data-testid="home-page"
-        className="h-full flex flex-col px-6 pt-6 pb-6 sm:px-8 sm:pt-8 sm:pb-8 md:px-4 md:pt-4 md:pb-4 bg-cream selection:bg-green selection:text-white"
+        className="h-full flex flex-col px-6 pt-6 pb-6 sm:px-8 sm:pt-8 sm:pb-8 md:px-4 md:pt-4 md:pb-4 relative bg-cream selection:bg-green selection:text-white"
       >
         <ArtDecoBorder />
         {/* Header */}
@@ -287,7 +287,7 @@ export default function Home() {
     <>
       <main
         data-testid="home-page"
-        className="h-full flex flex-col px-6 pt-6 pb-6 sm:px-8 sm:pt-8 sm:pb-8 md:px-4 md:pt-4 md:pb-4 bg-cream selection:bg-green selection:text-white"
+        className="h-full flex flex-col px-6 pt-6 pb-6 sm:px-8 sm:pt-8 sm:pb-8 md:px-4 md:pt-4 md:pb-4 relative bg-cream selection:bg-green selection:text-white"
       >
         <ArtDecoBorder />
         {/* Header */}
