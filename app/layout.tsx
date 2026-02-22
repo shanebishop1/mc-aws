@@ -71,10 +71,9 @@ export default function RootLayout({
       </head>
       <body
         data-testid="root-layout"
-        className={`${inter.variable} ${playfair.variable} antialiased bg-cream text-charcoal font-sans`}
+        className={`${inter.variable} ${playfair.variable} antialiased text-charcoal font-sans`}
       >
-        <div id="safe-area-top" aria-hidden="true" />
-        <div id="safe-area-bottom" aria-hidden="true" />
+        <div id="safari-chrome-tint-layer" aria-hidden="true" />
         <IOSViewportFix />
         <div id="app-root">
           <AuthProvider>{children}</AuthProvider>
