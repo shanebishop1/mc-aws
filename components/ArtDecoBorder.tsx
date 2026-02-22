@@ -96,7 +96,7 @@ export const ArtDecoBorder = () => {
   if (dimensions.width === 0) return null;
 
   return (
-    <div className="pointer-events-none fixed inset-0 z-50">
+    <div className="pointer-events-none absolute inset-0 z-50">
       <svg width={width} height={height} className="absolute inset-0">
         <path
           d={`M 0,0 L ${width},0 L ${width},${height} L 0,${height} Z ${borderPath}`}
