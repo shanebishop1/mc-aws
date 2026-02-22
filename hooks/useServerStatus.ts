@@ -167,7 +167,7 @@ export function useServerStatus(): UseServerStatusReturn {
     };
 
     const canPoll = () => {
-      return document.visibilityState === "visible" && document.hasFocus() && !isUserIdle;
+      return document.visibilityState === "visible" && !isUserIdle;
     };
 
     const handleUserActivity = () => {
@@ -218,8 +218,17 @@ export function useServerStatus(): UseServerStatusReturn {
       "touchstart",
     ];
 
-    // Initial fetch when page loads
-    handleUserActivity();
+    // Always fetch once on mount so UI can leave initial "Connecting..."
+    // even if focus APIs behave inconsistently on this device/browser.
+    void fetchStatus();
+
+    // Initialize polling state from current visibility/activity.
+    isUserIdle = false;
+    lastActivityAt = Date.now();
+    scheduleInactivityTimeout();
+    if (canPoll()) {
+      startPolling();
+    }
 
     // Listen for engagement and focus changes
     document.addEventListener("visibilitychange", handleVisibilityChange);
