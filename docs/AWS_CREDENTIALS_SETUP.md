@@ -44,11 +44,10 @@ You can tighten this later with least-privilege policies after confirming your w
 Copy from template first:
 
 ```bash
-cp .env.example .env
-cp .env.example .env
+cp .env.example .env.production
 ```
 
-Set values in both files:
+Set values in your deployment env file:
 
 ```bash
 AWS_REGION=us-west-1
@@ -58,6 +57,8 @@ AWS_ACCOUNT_ID=123456789012
 CDK_DEFAULT_ACCOUNT=123456789012
 CDK_DEFAULT_REGION=us-west-1
 ```
+
+`pnpm deploy:cf` resolves env files in this order: `ENV_FILE` -> `.env.production` -> `.env` -> `.env.local`.
 
 Notes:
 
@@ -77,13 +78,13 @@ Use the same key/secret/region as above.
 
 - **Local development (`pnpm dev`)**: backend API routes call AWS services directly.
 - **Infrastructure deploy (`pnpm cdk:deploy`)**: CDK uses your AWS CLI/session credentials.
-- **Production deploy (`pnpm deploy:cf`)**: AWS credentials from `.env` are uploaded as Worker secrets.
+- **Production deploy (`pnpm deploy:cf`)**: AWS credentials from the selected deployment env file are uploaded as Worker secrets.
 
 ## Common issues
 
 ### `Unable to locate credentials`
 
-- Check `.env` for `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
+- Check your deployment env file for `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
 - Restart dev server after updating env files.
 - Run `aws sts get-caller-identity` to verify CLI credentials.
 
@@ -99,7 +100,7 @@ Use the same key/secret/region as above.
 
 ### `No default region configured`
 
-- Set `AWS_REGION` in `.env`.
+- Set `AWS_REGION` in your deployment env file.
 - Optionally set CLI default region via `aws configure`.
 
 ## Related docs
