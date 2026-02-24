@@ -45,6 +45,7 @@ Copy from template first:
 
 ```bash
 cp .env.example .env.production
+cp .env.example .env.local
 ```
 
 Set values in your deployment env file:
@@ -58,7 +59,7 @@ CDK_DEFAULT_ACCOUNT=123456789012
 CDK_DEFAULT_REGION=us-west-1
 ```
 
-`pnpm deploy:cf` resolves env files in this order: `ENV_FILE` -> `.env.production` -> `.env` -> `.env.local`.
+`pnpm deploy:cf` uses `.env.production` by default (or `ENV_FILE` if explicitly set).
 
 Notes:
 

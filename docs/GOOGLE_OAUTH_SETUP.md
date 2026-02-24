@@ -30,13 +30,18 @@ Replace `mc.yourdomain.com` with your production panel URL.
 
 ## Add values to env files
 
-Set these in `.env`:
+Set these in your env files:
 
 ```bash
+# .env.local (local development)
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
-NEXT_PUBLIC_APP_URL=http://localhost:3000   # local
-# .env should use your real domain, e.g. https://mc.yourdomain.com
+NEXT_PUBLIC_APP_URL=http://localhost:3000
+
+# .env.production (deployment)
+GOOGLE_CLIENT_ID=...
+GOOGLE_CLIENT_SECRET=...
+NEXT_PUBLIC_APP_URL=https://mc.yourdomain.com
 ```
 
 Also set role emails:
@@ -60,7 +65,7 @@ Then:
 
 ## Production notes
 
-Before deploying, confirm `.env` has:
+Before deploying, confirm your deployment env file has:
 
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
@@ -73,6 +78,14 @@ Then deploy:
 wrangler login
 pnpm deploy:cf
 ```
+
+If needed, force a specific env file:
+
+```bash
+ENV_FILE=.env.production pnpm deploy:cf
+```
+
+By default, deploy already uses `.env.production`.
 
 ## Troubleshooting
 

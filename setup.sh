@@ -4,6 +4,9 @@
 
 set -euo pipefail
 
+PRODUCTION_ENV_FILE=".env.production"
+LOCAL_ENV_FILE=".env.local"
+
 # Log function
 log() {
   echo "$*"
@@ -88,6 +91,14 @@ write_env() {
   mv "$tmp" "$env_file"
 }
 
+write_env_files() {
+  local key="$1"
+  local value="$2"
+
+  write_env "$PRODUCTION_ENV_FILE" "$key" "$value"
+  write_env "$LOCAL_ENV_FILE" "$key" "$value"
+}
+
 get_missing_required_credentials() {
   local required=(
     "AWS_REGION"
@@ -132,7 +143,7 @@ ensure_auth_secret() {
     return 1
   fi
 
-  write_env ".env" "AUTH_SECRET" "$AUTH_SECRET"
+  write_env_files "AUTH_SECRET" "$AUTH_SECRET"
   return 0
 }
 
@@ -156,21 +167,21 @@ ensure_cdk_defaults() {
     return 1
   fi
 
-  write_env ".env" "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
-  write_env ".env" "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
+  write_env_files "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
+  write_env_files "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
   return 0
 }
 
 maybe_confirm_existing_credentials() {
   SKIP_WIZARD="0"
 
-  if [[ ! -f ".env" ]]; then
+  if [[ ! -f "$PRODUCTION_ENV_FILE" ]]; then
     return 0
   fi
 
-  load_env_file ".env" || true
+  load_env_file "$PRODUCTION_ENV_FILE" || true
 
-  # Only offer skipping the wizard when the repo already has .env.
+  # Only offer skipping the wizard when the repo already has .env.production.
   local missing
   missing="$(get_missing_required_credentials | tr '\n' ' ')"
 
@@ -180,7 +191,7 @@ maybe_confirm_existing_credentials() {
 
   screen_clear
   step "Configuration Detected"
-  log "All required credentials appear to already be set in .env."
+  log "All required credentials appear to already be set in $PRODUCTION_ENV_FILE."
   log "Press Enter to accept them and deploy (AWS + Cloudflare), or type 'wizard' to review/update."
   echo ""
   log "Detected:"
@@ -347,9 +358,9 @@ main() {
   # Step 5: Run setup wizard (unless credentials already present)
   if [[ "${SKIP_WIZARD}" == "1" ]]; then
     step "Skipping interactive setup wizard"
-    success "Using credentials from .env"
+    success "Using credentials from $PRODUCTION_ENV_FILE"
 
-    # .env file is already in place
+    # Production env file is already in place
   else
     step "Starting interactive setup wizard"
     log "Launching scripts/setup-wizard.sh..."
@@ -365,7 +376,7 @@ main() {
   fi
 
   # Reload env for the deploy steps below
-  load_env_file ".env" || true
+  load_env_file "$PRODUCTION_ENV_FILE" || true
 
   # Step 6: Deploy AWS infrastructure (CDK)
   step "Deploying AWS infrastructure (CDK)"
@@ -389,7 +400,7 @@ main() {
   success "INSTANCE_ID=$INSTANCE_ID"
 
   # Update env files with INSTANCE_ID for Cloudflare deploy
-  write_env ".env" "INSTANCE_ID" "$INSTANCE_ID"
+  write_env_files "INSTANCE_ID" "$INSTANCE_ID"
 
   # Step 8: Deploy Cloudflare Workers frontend
   step "Deploying Cloudflare Workers frontend"

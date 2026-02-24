@@ -21,7 +21,7 @@ pnpm setup
 1. Installs/verifies local tools (`mise`, Node, pnpm, AWS CLI, CDK)
 2. Launches the credential wizard (`scripts/setup-wizard.sh`)
 3. Deploys AWS infrastructure with CDK
-4. Stores deployment outputs (including `INSTANCE_ID`) in `.env`
+4. Stores deployment outputs (including `INSTANCE_ID`) in `.env.production` and `.env.local`
 5. Deploys the Next.js app to Cloudflare Workers
 
 ### Accounts/credentials you should have ready
@@ -42,7 +42,7 @@ Setup guides:
 ### Run locally against AWS
 
 ```bash
-cp .env.example .env
+cp .env.example .env.local
 pnpm dev
 ```
 
@@ -133,12 +133,9 @@ wrangler login
 pnpm deploy:cf
 ```
 
-`pnpm deploy:cf` selects an env file in this order:
+`pnpm deploy:cf` uses `.env.production` by default.
 
-1. `ENV_FILE` (if explicitly set)
-2. `.env.production`
-3. `.env`
-4. `.env.local`
+It also writes a temporary `.env.production.local` during build so `next build` cannot be overridden by `.env.local`.
 
 For explicit control:
 
@@ -158,7 +155,7 @@ pnpm cdk:deploy
 ### `pnpm setup` fails
 
 - Ensure `aws sts get-caller-identity` works
-- Ensure `.env` has required values from the wizard
+- Ensure `.env.production` has required values from the wizard
 - Re-run `pnpm install` then `pnpm setup`
 
 ### Google login redirect mismatch

@@ -13,13 +13,54 @@
 
 set -euo pipefail
 
-ENV_FILE=".env"
+ENV_FILE="${ENV_FILE:-.env.production}"
 WRANGLER_CONFIG_FILE="wrangler.jsonc"
+NEXT_BUILD_ENV_FILE=".env.production.local"
+NEXT_BUILD_ENV_BACKUP_FILE=""
+NEXT_BUILD_ENV_PREPARED="0"
 
-if [[ ! -f "$ENV_FILE" ]]; then
-  echo "❌ Error: $ENV_FILE file not found"
-  exit 1
-fi
+resolve_env_file() {
+  if [[ ! -f "$ENV_FILE" ]]; then
+    echo "❌ Error: Deployment env file not found: $ENV_FILE"
+    echo "Tip: set a custom file with: ENV_FILE=.env.production pnpm deploy:cf"
+    exit 1
+  fi
+
+  return 0
+}
+
+prepare_next_build_env_file() {
+  # Next.js loads .env.local during production builds, which can override
+  # .env.production. Copy the deploy env to .env.production.local so deploy
+  # always uses the intended production values.
+  if [[ -f "$NEXT_BUILD_ENV_FILE" ]]; then
+    NEXT_BUILD_ENV_BACKUP_FILE="$(mktemp "${NEXT_BUILD_ENV_FILE}.backup.XXXXXX")"
+    cp "$NEXT_BUILD_ENV_FILE" "$NEXT_BUILD_ENV_BACKUP_FILE"
+  fi
+
+  cp "$ENV_FILE" "$NEXT_BUILD_ENV_FILE"
+  NEXT_BUILD_ENV_PREPARED="1"
+}
+
+cleanup_next_build_env_file() {
+  if [[ "$NEXT_BUILD_ENV_PREPARED" != "1" ]]; then
+    return 0
+  fi
+
+  if [[ -n "$NEXT_BUILD_ENV_BACKUP_FILE" ]]; then
+    mv "$NEXT_BUILD_ENV_BACKUP_FILE" "$NEXT_BUILD_ENV_FILE"
+    return 0
+  fi
+
+  rm -f "$NEXT_BUILD_ENV_FILE"
+}
+
+resolve_env_file
+
+echo "🧪 Using environment file: $ENV_FILE"
+echo ""
+
+trap cleanup_next_build_env_file EXIT
 
 if [[ ! -f "$WRANGLER_CONFIG_FILE" ]]; then
   echo "❌ Error: $WRANGLER_CONFIG_FILE not found (required to determine Worker name)"
@@ -114,7 +155,7 @@ is_placeholder() {
   return 1
 }
 
-# Define required env vars from .env
+# Define required env vars from the selected deployment env file
 REQUIRED_VARS=(
   "NEXT_PUBLIC_APP_URL"
   "GOOGLE_CLIENT_ID"
@@ -142,11 +183,11 @@ if grep -q "AUTH_SECRET=your-secret-here" "$ENV_FILE" || grep -q "AUTH_SECRET=de
     NEW_SECRET=$(node -e "console.log(require('crypto').randomBytes(48).toString('base64'))")
   else
     echo "❌ Error: Neither openssl nor node found. Cannot generate AUTH_SECRET."
-    echo "Please install OpenSSL or Node.js, or manually add a strong random string to AUTH_SECRET in .env"
+    echo "Please install OpenSSL or Node.js, or manually add a strong random string to AUTH_SECRET in $ENV_FILE"
     exit 1
   fi
-  
-  # Update or add AUTH_SECRET in .env
+
+  # Update or add AUTH_SECRET in the selected deployment env file
   if grep -q "^AUTH_SECRET=" "$ENV_FILE"; then
     # Replace existing placeholder
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -462,6 +503,7 @@ if [[ -z "$WORKER_NAME" ]]; then
 fi
 
 echo "📦 Building for Cloudflare (OpenNext)..."
+prepare_next_build_env_file
 if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm exec opennextjs-cloudflare build; then
   echo ""
   echo "❌ Error: Failed to build for Cloudflare"
@@ -479,10 +521,10 @@ fi
 echo "✅ Deploy successful"
 echo ""
 
-# Upload secrets from .env
+# Upload secrets from selected deployment env file
 # Note: MC_BACKEND_MODE and ENABLE_DEV_LOGIN are exported above for the build process
 # but are NOT uploaded as Cloudflare secrets - they default correctly at runtime.
-echo "🔑 Uploading secrets from .env..."
+echo "🔑 Uploading secrets from $ENV_FILE..."
 
 SECRET_COUNT=0
 LINE_NO=0
