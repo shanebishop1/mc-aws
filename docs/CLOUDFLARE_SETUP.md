@@ -54,7 +54,7 @@ Find your `mc` record and copy its `id` as `CLOUDFLARE_RECORD_ID`.
 
 ## 5) Set env values
 
-Set these in `.env`:
+Set these in your deployment env file (recommended: `.env.production`):
 
 ```bash
 CLOUDFLARE_DNS_API_TOKEN=...
@@ -83,6 +83,16 @@ Important:
 pnpm deploy:cf
 ```
 
+The deploy script uses `.env.production` by default.
+
+If you want to force a specific file:
+
+```bash
+ENV_FILE=.env.production pnpm deploy:cf
+```
+
+During build, the script writes a temporary `.env.production.local` from the selected deploy file so `.env.local` cannot override production values.
+
 The deploy script validates env, uploads secrets, builds, and deploys the Worker.
 
 ## Troubleshooting
@@ -91,7 +101,7 @@ The deploy script validates env, uploads secrets, builds, and deploys the Worker
 
 - Remove exported `CLOUDFLARE_DNS_API_TOKEN` from your shell session.
 - Re-run `wrangler login`.
-- Use `.env` for DNS token storage instead of global shell exports.
+- Use a deployment env file (normally `.env.production`) for DNS token storage instead of global shell exports.
 
 ### DNS is not updating after server start
 
