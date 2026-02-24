@@ -72,15 +72,15 @@ async function setupDLMSnapshots() {
 (async () => {
   const githubToken = process.env.GITHUB_TOKEN;
   if (!githubToken) {
-    console.error("Error: GITHUB_TOKEN not found in .env file.");
-    console.error('Please add GITHUB_TOKEN="ghp_..." to your .env file.');
+    console.error("Error: GITHUB_TOKEN not found in env configuration.");
+    console.error('Please add GITHUB_TOKEN="ghp_..." to .env.production (or your active env file).');
     process.exit(1);
   }
 
   const cloudflareToken = process.env.CLOUDFLARE_DNS_API_TOKEN;
   if (!cloudflareToken) {
-    console.error("Error: CLOUDFLARE_DNS_API_TOKEN not found in .env file.");
-    console.error('Please add CLOUDFLARE_DNS_API_TOKEN="..." to your .env file.');
+    console.error("Error: CLOUDFLARE_DNS_API_TOKEN not found in env configuration.");
+    console.error('Please add CLOUDFLARE_DNS_API_TOKEN="..." to .env.production (or your active env file).');
     process.exit(1);
   }
 

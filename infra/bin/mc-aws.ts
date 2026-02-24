@@ -5,14 +5,16 @@ import * as path from "node:path";
 
 import * as dotenv from "dotenv";
 
-// Load environment from repo-root .env for CDK deploys
-const rootEnvPath = path.resolve(__dirname, "../../.env");
+// Load environment from repo root for CDK deploys.
+// Priority: .env.production, then .env.local.
+const envCandidates = [".env.production", ".env.local"].map((file) => path.resolve(__dirname, `../../${file}`));
+const selectedEnvPath = envCandidates.find((candidate) => fs.existsSync(candidate));
 
-if (fs.existsSync(rootEnvPath)) {
-  // override=true so a blank env var doesn't block values from .env
-  dotenv.config({ path: rootEnvPath, override: true });
+if (selectedEnvPath) {
+  // override=true so a blank shell env var does not block file values.
+  dotenv.config({ path: selectedEnvPath, override: true });
 } else {
-  dotenv.config();
+  dotenv.config({ override: true });
 }
 
 import * as cdk from "aws-cdk-lib";

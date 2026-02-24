@@ -1,7 +1,7 @@
 /**
  * Environment variable validation and retrieval
  *
- * Environment variables are loaded from .env
+ * Environment variables are loaded from env files at runtime/build time
  * Environment-specific behavior (dev/prod) is handled by package.json scripts
  */
 
@@ -89,7 +89,7 @@ export const env = {
     if (newToken) return newToken;
     if (oldToken) {
       console.warn(
-        "[DEPRECATION] CLOUDFLARE_API_TOKEN is deprecated. Please rename to CLOUDFLARE_DNS_API_TOKEN in your .env files."
+        "[DEPRECATION] CLOUDFLARE_API_TOKEN is deprecated. Please rename to CLOUDFLARE_DNS_API_TOKEN in your env files."
       );
       return oldToken;
     }
