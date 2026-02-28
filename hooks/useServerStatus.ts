@@ -1,15 +1,16 @@
 "use client";
 
+import { usePageFocus } from "@/hooks/usePageFocus";
+import { fetchPlayers, fetchStatus, queryKeys } from "@/lib/client-api";
 import { ServerState } from "@/lib/types";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
 
-// How long to show optimistic state before giving up (2 minutes)
 const PENDING_ACTION_TIMEOUT_MS = 2 * 60 * 1000;
 const STATUS_POLL_INTERVAL_MS = 5000;
 const USER_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 const ACTIVITY_DEBOUNCE_MS = 1000;
 
-// Maps pending action to expected final state
 const ACTION_TARGET_STATES: Record<string, ServerState[]> = {
   start: [ServerState.Running],
   resume: [ServerState.Running],
@@ -17,7 +18,6 @@ const ACTION_TARGET_STATES: Record<string, ServerState[]> = {
   hibernate: [ServerState.Hibernating],
 };
 
-// Maps pending action to display state
 const ACTION_DISPLAY_STATES: Record<string, ServerState> = {
   start: ServerState.Pending,
   resume: ServerState.Pending,
@@ -40,57 +40,64 @@ interface UseServerStatusReturn {
   setPendingAction: (action: string | null) => void;
 }
 
-const fetchPlayerCount = async (setPlayerCount: (count: number | undefined) => void) => {
-  try {
-    const playerRes = await fetch("/api/players");
-    if (playerRes.ok) {
-      const playerData = await playerRes.json();
-      if (playerData.success && playerData.data) {
-        setPlayerCount(playerData.data.count);
-      }
-    }
-  } catch (error) {
-    console.error("Failed to fetch player count", error);
-  }
-};
-
 export function useServerStatus(): UseServerStatusReturn {
-  const [actualStatus, setActualStatus] = useState<ServerState>(ServerState.Unknown);
-  const [hasVolume, setHasVolume] = useState<boolean>(false);
-  const [domain, setDomain] = useState<string | undefined>(undefined);
-  const [playerCount, setPlayerCount] = useState<number | undefined>(undefined);
-  const [isInitialLoad, setIsInitialLoad] = useState(true);
+  const isPageFocused = usePageFocus();
+  const queryClient = useQueryClient();
   const [pendingAction, setPendingActionState] = useState<PendingAction | null>(null);
+  const [isUserIdle, setIsUserIdle] = useState(false);
+  const [hasLoadedOnce, setHasLoadedOnce] = useState(false);
   const prevStatusRef = useRef<ServerState>(ServerState.Unknown);
 
-  // Set a pending action (called when user clicks start/stop/etc)
+  const statusQuery = useQuery({
+    queryKey: queryKeys.status,
+    queryFn: fetchStatus,
+    enabled: isPageFocused && !isUserIdle,
+    refetchInterval: STATUS_POLL_INTERVAL_MS,
+    refetchIntervalInBackground: false,
+  });
+
+  const playerCountQuery = useQuery({
+    queryKey: queryKeys.players,
+    queryFn: fetchPlayers,
+    enabled: false,
+  });
+
+  const refetchStatus = statusQuery.refetch;
+  const refetchPlayerCount = playerCountQuery.refetch;
+
+  const actualStatus = statusQuery.data?.data?.state ?? ServerState.Unknown;
+  const hasVolume = statusQuery.data?.data?.hasVolume ?? false;
+  const domain = actualStatus === ServerState.Running ? statusQuery.data?.data?.domain : undefined;
+
+  useEffect(() => {
+    if (statusQuery.data || statusQuery.error) {
+      setHasLoadedOnce(true);
+    }
+  }, [statusQuery.data, statusQuery.error]);
+
+  useEffect(() => {
+    const justBecameRunning = actualStatus === ServerState.Running && prevStatusRef.current !== ServerState.Running;
+
+    if (justBecameRunning) {
+      void refetchPlayerCount();
+    }
+
+    if (actualStatus !== ServerState.Running) {
+      void queryClient.cancelQueries({ queryKey: queryKeys.players });
+    }
+
+    prevStatusRef.current = actualStatus;
+  }, [actualStatus, queryClient, refetchPlayerCount]);
+
   const setPendingAction = useCallback((action: string | null) => {
     if (action) {
       setPendingActionState({ action, timestamp: Date.now() });
-    } else {
-      setPendingActionState(null);
+      return;
     }
+
+    setPendingActionState(null);
   }, []);
 
-  // Compute display status: show pending state if action is in progress, otherwise actual
-  const status = (() => {
-    if (!pendingAction) return actualStatus;
-
-    const { action, timestamp } = pendingAction;
-    const elapsed = Date.now() - timestamp;
-
-    // Timeout expired - show actual state
-    if (elapsed > PENDING_ACTION_TIMEOUT_MS) return actualStatus;
-
-    // Check if actual state has reached target - if so, clear pending and show actual
-    const targetStates = ACTION_TARGET_STATES[action];
-    if (targetStates?.includes(actualStatus)) return actualStatus;
-
-    // Still pending - show optimistic state
-    return ACTION_DISPLAY_STATES[action] ?? actualStatus;
-  })();
-
-  // Clear pending action when target state is reached
   useEffect(() => {
     if (!pendingAction) return;
 
@@ -100,56 +107,9 @@ export function useServerStatus(): UseServerStatusReturn {
     }
   }, [actualStatus, pendingAction]);
 
-  // Handle player count updates based on state changes
-  const updatePlayerCount = useCallback((newState: ServerState) => {
-    const justBecameRunning = newState === ServerState.Running && prevStatusRef.current !== ServerState.Running;
-    if (justBecameRunning) {
-      fetchPlayerCount(setPlayerCount);
-    } else if (newState !== ServerState.Running) {
-      setPlayerCount(undefined);
-    }
-    prevStatusRef.current = newState;
-  }, []);
-
-  const fetchStatus = useCallback(async () => {
-    try {
-      const res = await fetch("/api/status");
-      if (res.ok) {
-        const data = await res.json();
-        const newState = data.data.state;
-        setActualStatus(newState);
-        setHasVolume(data.data.hasVolume ?? false);
-        setDomain(newState === ServerState.Running ? data.data.domain : undefined);
-        updatePlayerCount(newState);
-      }
-    } catch (error) {
-      console.error("Failed to fetch status", error);
-    } finally {
-      setIsInitialLoad(false);
-    }
-  }, [updatePlayerCount]);
-
-  // Poll status only when user is actively engaged with this page
   useEffect(() => {
-    let intervalId: NodeJS.Timeout | null = null;
-    let inactivityTimeoutId: NodeJS.Timeout | null = null;
-    let isUserIdle = false;
+    let inactivityTimeoutId: ReturnType<typeof setTimeout> | null = null;
     let lastActivityAt = 0;
-
-    const startPolling = () => {
-      if (intervalId === null) {
-        intervalId = setInterval(() => {
-          void fetchStatus();
-        }, STATUS_POLL_INTERVAL_MS);
-      }
-    };
-
-    const stopPolling = () => {
-      if (intervalId !== null) {
-        clearInterval(intervalId);
-        intervalId = null;
-      }
-    };
 
     const clearInactivityTimeout = () => {
       if (inactivityTimeoutId !== null) {
@@ -161,13 +121,8 @@ export function useServerStatus(): UseServerStatusReturn {
     const scheduleInactivityTimeout = () => {
       clearInactivityTimeout();
       inactivityTimeoutId = setTimeout(() => {
-        isUserIdle = true;
-        stopPolling();
+        setIsUserIdle(true);
       }, USER_INACTIVITY_TIMEOUT_MS);
-    };
-
-    const canPoll = () => {
-      return document.visibilityState === "visible" && !isUserIdle;
     };
 
     const handleUserActivity = () => {
@@ -176,38 +131,21 @@ export function useServerStatus(): UseServerStatusReturn {
         return;
       }
 
-      const wasIdle = isUserIdle;
-      const wasPolling = intervalId !== null;
-
       lastActivityAt = now;
-      isUserIdle = false;
+      setIsUserIdle(false);
       scheduleInactivityTimeout();
-
-      if (canPoll() && (wasIdle || !wasPolling)) {
-        void fetchStatus();
-        startPolling();
-        return;
-      }
-
-      if (!canPoll()) {
-        stopPolling();
-      }
     };
 
     const handleVisibilityChange = () => {
       if (document.visibilityState === "visible") {
         handleUserActivity();
-      } else {
-        stopPolling();
+        void refetchStatus();
       }
     };
 
     const handleWindowFocus = () => {
       handleUserActivity();
-    };
-
-    const handleWindowBlur = () => {
-      stopPolling();
+      void refetchStatus();
     };
 
     const activityEvents: Array<keyof DocumentEventMap> = [
@@ -218,45 +156,55 @@ export function useServerStatus(): UseServerStatusReturn {
       "touchstart",
     ];
 
-    // Always fetch once on mount so UI can leave initial "Connecting..."
-    // even if focus APIs behave inconsistently on this device/browser.
-    void fetchStatus();
-
-    // Initialize polling state from current visibility/activity.
-    isUserIdle = false;
     lastActivityAt = Date.now();
     scheduleInactivityTimeout();
-    if (canPoll()) {
-      startPolling();
-    }
 
-    // Listen for engagement and focus changes
     document.addEventListener("visibilitychange", handleVisibilityChange);
     window.addEventListener("focus", handleWindowFocus);
-    window.addEventListener("blur", handleWindowBlur);
     for (const eventName of activityEvents) {
       document.addEventListener(eventName, handleUserActivity);
     }
 
     return () => {
-      stopPolling();
       clearInactivityTimeout();
       document.removeEventListener("visibilitychange", handleVisibilityChange);
       window.removeEventListener("focus", handleWindowFocus);
-      window.removeEventListener("blur", handleWindowBlur);
       for (const eventName of activityEvents) {
         document.removeEventListener(eventName, handleUserActivity);
       }
     };
-  }, [fetchStatus]);
+  }, [isUserIdle, refetchStatus]);
+
+  const status = (() => {
+    if (!pendingAction) return actualStatus;
+
+    const { action, timestamp } = pendingAction;
+    const elapsed = Date.now() - timestamp;
+
+    if (elapsed > PENDING_ACTION_TIMEOUT_MS) return actualStatus;
+
+    const targetStates = ACTION_TARGET_STATES[action];
+    if (targetStates?.includes(actualStatus)) return actualStatus;
+
+    return ACTION_DISPLAY_STATES[action] ?? actualStatus;
+  })();
+
+  const fetchStatusNow = useCallback(async () => {
+    const hasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
+    if (document.visibilityState !== "visible" || !hasFocus) {
+      return;
+    }
+
+    await refetchStatus();
+  }, [refetchStatus]);
 
   return {
     status,
     domain,
     hasVolume,
-    playerCount,
-    isInitialLoad,
-    fetchStatus,
+    playerCount: actualStatus === ServerState.Running ? playerCountQuery.data?.data?.count : undefined,
+    isInitialLoad: !hasLoadedOnce,
+    fetchStatus: fetchStatusNow,
     setPendingAction,
   };
 }

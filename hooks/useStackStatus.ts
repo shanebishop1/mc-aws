@@ -1,7 +1,8 @@
 "use client";
 
-import type { ApiResponse, StackStatusResponse } from "@/lib/types";
-import { useCallback, useEffect, useState } from "react";
+import { usePageFocus } from "@/hooks/usePageFocus";
+import { fetchStackStatus, queryKeys } from "@/lib/client-api";
+import { useQuery } from "@tanstack/react-query";
 
 interface UseStackStatusReturn {
   stackExists: boolean;
@@ -13,49 +14,24 @@ interface UseStackStatusReturn {
 }
 
 export function useStackStatus(): UseStackStatusReturn {
-  const [stackExists, setStackExists] = useState<boolean>(false);
-  const [stackStatus, setStackStatus] = useState<string | undefined>(undefined);
-  const [stackId, setStackId] = useState<string | undefined>(undefined);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | undefined>(undefined);
+  const isPageFocused = usePageFocus();
 
-  const refetch = useCallback(async () => {
-    setIsLoading(true);
-    setError(undefined);
+  const stackStatusQuery = useQuery({
+    queryKey: queryKeys.stackStatus,
+    queryFn: fetchStackStatus,
+    enabled: isPageFocused,
+  });
 
-    try {
-      const res = await fetch("/api/stack-status");
-      if (!res.ok) {
-        throw new Error(`Failed to fetch stack status: ${res.statusText}`);
-      }
-
-      const data: ApiResponse<StackStatusResponse> = await res.json();
-
-      if (data.success && data.data) {
-        setStackExists(data.data.exists);
-        setStackStatus(data.data.status);
-        setStackId(data.data.stackId);
-      } else {
-        setError(data.error ?? "Failed to get stack status");
-      }
-    } catch (error) {
-      console.error("[STACK_STATUS] Failed to fetch stack status:", error);
-      setError(error instanceof Error ? error.message : "Unknown error");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-  }, [refetch]);
+  const refetch = async () => {
+    await stackStatusQuery.refetch();
+  };
 
   return {
-    stackExists,
-    stackStatus,
-    stackId,
-    isLoading,
-    error,
+    stackExists: stackStatusQuery.data?.data?.exists ?? false,
+    stackStatus: stackStatusQuery.data?.data?.status,
+    stackId: stackStatusQuery.data?.data?.stackId,
+    isLoading: stackStatusQuery.isPending,
+    error: stackStatusQuery.error instanceof Error ? stackStatusQuery.error.message : undefined,
     refetch,
   };
 }

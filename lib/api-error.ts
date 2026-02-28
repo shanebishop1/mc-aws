@@ -38,6 +38,7 @@ const GENERIC_ERROR_MESSAGES = {
   resume: "Failed to resume server",
   hibernate: "Failed to hibernate server",
   backup: "Failed to create backup",
+  backups: "Failed to list backups",
   restore: "Failed to restore backup",
   costs: "Failed to fetch cost data",
   players: "Failed to fetch player count",

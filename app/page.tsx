@@ -9,18 +9,21 @@ import { ResumeModal } from "@/components/ResumeModal";
 import { ServerStatus } from "@/components/ServerStatus";
 import { useAuth } from "@/components/auth/auth-provider";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
+import { usePageFocus } from "@/hooks/usePageFocus";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { useStackStatus } from "@/hooks/useStackStatus";
+import { type ActionEndpoint, fetchAwsConfig, fetchServiceStatus, postServerAction, queryKeys } from "@/lib/client-api";
 import { ServerState } from "@/lib/types";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { useCallback, useEffect, useState } from "react";
 
 export default function Home() {
-  const { isAdmin, isAuthenticated } = useAuth();
+  const isPageFocused = usePageFocus();
+  const { isAdmin, isAllowed, isAuthenticated } = useAuth();
   const { status, domain, hasVolume, playerCount, isInitialLoad, fetchStatus, setPendingAction } = useServerStatus();
   const { stackExists, isLoading: stackLoading, error: stackError } = useStackStatus();
 
-  const [instanceId] = useState<string | undefined>(undefined);
   const [_isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [serviceActive, setServiceActive] = useState<boolean | undefined>(undefined);
@@ -49,73 +52,46 @@ export default function Home() {
     }
   }, []);
 
-  // Fetch AWS config for console URL
-  useEffect(() => {
-    if (!isAdmin) return;
+  const awsConfigQuery = useQuery({
+    queryKey: queryKeys.awsConfig,
+    queryFn: fetchAwsConfig,
+    enabled: isAdmin && isPageFocused,
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+  });
 
-    fetch("/api/aws-config")
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.data.ec2ConsoleUrl) {
-          setAwsConsoleUrl(data.data.ec2ConsoleUrl);
-        }
-      })
-      .catch(() => {
-        // Silently fail - AWS link is optional
-      });
-  }, [isAdmin]);
-
-  // Poll service status when instance is running
   useEffect(() => {
-    // Only poll when instance is running
-    if (status !== ServerState.Running) {
+    const nextUrl = awsConfigQuery.data?.data?.ec2ConsoleUrl;
+    if (nextUrl) {
+      setAwsConsoleUrl(nextUrl);
+    }
+  }, [awsConfigQuery.data]);
+
+  const serviceStatusQuery = useQuery({
+    queryKey: queryKeys.serviceStatus,
+    queryFn: fetchServiceStatus,
+    enabled: isAllowed && status === ServerState.Running && isPageFocused,
+    refetchInterval: 5000,
+    refetchIntervalInBackground: false,
+  });
+
+  useEffect(() => {
+    if (!isAllowed || status !== ServerState.Running) {
       setServiceActive(undefined);
       return;
     }
 
-    const fetchServiceStatus = async () => {
-      try {
-        const res = await fetch("/api/service-status");
-        if (res.ok) {
-          const data = await res.json();
-          if (data.success && data.data) {
-            setServiceActive(data.data.serviceActive);
-          }
-        }
-      } catch (error) {
-        console.error("[PAGE] Failed to fetch service status:", error);
-      }
-    };
-
-    // Initial fetch
-    void fetchServiceStatus();
-
-    // Poll every 5 seconds (same interval as status polling)
-    const intervalId = setInterval(() => {
-      void fetchServiceStatus();
-    }, 5000);
-
-    return () => {
-      clearInterval(intervalId);
-    };
-  }, [status]);
+    const nextServiceActive = serviceStatusQuery.data?.data?.serviceActive;
+    if (typeof nextServiceActive === "boolean") {
+      setServiceActive(nextServiceActive);
+    }
+  }, [isAllowed, serviceStatusQuery.data, status]);
 
   // Use custom hook to derive button visibility state
   const { showResume, showStart, showStop, showHibernate, showBackupRestore, actionsEnabled } = useButtonVisibility(
     status,
     hasVolume,
     serviceActive
-  );
-
-  const buildRequestBody = useCallback(
-    (extraData?: Record<string, string>): string | undefined => {
-      const bodyData: Record<string, string> = instanceId ? { instanceId } : {};
-      if (extraData) {
-        Object.assign(bodyData, extraData);
-      }
-      return Object.keys(bodyData).length > 0 ? JSON.stringify(bodyData) : undefined;
-    },
-    [instanceId]
   );
 
   // Helper to update status optimistically based on action
@@ -132,10 +108,18 @@ export default function Home() {
     [setPendingAction]
   );
 
+  const serverActionMutation = useMutation({
+    mutationFn: ({ endpoint, body }: { endpoint: ActionEndpoint; body?: Record<string, string> }) =>
+      postServerAction(endpoint, body),
+  });
+
   // Helper to schedule status refresh
   const scheduleStatusRefresh = useCallback(() => {
     setTimeout(async () => {
-      await fetchStatus();
+      const hasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
+      if (document.visibilityState === "visible" && hasFocus) {
+        await fetchStatus();
+      }
     }, 2000);
   }, [fetchStatus]);
 
@@ -146,7 +130,11 @@ export default function Home() {
       const errorMessage = error.message || "Unknown error";
       console.log("[PAGE ACTION] Error caught, setting message:", errorMessage);
       setMessage(errorMessage);
-      await fetchStatus();
+
+      const hasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
+      if (document.visibilityState === "visible" && hasFocus) {
+        await fetchStatus();
+      }
     },
     [fetchStatus]
   );
@@ -157,15 +145,9 @@ export default function Home() {
       updateOptimisticStatus(action);
 
       try {
-        // Execute API action
-        const body = buildRequestBody(bodyData);
-        const res = await fetch(endpoint, {
-          method: "POST",
-          headers: body ? { "Content-Type": "application/json" } : undefined,
-          body,
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || "Action failed");
+        const typedEndpoint = endpoint as ActionEndpoint;
+        const body = bodyData ?? undefined;
+        const data = await serverActionMutation.mutateAsync({ endpoint: typedEndpoint, body });
 
         if (data.data?.message) {
           setMessage(data.data.message);
@@ -178,7 +160,7 @@ export default function Home() {
         setTimeout(() => setMessage(null), 5000);
       }
     },
-    [updateOptimisticStatus, scheduleStatusRefresh, handleActionError, buildRequestBody]
+    [handleActionError, scheduleStatusRefresh, serverActionMutation, updateOptimisticStatus]
   );
 
   // If the user clicked Start while logged out, continue automatically after sign-in.
