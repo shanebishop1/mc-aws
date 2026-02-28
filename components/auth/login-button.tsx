@@ -4,7 +4,7 @@ import { motion } from "framer-motion";
 import { useAuth } from "./auth-provider";
 
 export function LoginButton() {
-  const { isLoading, isAuthenticated, refetch } = useAuth();
+  const { isLoading, isAuthenticated, refetch, signOut } = useAuth();
 
   if (isLoading) {
     return null;
@@ -43,7 +43,7 @@ export function LoginButton() {
   };
 
   const handleSignOut = async () => {
-    await fetch("/api/auth/logout", { method: "POST" });
+    await signOut();
     window.location.reload();
   };
 

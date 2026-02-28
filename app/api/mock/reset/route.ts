@@ -4,6 +4,7 @@
  * Only available in mock mode
  */
 
+import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { resetMockStateStore, resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
 import { isMockMode } from "@/lib/env";
@@ -24,9 +25,16 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
     );
   }
 
-  // In mock mode, skip authentication for easier testing
-  // In production, this would be blocked by the isMockMode() check above
-  console.log("[MOCK-CONTROL] Resetting mock state to defaults (mock mode, skipping auth)");
+  // Require authentication for mutations
+  try {
+    const user = await requireAllowed(_request);
+    console.log("[MOCK-CONTROL] Reset by:", user.email, "role:", user.role);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse<ApiResponse<unknown>>;
+    }
+    throw error;
+  }
 
   try {
     // Force a complete reset of the singleton to ensure clean state

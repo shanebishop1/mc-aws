@@ -1,5 +1,6 @@
 import { IOSViewportFix } from "@/components/IOSViewportFix";
 import { AuthProvider } from "@/components/auth/auth-provider";
+import { QueryProvider } from "@/components/providers/query-provider";
 import type { Metadata, Viewport } from "next";
 import { Inter, Playfair_Display } from "next/font/google";
 import "./globals.css";
@@ -76,7 +77,9 @@ export default function RootLayout({
         <div id="safari-chrome-tint-layer" aria-hidden="true" />
         <IOSViewportFix />
         <div id="app-root">
-          <AuthProvider>{children}</AuthProvider>
+          <QueryProvider>
+            <AuthProvider>{children}</AuthProvider>
+          </QueryProvider>
         </div>
       </body>
     </html>

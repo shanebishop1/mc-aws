@@ -1,6 +1,8 @@
 "use client";
 
 import { LuxuryButton } from "@/components/ui/Button";
+import { fetchGDriveSetup } from "@/lib/client-api";
+import { useMutation } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useRef, useState } from "react";
 
@@ -25,6 +27,10 @@ export const GoogleDriveSetupPrompt = ({
   const [error, setError] = useState<string | null>(null);
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
+  const gdriveSetupMutation = useMutation({
+    mutationFn: fetchGDriveSetup,
+  });
+
   // Reset state when modal closes
   useEffect(() => {
     if (!isOpen) {
@@ -44,13 +50,7 @@ export const GoogleDriveSetupPrompt = ({
     setError(null);
 
     try {
-      // Get OAuth URL from API
-      const res = await fetch("/api/gdrive/setup");
-      const data = await res.json();
-
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || "Failed to get OAuth URL");
-      }
+      const data = await gdriveSetupMutation.mutateAsync();
 
       const authUrl = data.data?.authUrl;
       if (!authUrl) {

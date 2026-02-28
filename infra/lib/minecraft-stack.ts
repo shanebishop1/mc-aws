@@ -159,21 +159,6 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Add permissions to manage volumes (for hibernate/resume)
-    ec2Role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: [
-          "ec2:DescribeVolumes",
-          "ec2:DescribeInstances",
-          "ec2:DetachVolume",
-          "ec2:DeleteVolume",
-          "ec2:CreateVolume",
-          "ec2:AttachVolume",
-        ],
-        resources: ["*"],
-      })
-    );
-
     // 3. Security Group
     const securityGroup = new ec2.SecurityGroup(this, "MinecraftSecurityGroup", {
       vpc,

@@ -7,13 +7,27 @@ import { getAuthUser } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
 import { env } from "@/lib/env";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const noStoreHeaders = { "Cache-Control": "no-store" } as const;
+const STATUS_CACHE_TTL_MS = 5_000;
+const STATUS_RATE_LIMIT_WINDOW_MS = 60_000;
+const STATUS_RATE_LIMIT_MAX_REQUESTS = 30;
+const IS_TEST_ENV = process.env.NODE_ENV === "test";
+
+type CachedStatusSnapshot = {
+  expiresAtMs: number;
+  generatedAt: string;
+  instanceId: string;
+  displayState: ServerState;
+  hasVolume: boolean;
+};
+
+let cachedStatusSnapshot: CachedStatusSnapshot | null = null;
 
 function mapEc2StateToServerState(state: string | undefined): ServerState {
   if (state === "running") return ServerState.Running;
@@ -46,27 +60,40 @@ function determineDisplayState(state: ServerState, hasVolume: boolean): ServerSt
 /**
  * Build success response for status endpoint
  */
-function buildStatusResponse(
-  displayState: ServerState,
-  instanceId: string,
-  hasVolume: boolean,
+function buildStatusPayload(
+  snapshot: CachedStatusSnapshot,
   user: import("@/lib/api-auth").AuthUser | null
-): NextResponse<ApiResponse<ServerStatusResponse>> {
-  const domain = displayState === ServerState.Running ? env.CLOUDFLARE_MC_DOMAIN : undefined;
-
-  const response: ApiResponse<ServerStatusResponse> = {
+): ApiResponse<ServerStatusResponse> {
+  const domain = snapshot.displayState === ServerState.Running ? env.CLOUDFLARE_MC_DOMAIN : undefined;
+  return {
     success: true,
     data: {
-      state: displayState,
-      instanceId: user ? instanceId : "redacted",
+      state: snapshot.displayState,
+      instanceId: user ? snapshot.instanceId : "redacted",
       domain,
-      hasVolume,
-      lastUpdated: new Date().toISOString(),
+      hasVolume: snapshot.hasVolume,
+      lastUpdated: snapshot.generatedAt,
     },
-    timestamp: new Date().toISOString(),
+    timestamp: snapshot.generatedAt,
   };
+}
 
-  return NextResponse.json(response, { headers: noStoreHeaders });
+function buildStatusResponse(
+  payload: ApiResponse<ServerStatusResponse>,
+  user: import("@/lib/api-auth").AuthUser | null,
+  cacheStatus: "HIT" | "MISS"
+): NextResponse<ApiResponse<ServerStatusResponse>> {
+  const headers = new Headers();
+  headers.set("Vary", "Cookie");
+  headers.set("X-Status-Cache", cacheStatus);
+
+  if (user) {
+    headers.set("Cache-Control", "private, no-store");
+  } else {
+    headers.set("Cache-Control", "public, s-maxage=5, stale-while-revalidate=25");
+  }
+
+  return NextResponse.json(payload, { headers });
 }
 
 /**
@@ -84,7 +111,36 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   const user = await getAuthUser(request);
   console.log("[STATUS] Access by:", user?.email ?? "anonymous");
 
+  if (!IS_TEST_ENV) {
+    const clientIp = getClientIp(request.headers);
+    const rateLimit = checkRateLimit({
+      key: `status:${clientIp}`,
+      limit: STATUS_RATE_LIMIT_MAX_REQUESTS,
+      windowMs: STATUS_RATE_LIMIT_WINDOW_MS,
+    });
+
+    if (!rateLimit.allowed) {
+      const response = NextResponse.json(
+        {
+          success: false,
+          error: "Too many status requests. Please retry shortly.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 429 }
+      );
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      response.headers.set("Cache-Control", "no-store");
+      return response;
+    }
+  }
+
   try {
+    const nowMs = Date.now();
+    if (!IS_TEST_ENV && cachedStatusSnapshot && cachedStatusSnapshot.expiresAtMs > nowMs) {
+      const payload = buildStatusPayload(cachedStatusSnapshot, user);
+      return buildStatusResponse(payload, user, "HIT");
+    }
+
     // Always resolve instance ID server-side - do not trust caller input
     const instanceId = await findInstanceId();
     console.log("[STATUS] Getting server status for instance:", instanceId);
@@ -96,7 +152,20 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     // Determine display state
     const displayState = determineDisplayState(state, hasVolume);
 
-    return buildStatusResponse(displayState, instanceId, hasVolume, user);
+    const snapshot: CachedStatusSnapshot = {
+      expiresAtMs: nowMs + STATUS_CACHE_TTL_MS,
+      generatedAt: new Date().toISOString(),
+      instanceId,
+      displayState,
+      hasVolume,
+    };
+
+    if (!IS_TEST_ENV) {
+      cachedStatusSnapshot = snapshot;
+    }
+    const payload = buildStatusPayload(snapshot, user);
+
+    return buildStatusResponse(payload, user, "MISS");
   } catch (error) {
     return buildStatusErrorResponse(error);
   }

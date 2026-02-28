@@ -2,6 +2,8 @@
 
 import { BackupSelectionList } from "@/components/backup";
 import { LuxuryButton } from "@/components/ui/Button";
+import { fetchBackups as fetchBackupsApi, queryKeys } from "@/lib/client-api";
+import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
@@ -16,6 +18,7 @@ interface ResumeModalProps {
 }
 
 export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => {
+  const queryClient = useQueryClient();
   const [view, setView] = useState<"choice" | "backups">("choice");
   const [backups, setBackups] = useState<BackupInfo[]>([]);
   const [selectedBackup, setSelectedBackup] = useState<string | null>(null);
@@ -47,20 +50,21 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
 
     try {
       const check = async () => {
-        const res = await fetch("/api/backups");
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error);
+        const data = await queryClient.fetchQuery({
+          queryKey: queryKeys.backups(false),
+          queryFn: () => fetchBackupsApi(false),
+        });
         return data.data;
       };
 
       let data = await check();
-      while (data.status === "caching" && attempts < maxAttempts) {
+      while (data?.status === "caching" && attempts < maxAttempts) {
         attempts++;
         await new Promise((r) => setTimeout(r, 3000));
         data = await check();
       }
 
-      setBackups(data.backups || []);
+      setBackups(data?.backups || []);
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch backups";
       setError(errorMessage);

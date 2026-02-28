@@ -1,6 +1,8 @@
 "use client";
 
-import type { CostData, CostsResponse } from "@/lib/types";
+import { fetchCosts } from "@/lib/client-api";
+import type { CostData } from "@/lib/types";
+import { useMutation } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
 const STORAGE_KEY = "mc-aws-cost-cache";
@@ -12,6 +14,7 @@ interface CachedCostData {
 
 function loadFromStorage(): CachedCostData | null {
   if (typeof window === "undefined") return null;
+
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (!stored) return null;
@@ -23,10 +26,11 @@ function loadFromStorage(): CachedCostData | null {
 
 function saveToStorage(data: CostData, cachedAt: number): void {
   if (typeof window === "undefined") return;
+
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify({ data, cachedAt }));
   } catch {
-    // localStorage full or unavailable - ignore
+    return;
   }
 }
 
@@ -44,10 +48,16 @@ interface UseCostDataReturn {
 export function useCostData(): UseCostDataReturn {
   const [costData, setCostData] = useState<CostData | null>(null);
   const [cachedAt, setCachedAt] = useState<number | null>(null);
-  const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load from localStorage on mount
+  const fetchCostsMutation = useMutation({
+    mutationFn: () => fetchCosts(false),
+  });
+
+  const refreshCostsMutation = useMutation({
+    mutationFn: () => fetchCosts(true),
+  });
+
   useEffect(() => {
     const cached = loadFromStorage();
     if (cached) {
@@ -56,70 +66,50 @@ export function useCostData(): UseCostDataReturn {
     }
   }, []);
 
-  const isStale = cachedAt ? Date.now() - cachedAt > 86400000 : false; // 1 day
+  const applyCostData = useCallback((data: CostData, timestamp: number) => {
+    setCostData(data);
+    setCachedAt(timestamp);
+    saveToStorage(data, timestamp);
+  }, []);
 
-  const fetchCosts = useCallback(async () => {
-    setIsLoading(true);
+  const fetchCostsNow = useCallback(async () => {
     setError(null);
 
     try {
-      const res = await fetch("/api/costs");
-      const data: CostsResponse = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to fetch cost data");
-      }
-
-      if (data.data) {
-        const timestamp = data.data.cachedAt || Date.now();
-        setCostData(data.data);
-        setCachedAt(timestamp);
-        saveToStorage(data.data, timestamp);
+      const result = await fetchCostsMutation.mutateAsync();
+      if (result.data) {
+        const timestamp = result.data.cachedAt || Date.now();
+        applyCostData(result.data, timestamp);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch cost data";
       setError(errorMessage);
-      console.error("Failed to fetch costs:", err);
-    } finally {
-      setIsLoading(false);
     }
-  }, []);
+  }, [applyCostData, fetchCostsMutation]);
 
   const refresh = useCallback(async () => {
-    setIsLoading(true);
     setError(null);
 
     try {
-      const res = await fetch("/api/costs?refresh=true");
-      const data: CostsResponse = await res.json();
-
-      if (!res.ok) {
-        throw new Error(data.error || "Failed to refresh cost data");
-      }
-
-      if (data.data) {
-        const timestamp = data.data.cachedAt || Date.now();
-        setCostData(data.data);
-        setCachedAt(timestamp);
-        saveToStorage(data.data, timestamp);
+      const result = await refreshCostsMutation.mutateAsync();
+      if (result.data) {
+        const timestamp = result.data.cachedAt || Date.now();
+        applyCostData(result.data, timestamp);
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to refresh cost data";
       setError(errorMessage);
-      console.error("Failed to refresh costs:", err);
-    } finally {
-      setIsLoading(false);
     }
-  }, []);
+  }, [applyCostData, refreshCostsMutation]);
 
   return {
     costData,
     cachedAt,
-    isLoading,
+    isLoading: fetchCostsMutation.isPending || refreshCostsMutation.isPending,
     error,
-    isStale,
+    isStale: cachedAt ? Date.now() - cachedAt > 86_400_000 : false,
     setError,
-    fetchCosts,
+    fetchCosts: fetchCostsNow,
     refresh,
   };
 }

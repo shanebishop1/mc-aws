@@ -1,7 +1,8 @@
 "use client";
 
-import type { ApiResponse, GDriveStatusResponse } from "@/lib/types";
-import { useCallback, useEffect, useState } from "react";
+import { usePageFocus } from "@/hooks/usePageFocus";
+import { fetchGDriveStatus, queryKeys } from "@/lib/client-api";
+import { useQuery } from "@tanstack/react-query";
 
 interface UseGDriveStatusReturn {
   isConfigured: boolean;
@@ -11,43 +12,23 @@ interface UseGDriveStatusReturn {
 }
 
 export function useGDriveStatus(): UseGDriveStatusReturn {
-  const [isConfigured, setIsConfigured] = useState<boolean>(false);
-  const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [error, setError] = useState<string | undefined>(undefined);
+  const isPageFocused = usePageFocus();
 
-  const refetch = useCallback(async () => {
-    setIsLoading(true);
-    setError(undefined);
+  const gdriveStatusQuery = useQuery({
+    queryKey: queryKeys.gdriveStatus,
+    queryFn: fetchGDriveStatus,
+    enabled: isPageFocused,
+    refetchOnWindowFocus: false,
+  });
 
-    try {
-      const res = await fetch("/api/gdrive/status");
-      if (!res.ok) {
-        throw new Error(`Failed to fetch GDrive status: ${res.statusText}`);
-      }
-
-      const data: ApiResponse<GDriveStatusResponse> = await res.json();
-
-      if (data.success && data.data) {
-        setIsConfigured(data.data.configured);
-      } else {
-        setError(data.error ?? "Failed to get GDrive status");
-      }
-    } catch (error) {
-      console.error("[GDRIVE_STATUS] Failed to fetch GDrive status:", error);
-      setError(error instanceof Error ? error.message : "Unknown error");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refetch();
-  }, [refetch]);
+  const refetch = async () => {
+    await gdriveStatusQuery.refetch();
+  };
 
   return {
-    isConfigured,
-    isLoading,
-    error,
+    isConfigured: gdriveStatusQuery.data?.data?.configured ?? false,
+    isLoading: gdriveStatusQuery.isPending,
+    error: gdriveStatusQuery.error instanceof Error ? gdriveStatusQuery.error.message : undefined,
     refetch,
   };
 }
