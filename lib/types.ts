@@ -21,6 +21,10 @@ export interface ServerStatusResponse {
   serverAction?: { action: string; timestamp: number } | null;
 }
 
+export type AuthUserRole = "admin" | "allowed" | "public";
+
+export type AuthMeResponse = { authenticated: false } | { authenticated: true; email: string; role: AuthUserRole };
+
 export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
@@ -122,6 +126,21 @@ export interface StackStatusResponse {
   status?: string; // e.g., "CREATE_COMPLETE", "UPDATE_IN_PROGRESS"
   stackId?: string;
   error?: string; // Only if AWS connection failed
+}
+
+export interface ServiceStatusResponse {
+  serviceActive: boolean;
+  instanceRunning: boolean;
+}
+
+export interface AwsConfigResponse {
+  region: string | null;
+  instanceId: string | null;
+  ec2ConsoleUrl: string | null;
+}
+
+export interface GDriveSetupResponse {
+  authUrl: string;
 }
 
 export interface GDriveStatusResponse {

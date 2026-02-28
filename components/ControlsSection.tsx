@@ -6,6 +6,8 @@ import { RestoreDialog } from "@/components/backup/RestoreDialog";
 import { BackupDialog } from "@/components/ui/BackupDialog";
 import { LuxuryButton } from "@/components/ui/Button";
 import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
+import { fetchAuthMe, fetchGDriveStatus, queryKeys } from "@/lib/client-api";
+import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
@@ -22,17 +24,6 @@ interface ControlsSectionProps {
   onRestoreStateChange?: (isRestoring: boolean, message: string | null) => void;
 }
 
-const checkGDriveStatus = async (): Promise<boolean> => {
-  try {
-    const response = await fetch("/api/gdrive/status");
-    const data = await response.json();
-    return data.success && data.data?.configured === true;
-  } catch (error) {
-    console.error("[CONTROLS] Failed to check GDrive status:", error);
-    return false;
-  }
-};
-
 export const ControlsSection = ({
   status,
   showStart,
@@ -45,6 +36,7 @@ export const ControlsSection = ({
   onOpenResume,
   onRestoreStateChange,
 }: ControlsSectionProps) => {
+  const queryClient = useQueryClient();
   const { isAdmin, isAllowed, isAuthenticated, refetch } = useAuth();
 
   const showStopEffective = showStop && isAdmin;
@@ -61,6 +53,19 @@ export const ControlsSection = ({
   const [isActionPending, setIsActionPending] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
   const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
+
+  const checkGDriveStatus = async (): Promise<boolean> => {
+    try {
+      const result = await queryClient.fetchQuery({
+        queryKey: queryKeys.gdriveStatus,
+        queryFn: fetchGDriveStatus,
+      });
+      return result.success && result.data?.configured === true;
+    } catch (error) {
+      console.error("[CONTROLS] Failed to check GDrive status:", error);
+      return false;
+    }
+  };
 
   // Monitor restore state - clear when server becomes running
   useEffect(() => {
@@ -130,8 +135,10 @@ export const ControlsSection = ({
 
   const isSignedIn = async (): Promise<boolean> => {
     try {
-      const res = await fetch("/api/auth/me");
-      const data = (await res.json()) as { authenticated?: boolean };
+      const data = await queryClient.fetchQuery({
+        queryKey: queryKeys.authMe,
+        queryFn: fetchAuthMe,
+      });
       return data.authenticated === true;
     } catch {
       return false;

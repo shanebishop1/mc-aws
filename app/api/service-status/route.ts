@@ -3,7 +3,10 @@
  * Check if Minecraft service is active on the EC2 instance
  */
 
+import { requireAllowed } from "@/lib/api-auth";
+import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -11,6 +14,17 @@ interface ServiceStatusResponse {
   serviceActive: boolean;
   instanceRunning: boolean;
 }
+
+const SERVICE_STATUS_CACHE_TTL_MS = 5_000;
+const SERVICE_STATUS_RATE_LIMIT_WINDOW_MS = 60_000;
+const SERVICE_STATUS_RATE_LIMIT_MAX_REQUESTS = 20;
+
+type CachedServiceStatus = {
+  expiresAtMs: number;
+  payload: ApiResponse<ServiceStatusResponse>;
+};
+
+let cachedServiceStatus: CachedServiceStatus | null = null;
 
 /**
  * Check if Minecraft service is active via SSM
@@ -43,8 +57,47 @@ async function checkInstanceRunning(instanceId: string): Promise<boolean> {
   }
 }
 
-export async function GET(): Promise<NextResponse<ApiResponse<ServiceStatusResponse>>> {
+export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServiceStatusResponse>>> {
   try {
+    try {
+      const user = await requireAllowed(request);
+      console.log("[SERVICE-STATUS] Access by:", user.email, "role:", user.role);
+    } catch (error) {
+      if (error instanceof Response) {
+        return error as NextResponse<ApiResponse<ServiceStatusResponse>>;
+      }
+      throw error;
+    }
+
+    const clientIp = getClientIp(request.headers);
+    const rateLimit = checkRateLimit({
+      key: `service-status:${clientIp}`,
+      limit: SERVICE_STATUS_RATE_LIMIT_MAX_REQUESTS,
+      windowMs: SERVICE_STATUS_RATE_LIMIT_WINDOW_MS,
+    });
+
+    if (!rateLimit.allowed) {
+      const response = NextResponse.json(
+        {
+          success: false,
+          error: "Too many service status requests. Please retry shortly.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 429 }
+      );
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      response.headers.set("Cache-Control", "no-store");
+      return response;
+    }
+
+    const nowMs = Date.now();
+    if (cachedServiceStatus && cachedServiceStatus.expiresAtMs > nowMs) {
+      const response = NextResponse.json(cachedServiceStatus.payload);
+      response.headers.set("Cache-Control", "private, no-store");
+      response.headers.set("X-Service-Status-Cache", "HIT");
+      return response;
+    }
+
     console.log("[SERVICE-STATUS] Starting service status check");
 
     // Get instance ID
@@ -62,25 +115,25 @@ export async function GET(): Promise<NextResponse<ApiResponse<ServiceStatusRespo
       console.log("[SERVICE-STATUS] Instance not running, skipping service check");
     }
 
-    return NextResponse.json({
+    const payload: ApiResponse<ServiceStatusResponse> = {
       success: true,
       data: {
         serviceActive,
         instanceRunning,
       },
       timestamp: new Date().toISOString(),
-    });
-  } catch (error) {
-    console.error("[SERVICE-STATUS] Error:", error);
-    const errorMessage = error instanceof Error ? error.message : "Unknown error";
+    };
 
-    return NextResponse.json(
-      {
-        success: false,
-        error: errorMessage,
-        timestamp: new Date().toISOString(),
-      },
-      { status: 500 }
-    );
+    cachedServiceStatus = {
+      expiresAtMs: nowMs + SERVICE_STATUS_CACHE_TTL_MS,
+      payload,
+    };
+
+    const response = NextResponse.json(payload);
+    response.headers.set("Cache-Control", "private, no-store");
+    response.headers.set("X-Service-Status-Cache", "MISS");
+    return response;
+  } catch (error) {
+    return formatApiErrorResponse<ServiceStatusResponse>(error, "status", "Failed to fetch service status");
   }
 }

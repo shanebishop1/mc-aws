@@ -58,8 +58,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     );
   }
 
-  // In mock mode, skip authentication for easier testing
-  console.log("[MOCK-CONTROL] Applying scenario (mock mode, skipping auth)");
+  // Require authentication for mutations
+  try {
+    const user = await requireAllowed(request);
+    console.log("[MOCK-CONTROL] Scenario apply by:", user.email, "role:", user.role);
+  } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse<ApiResponse<unknown>>;
+    }
+    throw error;
+  }
 
   try {
     const body = await request.json();

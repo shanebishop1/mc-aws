@@ -1,6 +1,9 @@
 "use client";
 
-import { type ReactNode, createContext, useCallback, useContext, useEffect, useState } from "react";
+import { usePageFocus } from "@/hooks/usePageFocus";
+import { fetchAuthMe, postAuthLogout, queryKeys } from "@/lib/client-api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type ReactNode, createContext, useCallback, useContext, useMemo } from "react";
 
 type UserRole = "admin" | "allowed" | "public";
 
@@ -15,42 +18,57 @@ interface AuthContextValue {
   isAuthenticated: boolean;
   isAdmin: boolean;
   isAllowed: boolean;
-  refetch: () => Promise<void>;
+  refetch: () => Promise<AuthUser | null>;
+  signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<AuthUser | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const queryClient = useQueryClient();
+  const isPageFocused = usePageFocus();
 
-  const fetchAuth = useCallback(async () => {
-    try {
-      const res = await fetch("/api/auth/me");
-      const data = await res.json();
-      if (data.authenticated) {
-        setUser({ email: data.email, role: data.role });
-      } else {
-        setUser(null);
-      }
-    } catch {
-      setUser(null);
-    } finally {
-      setIsLoading(false);
+  const authQuery = useQuery({
+    queryKey: queryKeys.authMe,
+    queryFn: fetchAuthMe,
+    enabled: isPageFocused,
+  });
+
+  const logoutMutation = useMutation({
+    mutationFn: postAuthLogout,
+  });
+
+  const user = useMemo<AuthUser | null>(() => {
+    if (!authQuery.data || !authQuery.data.authenticated) {
+      return null;
     }
-  }, []);
 
-  useEffect(() => {
-    fetchAuth();
-  }, [fetchAuth]);
+    return { email: authQuery.data.email, role: authQuery.data.role };
+  }, [authQuery.data]);
+
+  const refetch = useCallback(async (): Promise<AuthUser | null> => {
+    const result = await authQuery.refetch();
+    if (!result.data || !result.data.authenticated) {
+      return null;
+    }
+
+    return { email: result.data.email, role: result.data.role };
+  }, [authQuery]);
+
+  const signOut = useCallback(async (): Promise<void> => {
+    await logoutMutation.mutateAsync();
+    await queryClient.invalidateQueries({ queryKey: queryKeys.authMe });
+    await queryClient.refetchQueries({ queryKey: queryKeys.authMe });
+  }, [logoutMutation, queryClient]);
 
   const value: AuthContextValue = {
     user,
-    isLoading,
+    isLoading: authQuery.isPending || logoutMutation.isPending,
     isAuthenticated: !!user,
     isAdmin: user?.role === "admin",
     isAllowed: user?.role === "admin" || user?.role === "allowed",
-    refetch: fetchAuth,
+    refetch,
+    signOut,
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

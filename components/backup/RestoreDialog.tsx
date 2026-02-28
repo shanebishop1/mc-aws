@@ -1,6 +1,8 @@
 "use client";
 
+import { fetchBackups as fetchBackupsApi, queryKeys } from "@/lib/client-api";
 import { cn } from "@/lib/utils";
+import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BackupSelectionList } from "./BackupSelectionList";
@@ -11,18 +13,8 @@ interface RestoreDialogProps {
   onConfirm: (backupName: string) => void;
 }
 
-interface BackupInfo {
-  name: string;
-}
-
-interface BackupsResponse {
-  backups: BackupInfo[];
-  count: number;
-  status?: "listing" | "caching" | "error";
-  cachedAt?: number;
-}
-
 export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogProps) => {
+  const queryClient = useQueryClient();
   const modalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -42,9 +34,10 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
 
     try {
       const check = async () => {
-        const res = await fetch("/api/backups");
-        const data = (await res.json()) as { data?: BackupsResponse; error?: string };
-        if (!res.ok) throw new Error(data.error || "Failed to fetch backups");
+        const data = await queryClient.fetchQuery({
+          queryKey: queryKeys.backups(false),
+          queryFn: () => fetchBackupsApi(false),
+        });
         return data.data;
       };
 
@@ -56,7 +49,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
       }
 
       if (data?.backups) {
-        setBackups(data.backups.map((b) => b.name));
+        setBackups(data.backups.map((backup) => backup.name));
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch backups";
@@ -65,7 +58,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [queryClient]);
 
   // Reset state when dialog closes
   useEffect(() => {

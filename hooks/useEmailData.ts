@@ -1,6 +1,8 @@
 "use client";
 
-import type { EmailsResponse } from "@/lib/types";
+import { usePageFocus } from "@/hooks/usePageFocus";
+import { fetchEmails, putEmailsAllowlist, queryKeys } from "@/lib/client-api";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useState } from "react";
 
 interface UseEmailDataReturn {
@@ -17,140 +19,104 @@ interface UseEmailDataReturn {
   isSaving: boolean;
 }
 
-function updateFromResponse(
-  data: EmailsResponse["data"],
-  setAdminEmail: React.Dispatch<React.SetStateAction<string>>,
-  setAllowlist: React.Dispatch<React.SetStateAction<string[]>>,
-  setOriginalAllowlist: React.Dispatch<React.SetStateAction<string[]>>,
-  setError: React.Dispatch<React.SetStateAction<string | null>>
-): void {
-  if (data) {
-    setAdminEmail(data.adminEmail);
-    setAllowlist(data.allowlist);
-    setOriginalAllowlist(data.allowlist);
-    setError(null);
-  }
-}
-
-/**
- * Fetch emails from API
- */
-async function fetchEmailsFromApi(
-  url: string,
-  isBackground: boolean,
-  onSuccess: (data: EmailsResponse["data"]) => void,
-  onError: (message: string) => void
-): Promise<void> {
-  try {
-    const response = await fetch(url);
-    const data: EmailsResponse = await response.json();
-
-    if (!data.success) {
-      if (!isBackground) onError(data.error || "Failed to load emails");
-      return;
-    }
-
-    onSuccess(data.data);
-  } catch {
-    if (!isBackground) onError("Failed to load emails");
-  }
-}
-
 export function useEmailData(): UseEmailDataReturn {
+  const isPageFocused = usePageFocus();
+  const queryClient = useQueryClient();
   const [adminEmail, setAdminEmail] = useState("");
   const [allowlist, setAllowlist] = useState<string[]>([]);
   const [originalAllowlist, setOriginalAllowlist] = useState<string[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-  const [isRefetching, setIsRefetching] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [hasFetchedOnce, setHasFetchedOnce] = useState(false);
 
-  const hasChanges = JSON.stringify(allowlist) !== JSON.stringify(originalAllowlist);
+  const emailsQuery = useQuery({
+    queryKey: queryKeys.emails,
+    queryFn: () => fetchEmails(false),
+    enabled: isPageFocused,
+    refetchOnWindowFocus: false,
+  });
 
-  const fetchEmails = useCallback(async (isBackground = false) => {
-    const setLoadingState = isBackground ? setIsRefetching : setIsLoading;
-    setLoadingState(true);
+  const refreshMutation = useMutation({
+    mutationFn: () => fetchEmails(true),
+  });
 
-    const url = `/api/emails${isBackground ? "?refresh=true" : ""}`;
-    const onSuccess = (data: EmailsResponse["data"]) =>
-      updateFromResponse(data, setAdminEmail, setAllowlist, setOriginalAllowlist, setError);
+  const saveMutation = useMutation({
+    mutationFn: (emails: string[]) => putEmailsAllowlist(emails),
+  });
 
-    await fetchEmailsFromApi(url, isBackground, onSuccess, setError);
+  useEffect(() => {
+    if (!emailsQuery.data?.data) {
+      return;
+    }
 
-    setLoadingState(false);
-    setHasFetchedOnce(true);
-  }, []);
+    const nextAdminEmail = emailsQuery.data.data.adminEmail;
+    const nextAllowlist = emailsQuery.data.data.allowlist;
+    setAdminEmail(nextAdminEmail);
+    setAllowlist(nextAllowlist);
+    setOriginalAllowlist(nextAllowlist);
+    setError(null);
+  }, [emailsQuery.data]);
+
+  useEffect(() => {
+    if (emailsQuery.error instanceof Error) {
+      setError(emailsQuery.error.message);
+    }
+  }, [emailsQuery.error]);
 
   const refetch = useCallback(async () => {
-    setIsRefetching(true);
-
     const minDelayPromise = new Promise<void>((resolve) => {
       window.setTimeout(resolve, 500);
     });
 
     try {
-      const response = await fetch("/api/emails?refresh=true");
-      const data: EmailsResponse = await response.json();
-
-      if (data.success && data.data) {
-        updateFromResponse(data.data, setAdminEmail, setAllowlist, setOriginalAllowlist, setError);
-      } else {
-        setError(data.error || "Failed to refresh emails");
+      const result = await refreshMutation.mutateAsync();
+      if (result.data) {
+        const nextAdminEmail = result.data.adminEmail;
+        const nextAllowlist = result.data.allowlist;
+        setAdminEmail(nextAdminEmail);
+        setAllowlist(nextAllowlist);
+        setOriginalAllowlist(nextAllowlist);
+        setError(null);
       }
-    } catch {
-      setError("Failed to refresh emails");
+
+      queryClient.setQueryData(queryKeys.emails, result);
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to refresh emails";
+      setError(errorMessage);
     } finally {
       await minDelayPromise;
-      setIsRefetching(false);
     }
-  }, []);
+  }, [queryClient, refreshMutation]);
 
   const saveAllowlist = useCallback(async (): Promise<boolean> => {
-    setIsSaving(true);
     setError(null);
 
     try {
-      const response = await fetch("/api/emails/allowlist", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ emails: allowlist }),
-      });
-
-      const data: EmailsResponse = await response.json();
-
-      if (data.success) {
-        setOriginalAllowlist(allowlist);
-        return true;
+      const result = await saveMutation.mutateAsync(allowlist);
+      if (!result.success) {
+        setError(result.error || "Failed to save");
+        return false;
       }
-      setError(data.error || "Failed to save");
-      return false;
-    } catch {
-      setError("Failed to save");
-      return false;
-    } finally {
-      setIsSaving(false);
-    }
-  }, [allowlist]);
 
-  // Initial fetch
-  useEffect(() => {
-    if (!hasFetchedOnce) {
-      fetchEmails(false);
+      setOriginalAllowlist(allowlist);
+      await queryClient.invalidateQueries({ queryKey: queryKeys.emails });
+      return true;
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : "Failed to save";
+      setError(errorMessage);
+      return false;
     }
-  }, [fetchEmails, hasFetchedOnce]);
+  }, [allowlist, queryClient, saveMutation]);
 
   return {
     adminEmail,
     allowlist,
     setAllowlist,
     originalAllowlist,
-    isLoading,
-    isRefetching,
+    isLoading: emailsQuery.isPending,
+    isRefetching: refreshMutation.isPending,
     error,
-    hasChanges,
+    hasChanges: JSON.stringify(allowlist) !== JSON.stringify(originalAllowlist),
     refetch,
     saveAllowlist,
-    isSaving,
+    isSaving: saveMutation.isPending,
   };
 }
