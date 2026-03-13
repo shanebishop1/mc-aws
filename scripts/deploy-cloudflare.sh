@@ -502,9 +502,18 @@ if [[ -z "$WORKER_NAME" ]]; then
   exit 1
 fi
 
-echo "📦 Building for Cloudflare (OpenNext)..."
+echo "📦 Building Next.js app..."
 prepare_next_build_env_file
-if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm exec opennextjs-cloudflare build; then
+if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm build; then
+  echo ""
+  echo "❌ Error: Failed to build Next.js app"
+  exit 1
+fi
+echo "✅ Next.js build successful"
+echo ""
+
+echo "📦 Building for Cloudflare (OpenNext)..."
+if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm exec opennextjs-cloudflare build --skipNextBuild; then
   echo ""
   echo "❌ Error: Failed to build for Cloudflare"
   exit 1
