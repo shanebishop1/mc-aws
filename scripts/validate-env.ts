@@ -2,6 +2,11 @@
  * Validates required environment variables for production builds
  */
 
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import dotenv from "dotenv";
+
 const requiredEnvVars = [
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
@@ -10,8 +15,48 @@ const requiredEnvVars = [
   "NEXT_PUBLIC_APP_URL",
 ];
 
-function validateEnv() {
-  const isProduction = process.env.NODE_ENV === "production";
+const buildLifecycleEvents = new Set(["build", "prebuild", "deploy:cf", "preview:cf"]);
+
+const resolveNodeEnv = (): "development" | "production" | "test" => {
+  if (process.env.NODE_ENV === "production") {
+    return "production";
+  }
+
+  if (process.env.NODE_ENV === "test") {
+    return "test";
+  }
+
+  if (process.env.NODE_ENV === "development") {
+    return "development";
+  }
+
+  if (process.env.npm_lifecycle_event && buildLifecycleEvents.has(process.env.npm_lifecycle_event)) {
+    return "production";
+  }
+
+  return "development";
+};
+
+const loadEnvironmentFiles = (nodeEnv: "development" | "production" | "test"): void => {
+  const envFiles = [`.env.${nodeEnv}.local`, ...(nodeEnv === "test" ? [] : [".env.local"]), `.env.${nodeEnv}`, ".env"];
+
+  for (const envFile of envFiles) {
+    const envPath = path.resolve(process.cwd(), envFile);
+
+    if (!fs.existsSync(envPath)) {
+      continue;
+    }
+
+    dotenv.config({ path: envPath, override: false });
+  }
+};
+
+export function validateEnv(): void {
+  const nodeEnv = resolveNodeEnv();
+  const isProduction = nodeEnv === "production";
+
+  loadEnvironmentFiles(nodeEnv);
+
   const missing = requiredEnvVars.filter((name) => !process.env[name]);
 
   if (missing.length === 0) {
@@ -32,4 +77,8 @@ function validateEnv() {
   }
 }
 
-validateEnv();
+const isDirectExecution = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+
+if (isDirectExecution) {
+  validateEnv();
+}
