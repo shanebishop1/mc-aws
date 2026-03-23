@@ -34,6 +34,11 @@ describe("GET /api/stack-status rate-limit contract", () => {
 
     expect(res.status).toBe(429);
     expect(body.success).toBe(false);
+    expect(checkRateLimitMock).toHaveBeenCalledWith({
+      key: "stack-status:unknown",
+      limit: 15,
+      windowMs: 60_000,
+    });
     expect(res.headers.get("Retry-After")).toBe("27");
     expect(res.headers.get("Cache-Control")).toBe("no-store");
   });
