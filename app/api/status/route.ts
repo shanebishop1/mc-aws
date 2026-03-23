@@ -8,27 +8,24 @@ import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { emitRuntimeStateTelemetry } from "@/lib/runtime-state";
+import { emitRuntimeStateTelemetry, getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const STATUS_CACHE_TTL_MS = 5_000;
 const STATUS_RATE_LIMIT_WINDOW_MS = 60_000;
 const STATUS_RATE_LIMIT_MAX_REQUESTS = 30;
 const IS_TEST_ENV = process.env.NODE_ENV === "test";
 
 type CachedStatusSnapshot = {
-  expiresAtMs: number;
   generatedAt: string;
   instanceId: string;
   displayState: ServerState;
   hasVolume: boolean;
 };
-
-let cachedStatusSnapshot: CachedStatusSnapshot | null = null;
 
 function mapEc2StateToServerState(state: string | undefined): ServerState {
   if (state === "running") return ServerState.Running;
@@ -137,18 +134,36 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   }
 
   try {
-    const nowMs = Date.now();
-    if (!IS_TEST_ENV && cachedStatusSnapshot && cachedStatusSnapshot.expiresAtMs > nowMs) {
-      emitRuntimeStateTelemetry({
-        operation: "status.snapshot-cache",
-        outcome: "HIT",
-        source: "route",
-        route: "/api/status",
-        key: "status:latest",
+    const runtimeStateAdapter = getRuntimeStateAdapter();
+
+    if (!IS_TEST_ENV) {
+      const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedStatusSnapshot>({
+        key: snapshotCacheKeys.status,
       });
 
-      const payload = buildStatusPayload(cachedStatusSnapshot, user);
-      return buildStatusResponse(payload, user, "HIT");
+      if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
+        emitRuntimeStateTelemetry({
+          operation: "status.snapshot-cache",
+          outcome: "HIT",
+          source: "route",
+          route: "/api/status",
+          key: snapshotCacheKeys.status,
+        });
+
+        const payload = buildStatusPayload(cachedSnapshotResult.data.value, user);
+        return buildStatusResponse(payload, user, "HIT");
+      }
+
+      if (!cachedSnapshotResult.ok) {
+        emitRuntimeStateTelemetry({
+          operation: "status.snapshot-cache",
+          outcome: "FALLBACK",
+          source: "route",
+          route: "/api/status",
+          key: snapshotCacheKeys.status,
+          reason: `snapshot_read_failed:${cachedSnapshotResult.error.code}`,
+        });
+      }
     }
 
     // Always resolve instance ID server-side - do not trust caller input
@@ -163,7 +178,6 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const displayState = determineDisplayState(state, hasVolume);
 
     const snapshot: CachedStatusSnapshot = {
-      expiresAtMs: nowMs + STATUS_CACHE_TTL_MS,
       generatedAt: new Date().toISOString(),
       instanceId,
       displayState,
@@ -171,7 +185,22 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     };
 
     if (!IS_TEST_ENV) {
-      cachedStatusSnapshot = snapshot;
+      const writeSnapshotResult = await runtimeStateAdapter.setSnapshot({
+        key: snapshotCacheKeys.status,
+        value: snapshot,
+        ttlSeconds: snapshotCacheTtlSeconds.status,
+      });
+
+      if (!writeSnapshotResult.ok) {
+        emitRuntimeStateTelemetry({
+          operation: "status.snapshot-cache",
+          outcome: "FALLBACK",
+          source: "route",
+          route: "/api/status",
+          key: snapshotCacheKeys.status,
+          reason: `snapshot_write_failed:${writeSnapshotResult.error.code}`,
+        });
+      }
     }
 
     emitRuntimeStateTelemetry({
@@ -179,7 +208,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       outcome: "MISS",
       source: "route",
       route: "/api/status",
-      key: "status:latest",
+      key: snapshotCacheKeys.status,
       reason: "snapshot_absent_or_expired",
     });
 
@@ -192,7 +221,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       outcome: "FALLBACK",
       source: "route",
       route: "/api/status",
-      key: "status:latest",
+      key: snapshotCacheKeys.status,
       reason: "status_fetch_failed",
     });
 

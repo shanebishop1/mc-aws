@@ -2,11 +2,15 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { getCosts } from "@/lib/aws";
 import { isMockMode } from "@/lib/env";
+import { getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { snapshotCacheKeys } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse, CostData } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-// Permanent in-memory cache (until server restart or manual refresh)
-let cachedCosts: { data: CostData; timestamp: number } | null = null;
+type CachedCostsSnapshot = {
+  data: CostData;
+  timestamp: number;
+};
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<CostData & { cachedAt?: number }>>> {
   try {
@@ -24,18 +28,25 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "true";
     const skipCache = isMockMode();
+    const runtimeStateAdapter = getRuntimeStateAdapter();
 
     // Return cached data if exists and not forcing refresh
-    if (cachedCosts && !forceRefresh && !skipCache) {
-      console.log("[COSTS] Returning cached cost data");
-      return NextResponse.json({
-        success: true,
-        data: {
-          ...cachedCosts.data,
-          cachedAt: cachedCosts.timestamp,
-        },
-        timestamp: new Date().toISOString(),
+    if (!forceRefresh && !skipCache) {
+      const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedCostsSnapshot>({
+        key: snapshotCacheKeys.costs,
       });
+
+      if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
+        console.log("[COSTS] Returning cached cost data");
+        return NextResponse.json({
+          success: true,
+          data: {
+            ...cachedSnapshotResult.data.value.data,
+            cachedAt: cachedSnapshotResult.data.value.timestamp,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
     }
 
     console.log(skipCache ? "[COSTS] Mock mode - skipping cache" : "[COSTS] Fetching fresh cost data from AWS");
@@ -44,7 +55,10 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     // Update cache
     if (!skipCache) {
-      cachedCosts = { data, timestamp };
+      await runtimeStateAdapter.setSnapshot({
+        key: snapshotCacheKeys.costs,
+        value: { data, timestamp },
+      });
     }
 
     return NextResponse.json({

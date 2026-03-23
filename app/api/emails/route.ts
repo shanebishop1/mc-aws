@@ -3,12 +3,16 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { getEmailAllowlist, updateEmailAllowlist } from "@/lib/aws";
 import { env, getAllowedEmails } from "@/lib/env";
+import { getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { snapshotCacheKeys } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
-declare global {
-  var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;
-}
+type CachedEmailsSnapshot = {
+  adminEmail: string;
+  allowlist: string[];
+  timestamp: number;
+};
 
 function uniqueEmails(emails: string[]): string[] {
   const output: string[] = [];
@@ -45,20 +49,27 @@ export async function GET(
 
     const { searchParams } = new URL(request.url);
     const forceRefresh = searchParams.get("refresh") === "true";
+    const runtimeStateAdapter = getRuntimeStateAdapter();
 
     const adminEmail = (process.env.NOTIFICATION_EMAIL || env.ADMIN_EMAIL || "Not configured").trim();
 
-    if (globalThis.__mc_cachedEmails && !forceRefresh) {
-      console.log("[EMAILS] Returning cached email configuration");
-      return NextResponse.json({
-        success: true,
-        data: {
-          adminEmail: globalThis.__mc_cachedEmails.adminEmail,
-          allowlist: globalThis.__mc_cachedEmails.allowlist,
-          cachedAt: globalThis.__mc_cachedEmails.timestamp,
-        },
-        timestamp: new Date().toISOString(),
+    if (!forceRefresh) {
+      const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedEmailsSnapshot>({
+        key: snapshotCacheKeys.emails,
       });
+
+      if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
+        console.log("[EMAILS] Returning cached email configuration");
+        return NextResponse.json({
+          success: true,
+          data: {
+            adminEmail: cachedSnapshotResult.data.value.adminEmail,
+            allowlist: cachedSnapshotResult.data.value.allowlist,
+            cachedAt: cachedSnapshotResult.data.value.timestamp,
+          },
+          timestamp: new Date().toISOString(),
+        });
+      }
     }
 
     console.log("[EMAILS] Fetching fresh email configuration");
@@ -74,7 +85,10 @@ export async function GET(
 
     const timestamp = Date.now();
 
-    globalThis.__mc_cachedEmails = { adminEmail, allowlist, timestamp };
+    await runtimeStateAdapter.setSnapshot({
+      key: snapshotCacheKeys.emails,
+      value: { adminEmail, allowlist, timestamp },
+    });
 
     return NextResponse.json({
       success: true,

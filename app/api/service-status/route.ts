@@ -7,6 +7,8 @@ import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -15,16 +17,12 @@ interface ServiceStatusResponse {
   instanceRunning: boolean;
 }
 
-const SERVICE_STATUS_CACHE_TTL_MS = 5_000;
 const SERVICE_STATUS_RATE_LIMIT_WINDOW_MS = 60_000;
 const SERVICE_STATUS_RATE_LIMIT_MAX_REQUESTS = 20;
 
 type CachedServiceStatus = {
-  expiresAtMs: number;
   payload: ApiResponse<ServiceStatusResponse>;
 };
-
-let cachedServiceStatus: CachedServiceStatus | null = null;
 
 /**
  * Check if Minecraft service is active via SSM
@@ -91,9 +89,13 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       return response;
     }
 
-    const nowMs = Date.now();
-    if (cachedServiceStatus && cachedServiceStatus.expiresAtMs > nowMs) {
-      const response = NextResponse.json(cachedServiceStatus.payload);
+    const runtimeStateAdapter = getRuntimeStateAdapter();
+    const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedServiceStatus>({
+      key: snapshotCacheKeys.serviceStatus,
+    });
+
+    if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
+      const response = NextResponse.json(cachedSnapshotResult.data.value.payload);
       response.headers.set("Cache-Control", "private, no-store");
       response.headers.set("X-Service-Status-Cache", "HIT");
       return response;
@@ -125,10 +127,13 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       timestamp: new Date().toISOString(),
     };
 
-    cachedServiceStatus = {
-      expiresAtMs: nowMs + SERVICE_STATUS_CACHE_TTL_MS,
-      payload,
-    };
+    await runtimeStateAdapter.setSnapshot({
+      key: snapshotCacheKeys.serviceStatus,
+      value: {
+        payload,
+      },
+      ttlSeconds: snapshotCacheTtlSeconds.serviceStatus,
+    });
 
     const response = NextResponse.json(payload);
     response.headers.set("Cache-Control", "private, no-store");

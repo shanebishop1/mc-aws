@@ -3,12 +3,10 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { updateEmailAllowlist } from "@/lib/aws";
 import { env, getAllowedEmails } from "@/lib/env";
+import { getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { snapshotCacheKeys } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-
-declare global {
-  var __mc_cachedEmails: { adminEmail: string; allowlist: string[]; timestamp: number } | null | undefined;
-}
 
 function uniqueEmails(emails: string[]): string[] {
   const output: string[] = [];
@@ -92,8 +90,9 @@ export async function PUT(request: NextRequest): Promise<NextResponse<ApiRespons
     // Force auth allowlist cache refresh after admin mutations.
     invalidateAllowlistCache();
 
-    // Invalidate /api/emails cache so the next GET is fresh
-    globalThis.__mc_cachedEmails = null;
+    // Invalidate /api/emails cache so the next GET is fresh.
+    const runtimeStateAdapter = getRuntimeStateAdapter();
+    await runtimeStateAdapter.invalidateSnapshot({ key: snapshotCacheKeys.emails });
 
     return NextResponse.json({
       success: true,
