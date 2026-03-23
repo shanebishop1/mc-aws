@@ -126,11 +126,20 @@ describe("GET /api/stack-status cache contract", () => {
     const missResponse = await GET(req);
     const missBody = await parseNextResponse<ApiResponse<unknown>>(missResponse);
     expect(missBody.success).toBe(true);
+    expect(missBody.data).toEqual({
+      exists: true,
+      status: "CREATE_COMPLETE",
+      stackId: "redacted",
+    });
+    expect(typeof missBody.timestamp).toBe("string");
+    expect(missResponse.headers.get("Vary")).toBe("Cookie");
     expect(missResponse.headers.get("X-Stack-Status-Cache")).toBe("MISS");
 
     const hitResponse = await GET(req);
     const hitBody = await parseNextResponse<ApiResponse<unknown>>(hitResponse);
     expect(hitBody.success).toBe(true);
+    expect(hitBody).toEqual(missBody);
+    expect(hitResponse.headers.get("Vary")).toBe("Cookie");
     expect(hitResponse.headers.get("X-Stack-Status-Cache")).toBe("HIT");
 
     expect(getStackStatusMock).toHaveBeenCalledTimes(1);

@@ -141,11 +141,19 @@ describe("GET /api/status cache contract", () => {
     const missResponse = await GET(req);
     const missBody = await parseNextResponse<ApiResponse<ServerStatusResponse>>(missResponse);
     expect(missBody.success).toBe(true);
+    expect(missBody.data).toMatchObject({
+      state: "running",
+      instanceId: "redacted",
+      domain: "mc.example.com",
+      hasVolume: true,
+    });
+    expect(missBody.data?.lastUpdated).toBe(missBody.timestamp);
     expect(missResponse.headers.get("X-Status-Cache")).toBe("MISS");
 
     const hitResponse = await GET(req);
     const hitBody = await parseNextResponse<ApiResponse<ServerStatusResponse>>(hitResponse);
     expect(hitBody.success).toBe(true);
+    expect(hitBody).toEqual(missBody);
     expect(hitResponse.headers.get("X-Status-Cache")).toBe("HIT");
 
     expect(findInstanceIdMock).toHaveBeenCalledTimes(1);
