@@ -1,9 +1,5 @@
+import { getRuntimeStateAdapter } from "@/lib/runtime-state";
 import type { RuntimeStateCounterKey } from "@/lib/runtime-state";
-
-interface RateLimitEntry {
-  count: number;
-  windowStartMs: number;
-}
 
 interface RateLimitOptions {
   key: RuntimeStateCounterKey;
@@ -15,16 +11,6 @@ export interface RateLimitResult {
   allowed: boolean;
   remaining: number;
   retryAfterSeconds: number;
-}
-
-const limiterStore = new Map<string, RateLimitEntry>();
-
-function cleanupExpired(nowMs: number, windowMs: number) {
-  for (const [key, entry] of limiterStore.entries()) {
-    if (nowMs - entry.windowStartMs >= windowMs) {
-      limiterStore.delete(key);
-    }
-  }
 }
 
 export function getClientIp(headers: Headers): string {
@@ -46,43 +32,41 @@ export function getClientIp(headers: Headers): string {
   return "unknown";
 }
 
-export function checkRateLimit({ key, limit, windowMs }: RateLimitOptions): RateLimitResult {
-  const nowMs = Date.now();
-
-  if (limiterStore.size > 10_000) {
-    cleanupExpired(nowMs, windowMs);
-  }
-
-  const current = limiterStore.get(key);
-
-  if (!current || nowMs - current.windowStartMs >= windowMs) {
-    limiterStore.set(key, {
-      count: 1,
-      windowStartMs: nowMs,
-    });
-
-    return {
-      allowed: true,
-      remaining: Math.max(0, limit - 1),
-      retryAfterSeconds: 0,
-    };
-  }
-
-  if (current.count >= limit) {
-    const retryAfterSeconds = Math.ceil((windowMs - (nowMs - current.windowStartMs)) / 1000);
-    return {
-      allowed: false,
-      remaining: 0,
-      retryAfterSeconds: Math.max(1, retryAfterSeconds),
-    };
-  }
-
-  current.count += 1;
-  limiterStore.set(key, current);
-
+function fallbackRateLimitResult(limit: number): RateLimitResult {
   return {
     allowed: true,
-    remaining: Math.max(0, limit - current.count),
+    remaining: Math.max(0, limit - 1),
     retryAfterSeconds: 0,
   };
+}
+
+export async function checkRateLimit({ key, limit, windowMs }: RateLimitOptions): Promise<RateLimitResult> {
+  try {
+    const adapter = getRuntimeStateAdapter();
+    const counterResult = await adapter.incrementCounter({
+      key,
+      limit,
+      windowMs,
+    });
+
+    if (!counterResult.ok) {
+      console.warn("[RATE-LIMIT] Counter backend unavailable, allowing request", {
+        code: counterResult.error.code,
+        key,
+      });
+      return fallbackRateLimitResult(limit);
+    }
+
+    return {
+      allowed: counterResult.data.allowed,
+      remaining: counterResult.data.remaining,
+      retryAfterSeconds: counterResult.data.retryAfterSeconds,
+    };
+  } catch (error) {
+    console.warn("[RATE-LIMIT] Unexpected counter backend error, allowing request", {
+      key,
+      error,
+    });
+    return fallbackRateLimitResult(limit);
+  }
 }

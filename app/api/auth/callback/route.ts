@@ -27,7 +27,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     console.log("[CALLBACK] Processing OAuth callback");
 
     const clientIp = getClientIp(request.headers);
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: `auth:callback:${clientIp}`,
       limit: CALLBACK_RATE_LIMIT_MAX_REQUESTS,
       windowMs: CALLBACK_RATE_LIMIT_WINDOW_MS,

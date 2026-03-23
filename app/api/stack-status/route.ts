@@ -74,7 +74,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   console.log("[STACK-STATUS] Access by:", user?.email ?? "anonymous");
 
   const clientIp = getClientIp(request.headers);
-  const rateLimit = checkRateLimit({
+  const rateLimit = await checkRateLimit({
     key: `stack-status:${clientIp}`,
     limit: STACK_STATUS_RATE_LIMIT_MAX_REQUESTS,
     windowMs: STACK_STATUS_RATE_LIMIT_WINDOW_MS,

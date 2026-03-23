@@ -27,7 +27,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     console.log("[LOGIN] Initiating OAuth flow");
 
     const clientIp = getClientIp(request.headers);
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: `auth:login:${clientIp}`,
       limit: LOGIN_RATE_LIMIT_MAX_REQUESTS,
       windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,

@@ -70,7 +70,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     }
 
     const clientIp = getClientIp(request.headers);
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: `service-status:${clientIp}`,
       limit: SERVICE_STATUS_RATE_LIMIT_MAX_REQUESTS,
       windowMs: SERVICE_STATUS_RATE_LIMIT_WINDOW_MS,

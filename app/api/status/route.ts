@@ -114,7 +114,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
   if (!IS_TEST_ENV) {
     const clientIp = getClientIp(request.headers);
-    const rateLimit = checkRateLimit({
+    const rateLimit = await checkRateLimit({
       key: `status:${clientIp}`,
       limit: STATUS_RATE_LIMIT_MAX_REQUESTS,
       windowMs: STATUS_RATE_LIMIT_WINDOW_MS,
