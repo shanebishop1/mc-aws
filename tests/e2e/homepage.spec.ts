@@ -51,11 +51,12 @@ test.describe("Homepage States", () => {
     await navigateTo(page, "/");
     await waitForPageLoad(page);
 
-    const loginRequestPromise = page.waitForRequest((request) => request.url().includes("/api/auth/login?popup=1"));
+    const popupPromise = page.waitForEvent("popup");
     await page.getByRole("button", { name: /start server/i }).click();
-    const loginRequest = await loginRequestPromise;
+    const popup = await popupPromise;
 
-    expect(loginRequest.url()).toContain("/api/auth/login?popup=1");
+    expect(popup).toBeTruthy();
+    await expect.poll(() => page.evaluate(() => window.sessionStorage.getItem("mc_pending_action"))).toBe("start");
   });
 
   test("shows server controls when stack exists and running", async ({ page }) => {

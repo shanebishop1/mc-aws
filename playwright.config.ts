@@ -21,8 +21,9 @@ export default defineConfig({
     },
   ],
   webServer: {
-    command:
-      "bash -lc 'set -euo pipefail; export MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true AUTH_SECRET=dev-secret-placeholder; npm run build; npm run start -- -p 3001'",
+    // Run Playwright against mock dev server so tests can exercise mock-mode
+    // flows without weakening the production-only guard that blocks mock mode.
+    command: "bash -lc 'set -euo pipefail; export AUTH_SECRET=dev-secret-placeholder; npm run dev:mock -- -p 3001'",
     url: "http://localhost:3001",
     // In mock mode, always start fresh to avoid stale server/mock state.
     reuseExistingServer: !process.env.CI && !isMockMode,
