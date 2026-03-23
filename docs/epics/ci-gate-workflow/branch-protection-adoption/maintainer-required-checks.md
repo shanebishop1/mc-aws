@@ -21,6 +21,23 @@ Do **not** mark the two extended lanes as required checks.
 - `Mock integration lane (pnpm test:mock)`
 - `Mock E2E lane (pnpm test:e2e:mock)`
 
+## CI Gate Ownership and Red-CI Response SLA
+
+Use this table when a lane is red on a PR or scheduled run.
+
+| Lane / status check | Primary owner | Backup owner | Acknowledge target | Restore or mitigation target | Escalation guidance |
+| --- | --- | --- | --- | --- | --- |
+| `Baseline PR Validation` | PR author (or merger-of-record) | Maintainer on-call | ≤ 30 minutes during maintainer coverage hours | ≤ 2 hours to green, or post a documented unblock/rollback plan in PR | If still red after 2 hours, page maintainer on-call in team channel and pause merges to default branch until resolved. |
+| `Mock integration lane (pnpm test:mock)` | CI lane steward (maintainer rotating weekly) | PR author for touched area | ≤ 4 hours (business hours) | ≤ 1 business day to green, rerun, or classify as infra flake with follow-up issue | If unresolved for 1 business day or repeats 2+ runs, escalate to repo maintainers and link tracking issue in PR comment. |
+| `Mock E2E lane (pnpm test:e2e:mock)` | CI lane steward (maintainer rotating weekly) | PR author for touched area | ≤ 4 hours (business hours) | ≤ 1 business day to green, rerun, or classify as infra/environment issue with follow-up issue | If unresolved for 1 business day or blocks release readiness, escalate to repo maintainers and prioritize next maintainer sync. |
+
+### Response Playbook (Practical)
+
+1. Post first triage comment on the failing run with owner and suspected cause.
+2. If failure is lane/infra flake, rerun once and record result.
+3. If code issue, push fix or revert; if owner unavailable, backup owner takes over.
+4. For escalations, include run URL, failing step, impact (merge block vs optional lane), and ETA.
+
 ## Runbook: Apply Required Check Policy
 
 ### Option A — GitHub UI
