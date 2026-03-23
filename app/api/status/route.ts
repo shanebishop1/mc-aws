@@ -8,6 +8,7 @@ import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { emitRuntimeStateTelemetry } from "@/lib/runtime-state";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -120,6 +121,16 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     });
 
     if (!rateLimit.allowed) {
+      emitRuntimeStateTelemetry({
+        operation: "status.rate-limit",
+        outcome: "THROTTLE",
+        source: "route",
+        route: "/api/status",
+        key: `status:${clientIp}`,
+        retryAfterSeconds: rateLimit.retryAfterSeconds,
+        reason: "status_request_limit_exceeded",
+      });
+
       const response = NextResponse.json(
         {
           success: false,
@@ -137,6 +148,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   try {
     const nowMs = Date.now();
     if (!IS_TEST_ENV && cachedStatusSnapshot && cachedStatusSnapshot.expiresAtMs > nowMs) {
+      emitRuntimeStateTelemetry({
+        operation: "status.snapshot-cache",
+        outcome: "HIT",
+        source: "route",
+        route: "/api/status",
+        key: "status:latest",
+      });
+
       const payload = buildStatusPayload(cachedStatusSnapshot, user);
       return buildStatusResponse(payload, user, "HIT");
     }
@@ -163,10 +182,29 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     if (!IS_TEST_ENV) {
       cachedStatusSnapshot = snapshot;
     }
+
+    emitRuntimeStateTelemetry({
+      operation: "status.snapshot-cache",
+      outcome: "MISS",
+      source: "route",
+      route: "/api/status",
+      key: "status:latest",
+      reason: "snapshot_absent_or_expired",
+    });
+
     const payload = buildStatusPayload(snapshot, user);
 
     return buildStatusResponse(payload, user, "MISS");
   } catch (error) {
+    emitRuntimeStateTelemetry({
+      operation: "status.snapshot-cache",
+      outcome: "FALLBACK",
+      source: "route",
+      route: "/api/status",
+      key: "status:latest",
+      reason: "status_fetch_failed",
+    });
+
     return buildStatusErrorResponse(error);
   }
 }
