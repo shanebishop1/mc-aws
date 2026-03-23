@@ -117,12 +117,33 @@ describe("GET /api/costs cache contract", () => {
     const firstResponse = await GET(req);
     const firstBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(firstResponse);
     expect(firstBody.success).toBe(true);
+    expect(firstBody.data).toMatchObject({
+      totalCost: "10.00",
+      currency: "USD",
+      period: {
+        start: "2026-03-01",
+        end: "2026-03-31",
+      },
+      breakdown: [
+        {
+          service: "Amazon EC2",
+          cost: "10.00",
+        },
+      ],
+      fetchedAt: "2026-03-22T00:00:00.000Z",
+    });
     expect(firstBody.data?.cachedAt).toBeDefined();
+    expect(firstResponse.headers.get("X-Costs-Cache")).toBeNull();
 
     const secondResponse = await GET(req);
     const secondBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(secondResponse);
     expect(secondBody.success).toBe(true);
+    expect(secondBody.data).toMatchObject({
+      totalCost: "10.00",
+      currency: "USD",
+    });
     expect(secondBody.data?.cachedAt).toBe(firstBody.data?.cachedAt);
+    expect(secondResponse.headers.get("X-Costs-Cache")).toBeNull();
 
     expect(getCostsMock).toHaveBeenCalledTimes(1);
     expect(setSnapshotMock).toHaveBeenCalledWith(

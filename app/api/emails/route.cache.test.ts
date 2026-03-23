@@ -128,14 +128,26 @@ describe("emails routes cache contract", () => {
 
     const getRequest = createMockNextRequest("http://localhost/api/emails");
     const firstGet = await GET(getRequest);
-    const firstBody = await parseNextResponse<ApiResponse<{ cachedAt?: number }>>(firstGet);
+    const firstBody =
+      await parseNextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>(firstGet);
     expect(firstBody.success).toBe(true);
+    expect(firstBody.data).toMatchObject({
+      allowlist: ["friend@example.com"],
+    });
+    expect(typeof firstBody.data?.adminEmail).toBe("string");
     expect(firstBody.data?.cachedAt).toBeDefined();
+    expect(firstGet.headers.get("X-Emails-Cache")).toBeNull();
 
     const secondGet = await GET(getRequest);
-    const secondBody = await parseNextResponse<ApiResponse<{ cachedAt?: number }>>(secondGet);
+    const secondBody =
+      await parseNextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>(secondGet);
     expect(secondBody.success).toBe(true);
+    expect(secondBody.data).toMatchObject({
+      allowlist: ["friend@example.com"],
+    });
+    expect(typeof secondBody.data?.adminEmail).toBe("string");
     expect(secondBody.data?.cachedAt).toBe(firstBody.data?.cachedAt);
+    expect(secondGet.headers.get("X-Emails-Cache")).toBeNull();
     expect(getEmailAllowlistMock).toHaveBeenCalledTimes(1);
 
     const putRequest = createMockNextRequest("http://localhost/api/emails/allowlist", {
@@ -150,7 +162,8 @@ describe("emails routes cache contract", () => {
     expect(invalidateSnapshotMock).toHaveBeenCalledWith({ key: "emails:latest" });
 
     const thirdGet = await GET(getRequest);
-    const thirdBody = await parseNextResponse<ApiResponse<{ cachedAt?: number }>>(thirdGet);
+    const thirdBody =
+      await parseNextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>(thirdGet);
     expect(thirdBody.success).toBe(true);
     expect(getEmailAllowlistMock).toHaveBeenCalledTimes(2);
   });
