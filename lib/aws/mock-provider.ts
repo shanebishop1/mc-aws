@@ -386,6 +386,10 @@ export const mockProvider: AwsProvider = {
       // Simulate listing backups
       const backups = await stateStore.getBackups();
       output = backups.map((b) => `${b.name}|${b.size}|${b.date}`).join("\n");
+    } else if (commandString.includes("systemctl is-active minecraft")) {
+      // Simulate service status checks used by /api/service-status
+      const instance = await stateStore.getInstance();
+      output = instance.state === ServerState.Running ? "active" : "inactive";
     } else if (commandString.includes("GetPlayerCount")) {
       // Simulate getting player count
       const playerCount = await stateStore.getParameter("/minecraft/player-count");

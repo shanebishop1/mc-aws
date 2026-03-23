@@ -10,6 +10,7 @@ import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { invalidateMockControlSnapshots } from "../cache-invalidation";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<unknown>>> {
   // Only allow in mock mode
@@ -59,6 +60,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     await stateStore.patchState(updates);
+    await invalidateMockControlSnapshots();
 
     return NextResponse.json({
       success: true,
