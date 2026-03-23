@@ -111,6 +111,24 @@ Notes:
 - Replace KV placeholder IDs in `wrangler.jsonc` before remote deployment.
 - Local dev parity: `wrangler dev` uses these bindings against local state storage under `.wrangler/state` by default.
 
+### Rate-limit fallback policy and telemetry
+
+`lib/rate-limit.ts` uses a deterministic policy for runtime-state counter failures:
+
+- **Retryable backend error** (`error.retryable === true`): fail-open fallback (request allowed).
+- **Non-retryable backend error** (`error.retryable === false`): fail-closed fallback (request throttled, `Retry-After: 1`).
+- **Unexpected exception**: fail-open fallback (request allowed).
+
+Throttle/fallback outcomes are emitted through the canonical runtime-state telemetry helper (`emitRuntimeStateTelemetry`) with:
+
+- `operation: "rate-limit.increment-counter"`
+- `source: "route"`
+- route-aware fields (`route`, `key`)
+- `outcome: "THROTTLE"` for hard throttles or fail-closed fallbacks
+- `outcome: "FALLBACK"` for fail-open fallbacks
+
+This makes backend-failure behavior explicit and observable in route logs.
+
 ## Troubleshooting
 
 ### `wrangler login` fails or behaves like API-token mode

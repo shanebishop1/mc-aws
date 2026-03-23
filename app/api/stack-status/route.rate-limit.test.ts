@@ -35,6 +35,7 @@ describe("GET /api/stack-status rate-limit contract", () => {
     expect(res.status).toBe(429);
     expect(body.success).toBe(false);
     expect(checkRateLimitMock).toHaveBeenCalledWith({
+      route: "/api/stack-status",
       key: "stack-status:unknown",
       limit: 15,
       windowMs: 60_000,
