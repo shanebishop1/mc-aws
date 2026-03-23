@@ -12,6 +12,8 @@ const {
   getSnapshotMock,
   setSnapshotMock,
   snapshotState,
+  snapshotCacheKeys,
+  snapshotCacheTtlSeconds,
 } = vi.hoisted(() => {
   return {
     requireAllowedMock: vi.fn(),
@@ -23,6 +25,19 @@ const {
     getSnapshotMock: vi.fn(),
     setSnapshotMock: vi.fn(),
     snapshotState: { value: null as unknown },
+    snapshotCacheKeys: {
+      serviceStatus: "service-status:test-key",
+    },
+    snapshotCacheTtlSeconds: {
+      serviceStatus: 11,
+    },
+  };
+});
+
+vi.mock("@/lib/runtime-state/snapshot-cache", () => {
+  return {
+    snapshotCacheKeys,
+    snapshotCacheTtlSeconds,
   };
 });
 
@@ -94,7 +109,7 @@ describe("GET /api/service-status cache contract", () => {
       return {
         ok: true,
         data: {
-          key: "service-status:latest",
+          key: snapshotCacheKeys.serviceStatus,
         },
       };
     });
@@ -128,8 +143,8 @@ describe("GET /api/service-status cache contract", () => {
     expect(executeSSMCommandMock).toHaveBeenCalledTimes(1);
     expect(setSnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        key: "service-status:latest",
-        ttlSeconds: 5,
+        key: snapshotCacheKeys.serviceStatus,
+        ttlSeconds: snapshotCacheTtlSeconds.serviceStatus,
       })
     );
   });
