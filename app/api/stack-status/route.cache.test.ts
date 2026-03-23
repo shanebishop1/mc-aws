@@ -10,6 +10,8 @@ const {
   getSnapshotMock,
   setSnapshotMock,
   snapshotState,
+  snapshotCacheKeys,
+  snapshotCacheTtlSeconds,
 } = vi.hoisted(() => {
   return {
     getAuthUserMock: vi.fn(),
@@ -19,6 +21,19 @@ const {
     getSnapshotMock: vi.fn(),
     setSnapshotMock: vi.fn(),
     snapshotState: { value: null as unknown },
+    snapshotCacheKeys: {
+      stackStatus: "stack-status:test-key",
+    },
+    snapshotCacheTtlSeconds: {
+      stackStatus: 19,
+    },
+  };
+});
+
+vi.mock("@/lib/runtime-state/snapshot-cache", () => {
+  return {
+    snapshotCacheKeys,
+    snapshotCacheTtlSeconds,
   };
 });
 
@@ -89,7 +104,7 @@ describe("GET /api/stack-status cache contract", () => {
       return {
         ok: true,
         data: {
-          key: "stack-status:latest",
+          key: snapshotCacheKeys.stackStatus,
         },
       };
     });
@@ -121,8 +136,8 @@ describe("GET /api/stack-status cache contract", () => {
     expect(getStackStatusMock).toHaveBeenCalledTimes(1);
     expect(setSnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        key: "stack-status:latest",
-        ttlSeconds: 30,
+        key: snapshotCacheKeys.stackStatus,
+        ttlSeconds: snapshotCacheTtlSeconds.stackStatus,
       })
     );
   });
