@@ -1,10 +1,12 @@
+import type { RuntimeStateCounterKey } from "@/lib/runtime-state";
+
 interface RateLimitEntry {
   count: number;
   windowStartMs: number;
 }
 
 interface RateLimitOptions {
-  key: string;
+  key: RuntimeStateCounterKey;
   limit: number;
   windowMs: number;
 }
