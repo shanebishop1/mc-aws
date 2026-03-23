@@ -38,6 +38,10 @@ Use this table when a lane is red on a PR or scheduled run.
 3. If code issue, push fix or revert; if owner unavailable, backup owner takes over.
 4. For escalations, include run URL, failing step, impact (merge block vs optional lane), and ETA.
 
+For newly added high-risk matrix tests, apply the explicit rerun/quarantine/unquarantine policy in:
+
+- `docs/epics/testing-expansion-high-risk-paths/high-risk-test-matrix-and-harness/high-risk-coverage-matrix.md` (section: **Flake triage policy for newly added high-risk tests (T-2.2)**).
+
 ## Runbook: Apply Required Check Policy
 
 ### Option A — GitHub UI

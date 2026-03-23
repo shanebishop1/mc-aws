@@ -63,3 +63,49 @@ The following mandatory endpoints/hooks/components are in scope and covered by a
 - Keep deterministic harness rules strict: fixed clock, explicit cookie jar handling, runtime-state stubs with stable seeds.
 - Each test suite implementing these rows should reference its `Row ID` in the describe/title so CI failures map back to this matrix.
 - If implementation discovers an untestable assertion, update this matrix in the same PR with rationale (do not silently drop coverage intent).
+
+## Flake triage policy for newly added high-risk tests (T-2.2)
+
+Applies to newly added tests mapped to matrix rows above (for example `A-*`, `R-*`, `H-*`, `C-*`, `E2E-*`) when they fail in:
+
+- `Baseline PR Validation`
+- `Mock integration lane (pnpm test:mock)`
+- `Mock E2E lane (pnpm test:e2e:mock)`
+
+### 1) Rerun threshold (before quarantine)
+
+1. Capture failing `Row ID`, lane/check name, and run URL in the PR comment.
+2. Rerun limits per SHA:
+   - `Baseline PR Validation`: **1 rerun max**.
+   - `Mock integration lane (pnpm test:mock)` and `Mock E2E lane (pnpm test:e2e:mock)`: **2 reruns max**.
+3. If still failing after hitting the rerun limit, treat as deterministic regression (not flake) and fix before merge.
+
+### 2) Quarantine trigger and required actions
+
+Quarantine a newly added high-risk test when either condition is true:
+
+- It passes only after exceeding the rerun threshold above in the same PR, **or**
+- The same `Row ID` has mixed pass/fail results in at least **2 of the last 5 CI runs** for its owning lane.
+
+When triggered, the PR author (or suite owner) must:
+
+1. Open a tracking issue with `Row ID`, exact status check, run URLs, failure signature, and suspected cause.
+2. Mark the test as quarantined in suite metadata/test name comments using the linked issue ID.
+3. Add/maintain this matrix row note with `Quarantined: <issue>` so maintainers can audit scope.
+
+### 3) Ownership and escalation
+
+- **Primary owner:** PR author / suite owner for the affected row.
+- **Operational owner:** CI lane steward listed in `docs/epics/ci-gate-workflow/branch-protection-adoption/maintainer-required-checks.md`.
+- **Escalate to repo maintainers** when quarantine lasts longer than **5 business days**, or immediately if the flake affects `Baseline PR Validation` merge reliability.
+
+### 4) Exit criteria (unquarantine)
+
+A quarantined high-risk test can be restored only when all are true:
+
+1. Root-cause fix merged (or deterministic stabilization documented) and linked in the tracking issue.
+2. Test passes in **3 consecutive CI runs** in its owning lane.
+3. At least **1 scheduled/manual extended-lane run** also passes for that row (`pnpm test:mock` or `pnpm test:e2e:mock` when applicable).
+4. Quarantine markers and row note are removed in the same PR that closes the issue.
+
+Maintainers should reject unquarantine PRs that do not include the run evidence above.
