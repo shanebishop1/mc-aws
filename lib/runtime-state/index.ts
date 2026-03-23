@@ -41,6 +41,16 @@ export type {
 export { createCloudflareRuntimeStateAdapter } from "@/lib/runtime-state/cloudflare-adapter";
 export { inMemoryRuntimeStateAdapter } from "@/lib/runtime-state/in-memory-adapter";
 export {
+  createRuntimeStateTelemetryEvent,
+  emitRuntimeStateTelemetry,
+  runtimeStateTelemetryEventName,
+} from "@/lib/runtime-state/telemetry";
+export type {
+  RuntimeStateTelemetryEvent,
+  RuntimeStateTelemetryInput,
+  RuntimeStateTelemetryOutcome,
+} from "@/lib/runtime-state/telemetry";
+export {
   getRuntimeStateAdapter,
   hasCloudflareRuntimeStateBindings,
   selectRuntimeStateAdapterKind,
