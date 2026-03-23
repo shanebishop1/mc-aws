@@ -36,6 +36,7 @@ describe("GET /api/auth/callback rate-limit contract", () => {
     const res = await GET(req);
 
     expect(checkRateLimitMock).toHaveBeenCalledWith({
+      route: "/api/auth/callback",
       key: "auth:callback:198.51.100.25",
       limit: 6,
       windowMs: 60_000,

@@ -28,6 +28,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const clientIp = getClientIp(request.headers);
     const rateLimit = await checkRateLimit({
+      route: "/api/auth/callback",
       key: `auth:callback:${clientIp}`,
       limit: CALLBACK_RATE_LIMIT_MAX_REQUESTS,
       windowMs: CALLBACK_RATE_LIMIT_WINDOW_MS,

@@ -1,7 +1,8 @@
-import { getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { emitRuntimeStateTelemetry, getRuntimeStateAdapter } from "@/lib/runtime-state";
 import type { RuntimeStateCounterKey } from "@/lib/runtime-state";
 
 interface RateLimitOptions {
+  route: string;
   key: RuntimeStateCounterKey;
   limit: number;
   windowMs: number;
@@ -40,6 +41,14 @@ function fallbackRateLimitResult(limit: number): RateLimitResult {
   };
 }
 
+function failClosedRateLimitResult(): RateLimitResult {
+  return {
+    allowed: false,
+    remaining: 0,
+    retryAfterSeconds: 1,
+  };
+}
+
 function normalizeRateLimitResult(result: RateLimitResult): RateLimitResult {
   if (result.allowed) {
     return {
@@ -56,7 +65,7 @@ function normalizeRateLimitResult(result: RateLimitResult): RateLimitResult {
   };
 }
 
-export async function checkRateLimit({ key, limit, windowMs }: RateLimitOptions): Promise<RateLimitResult> {
+export async function checkRateLimit({ route, key, limit, windowMs }: RateLimitOptions): Promise<RateLimitResult> {
   try {
     const adapter = getRuntimeStateAdapter();
     const counterResult = await adapter.incrementCounter({
@@ -66,20 +75,75 @@ export async function checkRateLimit({ key, limit, windowMs }: RateLimitOptions)
     });
 
     if (!counterResult.ok) {
-      console.warn("[RATE-LIMIT] Counter backend unavailable, allowing request", {
+      if (counterResult.error.retryable) {
+        emitRuntimeStateTelemetry({
+          operation: "rate-limit.increment-counter",
+          outcome: "FALLBACK",
+          source: "route",
+          route,
+          key,
+          reason: `counter_backend_retryable_error:${counterResult.error.code}`,
+        });
+
+        console.warn("[RATE-LIMIT] Retryable counter backend error, allowing request", {
+          route,
+          code: counterResult.error.code,
+          retryable: counterResult.error.retryable,
+          key,
+        });
+        return fallbackRateLimitResult(limit);
+      }
+
+      emitRuntimeStateTelemetry({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route,
+        key,
+        retryAfterSeconds: 1,
+        reason: `counter_backend_non_retryable_error:${counterResult.error.code}`,
+      });
+
+      console.warn("[RATE-LIMIT] Non-retryable counter backend error, denying request", {
+        route,
         code: counterResult.error.code,
+        retryable: counterResult.error.retryable,
         key,
       });
-      return fallbackRateLimitResult(limit);
+      return failClosedRateLimitResult();
     }
 
-    return normalizeRateLimitResult({
+    const normalizedResult = normalizeRateLimitResult({
       allowed: counterResult.data.allowed,
       remaining: counterResult.data.remaining,
       retryAfterSeconds: counterResult.data.retryAfterSeconds,
     });
+
+    if (!normalizedResult.allowed) {
+      emitRuntimeStateTelemetry({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route,
+        key,
+        retryAfterSeconds: normalizedResult.retryAfterSeconds,
+        reason: "rate_limit_exceeded",
+      });
+    }
+
+    return normalizedResult;
   } catch (error) {
+    emitRuntimeStateTelemetry({
+      operation: "rate-limit.increment-counter",
+      outcome: "FALLBACK",
+      source: "route",
+      route,
+      key,
+      reason: "counter_backend_exception",
+    });
+
     console.warn("[RATE-LIMIT] Unexpected counter backend error, allowing request", {
+      route,
       key,
       error,
     });

@@ -36,6 +36,7 @@ describe("GET /api/auth/login rate-limit contract", () => {
     const res = await GET(req);
 
     expect(checkRateLimitMock).toHaveBeenCalledWith({
+      route: "/api/auth/login",
       key: "auth:login:198.51.100.24",
       limit: 6,
       windowMs: 60_000,

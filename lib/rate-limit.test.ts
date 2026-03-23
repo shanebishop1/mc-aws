@@ -1,8 +1,9 @@
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { getRuntimeStateAdapterMock, incrementCounterMock } = vi.hoisted(() => {
+const { emitRuntimeStateTelemetryMock, getRuntimeStateAdapterMock, incrementCounterMock } = vi.hoisted(() => {
   return {
+    emitRuntimeStateTelemetryMock: vi.fn(),
     getRuntimeStateAdapterMock: vi.fn(),
     incrementCounterMock: vi.fn(),
   };
@@ -10,6 +11,7 @@ const { getRuntimeStateAdapterMock, incrementCounterMock } = vi.hoisted(() => {
 
 vi.mock("@/lib/runtime-state", () => {
   return {
+    emitRuntimeStateTelemetry: emitRuntimeStateTelemetryMock,
     getRuntimeStateAdapter: getRuntimeStateAdapterMock,
   };
 });
@@ -37,6 +39,7 @@ describe("rate-limit", () => {
       });
 
       const result = await checkRateLimit({
+        route: "/api/status",
         key: "status:127.0.0.1",
         limit: 6,
         windowMs: 60_000,
@@ -67,6 +70,7 @@ describe("rate-limit", () => {
       });
 
       const result = await checkRateLimit({
+        route: "/api/status",
         key: "status:127.0.0.1",
         limit: 6,
         windowMs: 60_000,
@@ -76,6 +80,15 @@ describe("rate-limit", () => {
         allowed: false,
         remaining: 0,
         retryAfterSeconds: 34,
+      });
+      expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route: "/api/status",
+        key: "status:127.0.0.1",
+        retryAfterSeconds: 34,
+        reason: "rate_limit_exceeded",
       });
     });
 
@@ -92,6 +105,7 @@ describe("rate-limit", () => {
       });
 
       const result = await checkRateLimit({
+        route: "/api/status",
         key: "status:127.0.0.1",
         limit: 6,
         windowMs: 60_000,
@@ -104,7 +118,7 @@ describe("rate-limit", () => {
       });
     });
 
-    it("fails open when runtime-state adapter returns an error", async () => {
+    it("fails open when runtime-state adapter returns a retryable backend error", async () => {
       incrementCounterMock.mockResolvedValueOnce({
         ok: false,
         error: {
@@ -115,6 +129,7 @@ describe("rate-limit", () => {
       });
 
       const result = await checkRateLimit({
+        route: "/api/status",
         key: "status:127.0.0.1",
         limit: 6,
         windowMs: 60_000,
@@ -124,6 +139,47 @@ describe("rate-limit", () => {
         allowed: true,
         remaining: 5,
         retryAfterSeconds: 0,
+      });
+      expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith({
+        operation: "rate-limit.increment-counter",
+        outcome: "FALLBACK",
+        source: "route",
+        route: "/api/status",
+        key: "status:127.0.0.1",
+        reason: "counter_backend_retryable_error:counter_unavailable",
+      });
+    });
+
+    it("fails closed when runtime-state adapter returns a non-retryable backend error", async () => {
+      incrementCounterMock.mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "counter_invalid_input",
+          message: "Invalid input",
+          retryable: false,
+        },
+      });
+
+      const result = await checkRateLimit({
+        route: "/api/status",
+        key: "status:127.0.0.1",
+        limit: 6,
+        windowMs: 60_000,
+      });
+
+      expect(result).toEqual({
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: 1,
+      });
+      expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route: "/api/status",
+        key: "status:127.0.0.1",
+        retryAfterSeconds: 1,
+        reason: "counter_backend_non_retryable_error:counter_invalid_input",
       });
     });
 
@@ -131,6 +187,7 @@ describe("rate-limit", () => {
       incrementCounterMock.mockRejectedValueOnce(new Error("boom"));
 
       const result = await checkRateLimit({
+        route: "/api/status",
         key: "status:127.0.0.1",
         limit: 6,
         windowMs: 60_000,
@@ -140,6 +197,14 @@ describe("rate-limit", () => {
         allowed: true,
         remaining: 5,
         retryAfterSeconds: 0,
+      });
+      expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith({
+        operation: "rate-limit.increment-counter",
+        outcome: "FALLBACK",
+        source: "route",
+        route: "/api/status",
+        key: "status:127.0.0.1",
+        reason: "counter_backend_exception",
       });
     });
   });

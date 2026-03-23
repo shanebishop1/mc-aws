@@ -28,6 +28,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     const clientIp = getClientIp(request.headers);
     const rateLimit = await checkRateLimit({
+      route: "/api/auth/login",
       key: `auth:login:${clientIp}`,
       limit: LOGIN_RATE_LIMIT_MAX_REQUESTS,
       windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
