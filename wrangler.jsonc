@@ -8,6 +8,27 @@
     "directory": ".open-next/assets",
     "binding": "ASSETS"
   },
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "RUNTIME_STATE_DURABLE_OBJECT",
+        "class_name": "RuntimeStateDurableObject"
+      }
+    ]
+  },
+  "kv_namespaces": [
+    {
+      "binding": "RUNTIME_STATE_SNAPSHOT_KV",
+      "id": "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_ID",
+      "preview_id": "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"
+    }
+  ],
+  "migrations": [
+    {
+      "tag": "v1-runtime-state-durable-object",
+      "new_sqlite_classes": ["RuntimeStateDurableObject"]
+    }
+  ],
   "observability": {
     "enabled": false,
     "head_sampling_rate": 1,
