@@ -95,6 +95,22 @@ During build, the script writes a temporary `.env.production.local` from the sel
 
 The deploy script validates env, uploads secrets, builds, and deploys the Worker.
 
+## 8) Runtime-state bindings (Durable Object + KV)
+
+`wrangler.jsonc` defines runtime-state namespaces used by the Cloudflare runtime adapter:
+
+- Durable Object binding: `RUNTIME_STATE_DURABLE_OBJECT` (authoritative mutable state)
+- KV binding: `RUNTIME_STATE_SNAPSHOT_KV` (optional snapshot cache)
+
+Notes:
+
+- Runtime adapter naming stays consistent with selector fields:
+  - `durableObjectNamespace` -> `env.RUNTIME_STATE_DURABLE_OBJECT`
+  - `snapshotKvNamespace` -> `env.RUNTIME_STATE_SNAPSHOT_KV`
+- A Durable Object migration tag (`v1-runtime-state-durable-object`) is included in Wrangler config.
+- Replace KV placeholder IDs in `wrangler.jsonc` before remote deployment.
+- Local dev parity: `wrangler dev` uses these bindings against local state storage under `.wrangler/state` by default.
+
 ## Troubleshooting
 
 ### `wrangler login` fails or behaves like API-token mode
