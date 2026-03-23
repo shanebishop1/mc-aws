@@ -44,6 +44,20 @@ test.describe("Homepage States", () => {
     await expect(page.getByRole("button", { name: /restore/i })).not.toBeVisible();
   });
 
+  test("unauthenticated start routes through login flow", async ({ page }) => {
+    await setupStoppedScenario(page);
+    await page.context().clearCookies();
+
+    await navigateTo(page, "/");
+    await waitForPageLoad(page);
+
+    const loginRequestPromise = page.waitForRequest((request) => request.url().includes("/api/auth/login?popup=1"));
+    await page.getByRole("button", { name: /start server/i }).click();
+    const loginRequest = await loginRequestPromise;
+
+    expect(loginRequest.url()).toContain("/api/auth/login?popup=1");
+  });
+
   test("shows server controls when stack exists and running", async ({ page }) => {
     await setupRunningScenario(page);
 
