@@ -1,6 +1,17 @@
 import { expect, test } from "@playwright/test";
 import { confirmDialog, waitForLoading, waitForPageLoad } from "./helpers";
-import { setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
+import { setMockParameter, setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
+
+const seedBackupsCache = async (page: Parameters<typeof setupHibernatedScenario>[0]) => {
+  await setMockParameter(
+    page,
+    "/minecraft/backups-cache",
+    JSON.stringify({
+      backups: [{ name: "minecraft-backup-2025-01-15" }, { name: "minecraft-backup-2025-01-20" }],
+      cachedAt: Date.now(),
+    })
+  );
+};
 
 test.describe("Server Operations", () => {
   test.beforeEach(async ({ page }) => {
@@ -56,7 +67,7 @@ test.describe("Server Operations", () => {
     await confirmDialog(page);
 
     // Verify action started
-    await expect(page.getByText(/hibernating/i)).toBeVisible();
+    await expect(page.getByTestId("server-status")).toContainText(/stopping\.\.\.|hibernating/i);
   });
 
   test("can cancel hibernate confirmation", async ({ page }) => {
@@ -109,6 +120,7 @@ test.describe("Server Operations", () => {
 
   test("resume with restore from backup option", async ({ page }) => {
     await setupHibernatedScenario(page);
+    await seedBackupsCache(page);
     await page.goto("/");
     await waitForPageLoad(page);
 
@@ -245,6 +257,7 @@ test.describe("Server Operations", () => {
 
   test("resume confirm restore is disabled until backup is selected", async ({ page }) => {
     await setupHibernatedScenario(page);
+    await seedBackupsCache(page);
     await page.goto("/");
     await waitForPageLoad(page);
 

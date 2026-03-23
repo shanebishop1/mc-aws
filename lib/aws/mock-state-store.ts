@@ -972,9 +972,12 @@ export function getMockStateStore(options?: MockStateStoreOptions): MockStateSto
     return existingStore;
   }
 
-  // Disable persistence in test mode to ensure clean state between tests
-  const isTestMode = process.env.NODE_ENV === "test" || process.env.PLAYWRIGHT_TEST === "1";
-  console.log("[MOCK-STATE-STORE] Creating new store, test mode:", isTestMode);
+  // Disable persistence only for unit-test environments.
+  // Playwright E2E runs against a dev server where requests may execute in
+  // separate runtimes; persistence keeps mock state consistent across those
+  // boundaries and prevents scenario/patch drift between requests.
+  const isTestMode = process.env.NODE_ENV === "test";
+  console.log("[MOCK-STATE-STORE] Creating new store, unit test mode:", isTestMode);
 
   // Enable file persistence by default to survive module reloads in dev mode
   const storeOptions: MockStateStoreOptions = {

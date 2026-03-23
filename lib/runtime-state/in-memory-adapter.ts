@@ -27,6 +27,11 @@ interface SnapshotEntry {
 const counters = new Map<string, CounterEntry>();
 const snapshots = new Map<string, SnapshotEntry>();
 
+export function resetInMemoryRuntimeStateAdapterState(): void {
+  counters.clear();
+  snapshots.clear();
+}
+
 const buildCounterWindowState = ({
   count,
   limit,
