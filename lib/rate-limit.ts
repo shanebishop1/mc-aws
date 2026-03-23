@@ -40,6 +40,22 @@ function fallbackRateLimitResult(limit: number): RateLimitResult {
   };
 }
 
+function normalizeRateLimitResult(result: RateLimitResult): RateLimitResult {
+  if (result.allowed) {
+    return {
+      allowed: true,
+      remaining: Math.max(0, result.remaining),
+      retryAfterSeconds: 0,
+    };
+  }
+
+  return {
+    allowed: false,
+    remaining: 0,
+    retryAfterSeconds: Math.max(1, result.retryAfterSeconds),
+  };
+}
+
 export async function checkRateLimit({ key, limit, windowMs }: RateLimitOptions): Promise<RateLimitResult> {
   try {
     const adapter = getRuntimeStateAdapter();
@@ -57,11 +73,11 @@ export async function checkRateLimit({ key, limit, windowMs }: RateLimitOptions)
       return fallbackRateLimitResult(limit);
     }
 
-    return {
+    return normalizeRateLimitResult({
       allowed: counterResult.data.allowed,
       remaining: counterResult.data.remaining,
       retryAfterSeconds: counterResult.data.retryAfterSeconds,
-    };
+    });
   } catch (error) {
     console.warn("[RATE-LIMIT] Unexpected counter backend error, allowing request", {
       key,
