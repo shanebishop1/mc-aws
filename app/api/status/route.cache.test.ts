@@ -1,4 +1,6 @@
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
+import { createRuntimeStateAdapterFixture, freezeTime, restoreTime } from "@/tests/fixtures";
+import type { RuntimeStateAdapterFixture } from "@/tests/fixtures/runtime-state";
 import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,9 +11,6 @@ const {
   getAuthUserMock,
   getRuntimeStateAdapterMock,
   emitRuntimeStateTelemetryMock,
-  getSnapshotMock,
-  setSnapshotMock,
-  snapshotState,
   snapshotCacheKeys,
   snapshotCacheTtlSeconds,
 } = vi.hoisted(() => {
@@ -22,9 +21,6 @@ const {
     getAuthUserMock: vi.fn(),
     getRuntimeStateAdapterMock: vi.fn(),
     emitRuntimeStateTelemetryMock: vi.fn(),
-    getSnapshotMock: vi.fn(),
-    setSnapshotMock: vi.fn(),
-    snapshotState: { value: null as unknown },
     snapshotCacheKeys: {
       status: "status:test-key",
     },
@@ -71,11 +67,14 @@ vi.mock("@/lib/runtime-state", () => {
 });
 
 describe("GET /api/status cache contract", () => {
+  let runtimeStateFixture: RuntimeStateAdapterFixture;
+
   beforeEach(() => {
     vi.resetModules();
     vi.stubEnv("NODE_ENV", "development");
+    freezeTime("2026-01-02T03:04:05.000Z");
 
-    snapshotState.value = null;
+    runtimeStateFixture = createRuntimeStateAdapterFixture();
 
     checkRateLimitMock.mockResolvedValue({
       allowed: true,
@@ -89,47 +88,11 @@ describe("GET /api/status cache contract", () => {
       blockDeviceMappings: [{ deviceName: "/dev/sda1", ebs: { volumeId: "vol-1" } }],
     });
 
-    getSnapshotMock.mockImplementation(async () => {
-      if (snapshotState.value) {
-        return {
-          ok: true,
-          data: {
-            status: "hit",
-            value: snapshotState.value,
-            updatedAt: new Date().toISOString(),
-          },
-        };
-      }
-
-      return {
-        ok: true,
-        data: {
-          status: "miss",
-        },
-      };
-    });
-
-    setSnapshotMock.mockImplementation(async ({ value }: { value: unknown }) => {
-      snapshotState.value = value;
-      return {
-        ok: true,
-        data: {
-          key: snapshotCacheKeys.status,
-        },
-      };
-    });
-
-    getRuntimeStateAdapterMock.mockReturnValue({
-      kind: "in-memory",
-      incrementCounter: vi.fn(),
-      checkCounter: vi.fn(),
-      invalidateSnapshot: vi.fn(),
-      getSnapshot: getSnapshotMock,
-      setSnapshot: setSnapshotMock,
-    });
+    getRuntimeStateAdapterMock.mockReturnValue(runtimeStateFixture.adapter);
   });
 
   afterEach(() => {
+    restoreTime();
     vi.unstubAllEnvs();
   });
 
@@ -158,7 +121,7 @@ describe("GET /api/status cache contract", () => {
 
     expect(findInstanceIdMock).toHaveBeenCalledTimes(1);
     expect(getInstanceDetailsMock).toHaveBeenCalledTimes(1);
-    expect(setSnapshotMock).toHaveBeenCalledWith(
+    expect(runtimeStateFixture.setSnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
         key: snapshotCacheKeys.status,
         ttlSeconds: snapshotCacheTtlSeconds.status,
