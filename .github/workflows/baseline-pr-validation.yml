@@ -38,3 +38,12 @@ jobs:
         run: |
           node --version
           pnpm --version
+
+      - name: Gate - pnpm check
+        run: pnpm check
+
+      - name: Gate - pnpm typecheck
+        run: pnpm typecheck
+
+      - name: Gate - pnpm test
+        run: pnpm test
