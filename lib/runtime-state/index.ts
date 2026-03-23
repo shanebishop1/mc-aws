@@ -39,7 +39,10 @@ export type {
 } from "@/lib/runtime-state/adapters";
 
 export { createCloudflareRuntimeStateAdapter } from "@/lib/runtime-state/cloudflare-adapter";
-export { inMemoryRuntimeStateAdapter } from "@/lib/runtime-state/in-memory-adapter";
+export {
+  inMemoryRuntimeStateAdapter,
+  resetInMemoryRuntimeStateAdapterState,
+} from "@/lib/runtime-state/in-memory-adapter";
 export {
   createRuntimeStateTelemetryEvent,
   emitRuntimeStateTelemetry,

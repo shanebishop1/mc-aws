@@ -13,6 +13,7 @@ import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { invalidateMockControlSnapshots } from "../cache-invalidation";
 
 export async function GET(_request: NextRequest): Promise<NextResponse<ApiResponse<unknown>>> {
   // Only allow in mock mode
@@ -99,6 +100,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       errorCode,
       errorMessage,
     });
+    await invalidateMockControlSnapshots();
 
     return NextResponse.json({
       success: true,
@@ -146,6 +148,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
       // Clear specific operation fault
       console.log("[MOCK-CONTROL] Clearing fault for operation:", operation);
       await clearFault(operation);
+      await invalidateMockControlSnapshots();
 
       return NextResponse.json({
         success: true,
@@ -160,6 +163,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
     // Clear all faults
     console.log("[MOCK-CONTROL] Clearing all faults");
     await clearAllFaults();
+    await invalidateMockControlSnapshots();
 
     return NextResponse.json({
       success: true,

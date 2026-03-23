@@ -8,8 +8,10 @@ import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { resetMockStateStore, resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
 import { isMockMode } from "@/lib/env";
+import { resetInMemoryRuntimeStateAdapterState } from "@/lib/runtime-state";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { invalidateMockControlSnapshots } from "../cache-invalidation";
 
 export async function POST(_request: NextRequest): Promise<NextResponse<ApiResponse<unknown>>> {
   // Only allow in mock mode
@@ -39,8 +41,11 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
   try {
     // Force a complete reset of the singleton to ensure clean state
     resetMockStateStore();
+    // Reset in-memory runtime-state counters/snapshots (rate limits + cache)
+    resetInMemoryRuntimeStateAdapterState();
     // Then reset to default scenario
     await resetToDefaultScenario();
+    await invalidateMockControlSnapshots();
 
     return NextResponse.json({
       success: true,

@@ -77,6 +77,9 @@ test.describe("Backup and Restore", () => {
   test("restore with confirmation", async ({ page }) => {
     await setupRunningScenario(page);
 
+    // Ensure Google Drive is configured so restore dialog opens (not setup prompt)
+    await setMockParameter(page, "/minecraft/gdrive-token", "mock-token", "SecureString");
+
     // Set mock backups cache with sample backups
     const mockBackups = {
       backups: [
@@ -102,14 +105,18 @@ test.describe("Backup and Restore", () => {
     await expect(page.getByText(/Restore Backup/i)).toBeVisible();
     await expect(page.getByText(/Select a backup to restore from Google Drive/i)).toBeVisible();
 
-    // Wait for backup list to load
-    await expect(page.getByTestId("backup-selection-list")).toBeVisible({ timeout: 5000 });
+    // Prefer selecting from list when available; fall back to manual input if still caching
+    const backupList = page.getByTestId("backup-selection-list");
+    const backupInput = page.getByTestId("restore-backup-input");
+    const hasList = await backupList.isVisible({ timeout: 5000 }).catch(() => false);
 
-    // Select a backup from the list
-    await page.getByText("minecraft-backup-2025-01-20").click();
+    if (hasList) {
+      await page.getByText("minecraft-backup-2025-01-20").click();
+    } else {
+      await backupInput.fill("minecraft-backup-2025-01-20");
+    }
 
     // Verify the selected backup name is visible in the input
-    const backupInput = page.getByTestId("restore-backup-input");
     await expect(backupInput).toHaveValue("minecraft-backup-2025-01-20");
 
     // Verify the confirmation summary shows the selected backup

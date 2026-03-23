@@ -1,6 +1,7 @@
 import { defineConfig, devices } from "@playwright/test";
 
-const isMockMode = process.env.MC_BACKEND_MODE === "mock";
+// This suite always targets the mock backend via webServer.command.
+const isMockMode = true;
 
 export default defineConfig({
   testDir: "./tests",
