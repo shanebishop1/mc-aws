@@ -7,24 +7,22 @@ import { getAuthUser } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { getStackStatus } from "@/lib/aws";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
+import { getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse, StackStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export const dynamic = "force-dynamic";
 
-const STACK_STATUS_CACHE_TTL_MS = 30_000;
 const STACK_STATUS_RATE_LIMIT_WINDOW_MS = 60_000;
 const STACK_STATUS_RATE_LIMIT_MAX_REQUESTS = 15;
 
 type CachedStackStatusSnapshot = {
-  expiresAtMs: number;
   generatedAt: string;
   exists: boolean;
   status?: string;
   stackId?: string;
 };
-
-let cachedStackStatusSnapshot: CachedStackStatusSnapshot | null = null;
 
 function buildStackStatusPayload(
   snapshot: CachedStackStatusSnapshot,
@@ -96,9 +94,13 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   }
 
   try {
-    const nowMs = Date.now();
-    if (cachedStackStatusSnapshot && cachedStackStatusSnapshot.expiresAtMs > nowMs) {
-      const payload = buildStackStatusPayload(cachedStackStatusSnapshot, user);
+    const runtimeStateAdapter = getRuntimeStateAdapter();
+    const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedStackStatusSnapshot>({
+      key: snapshotCacheKeys.stackStatus,
+    });
+
+    if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
+      const payload = buildStackStatusPayload(cachedSnapshotResult.data.value, user);
       return buildStackStatusResponse(payload, user, "HIT");
     }
 
@@ -107,19 +109,22 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     const snapshot: CachedStackStatusSnapshot = stack
       ? {
-          expiresAtMs: nowMs + STACK_STATUS_CACHE_TTL_MS,
           generatedAt: new Date().toISOString(),
           exists: true,
           status: stack.StackStatus,
           stackId: stack.StackId,
         }
       : {
-          expiresAtMs: nowMs + STACK_STATUS_CACHE_TTL_MS,
           generatedAt: new Date().toISOString(),
           exists: false,
         };
 
-    cachedStackStatusSnapshot = snapshot;
+    await runtimeStateAdapter.setSnapshot({
+      key: snapshotCacheKeys.stackStatus,
+      value: snapshot,
+      ttlSeconds: snapshotCacheTtlSeconds.stackStatus,
+    });
+
     const payload = buildStackStatusPayload(snapshot, user);
     return buildStackStatusResponse(payload, user, "MISS");
   } catch (error) {
