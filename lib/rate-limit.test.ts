@@ -79,6 +79,31 @@ describe("rate-limit", () => {
       });
     });
 
+    it("normalizes throttled contract fields for caller compatibility", async () => {
+      incrementCounterMock.mockResolvedValueOnce({
+        ok: true,
+        data: {
+          allowed: false,
+          count: 7,
+          remaining: 4,
+          retryAfterSeconds: 0,
+          windowStartedAtMs: 123,
+        },
+      });
+
+      const result = await checkRateLimit({
+        key: "status:127.0.0.1",
+        limit: 6,
+        windowMs: 60_000,
+      });
+
+      expect(result).toEqual({
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: 1,
+      });
+    });
+
     it("fails open when runtime-state adapter returns an error", async () => {
       incrementCounterMock.mockResolvedValueOnce({
         ok: false,
