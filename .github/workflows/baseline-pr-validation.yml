@@ -7,8 +7,61 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
+  changed-path-groups:
+    name: Detect changed high-risk paths
+    runs-on: ubuntu-latest
+    outputs:
+      auth_changed: ${{ steps.detect_pr_paths.outputs.auth || steps.default_non_pr_paths.outputs.auth_changed }}
+      api_changed: ${{ steps.detect_pr_paths.outputs.api || steps.default_non_pr_paths.outputs.api_changed }}
+      runtime_changed: ${{ steps.detect_pr_paths.outputs.runtime || steps.default_non_pr_paths.outputs.runtime_changed }}
+      ui_changed: ${{ steps.detect_pr_paths.outputs.ui || steps.default_non_pr_paths.outputs.ui_changed }}
+      tests_changed: ${{ steps.detect_pr_paths.outputs.tests || steps.default_non_pr_paths.outputs.tests_changed }}
+
+    steps:
+      - name: Detect changed paths for pull requests
+        id: detect_pr_paths
+        if: github.event_name == 'pull_request'
+        uses: dorny/paths-filter@v3
+        with:
+          token: ${{ github.token }}
+          filters: |
+            auth:
+              - "app/api/auth/**"
+              - "components/auth/**"
+              - "lib/auth.ts"
+            api:
+              - "app/api/**"
+            runtime:
+              - "infra/**"
+              - "lib/aws/**"
+              - "lib/env.ts"
+              - "lib/rate-limit.ts"
+              - "wrangler.toml"
+            ui:
+              - "app/**"
+              - "components/**"
+              - "hooks/**"
+              - "!app/api/**"
+            tests:
+              - "tests/**"
+              - "**/*.test.ts"
+              - "**/*.test.tsx"
+              - "**/*.spec.ts"
+              - "**/*.spec.tsx"
+
+      - name: Default changed-path outputs for non-PR runs
+        id: default_non_pr_paths
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "auth_changed=true" >> "$GITHUB_OUTPUT"
+          echo "api_changed=true" >> "$GITHUB_OUTPUT"
+          echo "runtime_changed=true" >> "$GITHUB_OUTPUT"
+          echo "ui_changed=true" >> "$GITHUB_OUTPUT"
+          echo "tests_changed=true" >> "$GITHUB_OUTPUT"
+
   baseline-pr-validation:
     name: Baseline PR Validation
     if: github.event_name != 'pull_request' || github.event.pull_request.base.ref == github.event.repository.default_branch
