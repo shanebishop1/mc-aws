@@ -40,10 +40,76 @@ jobs:
           pnpm --version
 
       - name: Gate - pnpm check
+        id: gate_check
+        if: always()
+        continue-on-error: true
         run: pnpm check
 
       - name: Gate - pnpm typecheck
+        id: gate_typecheck
+        if: always()
+        continue-on-error: true
         run: pnpm typecheck
 
       - name: Gate - pnpm test
+        id: gate_test
+        if: always()
+        continue-on-error: true
         run: pnpm test
+
+      - name: Baseline gate summary
+        if: always()
+        run: |
+          run_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+
+          check_status="${{ steps.gate_check.outcome }}"
+          typecheck_status="${{ steps.gate_typecheck.outcome }}"
+          test_status="${{ steps.gate_test.outcome }}"
+
+          status_icon() {
+            if [ "$1" = "success" ]; then
+              printf "✅ Pass"
+            else
+              printf "❌ Fail"
+            fi
+          }
+
+          signal_text() {
+            if [ "$1" = "success" ]; then
+              printf "-"
+            else
+              printf "[View run logs](%s) → expand `%s`" "$run_url" "$2"
+            fi
+          }
+
+          {
+            echo "## Baseline PR gate summary"
+            echo
+            echo "| Gate | Status | Failure signal |"
+            echo "| --- | --- | --- |"
+            printf "| pnpm check | %s | %s |\n" "$(status_icon "$check_status")" "$(signal_text "$check_status" "Gate - pnpm check")"
+            printf "| pnpm typecheck | %s | %s |\n" "$(status_icon "$typecheck_status")" "$(signal_text "$typecheck_status" "Gate - pnpm typecheck")"
+            printf "| pnpm test | %s | %s |\n" "$(status_icon "$test_status")" "$(signal_text "$test_status" "Gate - pnpm test")"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Enforce baseline gate result
+        if: always()
+        run: |
+          failed=0
+
+          if [ "${{ steps.gate_check.outcome }}" != "success" ]; then
+            failed=1
+          fi
+
+          if [ "${{ steps.gate_typecheck.outcome }}" != "success" ]; then
+            failed=1
+          fi
+
+          if [ "${{ steps.gate_test.outcome }}" != "success" ]; then
+            failed=1
+          fi
+
+          if [ "$failed" -ne 0 ]; then
+            echo "One or more baseline gates failed. See job summary for details."
+            exit 1
+          fi
