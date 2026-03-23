@@ -41,7 +41,7 @@ vi.mock("@/lib/aws", () => {
   };
 });
 
-describe("GET /api/service-status rate-limit contract", () => {
+describe("GET /api/service-status strict counter/throttle contract", () => {
   beforeEach(() => {
     requireAllowedMock.mockResolvedValue({ email: "admin@example.com", role: "admin" });
     getRuntimeStateAdapterMock.mockReturnValue({
@@ -78,7 +78,7 @@ describe("GET /api/service-status rate-limit contract", () => {
     expect(res.headers.get("X-Service-Status-Cache")).toBeNull();
   });
 
-  it("allows a boundary request and throttles the next request", async () => {
+  it("enforces strict boundary then throttle sequencing", async () => {
     checkRateLimitMock
       .mockResolvedValueOnce({
         allowed: true,

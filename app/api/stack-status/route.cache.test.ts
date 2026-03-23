@@ -1,6 +1,7 @@
 import type { ApiResponse } from "@/lib/types";
+import { freezeTime, restoreTime } from "@/tests/fixtures";
 import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const {
   getAuthUserMock,
@@ -65,7 +66,10 @@ vi.mock("@/lib/runtime-state", () => {
 });
 
 describe("GET /api/stack-status cache contract", () => {
+  const toleratedSnapshotStalenessMs = snapshotCacheTtlSeconds.stackStatus * 1000;
+
   beforeEach(() => {
+    freezeTime("2026-01-02T03:04:05.000Z");
     snapshotState.value = null;
 
     getAuthUserMock.mockResolvedValue(null);
@@ -119,6 +123,10 @@ describe("GET /api/stack-status cache contract", () => {
     });
   });
 
+  afterEach(() => {
+    restoreTime();
+  });
+
   it("returns MISS then HIT with stack snapshot cache", async () => {
     const { GET } = await import("./route");
     const req = createMockNextRequest("http://localhost/api/stack-status");
@@ -149,5 +157,33 @@ describe("GET /api/stack-status cache contract", () => {
         ttlSeconds: snapshotCacheTtlSeconds.stackStatus,
       })
     );
+  });
+
+  it("allows stale-but-bounded snapshots on cache HIT", async () => {
+    const { GET } = await import("./route");
+    const req = createMockNextRequest("http://localhost/api/stack-status");
+
+    const staleSnapshotAgeMs = toleratedSnapshotStalenessMs - 1_000;
+    const staleGeneratedAt = new Date(Date.now() - staleSnapshotAgeMs).toISOString();
+
+    snapshotState.value = {
+      generatedAt: staleGeneratedAt,
+      exists: true,
+      status: "CREATE_COMPLETE",
+      stackId: "stack-123",
+    };
+
+    const response = await GET(req);
+    const body = await parseNextResponse<ApiResponse<unknown>>(response);
+
+    expect(response.headers.get("X-Stack-Status-Cache")).toBe("HIT");
+    expect(body.success).toBe(true);
+    expect(body.timestamp).toBe(staleGeneratedAt);
+
+    const observedStalenessMs = Date.now() - Date.parse(body.timestamp);
+    expect(observedStalenessMs).toBeGreaterThan(0);
+    expect(observedStalenessMs).toBeLessThanOrEqual(toleratedSnapshotStalenessMs);
+
+    expect(getStackStatusMock).not.toHaveBeenCalled();
   });
 });

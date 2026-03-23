@@ -25,7 +25,7 @@ describe("rate-limit", () => {
     });
   });
 
-  describe("checkRateLimit", () => {
+  describe("checkRateLimit strict counter/throttle behavior", () => {
     it("uses runtime-state adapter incrementCounter", async () => {
       incrementCounterMock.mockResolvedValueOnce({
         ok: true,
