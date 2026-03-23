@@ -67,6 +67,7 @@ vi.mock("@/lib/runtime-state", () => {
 });
 
 describe("GET /api/status cache contract", () => {
+  const toleratedSnapshotStalenessMs = snapshotCacheTtlSeconds.status * 1000;
   let runtimeStateFixture: RuntimeStateAdapterFixture;
 
   beforeEach(() => {
@@ -127,5 +128,34 @@ describe("GET /api/status cache contract", () => {
         ttlSeconds: snapshotCacheTtlSeconds.status,
       })
     );
+  });
+
+  it("tolerates bounded snapshot staleness for cache hits", async () => {
+    const { GET } = await import("./route");
+
+    const staleSnapshotAgeMs = toleratedSnapshotStalenessMs - 1_000;
+    const staleGeneratedAt = new Date(Date.now() - staleSnapshotAgeMs).toISOString();
+
+    runtimeStateFixture.seedSnapshot(snapshotCacheKeys.status, {
+      generatedAt: staleGeneratedAt,
+      instanceId: "i-1234567890abcdef0",
+      displayState: "running",
+      hasVolume: true,
+    });
+
+    const req = createMockNextRequest("http://localhost/api/status");
+    const response = await GET(req);
+    const body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(response);
+
+    expect(response.headers.get("X-Status-Cache")).toBe("HIT");
+    expect(body.success).toBe(true);
+    expect(body.timestamp).toBe(staleGeneratedAt);
+
+    const observedStalenessMs = Date.now() - Date.parse(body.timestamp);
+    expect(observedStalenessMs).toBeGreaterThan(0);
+    expect(observedStalenessMs).toBeLessThanOrEqual(toleratedSnapshotStalenessMs);
+
+    expect(findInstanceIdMock).not.toHaveBeenCalled();
+    expect(getInstanceDetailsMock).not.toHaveBeenCalled();
   });
 });
