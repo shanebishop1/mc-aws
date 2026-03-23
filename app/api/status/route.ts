@@ -115,22 +115,13 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   if (!IS_TEST_ENV) {
     const clientIp = getClientIp(request.headers);
     const rateLimit = await checkRateLimit({
+      route: "/api/status",
       key: `status:${clientIp}`,
       limit: STATUS_RATE_LIMIT_MAX_REQUESTS,
       windowMs: STATUS_RATE_LIMIT_WINDOW_MS,
     });
 
     if (!rateLimit.allowed) {
-      emitRuntimeStateTelemetry({
-        operation: "status.rate-limit",
-        outcome: "THROTTLE",
-        source: "route",
-        route: "/api/status",
-        key: `status:${clientIp}`,
-        retryAfterSeconds: rateLimit.retryAfterSeconds,
-        reason: "status_request_limit_exceeded",
-      });
-
       const response = NextResponse.json(
         {
           success: false,

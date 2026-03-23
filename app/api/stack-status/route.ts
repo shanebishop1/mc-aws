@@ -75,6 +75,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
   const clientIp = getClientIp(request.headers);
   const rateLimit = await checkRateLimit({
+    route: "/api/stack-status",
     key: `stack-status:${clientIp}`,
     limit: STACK_STATUS_RATE_LIMIT_MAX_REQUESTS,
     windowMs: STACK_STATUS_RATE_LIMIT_WINDOW_MS,
