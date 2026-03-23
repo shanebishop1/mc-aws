@@ -26,3 +26,22 @@ export type {
   SnapshotSetInput,
   SnapshotSetResult,
 } from "@/lib/runtime-state/contract";
+
+export type {
+  RuntimeStateAdapter,
+  RuntimeStateAdapterKind,
+  RuntimeStateCloudflareAdapter,
+  RuntimeStateCloudflareBindings,
+  RuntimeStateCounterOperations,
+  RuntimeStateInMemoryAdapter,
+  RuntimeStateSelectorInput,
+  RuntimeStateSnapshotOperations,
+} from "@/lib/runtime-state/adapters";
+
+export { createCloudflareRuntimeStateAdapter } from "@/lib/runtime-state/cloudflare-adapter";
+export { inMemoryRuntimeStateAdapter } from "@/lib/runtime-state/in-memory-adapter";
+export {
+  getRuntimeStateAdapter,
+  hasCloudflareRuntimeStateBindings,
+  selectRuntimeStateAdapterKind,
+} from "@/lib/runtime-state/provider-selector";
