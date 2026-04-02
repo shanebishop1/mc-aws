@@ -3,7 +3,13 @@ import {
   hasCloudflareRuntimeStateBindings,
   selectRuntimeStateAdapterKind,
 } from "@/lib/runtime-state";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
+
+const cloudflareContextSymbol = Symbol.for("__cloudflare-context__");
+
+afterEach(() => {
+  delete (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol];
+});
 
 describe("runtime-state provider selector", () => {
   describe("hasCloudflareRuntimeStateBindings", () => {
@@ -59,6 +65,18 @@ describe("runtime-state provider selector", () => {
     it("falls back to in-memory in production when no bindings are present", () => {
       expect(selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toBe("in-memory");
     });
+
+    it("selects cloudflare in production when bindings are present in cloudflare context", () => {
+      (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
+        env: {
+          RUNTIME_STATE_DURABLE_OBJECT: {
+            idFromName: () => "id",
+          },
+        },
+      };
+
+      expect(selectRuntimeStateAdapterKind({ nodeEnv: "production" })).toBe("cloudflare");
+    });
   });
 
   describe("getRuntimeStateAdapter", () => {
@@ -75,6 +93,24 @@ describe("runtime-state provider selector", () => {
             idFromName: () => "id",
           },
         },
+      });
+
+      expect(adapter.kind).toBe("cloudflare");
+    });
+
+    it("returns cloudflare adapter when only cloudflare context bindings are present", () => {
+      (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
+        env: {
+          RUNTIME_STATE_SNAPSHOT_KV: {
+            get: async () => null,
+            put: async () => undefined,
+            delete: async () => undefined,
+          },
+        },
+      };
+
+      const adapter = getRuntimeStateAdapter({
+        nodeEnv: "production",
       });
 
       expect(adapter.kind).toBe("cloudflare");

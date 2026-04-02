@@ -50,6 +50,7 @@ vi.mock("@/lib/runtime-state", () => {
 
 describe("GET /api/costs cache contract", () => {
   beforeEach(() => {
+    vi.resetModules();
     snapshotState.value = null;
 
     requireAdminMock.mockResolvedValue({ email: "admin@example.com", role: "admin" });
@@ -110,14 +111,15 @@ describe("GET /api/costs cache contract", () => {
     });
   });
 
-  it("returns cached costs without refetching AWS", async () => {
+  it("fetches on first cache miss", async () => {
     const { GET } = await import("./route");
     const req = createMockNextRequest("http://localhost/api/costs");
 
-    const firstResponse = await GET(req);
-    const firstBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(firstResponse);
-    expect(firstBody.success).toBe(true);
-    expect(firstBody.data).toMatchObject({
+    const response = await GET(req);
+    const body = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(response);
+
+    expect(body.success).toBe(true);
+    expect(body.data).toMatchObject({
       totalCost: "10.00",
       currency: "USD",
       period: {
@@ -132,8 +134,21 @@ describe("GET /api/costs cache contract", () => {
       ],
       fetchedAt: "2026-03-22T00:00:00.000Z",
     });
+    expect(body.data?.cachedAt).toBeDefined();
+    expect(response.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(response.headers.get("X-Costs-Cache")).toBe("MISS");
+
+    expect(getCostsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("reuses cache for repeated non-refresh requests", async () => {
+    const { GET } = await import("./route");
+    const req = createMockNextRequest("http://localhost/api/costs");
+
+    const firstResponse = await GET(req);
+    const firstBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(firstResponse);
+    expect(firstBody.success).toBe(true);
     expect(firstBody.data?.cachedAt).toBeDefined();
-    expect(firstResponse.headers.get("X-Costs-Cache")).toBeNull();
 
     const secondResponse = await GET(req);
     const secondBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(secondResponse);
@@ -143,9 +158,48 @@ describe("GET /api/costs cache contract", () => {
       currency: "USD",
     });
     expect(secondBody.data?.cachedAt).toBe(firstBody.data?.cachedAt);
-    expect(secondResponse.headers.get("X-Costs-Cache")).toBeNull();
+    expect(secondResponse.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(secondResponse.headers.get("X-Costs-Cache")).toBe("HIT");
 
     expect(getCostsMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("forces a fresh AWS fetch when refresh=true", async () => {
+    const { GET } = await import("./route");
+    const baseReq = createMockNextRequest("http://localhost/api/costs");
+    const refreshReq = createMockNextRequest("http://localhost/api/costs?refresh=true");
+
+    const firstResponse = await GET(baseReq);
+    const firstBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(firstResponse);
+    expect(firstBody.success).toBe(true);
+    expect(firstBody.data?.cachedAt).toBeDefined();
+
+    const secondResponse = await GET(refreshReq);
+    const secondBody = await parseNextResponse<ApiResponse<CostData & { cachedAt?: number }>>(secondResponse);
+
+    expect(secondBody.success).toBe(true);
+    expect(secondBody.data?.cachedAt).toBeDefined();
+    expect(secondResponse.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(secondResponse.headers.get("X-Costs-Cache")).toBe("MISS");
+
+    expect(getCostsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not set ttlSeconds for costs snapshots", async () => {
+    const { GET } = await import("./route");
+    const req = createMockNextRequest("http://localhost/api/costs");
+
+    await GET(req);
+
+    expect(setSnapshotMock).toHaveBeenCalledTimes(1);
+    const firstSetSnapshotCallArg = setSnapshotMock.mock.calls[0]?.[0] as { ttlSeconds?: number } | undefined;
+    expect(firstSetSnapshotCallArg).toBeDefined();
+    if (!firstSetSnapshotCallArg) {
+      throw new Error("Expected setSnapshot to be called with a payload");
+    }
+    expect(firstSetSnapshotCallArg.ttlSeconds).toBeUndefined();
+    expect("ttlSeconds" in firstSetSnapshotCallArg).toBe(false);
+
     expect(setSnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
         key: "costs:latest",

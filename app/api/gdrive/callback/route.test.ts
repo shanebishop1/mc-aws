@@ -24,7 +24,7 @@ const mocks = vi.hoisted(() => ({
   // Mock environment variables (must be hoisted)
   mockEnv: {
     MC_BACKEND_MODE: "aws",
-    NEXT_PUBLIC_APP_URL: "http://localhost:3001",
+    NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     GOOGLE_CLIENT_ID: "test-client-id",
     GOOGLE_CLIENT_SECRET: "test-client-secret",
   },
@@ -44,7 +44,7 @@ vi.mock("@/lib/aws/mock-state-store", () => ({
   getMockStateStore: mocks.getMockStateStore,
 }));
 
-vi.mock("@/lib/aws/ssm-client", () => ({
+vi.mock("@/lib/aws", () => ({
   putParameter: mocks.putParameter,
 }));
 

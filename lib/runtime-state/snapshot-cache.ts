@@ -10,4 +10,5 @@ export const snapshotCacheTtlSeconds = {
   status: 5,
   serviceStatus: 5,
   stackStatus: 30,
+  emails: 30,
 } as const;

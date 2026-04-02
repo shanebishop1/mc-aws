@@ -1,4 +1,4 @@
-import { getEmailAllowlist } from "./aws/ssm-client";
+import { getEmailAllowlist } from "@/lib/aws";
 
 interface CacheEntry {
   data: string[];

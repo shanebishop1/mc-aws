@@ -12,6 +12,16 @@ type CachedCostsSnapshot = {
   timestamp: number;
 };
 
+function buildCostsResponse(
+  payload: ApiResponse<CostData & { cachedAt?: number }>,
+  cacheStatus: "HIT" | "MISS"
+): NextResponse<ApiResponse<CostData & { cachedAt?: number }>> {
+  const response = NextResponse.json(payload);
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("X-Costs-Cache", cacheStatus);
+  return response;
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<CostData & { cachedAt?: number }>>> {
   try {
     // Check admin authorization
@@ -38,14 +48,17 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
       if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
         console.log("[COSTS] Returning cached cost data");
-        return NextResponse.json({
-          success: true,
-          data: {
-            ...cachedSnapshotResult.data.value.data,
-            cachedAt: cachedSnapshotResult.data.value.timestamp,
+        return buildCostsResponse(
+          {
+            success: true,
+            data: {
+              ...cachedSnapshotResult.data.value.data,
+              cachedAt: cachedSnapshotResult.data.value.timestamp,
+            },
+            timestamp: new Date().toISOString(),
           },
-          timestamp: new Date().toISOString(),
-        });
+          "HIT"
+        );
       }
     }
 
@@ -53,7 +66,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const data = await getCosts();
     const timestamp = Date.now();
 
-    // Update cache
+    // Update cache (intentionally no ttlSeconds; costs only refresh on cache miss or refresh=true)
     if (!skipCache) {
       await runtimeStateAdapter.setSnapshot({
         key: snapshotCacheKeys.costs,
@@ -61,15 +74,21 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       });
     }
 
-    return NextResponse.json({
-      success: true,
-      data: {
-        ...data,
-        cachedAt: timestamp,
+    return buildCostsResponse(
+      {
+        success: true,
+        data: {
+          ...data,
+          cachedAt: timestamp,
+        },
+        timestamp: new Date().toISOString(),
       },
-      timestamp: new Date().toISOString(),
-    });
+      "MISS"
+    );
   } catch (error) {
-    return formatApiErrorResponse<CostData & { cachedAt?: number }>(error, "costs");
+    const response = formatApiErrorResponse<CostData & { cachedAt?: number }>(error, "costs");
+    response.headers.set("Cache-Control", "private, no-store");
+    response.headers.set("X-Costs-Cache", "MISS");
+    return response;
   }
 }

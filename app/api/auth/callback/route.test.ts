@@ -14,7 +14,7 @@ const mocks = vi.hoisted(() => {
     mockEnv: {
       GOOGLE_CLIENT_ID: "test-google-client-id",
       GOOGLE_CLIENT_SECRET: "test-google-client-secret",
-      NEXT_PUBLIC_APP_URL: "http://localhost",
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     },
     cookieValues,
     cookieStore: {
@@ -77,7 +77,7 @@ describe("GET /api/auth/callback regression contract", () => {
 
     mocks.mockEnv.GOOGLE_CLIENT_ID = "test-google-client-id";
     mocks.mockEnv.GOOGLE_CLIENT_SECRET = "test-google-client-secret";
-    mocks.mockEnv.NEXT_PUBLIC_APP_URL = "http://localhost";
+    mocks.mockEnv.NEXT_PUBLIC_APP_URL = "http://localhost:3000";
 
     setDefaultOAuthCookies();
 

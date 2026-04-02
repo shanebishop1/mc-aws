@@ -4,8 +4,8 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
+import { putParameter } from "@/lib/aws";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
-import { putParameter } from "@/lib/aws/ssm-client";
 import { env } from "@/lib/env";
 import { isMockMode } from "@/lib/env";
 import { cookies } from "next/headers";

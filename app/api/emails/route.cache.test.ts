@@ -1,3 +1,4 @@
+import { snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
 import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -136,7 +137,15 @@ describe("emails routes cache contract", () => {
     });
     expect(typeof firstBody.data?.adminEmail).toBe("string");
     expect(firstBody.data?.cachedAt).toBeDefined();
-    expect(firstGet.headers.get("X-Emails-Cache")).toBeNull();
+    expect(firstGet.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(firstGet.headers.get("X-Emails-Cache")).toBe("MISS");
+
+    expect(setSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        key: "emails:latest",
+        ttlSeconds: snapshotCacheTtlSeconds.emails,
+      })
+    );
 
     const secondGet = await GET(getRequest);
     const secondBody =
@@ -147,7 +156,8 @@ describe("emails routes cache contract", () => {
     });
     expect(typeof secondBody.data?.adminEmail).toBe("string");
     expect(secondBody.data?.cachedAt).toBe(firstBody.data?.cachedAt);
-    expect(secondGet.headers.get("X-Emails-Cache")).toBeNull();
+    expect(secondGet.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(secondGet.headers.get("X-Emails-Cache")).toBe("HIT");
     expect(getEmailAllowlistMock).toHaveBeenCalledTimes(1);
 
     const putRequest = createMockNextRequest("http://localhost/api/emails/allowlist", {
@@ -165,6 +175,29 @@ describe("emails routes cache contract", () => {
     const thirdBody =
       await parseNextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>(thirdGet);
     expect(thirdBody.success).toBe(true);
+    expect(thirdGet.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(thirdGet.headers.get("X-Emails-Cache")).toBe("MISS");
+    expect(getEmailAllowlistMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("forces a fresh email fetch when refresh=true", async () => {
+    const { GET } = await import("./route");
+    const baseRequest = createMockNextRequest("http://localhost/api/emails");
+    const refreshRequest = createMockNextRequest("http://localhost/api/emails?refresh=true");
+
+    const firstGet = await GET(baseRequest);
+    const firstBody =
+      await parseNextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>(firstGet);
+    expect(firstBody.success).toBe(true);
+    expect(firstGet.headers.get("X-Emails-Cache")).toBe("MISS");
+
+    const refreshGet = await GET(refreshRequest);
+    const refreshBody =
+      await parseNextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>(refreshGet);
+    expect(refreshBody.success).toBe(true);
+    expect(refreshGet.headers.get("Cache-Control")).toBe("private, no-store");
+    expect(refreshGet.headers.get("X-Emails-Cache")).toBe("MISS");
+
     expect(getEmailAllowlistMock).toHaveBeenCalledTimes(2);
   });
 });

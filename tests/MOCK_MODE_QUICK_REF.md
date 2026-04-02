@@ -70,7 +70,7 @@ await authenticateAsDev(page);
 - Check `.env` has `ENABLE_DEV_LOGIN=true`
 
 **Tests timeout**
-- Ensure port 3001 is not blocked
+- Ensure port 3000 is not blocked
 - Check dev server is starting correctly
 
 **Tests fail to find elements**

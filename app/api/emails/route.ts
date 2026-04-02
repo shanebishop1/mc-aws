@@ -4,7 +4,7 @@ import { formatApiErrorResponse } from "@/lib/api-error";
 import { getEmailAllowlist, updateEmailAllowlist } from "@/lib/aws";
 import { env, getAllowedEmails } from "@/lib/env";
 import { getRuntimeStateAdapter } from "@/lib/runtime-state";
-import { snapshotCacheKeys } from "@/lib/runtime-state/snapshot-cache";
+import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -30,6 +30,16 @@ function uniqueEmails(emails: string[]): string[] {
 function getBaselineAllowlist(): string[] {
   const notificationEmail = (process.env.NOTIFICATION_EMAIL || env.ADMIN_EMAIL || "").trim();
   return uniqueEmails([notificationEmail, env.ADMIN_EMAIL, ...getAllowedEmails()]);
+}
+
+function buildEmailsResponse(
+  payload: ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>,
+  cacheStatus: "HIT" | "MISS"
+): NextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>> {
+  const response = NextResponse.json(payload);
+  response.headers.set("Cache-Control", "private, no-store");
+  response.headers.set("X-Emails-Cache", cacheStatus);
+  return response;
 }
 
 export async function GET(
@@ -60,15 +70,18 @@ export async function GET(
 
       if (cachedSnapshotResult.ok && cachedSnapshotResult.data.status === "hit") {
         console.log("[EMAILS] Returning cached email configuration");
-        return NextResponse.json({
-          success: true,
-          data: {
-            adminEmail: cachedSnapshotResult.data.value.adminEmail,
-            allowlist: cachedSnapshotResult.data.value.allowlist,
-            cachedAt: cachedSnapshotResult.data.value.timestamp,
+        return buildEmailsResponse(
+          {
+            success: true,
+            data: {
+              adminEmail: cachedSnapshotResult.data.value.adminEmail,
+              allowlist: cachedSnapshotResult.data.value.allowlist,
+              cachedAt: cachedSnapshotResult.data.value.timestamp,
+            },
+            timestamp: new Date().toISOString(),
           },
-          timestamp: new Date().toISOString(),
-        });
+          "HIT"
+        );
       }
     }
 
@@ -88,14 +101,24 @@ export async function GET(
     await runtimeStateAdapter.setSnapshot({
       key: snapshotCacheKeys.emails,
       value: { adminEmail, allowlist, timestamp },
+      ttlSeconds: snapshotCacheTtlSeconds.emails,
     });
 
-    return NextResponse.json({
-      success: true,
-      data: { adminEmail, allowlist, cachedAt: timestamp },
-      timestamp: new Date().toISOString(),
-    });
+    return buildEmailsResponse(
+      {
+        success: true,
+        data: { adminEmail, allowlist, cachedAt: timestamp },
+        timestamp: new Date().toISOString(),
+      },
+      "MISS"
+    );
   } catch (error) {
-    return formatApiErrorResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>(error, "emails");
+    const response = formatApiErrorResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>(
+      error,
+      "emails"
+    );
+    response.headers.set("Cache-Control", "private, no-store");
+    response.headers.set("X-Emails-Cache", "MISS");
+    return response;
   }
 }

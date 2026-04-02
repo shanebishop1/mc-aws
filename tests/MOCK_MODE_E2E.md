@@ -221,7 +221,7 @@ test("Test name", async ({ page }) => {
 **Solution**: The mock backend transitions states quickly. If tests timeout, check that:
 1. The dev server is running (Playwright starts it automatically)
 2. The mock mode is enabled
-3. No other processes are blocking port 3001
+3. No other processes are blocking port 3000
 
 ### Tests fail to find elements
 
