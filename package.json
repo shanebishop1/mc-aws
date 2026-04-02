@@ -3,8 +3,8 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "ENABLE_DEV_LOGIN=true next dev",
-    "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev",
+    "dev": "ENABLE_DEV_LOGIN=true next dev -p 3000",
+    "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3000",
     "setup": "./setup.sh",
     "prebuild": "tsx scripts/validate-env.ts",
     "build": "next build",
@@ -31,6 +31,7 @@
     "mock:reset": "tsx scripts/mock-cli.ts reset",
     "mock:scenario": "tsx scripts/mock-cli.ts scenario",
     "validate:dev-login": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true tsx scripts/validate-dev-login.ts",
+    "docs:check": "tsx scripts/validate-docs-consistency.ts",
     "preview:cf": "opennextjs-cloudflare build && wrangler dev",
     "deploy:cf": "./scripts/deploy-cloudflare.sh",
     "cdk:version": "cd infra && cdk --version",

@@ -45,14 +45,14 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 pnpm dev:mock
 ```
 
-The server will start at `http://localhost:3001`.
+The server will start at `http://localhost:3000`.
 
 ## Step 4: Authenticate
 
 Open your browser and visit:
 
 ```
-http://localhost:3001/api/auth/dev-login
+http://localhost:3000/api/auth/dev-login
 ```
 
 You'll be automatically redirected to the home page and logged in as an admin user.
@@ -61,7 +61,7 @@ You'll be automatically redirected to the home page and logged in as an admin us
 
 Now you can:
 
-- **View the UI:** Open `http://localhost:3001` in your browser
+- **View the UI:** Open `http://localhost:3000` in your browser
 - **Test scenarios:** Use `pnpm mock:scenario <name>` to switch between states
 - **Run tests:** Use `pnpm test:e2e:mock` to run E2E tests
 - **Validate setup:** Use `pnpm validate:dev-login` to verify everything works

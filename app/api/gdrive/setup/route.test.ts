@@ -22,7 +22,7 @@ const mocks = vi.hoisted(() => ({
   // Mock environment variables (must be hoisted)
   mockEnv: {
     MC_BACKEND_MODE: "aws",
-    NEXT_PUBLIC_APP_URL: "http://localhost:3001",
+    NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     GOOGLE_CLIENT_ID: "test-client-id",
   },
 }));
@@ -132,7 +132,7 @@ describe("GET /api/gdrive/setup", () => {
     const authUrl = new URL(body.data?.authUrl || "");
 
     expect(authUrl.searchParams.get("client_id")).toBe("test-client-id");
-    expect(authUrl.searchParams.get("redirect_uri")).toBe("http://localhost:3001/api/gdrive/callback");
+    expect(authUrl.searchParams.get("redirect_uri")).toBe("http://localhost:3000/api/gdrive/callback");
     expect(authUrl.searchParams.get("scope")).toBe("https://www.googleapis.com/auth/drive.file");
     expect(authUrl.searchParams.get("response_type")).toBe("code");
     expect(authUrl.searchParams.get("access_type")).toBe("offline");

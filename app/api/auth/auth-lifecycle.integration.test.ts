@@ -62,7 +62,7 @@ const mocks = vi.hoisted(() => {
     mockEnv: {
       GOOGLE_CLIENT_ID: "test-google-client-id",
       GOOGLE_CLIENT_SECRET: "test-google-client-secret",
-      NEXT_PUBLIC_APP_URL: "http://localhost",
+      NEXT_PUBLIC_APP_URL: "http://localhost:3000",
     },
   };
 });

@@ -25,7 +25,7 @@ This guide provides comprehensive documentation for using mock mode in the mc-aw
 # Start in mock mode with dev login enabled
 pnpm dev:mock
 
-# The server will be available at http://localhost:3001
+# The server will be available at http://localhost:3000
 # You'll be automatically logged in as an admin user
 ```
 
@@ -265,7 +265,7 @@ pnpm dev:mock
 Starts the Next.js development server in mock mode with:
 - `MC_BACKEND_MODE=mock`
 - `ENABLE_DEV_LOGIN=true`
-- Port 3001
+- Port 3000
 
 ### Testing
 
@@ -581,17 +581,17 @@ pnpm mock:reset
 pnpm dev:mock
 
 # 3. Use the web UI or API to start the server
-curl -X POST http://localhost:3001/api/start
+curl -X POST http://localhost:3000/api/start
 
 # 4. Check the state transitions
-curl http://localhost:3001/api/status
+curl http://localhost:3000/api/status
 # Should show: stopped → pending → running
 
 # 5. Stop the server
-curl -X POST http://localhost:3001/api/stop
+curl -X POST http://localhost:3000/api/stop
 
 # 6. Verify state returns to stopped
-curl http://localhost:3001/api/status
+curl http://localhost:3000/api/status
 ```
 
 ### Testing Error Scenarios
@@ -604,7 +604,7 @@ pnpm mock:scenario errors
 pnpm dev:mock
 
 # 3. Try to start the server (will fail)
-curl -X POST http://localhost:3001/api/start
+curl -X POST http://localhost:3000/api/start
 
 # 4. Verify error handling in UI
 # The UI should display the error message gracefully
@@ -622,7 +622,7 @@ pnpm mock:scenario high-cost
 # 2. Start dev server
 pnpm dev:mock
 
-# 3. Open http://localhost:3001 in your browser
+# 3. Open http://localhost:3000 in your browser
 
 # 4. Verify:
 #    - Cost dashboard shows high costs
@@ -644,13 +644,13 @@ pnpm mock:reset
 pnpm dev:mock
 
 # 3. List backups
-curl http://localhost:3001/api/backups
+curl http://localhost:3000/api/backups
 
 # 4. Create a backup
-curl -X POST http://localhost:3001/api/backup
+curl -X POST http://localhost:3000/api/backup
 
 # 5. Restore from backup
-curl -X POST http://localhost:3001/api/restore \
+curl -X POST http://localhost:3000/api/restore \
   -H "Content-Type: application/json" \
   -d '{"backupName": "backup-2026-01-30"}'
 
@@ -669,19 +669,19 @@ pnpm mock:scenario hibernated
 pnpm dev:mock
 
 # 3. Verify state shows hibernated (no volume)
-curl http://localhost:3001/api/status
+curl http://localhost:3000/api/status
 
 # 4. Resume from hibernation
-curl -X POST http://localhost:3001/api/resume
+curl -X POST http://localhost:3000/api/resume
 
 # 5. Verify volume is created and instance starts
-curl http://localhost:3001/api/status
+curl http://localhost:3000/api/status
 
 # 6. Hibernate again
-curl -X POST http://localhost:3001/api/hibernate
+curl -X POST http://localhost:3000/api/hibernate
 
 # 7. Verify volume is deleted
-curl http://localhost:3001/api/status
+curl http://localhost:3000/api/status
 ```
 
 ## Fault Injection
@@ -695,7 +695,7 @@ Fault injection allows you to simulate AWS API failures for testing error handli
 The next call to the operation will fail, then the fault is cleared.
 
 ```bash
-curl -X POST http://localhost:3001/api/mock/fault \
+curl -X POST http://localhost:3000/api/mock/fault \
   -H "Content-Type: application/json" \
   -d '{
     "operation": "startInstance",
@@ -710,7 +710,7 @@ curl -X POST http://localhost:3001/api/mock/fault \
 All calls to the operation will fail until the fault is cleared.
 
 ```bash
-curl -X POST http://localhost:3001/api/mock/fault \
+curl -X POST http://localhost:3000/api/mock/fault \
   -H "Content-Type: application/json" \
   -d '{
     "operation": "getCosts",
@@ -725,7 +725,7 @@ curl -X POST http://localhost:3001/api/mock/fault \
 Add artificial delay to operations for testing loading states.
 
 ```bash
-curl -X POST http://localhost:3001/api/mock/fault \
+curl -X POST http://localhost:3000/api/mock/fault \
   -H "Content-Type: application/json" \
   -d '{
     "operation": "startInstance",
@@ -737,7 +737,7 @@ curl -X POST http://localhost:3001/api/mock/fault \
 
 ```bash
 # Clear a specific fault
-curl -X POST http://localhost:3001/api/mock/fault \
+curl -X POST http://localhost:3000/api/mock/fault \
   -H "Content-Type: application/json" \
   -d '{
     "operation": "startInstance",
@@ -796,7 +796,7 @@ pnpm mock:scenario running
 pnpm dev:mock
 
 # Make some changes via the API
-curl -X POST http://localhost:3001/api/start
+curl -X POST http://localhost:3000/api/start
 
 # Check the persisted state
 cat mock-state.json
@@ -854,7 +854,7 @@ ENABLE_DEV_LOGIN=true
 # (Environment variables are only loaded on startup)
 
 # Visit the dev login route
-open http://localhost:3001/api/auth/dev-login
+open http://localhost:3000/api/auth/dev-login
 
 # You'll be logged in as an admin user
 ```
@@ -962,13 +962,13 @@ pnpm test:e2e:mock
 
 ### Port Already in Use
 
-**Problem:** Can't start dev server, port 3001 is in use
+**Problem:** Can't start dev server, port 3000 is in use
 
 **Solution:** Kill the existing process or use a different port:
 
 ```bash
 # Find and kill the process
-lsof -ti:3001 | xargs kill -9
+lsof -ti:3000 | xargs kill -9
 
 # Or use a different port
 MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3002

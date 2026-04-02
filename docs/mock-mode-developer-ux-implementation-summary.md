@@ -20,7 +20,7 @@ Added the following scripts for convenient mock mode usage:
 
 **Implementation:**
 ```json
-"dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3001",
+"dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3000",
 "test:e2e:mock": "MC_BACKEND_MODE=mock playwright test",
 "test:mock": "MC_BACKEND_MODE=mock vitest run",
 "mock:reset": "tsx scripts/mock-cli.ts reset",
@@ -102,7 +102,7 @@ Updated existing documentation to cross-reference the new developer guide:
 
 ✅ **`pnpm dev:mock` starts the dev server in mock mode**
 - Script sets `MC_BACKEND_MODE=mock` and `ENABLE_DEV_LOGIN=true`
-- Starts Next.js dev server on port 3001
+- Starts Next.js dev server on port 3000
 
 ✅ **`pnpm test:e2e:mock` runs E2E tests in mock mode**
 - Script sets `MC_BACKEND_MODE=mock`

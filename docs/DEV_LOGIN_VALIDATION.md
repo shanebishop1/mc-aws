@@ -45,12 +45,12 @@ This document summarizes the validation of the `ENABLE_DEV_LOGIN` feature in moc
 2. **Start Dev Server**
    ```bash
    pnpm dev:mock
-   # Server starts on port 3001
+   # Server starts on port 3000
    ```
 
 3. **Visit Dev Login Endpoint**
    ```
-   GET http://localhost:3001/api/auth/dev-login
+   GET http://localhost:3000/api/auth/dev-login
    ```
 
 4. **Expected Response**
@@ -60,7 +60,7 @@ This document summarizes the validation of the `ENABLE_DEV_LOGIN` feature in moc
 
 5. **Verify Authentication**
    ```bash
-   GET http://localhost:3001/api/auth/me
+   GET http://localhost:3000/api/auth/me
    Cookie: mc_session=<jwt-token>
 
    Response:
@@ -73,7 +73,7 @@ This document summarizes the validation of the `ENABLE_DEV_LOGIN` feature in moc
 
 6. **Access Protected Routes**
    ```bash
-   GET http://localhost:3001/api/status
+   GET http://localhost:3000/api/status
    Cookie: mc_session=<jwt-token>
 
    Response:
@@ -86,7 +86,7 @@ This document summarizes the validation of the `ENABLE_DEV_LOGIN` feature in moc
 
 7. **Logout**
    ```bash
-   POST http://localhost:3001/api/auth/logout
+   POST http://localhost:3000/api/auth/logout
 
    Response:
    {

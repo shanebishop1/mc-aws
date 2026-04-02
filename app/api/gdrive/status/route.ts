@@ -5,8 +5,8 @@
 
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
+import { getParameter } from "@/lib/aws";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
-import { getParameter } from "@/lib/aws/ssm-client";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse, GDriveStatusResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";

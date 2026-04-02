@@ -12,7 +12,7 @@ export default defineConfig({
   reporter: "html",
   globalSetup: "./tests/e2e/global-setup.ts",
   use: {
-    baseURL: "http://localhost:3001",
+    baseURL: "http://localhost:3000",
     trace: "on-first-retry",
   },
   projects: [
@@ -24,8 +24,8 @@ export default defineConfig({
   webServer: {
     // Run Playwright against mock dev server so tests can exercise mock-mode
     // flows without weakening the production-only guard that blocks mock mode.
-    command: "bash -lc 'set -euo pipefail; export AUTH_SECRET=dev-secret-placeholder; npm run dev:mock -- -p 3001'",
-    url: "http://localhost:3001",
+    command: "bash -lc 'set -euo pipefail; export AUTH_SECRET=dev-secret-placeholder; npm run dev:mock'",
+    url: "http://localhost:3000",
     // In mock mode, always start fresh to avoid stale server/mock state.
     reuseExistingServer: !process.env.CI && !isMockMode,
     timeout: 120000,

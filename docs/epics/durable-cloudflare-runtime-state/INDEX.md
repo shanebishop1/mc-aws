@@ -13,3 +13,7 @@
 3. Status Snapshot Durable Cache Migration
    - `docs/epics/durable-cloudflare-runtime-state/status-snapshot-durable-cache-migration/prds/status-snapshot-durable-cache-migration-prd.md`
    - `docs/epics/durable-cloudflare-runtime-state/status-snapshot-durable-cache-migration/maintainer-rollout-and-rollback.md`
+
+## Verification Runbooks
+
+- `docs/epics/durable-cloudflare-runtime-state/configuration-docs-drift-verification-runbook.md`

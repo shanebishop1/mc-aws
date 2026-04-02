@@ -28,7 +28,7 @@ This implementation adds comprehensive Playwright E2E tests for mock mode that v
 
 1. **`playwright.config.ts`**
    - Updated `testDir` from `./tests/e2e` to `./tests` to include new test file
-   - Updated `baseURL` from `http://localhost:3000` to `http://localhost:3001` (matching dev server port)
+   - Set `baseURL` to `http://localhost:3000` (matching dev server port)
    - Added environment variables to `webServer.command`: `MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true`
    - Increased `timeout` to 120000ms for dev server startup
 

@@ -1,9 +1,27 @@
+import { resetProvider } from "@/lib/aws/provider-selector";
 import { type ApiResponse, ServerState, type ServerStatusResponse } from "@/lib/types";
 import { createMockNextRequest, parseNextResponse, setupInstanceState } from "@/tests/utils";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { GET } from "./route";
 
 describe("GET /api/status", () => {
+  let previousBackendMode: string | undefined;
+
+  beforeEach(() => {
+    previousBackendMode = process.env.MC_BACKEND_MODE;
+    process.env.MC_BACKEND_MODE = "aws";
+    resetProvider();
+  });
+
+  afterEach(() => {
+    if (previousBackendMode === undefined) {
+      process.env.MC_BACKEND_MODE = undefined;
+    } else {
+      process.env.MC_BACKEND_MODE = previousBackendMode;
+    }
+    resetProvider();
+  });
+
   it("should return running status when instance is running", async () => {
     setupInstanceState("running");
 

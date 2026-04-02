@@ -1,9 +1,27 @@
+import { resetProvider } from "@/lib/aws/provider-selector";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
-import { createMockNextRequest, parseNextResponse, setupInstanceState } from "@/tests/utils";
-import { describe, expect, it, vi } from "vitest";
+import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { POST } from "./route";
 
 describe("POST /api/stop", () => {
+  let previousBackendMode: string | undefined;
+
+  beforeEach(() => {
+    previousBackendMode = process.env.MC_BACKEND_MODE;
+    process.env.MC_BACKEND_MODE = "aws";
+    resetProvider();
+  });
+
+  afterEach(() => {
+    if (previousBackendMode === undefined) {
+      process.env.MC_BACKEND_MODE = undefined;
+    } else {
+      process.env.MC_BACKEND_MODE = previousBackendMode;
+    }
+    resetProvider();
+  });
+
   it("should stop the server successfully when running", async () => {
     const { mockEC2Client, mockSSMClient } = await import("@/tests/mocks/aws");
 
