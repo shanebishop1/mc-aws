@@ -62,5 +62,5 @@ next-env.d.ts
 .open-next
 frontend/.next
 
-# bv (beads viewer) local config and caches
-.bv/
+.agents/
+AGENTS.md
