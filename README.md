@@ -4,7 +4,7 @@
 
 Run your own Minecraft server on AWS, control it from a web app, and keep idle cost low by stopping or hibernating when nobody is playing.
 
-This project is web-app first. CLI/API/manual shell flows are supported as optional add-ons.
+This project is web-app first. CLI/manual shell flows are supported as optional add-ons.
 
 ## Quick Setup (Production)
 
@@ -67,26 +67,9 @@ Local auth options:
 - `ALLOWED_EMAILS`: can check status and start
 - signed-in users not listed above: status-only
 
-## Local Development (No AWS Required)
-
-Use mock mode when building UI/API behavior without touching real AWS resources:
-
-```bash
-pnpm dev:mock
-pnpm test:mock
-pnpm test:e2e:mock
-pnpm mock:scenario running
-pnpm mock:reset
-```
-
-More detail:
-
-- [Quick Start Mock Mode](docs/QUICK_START_MOCK_MODE.md)
-- [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
-
 ## CLI Addendum (Optional)
 
-The web app is the default workflow. If you want terminal control, these commands call the same API routes:
+The web app is the default workflow. If you want terminal control, these commands are available:
 
 ```bash
 pnpm server:status
@@ -105,24 +88,6 @@ Manual EC2 shell access (advanced):
 ./bin/connect.sh
 ./bin/console.sh
 ```
-
-## API Addendum (Optional)
-
-Primary routes live in `app/api`:
-
-- `GET /api/status`
-- `POST /api/start`
-- `POST /api/stop`
-- `POST /api/resume`
-- `POST /api/hibernate`
-- `POST /api/backup`
-- `POST /api/restore`
-- `GET /api/backups`
-- `GET /api/costs`
-- `GET /api/emails`
-- `PUT /api/emails/allowlist`
-
-See [API Reference](docs/docs/API.md) for a broader route map.
 
 ## Deploying Updates
 
@@ -171,21 +136,6 @@ pnpm cdk:deploy
 - Keep DNS runtime token in your deployment env file as `CLOUDFLARE_DNS_API_TOKEN`
 - Avoid exporting `CLOUDFLARE_DNS_API_TOKEN` globally in your shell
 
-## Repo Structure (Quick View)
-
-```text
-mc-aws/
-├── app/              # Next.js app + API routes
-├── components/       # Frontend components
-├── hooks/            # Frontend hooks
-├── lib/              # Shared AWS/auth/types utilities
-├── scripts/          # Setup/deploy/dev helper scripts
-├── bin/              # Manual EC2 shell scripts
-├── infra/            # AWS CDK stack + Lambda/EC2 assets
-├── docs/             # Setup guides and deeper docs
-└── tests/            # Vitest + Playwright tests
-```
-
 ## Key Docs
 
 - [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md)
@@ -193,4 +143,3 @@ mc-aws/
 - [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md)
 - [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md)
 - [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
-- [API Reference](docs/docs/API.md)
