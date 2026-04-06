@@ -228,6 +228,16 @@ command_exists() {
   command -v "$1" &> /dev/null
 }
 
+activate_mise_for_current_shell() {
+  if ! command_exists mise; then
+    return 1
+  fi
+
+  # Ensure this script can immediately use tools from mise without
+  # requiring the user to open a new shell first.
+  eval "$(mise activate bash)"
+}
+
 # Print error and exit
 error_exit() {
   log "❌ Error: $*"
@@ -332,10 +342,17 @@ main() {
     fi
   fi
 
+  if ! activate_mise_for_current_shell; then
+    error_exit "mise is installed but could not be activated for this setup session. Restart your terminal and re-run ./setup.sh"
+  fi
+
   # Step 2: Install tools with mise
   step "Installing Node.js and pnpm with mise"
   log "Running 'mise install' to ensure correct versions..."
   mise install
+  if ! command_exists node || ! command_exists pnpm; then
+    error_exit "mise finished but Node.js or pnpm is still unavailable. Restart your terminal and re-run ./setup.sh"
+  fi
   success "Node.js and pnpm are ready"
   info "mise will automatically activate Node.js 22 and pnpm 10 when you cd into this directory"
 

@@ -8,21 +8,26 @@ This project is web-app first. CLI/manual shell flows are supported as optional 
 
 ## Quick Setup (Production)
 
-If you want the fastest path from clone to a live panel and server, use the setup script:
+If you want the fastest path from clone to a live panel and server, just run the setup script.
+
+You do not need Node.js, `pnpm`, or `mise` installed ahead of time. `./setup.sh` checks for `mise`, installs it if needed, activates it for the current setup session, and then uses it to install the correct Node.js and `pnpm` versions for this project.
 
 ```bash
 git clone <your-repo-url>
 cd mc-aws
-pnpm setup
+bash ./setup.sh
 ```
 
-`pnpm setup` runs `./setup.sh`, which automatically:
+`./setup.sh` automatically:
 
-1. Installs/verifies local tools (`mise`, Node, pnpm, AWS CLI, CDK)
-2. Launches the credential wizard (`scripts/setup-wizard.sh`)
-3. Deploys AWS infrastructure with CDK
-4. Stores deployment outputs (including `INSTANCE_ID`) in `.env.production` and `.env.local`
-5. Deploys the Next.js app to Cloudflare Workers
+1. Installs/verifies `mise`
+2. Activates `mise` for the current setup run and your future shell sessions
+3. Uses `mise` to install the correct Node.js and `pnpm` versions for this project
+4. Installs project dependencies
+5. Launches the credential wizard (`scripts/setup-wizard.sh`)
+6. Deploys AWS infrastructure with CDK
+7. Stores deployment outputs (including `INSTANCE_ID`) in `.env.production` and `.env.local`
+8. Deploys the Next.js app to Cloudflare Workers
 
 ### Accounts/credentials you should have ready
 
@@ -117,11 +122,17 @@ pnpm cdk:deploy
 
 ## Troubleshooting (Quick)
 
-### `pnpm setup` fails
+### `./setup.sh` fails
 
 - Ensure `aws sts get-caller-identity` works
 - Ensure `.env.production` has required values from the wizard
-- Re-run `pnpm install` then `pnpm setup`
+- Re-run `./setup.sh`
+
+### `node` or `pnpm` is not found
+
+- Re-run `./setup.sh` so it can finish the `mise` setup step
+- If it still fails, check whether `mise` was installed to `~/.local/bin/mise`
+- Restart your terminal, then run `./setup.sh` again
 
 ### Google login redirect mismatch
 
