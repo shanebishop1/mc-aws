@@ -88,20 +88,20 @@ while IFS='=' read -r key value; do
 done
 
 if [[ "$protocol" == "https" && "$host" == "github.com" ]]; then
-  if [[ -n "${GITHUB_USERNAME:-}" && -n "${GITHUB_TOKEN:-}" ]]; then
+  GITHUB_USERNAME=$(aws ssm get-parameter --name /minecraft/github-user --query Parameter.Value --output text 2>/dev/null || echo "")
+  GITHUB_TOKEN=$(aws ssm get-parameter \
+    --name /minecraft/github-pat \
+    --with-decryption \
+    --query Parameter.Value \
+    --output text 2>/dev/null || echo "")
+
+  if [[ -n "$GITHUB_USERNAME" && -n "$GITHUB_TOKEN" ]]; then
     echo "username=${GITHUB_USERNAME}"
     echo "password=${GITHUB_TOKEN}"
   fi
 fi
 HELPER_EOF
 chmod 755 "$CREDENTIAL_HELPER_FILE"
-
-# Persist credentials for systemd runtime environment (ExecStartPre git pull)
-cat > /etc/default/minecraft <<EOF
-GITHUB_USERNAME=${GITHUB_USERNAME}
-GITHUB_TOKEN=${GITHUB_TOKEN}
-EOF
-chmod 600 /etc/default/minecraft
 
 if [[ ! -d "/opt/setup/.git" ]]; then
   log "Cloning setup repo into /opt/setup..."
