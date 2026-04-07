@@ -223,13 +223,14 @@ export async function getPlayerCount(): Promise<{ count: number; lastUpdated: st
 export async function putParameter(
   name: string,
   value: string,
-  type: "String" | "SecureString" = "String"
+  type: "String" | "SecureString" = "String",
+  overwrite = true
 ): Promise<void> {
   const command = new PutParameterCommand({
     Name: name,
     Value: value,
     Type: type,
-    Overwrite: true,
+    Overwrite: overwrite,
   });
   await ssm.send(command);
 }

@@ -6,13 +6,21 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
+import {
+  acquireServerActionLock,
+  isServerActionLockConflictError,
+  releaseServerActionLock,
+} from "@/lib/server-action-lock";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
+  let userEmail = "unknown";
+
   try {
     const user = await requireAdmin(request);
+    userEmail = user.email;
     console.log("[STOP] Action by:", user.email, "role:", user.role);
   } catch (error) {
     if (error instanceof Response) {
@@ -53,9 +61,17 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    // Send stop command
-    console.log("[STOP] Sending stop command...");
-    await stopInstance(resolvedId);
+    const lock = await acquireServerActionLock("stop", userEmail);
+
+    try {
+      // Send stop command
+      console.log("[STOP] Sending stop command...");
+      await stopInstance(resolvedId);
+    } finally {
+      await releaseServerActionLock(lock.lockId).catch((releaseError) => {
+        console.error("[STOP] Failed to release lock:", releaseError);
+      });
+    }
 
     const response: ApiResponse<StopServerResponse> = {
       success: true,
@@ -68,6 +84,17 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     return NextResponse.json(response);
   } catch (error) {
+    if (isServerActionLockConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Another operation is already in progress. Please wait for it to complete.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
     return formatApiErrorResponse<StopServerResponse>(error, "stop");
   }
 }

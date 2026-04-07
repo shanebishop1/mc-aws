@@ -8,6 +8,11 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatApiErrorResponseWithStatus } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import {
+  acquireServerActionLock,
+  isServerActionLockConflictError,
+  releaseServerActionLock,
+} from "@/lib/server-action-lock";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -67,7 +72,8 @@ function validateHibernateState(currentState: string): NextResponse<ApiResponse<
  */
 async function invokeHibernateLambda(
   instanceId: string,
-  user: AuthUser
+  user: AuthUser,
+  lockId: string
 ): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
   try {
     console.log(`[HIBERNATE] Invoking Lambda for hibernate on ${instanceId}`);
@@ -77,6 +83,7 @@ async function invokeHibernateLambda(
       instanceId: instanceId,
       userEmail: user.email,
       args: [],
+      lockId,
     });
 
     return NextResponse.json(
@@ -93,6 +100,9 @@ async function invokeHibernateLambda(
     );
   } catch (error) {
     console.error("[HIBERNATE] Lambda invocation failed:", error);
+    await releaseServerActionLock(lockId).catch((releaseError) => {
+      console.error("[HIBERNATE] Failed to release lock after invoke error:", releaseError);
+    });
     throw error;
   }
 }
@@ -103,9 +113,7 @@ async function invokeHibernateLambda(
 function buildHibernateErrorResponse(error: unknown): NextResponse<ApiResponse<HibernateResponse>> {
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
-  // If the error is about another action in progress, return 409 Conflict
-  // This is a specific business logic error that should be preserved
-  if (errorMessage.includes("Another operation is in progress")) {
+  if (isServerActionLockConflictError(error) || errorMessage.includes("Another operation is in progress")) {
     return formatApiErrorResponseWithStatus<HibernateResponse>(
       error,
       409,
@@ -151,7 +159,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Invoke Lambda for hibernate
-    return await invokeHibernateLambda(resolvedId, user);
+    const lock = await acquireServerActionLock("hibernate", user.email);
+    return await invokeHibernateLambda(resolvedId, user, lock.lockId);
   } catch (error) {
     return buildHibernateErrorResponse(error);
   }

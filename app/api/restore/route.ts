@@ -7,6 +7,11 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { sanitizeBackupName } from "@/lib/sanitization";
+import {
+  acquireServerActionLock,
+  isServerActionLockConflictError,
+  releaseServerActionLock,
+} from "@/lib/server-action-lock";
 import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -79,6 +84,7 @@ async function validateServiceReady(instanceId: string): Promise<NextResponse<Ap
 async function invokeRestoreLambda(
   instanceId: string,
   userEmail: string,
+  lockId: string,
   backupName?: string
 ): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
   try {
@@ -89,6 +95,7 @@ async function invokeRestoreLambda(
       instanceId: instanceId,
       userEmail: userEmail,
       args: backupName ? [backupName] : [],
+      lockId,
     });
 
     return NextResponse.json(
@@ -105,6 +112,9 @@ async function invokeRestoreLambda(
     );
   } catch (error) {
     console.error("[RESTORE] Lambda invocation failed:", error);
+    await releaseServerActionLock(lockId).catch((releaseError) => {
+      console.error("[RESTORE] Failed to release lock after invoke error:", releaseError);
+    });
     throw error;
   }
 }
@@ -148,8 +158,20 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Invoke Lambda for restore
-    return await invokeRestoreLambda(resolvedId, authResult.email, backupName);
+    const lock = await acquireServerActionLock("restore", authResult.email);
+    return await invokeRestoreLambda(resolvedId, authResult.email, lock.lockId, backupName);
   } catch (error) {
+    if (isServerActionLockConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Another operation is already in progress. Please wait for it to complete.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
     return buildRestoreErrorResponse(error);
   }
 }

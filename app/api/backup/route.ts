@@ -9,6 +9,11 @@ import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
+import {
+  acquireServerActionLock,
+  isServerActionLockConflictError,
+  releaseServerActionLock,
+} from "@/lib/server-action-lock";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -88,6 +93,7 @@ async function validateServiceReady(instanceId: string): Promise<NextResponse<Ap
 async function invokeBackupLambda(
   instanceId: string,
   user: AuthUser,
+  lockId: string,
   backupName?: string
 ): Promise<NextResponse<ApiResponse<BackupResponse>>> {
   try {
@@ -98,6 +104,7 @@ async function invokeBackupLambda(
       instanceId: instanceId,
       userEmail: user.email,
       args: backupName ? [backupName] : [],
+      lockId,
     });
 
     return NextResponse.json(
@@ -114,6 +121,9 @@ async function invokeBackupLambda(
     );
   } catch (error) {
     console.error("[BACKUP] Lambda invocation failed:", error);
+    await releaseServerActionLock(lockId).catch((releaseError) => {
+      console.error("[BACKUP] Failed to release lock after invoke error:", releaseError);
+    });
     throw error;
   }
 }
@@ -161,8 +171,20 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Invoke Lambda for backup
-    return await invokeBackupLambda(resolvedId, user, backupName);
+    const lock = await acquireServerActionLock("backup", user.email);
+    return await invokeBackupLambda(resolvedId, user, lock.lockId, backupName);
   } catch (error) {
+    if (isServerActionLockConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Another operation is already in progress. Please wait for it to complete.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
     return buildBackupErrorResponse(error);
   }
 }

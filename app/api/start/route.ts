@@ -9,6 +9,11 @@ import { type AuthUser, requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import {
+  acquireServerActionLock,
+  isServerActionLockConflictError,
+  releaseServerActionLock,
+} from "@/lib/server-action-lock";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
@@ -46,6 +51,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Invoke the Lambda function asynchronously
+    const lock = await acquireServerActionLock("start", user.email);
+
     try {
       console.log("[START] Invoking StartMinecraftServer Lambda");
       await invokeLambda("StartMinecraftServer", {
@@ -53,6 +60,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         command: "start",
         userEmail: user.email,
         instanceId: resolvedId,
+        lockId: lock.lockId,
       });
 
       // Return immediately with pending status (fire-and-forget)
@@ -69,9 +77,23 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return NextResponse.json(response);
     } catch (error) {
       console.error("[START] Lambda invocation failed:", error);
+      await releaseServerActionLock(lock.lockId).catch((releaseError) => {
+        console.error("[START] Failed to release lock after invoke error:", releaseError);
+      });
       throw error;
     }
   } catch (error) {
+    if (isServerActionLockConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Another operation is already in progress. Please wait for it to complete.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
     return formatApiErrorResponse<StartServerResponse>(error, "start");
   }
 }

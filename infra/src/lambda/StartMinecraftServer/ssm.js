@@ -1,6 +1,7 @@
 import {
   DeleteParameterCommand,
   GetCommandInvocationCommand,
+  GetParameterCommand,
   PutParameterCommand,
   SendCommandCommand,
   ssm,
@@ -89,4 +90,20 @@ async function putParameter(name, value, type = "String") {
   }
 }
 
-export { executeSSMCommand, deleteParameter, putParameter };
+async function getParameter(name) {
+  try {
+    const response = await ssm.send(
+      new GetParameterCommand({
+        Name: name,
+      })
+    );
+    return response.Parameter?.Value || null;
+  } catch (error) {
+    if (error.name === "ParameterNotFound") {
+      return null;
+    }
+    throw error;
+  }
+}
+
+export { executeSSMCommand, deleteParameter, getParameter, putParameter };

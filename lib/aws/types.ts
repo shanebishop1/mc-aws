@@ -60,7 +60,7 @@ export interface AwsProvider {
 
   // SSM - Parameter Store
   getParameter(name: string): Promise<string | null>;
-  putParameter(name: string, value: string, type?: "String" | "SecureString"): Promise<void>;
+  putParameter(name: string, value: string, type?: "String" | "SecureString", overwrite?: boolean): Promise<void>;
   deleteParameter(name: string): Promise<void>;
 
   // SSM - Application-Specific Parameters
