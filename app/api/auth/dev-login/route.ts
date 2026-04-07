@@ -10,8 +10,12 @@
  * To test different roles, change the "role" value below
  */
 
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { SignJWT } from "jose";
 import { type NextRequest, NextResponse } from "next/server";
+
+const DEV_LOGIN_RATE_LIMIT_WINDOW_MS = 60_000;
+const DEV_LOGIN_RATE_LIMIT_MAX_REQUESTS = 10;
 
 export async function GET(request: NextRequest) {
   // SECURITY: Hard stop in production
@@ -22,6 +26,25 @@ export async function GET(request: NextRequest) {
   // Require explicit opt-in via environment variable
   if (process.env.ENABLE_DEV_LOGIN !== "true") {
     return NextResponse.json({ error: "Dev login is disabled. Set ENABLE_DEV_LOGIN=true in .env" }, { status: 403 });
+  }
+
+  const clientIp = getClientIp(request.headers);
+  const rateLimit = await checkRateLimit({
+    route: "/api/auth/dev-login",
+    key: `auth:dev-login:${clientIp}`,
+    limit: DEV_LOGIN_RATE_LIMIT_MAX_REQUESTS,
+    windowMs: DEV_LOGIN_RATE_LIMIT_WINDOW_MS,
+    failureMode: "closed",
+  });
+
+  if (!rateLimit.allowed) {
+    const response = NextResponse.json(
+      { error: "Too many dev login requests. Please retry shortly." },
+      { status: 429 }
+    );
+    response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+    response.headers.set("Cache-Control", "no-store");
+    return response;
   }
 
   // Create a real JWT token (same as production login would)

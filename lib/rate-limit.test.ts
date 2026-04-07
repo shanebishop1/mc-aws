@@ -207,24 +207,100 @@ describe("rate-limit", () => {
         reason: "counter_backend_exception",
       });
     });
+
+    it("fails closed for retryable backend errors when configured", async () => {
+      incrementCounterMock.mockResolvedValueOnce({
+        ok: false,
+        error: {
+          code: "counter_unavailable",
+          message: "Backend unavailable",
+          retryable: true,
+        },
+      });
+
+      const result = await checkRateLimit({
+        route: "/api/auth/me",
+        key: "auth:me:127.0.0.1",
+        limit: 30,
+        windowMs: 60_000,
+        failureMode: "closed",
+      });
+
+      expect(result).toEqual({
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: 1,
+      });
+      expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route: "/api/auth/me",
+        key: "auth:me:127.0.0.1",
+        retryAfterSeconds: 1,
+        reason: "counter_backend_retryable_error:counter_unavailable",
+      });
+    });
+
+    it("fails closed on backend exceptions when configured", async () => {
+      incrementCounterMock.mockRejectedValueOnce(new Error("boom"));
+
+      const result = await checkRateLimit({
+        route: "/api/auth/me",
+        key: "auth:me:127.0.0.1",
+        limit: 30,
+        windowMs: 60_000,
+        failureMode: "closed",
+      });
+
+      expect(result).toEqual({
+        allowed: false,
+        remaining: 0,
+        retryAfterSeconds: 1,
+      });
+      expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route: "/api/auth/me",
+        key: "auth:me:127.0.0.1",
+        retryAfterSeconds: 1,
+        reason: "counter_backend_exception",
+      });
+    });
   });
 
   describe("getClientIp", () => {
+    it("returns unknown in production when cf-connecting-ip is missing", () => {
+      vi.stubEnv("NODE_ENV", "production");
+      const headers = new Headers({
+        "x-forwarded-for": "203.0.113.1, 203.0.113.2",
+        "x-real-ip": "203.0.113.9",
+      });
+
+      expect(getClientIp(headers)).toBe("unknown");
+      vi.unstubAllEnvs();
+    });
+
     it("prefers cf-connecting-ip", () => {
+      vi.stubEnv("NODE_ENV", "production");
       const headers = new Headers({
         "cf-connecting-ip": "198.51.100.7",
         "x-forwarded-for": "203.0.113.1",
       });
 
       expect(getClientIp(headers)).toBe("198.51.100.7");
+      vi.unstubAllEnvs();
     });
 
     it("falls back to first x-forwarded-for address", () => {
+      vi.stubEnv("NODE_ENV", "development");
       const headers = new Headers({
         "x-forwarded-for": "203.0.113.1, 203.0.113.2",
       });
 
       expect(getClientIp(headers)).toBe("203.0.113.1");
+      vi.unstubAllEnvs();
     });
 
     it("returns unknown when no supported headers are present", () => {

@@ -9,12 +9,16 @@
  */
 
 import { SESSION_COOKIE_NAME, clearSessionCookie, verifySession } from "@/lib/auth";
+import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { cookies } from "next/headers";
 import { type NextRequest, NextResponse } from "next/server";
 
 type AuthMeResponse =
   | { authenticated: false }
   | { authenticated: true; email: string; role: "admin" | "allowed" | "public" };
+
+const AUTH_ME_RATE_LIMIT_WINDOW_MS = 60_000;
+const AUTH_ME_RATE_LIMIT_MAX_REQUESTS = 30;
 
 function withClearedSessionCookie(response: NextResponse<AuthMeResponse>): NextResponse<AuthMeResponse> {
   const cookieOptions = clearSessionCookie();
@@ -28,8 +32,25 @@ function withClearedSessionCookie(response: NextResponse<AuthMeResponse>): NextR
   return response;
 }
 
-export async function GET(_request: NextRequest): Promise<NextResponse<AuthMeResponse>> {
+export async function GET(request: NextRequest): Promise<NextResponse<AuthMeResponse>> {
   try {
+    const clientIp = getClientIp(request.headers);
+    const rateLimit = await checkRateLimit({
+      route: "/api/auth/me",
+      key: `auth:me:${clientIp}`,
+      limit: AUTH_ME_RATE_LIMIT_MAX_REQUESTS,
+      windowMs: AUTH_ME_RATE_LIMIT_WINDOW_MS,
+      failureMode: "closed",
+    });
+
+    if (!rateLimit.allowed) {
+      const payload: AuthMeResponse = { authenticated: false };
+      const response = NextResponse.json(payload, { status: 429 });
+      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
+      response.headers.set("Cache-Control", "no-store");
+      return response;
+    }
+
     const cookieStore = await cookies();
     const sessionToken = cookieStore.get(SESSION_COOKIE_NAME)?.value;
 

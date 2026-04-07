@@ -146,6 +146,7 @@ describe("GET /api/auth/login regression contract", () => {
       key: "auth:login:198.51.100.24",
       limit: 6,
       windowMs: 60_000,
+      failureMode: "closed",
     });
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("http://localhost/?error=oauth_rate_limited");

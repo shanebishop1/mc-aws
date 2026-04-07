@@ -32,6 +32,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       key: `auth:login:${clientIp}`,
       limit: LOGIN_RATE_LIMIT_MAX_REQUESTS,
       windowMs: LOGIN_RATE_LIMIT_WINDOW_MS,
+      failureMode: "closed",
     });
 
     if (!rateLimit.allowed) {
