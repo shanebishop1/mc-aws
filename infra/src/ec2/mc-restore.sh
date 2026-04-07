@@ -11,8 +11,14 @@ export RCLONE_CONFIG="/opt/setup/rclone/rclone.conf"
 # Create operation lock to prevent concurrent backup/restore operations
 OPERATION_LOCK="/tmp/mc-operation.lock"
 if [[ -f "$OPERATION_LOCK" ]]; then
-  log "ERROR: Another operation is in progress"
-  exit 1
+  LOCK_PID="$(cat "$OPERATION_LOCK" 2>/dev/null || true)"
+  if [[ -n "$LOCK_PID" ]] && kill -0 "$LOCK_PID" 2>/dev/null; then
+    log "ERROR: Another operation is in progress"
+    exit 1
+  fi
+
+  log "Found stale operation lock. Cleaning up..."
+  rm -f "$OPERATION_LOCK"
 fi
 echo "$$" > "$OPERATION_LOCK"
 

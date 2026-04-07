@@ -6,7 +6,7 @@ import { ensureInstanceRunning, getPublicIp } from "./ec2.js";
 import { getSanitizedErrorMessage, sendNotification } from "./notifications.js";
 
 // SSM command execution
-import { deleteParameter, executeSSMCommand, putParameter } from "./ssm.js";
+import { deleteParameter, executeSSMCommand, getParameter, putParameter } from "./ssm.js";
 
 // Allowlist management
 import { extractEmails, getAllowlist, updateAllowlist } from "./allowlist.js";
@@ -37,7 +37,7 @@ export const handler = async (event) => {
  * Handle API invocation for async commands
  */
 async function handleApiInvocation(event) {
-  const { instanceId, userEmail, command, args } = event;
+  const { instanceId, userEmail, command, args, lockId } = event;
   console.log(`[API] Async command '${command}' triggered by ${userEmail}`);
 
   if (!instanceId || !userEmail || !command) {
@@ -55,16 +55,46 @@ async function handleApiInvocation(event) {
   } catch (error) {
     console.error(`[API] Command '${command}' failed:`, error);
   } finally {
-    console.log("[API] Clearing server-action lock...");
-    try {
-      await deleteParameter("/minecraft/server-action");
-    } catch (error) {
-      // Do not fail the entire invocation because the lock couldn't be cleared.
-      console.error("[API] Failed to clear server-action lock:", error);
-    }
+    await releaseServerActionLockIfOwned(lockId, command);
   }
 
   return { statusCode: 202, body: `Async command '${command}' accepted` };
+}
+
+async function releaseServerActionLockIfOwned(lockId, command) {
+  if (!lockId) {
+    console.warn(`[API] No lockId provided for '${command}', skipping lock release`);
+    return;
+  }
+
+  try {
+    const lockValue = await getParameter("/minecraft/server-action");
+    if (!lockValue) {
+      console.log(`[API] No active lock to release for '${command}'`);
+      return;
+    }
+
+    let lock;
+    try {
+      lock = JSON.parse(lockValue);
+    } catch {
+      console.warn(`[API] Lock format invalid for '${command}', skipping release`);
+      return;
+    }
+
+    if (lock.lockId !== lockId) {
+      console.warn(
+        `[API] Lock ownership mismatch for '${command}'. current=${lock.lockId || "unknown"} provided=${lockId}`
+      );
+      return;
+    }
+
+    await deleteParameter("/minecraft/server-action");
+    console.log(`[API] Released server-action lock for '${command}'`);
+  } catch (error) {
+    // Do not fail the entire invocation because lock cleanup failed.
+    console.error("[API] Failed to conditionally release server-action lock:", error);
+  }
 }
 
 /**
@@ -265,16 +295,6 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
       );
     }
     return { statusCode: 500, body: `Failed to process request: ${error.message}` };
-  } finally {
-    // Always release the lock, regardless of success or failure
-    try {
-      await deleteParameter("/minecraft/server-action");
-    } catch (e) {
-      // Don't fail if the parameter doesn't exist (might not have been set)
-      if (e.name !== "ParameterNotFound") {
-        console.error("Failed to release server action lock:", e.message);
-      }
-    }
   }
 }
 

@@ -450,10 +450,21 @@ export const mockProvider: AwsProvider = {
     return stateStore.getParameter(name);
   },
 
-  putParameter: async (name: string, value: string, type?: "String" | "SecureString"): Promise<void> => {
+  putParameter: async (
+    name: string,
+    value: string,
+    type?: "String" | "SecureString",
+    overwrite = true
+  ): Promise<void> => {
     await applyFaultInjection("putParameter");
-    console.log("[MOCK] putParameter called for:", name, "value:", value, "type:", type);
+    console.log("[MOCK] putParameter called for:", name, "value:", value, "type:", type, "overwrite:", overwrite);
     const stateStore = getMockStateStore();
+    const existingValue = await stateStore.getParameter(name);
+    if (!overwrite && existingValue !== null) {
+      const error = new Error(`Parameter ${name} already exists`);
+      (error as Error & { name: string }).name = "ParameterAlreadyExists";
+      throw error;
+    }
     await stateStore.setParameter(name, value, type || "String");
   },
 
@@ -612,14 +623,37 @@ export const mockProvider: AwsProvider = {
   invokeLambda: async (functionName: string, payload: unknown): Promise<void> => {
     await applyFaultInjection("invokeLambda");
     console.log("[MOCK] invokeLambda called for:", functionName, "payload:", payload);
+    const stateStore = getMockStateStore();
 
     // Simulate StartMinecraftServer lambda
     if (functionName === "StartMinecraftServer" || functionName.includes("StartMinecraftServer")) {
       const parsedPayload = typeof payload === "string" ? JSON.parse(payload) : payload;
+      const lockId = parsedPayload.lockId;
+
+      const releaseLockIfOwned = async () => {
+        if (!lockId) {
+          return;
+        }
+
+        const lockRaw = await stateStore.getParameter("/minecraft/server-action");
+        if (!lockRaw) {
+          return;
+        }
+
+        try {
+          const parsedLock = JSON.parse(lockRaw) as { lockId?: string };
+          if (parsedLock.lockId !== lockId) {
+            return;
+          }
+        } catch {
+          return;
+        }
+
+        await mockProvider.deleteParameter("/minecraft/server-action");
+      };
 
       if (parsedPayload.command === "start") {
         console.log("[MOCK] Simulating async start by triggering startInstance");
-        const stateStore = getMockStateStore();
 
         // Check for startInstance fault injection BEFORE starting
         // This ensures errors are propagated back to the API caller
@@ -634,12 +668,24 @@ export const mockProvider: AwsProvider = {
         const lockClearDelay = PENDING_DELAY_MS + 500; // Clear lock shortly after instance reaches running
         const lockClearTimeout = setTimeout(async () => {
           try {
-            await mockProvider.deleteParameter("/minecraft/server-action");
+            await releaseLockIfOwned();
             console.log("[MOCK] Cleared server-action lock after start completion");
           } catch {
             // Ignore if lock doesn't exist
           }
         }, lockClearDelay);
+        stateStore.registerTimeout(lockClearTimeout);
+      }
+
+      if (["resume", "backup", "restore", "hibernate"].includes(parsedPayload.command)) {
+        const lockClearTimeout = setTimeout(async () => {
+          try {
+            await releaseLockIfOwned();
+            console.log(`[MOCK] Cleared server-action lock after ${parsedPayload.command} completion`);
+          } catch {
+            // Ignore if lock doesn't exist
+          }
+        }, 500);
         stateStore.registerTimeout(lockClearTimeout);
       }
     }

@@ -9,6 +9,11 @@ import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { sanitizeBackupName } from "@/lib/sanitization";
+import {
+  acquireServerActionLock,
+  isServerActionLockConflictError,
+  releaseServerActionLock,
+} from "@/lib/server-action-lock";
 import type { ApiResponse, ResumeResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -54,6 +59,7 @@ function checkAlreadyRunning(currentState: string): NextResponse<ApiResponse<Res
 async function invokeResumeLambda(
   instanceId: string,
   user: AuthUser,
+  lockId: string,
   backupName?: string
 ): Promise<NextResponse<ApiResponse<ResumeResponse>>> {
   try {
@@ -64,6 +70,7 @@ async function invokeResumeLambda(
       instanceId: instanceId,
       userEmail: user.email,
       args: backupName ? [backupName] : [],
+      lockId,
     });
 
     return NextResponse.json(
@@ -81,6 +88,9 @@ async function invokeResumeLambda(
     );
   } catch (error) {
     console.error("[RESUME] Lambda invocation failed:", error);
+    await releaseServerActionLock(lockId).catch((releaseError) => {
+      console.error("[RESUME] Failed to release lock after invoke error:", releaseError);
+    });
     throw error;
   }
 }
@@ -125,8 +135,20 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Invoke Lambda for resume
-    return await invokeResumeLambda(resolvedId, user, backupName);
+    const lock = await acquireServerActionLock("resume", user.email);
+    return await invokeResumeLambda(resolvedId, user, lock.lockId, backupName);
   } catch (error) {
+    if (isServerActionLockConflictError(error)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "Another operation is already in progress. Please wait for it to complete.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 409 }
+      );
+    }
+
     return buildResumeErrorResponse(error);
   }
 }

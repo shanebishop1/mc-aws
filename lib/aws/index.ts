@@ -82,8 +82,13 @@ export async function getParameter(name: string): Promise<string | null> {
   return getProvider().getParameter(name);
 }
 
-export async function putParameter(name: string, value: string, type?: "String" | "SecureString"): Promise<void> {
-  return getProvider().putParameter(name, value, type);
+export async function putParameter(
+  name: string,
+  value: string,
+  type?: "String" | "SecureString",
+  overwrite?: boolean
+): Promise<void> {
+  return getProvider().putParameter(name, value, type, overwrite);
 }
 
 export async function deleteParameter(name: string): Promise<void> {
