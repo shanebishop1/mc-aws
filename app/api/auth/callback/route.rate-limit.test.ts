@@ -40,6 +40,7 @@ describe("GET /api/auth/callback rate-limit contract", () => {
       key: "auth:callback:198.51.100.25",
       limit: 6,
       windowMs: 60_000,
+      failureMode: "closed",
     });
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toBe("http://localhost/?error=oauth_rate_limited");

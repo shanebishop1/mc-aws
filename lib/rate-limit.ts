@@ -6,6 +6,7 @@ interface RateLimitOptions {
   key: RuntimeStateCounterKey;
   limit: number;
   windowMs: number;
+  failureMode?: "open" | "closed";
 }
 
 export interface RateLimitResult {
@@ -15,9 +16,14 @@ export interface RateLimitResult {
 }
 
 export function getClientIp(headers: Headers): string {
+  const isProduction = process.env.NODE_ENV === "production";
   const cfConnectingIp = headers.get("cf-connecting-ip")?.trim();
   if (cfConnectingIp) {
     return cfConnectingIp;
+  }
+
+  if (isProduction) {
+    return "unknown";
   }
 
   const xForwardedFor = headers.get("x-forwarded-for")?.trim();
@@ -65,7 +71,15 @@ function normalizeRateLimitResult(result: RateLimitResult): RateLimitResult {
   };
 }
 
-export async function checkRateLimit({ route, key, limit, windowMs }: RateLimitOptions): Promise<RateLimitResult> {
+export async function checkRateLimit({
+  route,
+  key,
+  limit,
+  windowMs,
+  failureMode = "open",
+}: RateLimitOptions): Promise<RateLimitResult> {
+  const failClosed = failureMode === "closed";
+
   try {
     const adapter = getRuntimeStateAdapter();
     const counterResult = await adapter.incrementCounter({
@@ -76,6 +90,26 @@ export async function checkRateLimit({ route, key, limit, windowMs }: RateLimitO
 
     if (!counterResult.ok) {
       if (counterResult.error.retryable) {
+        if (failClosed) {
+          emitRuntimeStateTelemetry({
+            operation: "rate-limit.increment-counter",
+            outcome: "THROTTLE",
+            source: "route",
+            route,
+            key,
+            retryAfterSeconds: 1,
+            reason: `counter_backend_retryable_error:${counterResult.error.code}`,
+          });
+
+          console.warn("[RATE-LIMIT] Retryable counter backend error, denying request", {
+            route,
+            code: counterResult.error.code,
+            retryable: counterResult.error.retryable,
+            key,
+          });
+          return failClosedRateLimitResult();
+        }
+
         emitRuntimeStateTelemetry({
           operation: "rate-limit.increment-counter",
           outcome: "FALLBACK",
@@ -133,6 +167,25 @@ export async function checkRateLimit({ route, key, limit, windowMs }: RateLimitO
 
     return normalizedResult;
   } catch (error) {
+    if (failClosed) {
+      emitRuntimeStateTelemetry({
+        operation: "rate-limit.increment-counter",
+        outcome: "THROTTLE",
+        source: "route",
+        route,
+        key,
+        retryAfterSeconds: 1,
+        reason: "counter_backend_exception",
+      });
+
+      console.warn("[RATE-LIMIT] Unexpected counter backend error, denying request", {
+        route,
+        key,
+        error,
+      });
+      return failClosedRateLimitResult();
+    }
+
     emitRuntimeStateTelemetry({
       operation: "rate-limit.increment-counter",
       outcome: "FALLBACK",

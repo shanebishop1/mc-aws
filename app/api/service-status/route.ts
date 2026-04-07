@@ -6,7 +6,6 @@
 import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws";
-import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { getRuntimeStateAdapter } from "@/lib/runtime-state";
 import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
@@ -16,9 +15,6 @@ interface ServiceStatusResponse {
   serviceActive: boolean;
   instanceRunning: boolean;
 }
-
-const SERVICE_STATUS_RATE_LIMIT_WINDOW_MS = 60_000;
-const SERVICE_STATUS_RATE_LIMIT_MAX_REQUESTS = 20;
 
 type CachedServiceStatus = {
   payload: ApiResponse<ServiceStatusResponse>;
@@ -65,28 +61,6 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         return error as NextResponse<ApiResponse<ServiceStatusResponse>>;
       }
       throw error;
-    }
-
-    const clientIp = getClientIp(request.headers);
-    const rateLimit = await checkRateLimit({
-      route: "/api/service-status",
-      key: `service-status:${clientIp}`,
-      limit: SERVICE_STATUS_RATE_LIMIT_MAX_REQUESTS,
-      windowMs: SERVICE_STATUS_RATE_LIMIT_WINDOW_MS,
-    });
-
-    if (!rateLimit.allowed) {
-      const response = NextResponse.json(
-        {
-          success: false,
-          error: "Too many service status requests. Please retry shortly.",
-          timestamp: new Date().toISOString(),
-        },
-        { status: 429 }
-      );
-      response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
-      response.headers.set("Cache-Control", "no-store");
-      return response;
     }
 
     const runtimeStateAdapter = getRuntimeStateAdapter();
