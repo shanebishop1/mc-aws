@@ -214,8 +214,8 @@ async function handleEmailInvocation(event) {
     if (allowlistResult) return allowlistResult;
   }
 
-  // Validate environment
-  const envResult = validateEnvironment();
+  // Validate environment (email path requires sender config)
+  const envResult = validateEnvironment({ requireVerifiedSender: true });
   if (envResult.error) return envResult.error;
 
   // Parse and authorize command
@@ -268,13 +268,25 @@ async function handleAllowlistUpdate(senderEmail, body, notificationEmail, admin
   return { statusCode: 200, body: "Allowlist updated successfully." };
 }
 
-function validateEnvironment() {
+function validateEnvironment(options = {}) {
+  const { requireVerifiedSender = false } = options;
   const instanceId = process.env.INSTANCE_ID;
 
-  if (!instanceId || !process.env.VERIFIED_SENDER) {
-    console.error("Missing required environment variables.");
+  if (!instanceId) {
+    console.error("Missing required environment variable: INSTANCE_ID.");
     return { error: { statusCode: 500, body: "Configuration error." } };
   }
+
+  if (requireVerifiedSender && !process.env.VERIFIED_SENDER) {
+    console.error("Email command requested but VERIFIED_SENDER is not configured.");
+    return {
+      error: {
+        statusCode: 503,
+        body: "Email commands are disabled. Configure VERIFIED_SENDER to enable SES email flows.",
+      },
+    };
+  }
+
   return { instanceId };
 }
 

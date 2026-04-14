@@ -15,6 +15,13 @@ const baseWorkerValues: Record<string, string> = {
   NEXT_PUBLIC_APP_URL: "https://panel.example.com",
 };
 
+const baseLambdaValues: Record<string, string> = {
+  AWS_REGION: "us-east-1",
+  AWS_ACCOUNT_ID: "123456789012",
+  INSTANCE_ID: "i-abc123",
+  ADMIN_EMAIL: "admin@example.com",
+};
+
 describe("scripts/validate-env", () => {
   it("fails closed for production strict validation", () => {
     expect(() =>
@@ -70,5 +77,16 @@ describe("scripts/validate-env", () => {
         },
       })
     ).toThrow("Strict environment validation failed.");
+  });
+
+  it("allows lambda target validation without VERIFIED_SENDER", () => {
+    expect(() =>
+      validateEnv({
+        strict: true,
+        target: "lambda",
+        nodeEnv: "production",
+        values: baseLambdaValues,
+      })
+    ).not.toThrow();
   });
 });

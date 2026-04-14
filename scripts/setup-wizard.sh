@@ -713,8 +713,8 @@ collect_production_url() {
 collect_email_settings() {
   step_section 7 "Optional: Email Settings (SES)"
 
-  log "Configure email notifications for server events."
-  log "This feature allows starting the server via email."
+  log "Configure optional SES email features for notifications and email-triggered commands."
+  log "Core panel/server operations work even when this section is skipped."
   echo ""
 
   echo "What this email feature does:"
@@ -735,6 +735,8 @@ collect_email_settings() {
   echo "  - If your SES account is in sandbox, you may also need to verify recipients"
   echo ""
   echo "Leave these empty to skip email configuration."
+  echo "If skipped: web panel/server actions still work, but email-triggered commands"
+  echo "and SES notifications are disabled until VERIFIED_SENDER is configured."
   echo ""
 
   prompt_optional VERIFIED_SENDER "Enter start/notification address" "${VERIFIED_SENDER:-}"
