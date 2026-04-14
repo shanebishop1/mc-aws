@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { deleteParameter, getParameter, putParameter } from "@/lib/aws";
 
 const serverActionLockParam = "/minecraft/server-action";
+const serverActionDeleteClaimPrefix = "/minecraft/server-action-delete-claim";
 const serverActionLockTtlMs = 30 * 60 * 1000;
 const serverActions: ReadonlySet<ServerActionType> = new Set([
   "start",
@@ -96,26 +97,74 @@ function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+function lockMatchesReleaseOptions(
+  lock: ServerActionLock,
+  lockId: string,
+  options?: ReleaseServerActionLockOptions
+): boolean {
+  if (lock.lockId !== lockId) {
+    console.warn(`[LOCK] Skip releasing lock. Ownership mismatch for lockId=${lockId}`);
+    return false;
+  }
+
+  if (options?.action && lock.action !== options.action) {
+    console.warn(`[LOCK] Skip releasing lock. Action mismatch for lockId=${lockId}`);
+    return false;
+  }
+
+  if (options?.ownerEmail && normalizeEmail(lock.ownerEmail) !== normalizeEmail(options.ownerEmail)) {
+    console.warn(`[LOCK] Skip releasing lock. Owner mismatch for lockId=${lockId}`);
+    return false;
+  }
+
+  return true;
+}
+
 async function deleteLockIfExpected(expectedLockId?: string): Promise<boolean> {
-  const currentLockRaw = await getParameter(serverActionLockParam);
-  const currentLock = parseLock(currentLockRaw);
-
-  if (!isStaleLock(currentLock)) {
+  if (!expectedLockId) {
     return false;
   }
 
-  if (expectedLockId && currentLock && currentLock.lockId !== expectedLockId) {
-    return false;
-  }
+  const deleteClaimParam = `${serverActionDeleteClaimPrefix}/${expectedLockId}`;
+  const claim = JSON.stringify({
+    claimId: randomUUID(),
+    createdAt: new Date().toISOString(),
+  });
 
   try {
-    await deleteParameter(serverActionLockParam);
-    return true;
+    await putParameter(deleteClaimParam, claim, "String", false);
   } catch (error) {
-    if (isParameterNotFoundError(error)) {
+    if (isParameterAlreadyExistsError(error)) {
       return false;
     }
     throw error;
+  }
+
+  try {
+    const currentLockRaw = await getParameter(serverActionLockParam);
+    const currentLock = parseLock(currentLockRaw);
+
+    if (!currentLock || currentLock.lockId !== expectedLockId || !isStaleLock(currentLock)) {
+      return false;
+    }
+
+    try {
+      await deleteParameter(serverActionLockParam);
+      return true;
+    } catch (error) {
+      if (isParameterNotFoundError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  } finally {
+    try {
+      await deleteParameter(deleteClaimParam);
+    } catch (error) {
+      if (!isParameterNotFoundError(error)) {
+        console.warn(`[LOCK] Failed to clean delete claim for lockId=${expectedLockId}`);
+      }
+    }
   }
 }
 
@@ -165,36 +214,51 @@ export async function releaseServerActionLock(
   lockId: string,
   options?: ReleaseServerActionLockOptions
 ): Promise<boolean> {
-  const existingLockRaw = await getParameter(serverActionLockParam);
-  const existingLock = parseLock(existingLockRaw);
-
-  if (!existingLock) {
-    return false;
-  }
-
-  if (existingLock.lockId !== lockId) {
-    console.warn(`[LOCK] Skip releasing lock. Ownership mismatch for lockId=${lockId}`);
-    return false;
-  }
-
-  if (options?.action && existingLock.action !== options.action) {
-    console.warn(`[LOCK] Skip releasing lock. Action mismatch for lockId=${lockId}`);
-    return false;
-  }
-
-  if (options?.ownerEmail && normalizeEmail(existingLock.ownerEmail) !== normalizeEmail(options.ownerEmail)) {
-    console.warn(`[LOCK] Skip releasing lock. Owner mismatch for lockId=${lockId}`);
-    return false;
-  }
+  const deleteClaimParam = `${serverActionDeleteClaimPrefix}/${lockId}`;
+  const claim = JSON.stringify({
+    claimId: randomUUID(),
+    createdAt: new Date().toISOString(),
+  });
 
   try {
-    await deleteParameter(serverActionLockParam);
-    return true;
+    await putParameter(deleteClaimParam, claim, "String", false);
   } catch (error) {
-    if (isParameterNotFoundError(error)) {
+    if (isParameterAlreadyExistsError(error)) {
+      console.warn(`[LOCK] Skip releasing lock. Another release/cleanup in progress for lockId=${lockId}`);
       return false;
     }
     throw error;
+  }
+
+  try {
+    const existingLockRaw = await getParameter(serverActionLockParam);
+    const existingLock = parseLock(existingLockRaw);
+
+    if (!existingLock) {
+      return false;
+    }
+
+    if (!lockMatchesReleaseOptions(existingLock, lockId, options)) {
+      return false;
+    }
+
+    try {
+      await deleteParameter(serverActionLockParam);
+      return true;
+    } catch (error) {
+      if (isParameterNotFoundError(error)) {
+        return false;
+      }
+      throw error;
+    }
+  } finally {
+    try {
+      await deleteParameter(deleteClaimParam);
+    } catch (error) {
+      if (!isParameterNotFoundError(error)) {
+        console.warn(`[LOCK] Failed to clean delete claim for lockId=${lockId}`);
+      }
+    }
   }
 }
 

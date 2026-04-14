@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+const lockParam = "/minecraft/server-action";
+const deleteClaimPrefix = "/minecraft/server-action-delete-claim";
+
 const mocks = vi.hoisted(() => ({
   randomUUID: vi.fn(),
   getParameter: vi.fn(),
@@ -51,10 +54,10 @@ describe("server-action-lock", () => {
     expect(lock.lockId).toBe("lock-123");
     expect(lock.createdAt).toBe("2026-04-13T12:00:00.000Z");
     expect(lock.expiresAt).toBe("2026-04-13T12:30:00.000Z");
-    expect(mocks.putParameter).toHaveBeenCalledWith("/minecraft/server-action", JSON.stringify(lock), "String", false);
+    expect(mocks.putParameter).toHaveBeenCalledWith(lockParam, JSON.stringify(lock), "String", false);
   });
 
-  it("recovers from stale lock before acquiring", async () => {
+  it("recovers from stale lock with delete-claim protection", async () => {
     const staleLock = {
       lockId: "stale-1",
       action: "backup",
@@ -63,31 +66,43 @@ describe("server-action-lock", () => {
       expiresAt: "2026-04-13T10:00:00.000Z",
     };
 
-    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError()).mockResolvedValueOnce(undefined);
-    mocks.getParameter
-      .mockResolvedValueOnce(JSON.stringify(staleLock))
-      .mockResolvedValueOnce(JSON.stringify(staleLock));
-    mocks.deleteParameter.mockResolvedValueOnce(undefined);
+    mocks.randomUUID.mockReturnValueOnce("lock-123").mockReturnValueOnce("claim-123");
+
+    mocks.putParameter
+      .mockRejectedValueOnce(parameterAlreadyExistsError())
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined);
+
+    mocks.getParameter.mockResolvedValueOnce(JSON.stringify(staleLock)).mockResolvedValueOnce(JSON.stringify(staleLock));
+
+    mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
 
     const lock = await acquireServerActionLock("restore", "admin@example.com");
 
     expect(lock.lockId).toBe("lock-123");
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
-    expect(mocks.putParameter).toHaveBeenCalledTimes(2);
+    expect(mocks.putParameter).toHaveBeenNthCalledWith(
+      2,
+      `${deleteClaimPrefix}/stale-1`,
+      expect.stringContaining('"claimId":"claim-123"'),
+      "String",
+      false
+    );
+    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(1, lockParam);
+    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(2, `${deleteClaimPrefix}/stale-1`);
   });
 
-  it("treats malformed lock payload as stale and recovers", async () => {
-    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError()).mockResolvedValueOnce(undefined);
+  it("does not blindly delete unknown malformed lock payload", async () => {
+    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError()).mockRejectedValueOnce(parameterAlreadyExistsError());
     mocks.getParameter.mockResolvedValueOnce("{not-json").mockResolvedValueOnce("{not-json");
-    mocks.deleteParameter.mockResolvedValueOnce(undefined);
 
-    const lock = await acquireServerActionLock("hibernate", "admin@example.com");
+    await expect(acquireServerActionLock("hibernate", "admin@example.com")).rejects.toEqual(
+      expect.objectContaining({ name: "ServerActionLockConflictError" })
+    );
 
-    expect(lock.lockId).toBe("lock-123");
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+    expect(mocks.deleteParameter).not.toHaveBeenCalledWith(lockParam);
   });
 
-  it("fails with conflict when stale lock changed ownership during recovery", async () => {
+  it("handles stale-cleanup race without deleting newly acquired lock", async () => {
     const staleLock = {
       lockId: "stale-1",
       action: "backup",
@@ -96,29 +111,37 @@ describe("server-action-lock", () => {
       expiresAt: "2026-04-13T10:00:00.000Z",
     };
     const replacementLock = {
-      lockId: "stale-2",
+      lockId: "lock-999",
       action: "restore",
       ownerEmail: "other@example.com",
-      createdAt: "2026-04-13T09:10:00.000Z",
-      expiresAt: "2026-04-13T10:10:00.000Z",
+      createdAt: "2026-04-13T12:00:10.000Z",
+      expiresAt: "2026-04-13T12:30:10.000Z",
     };
+
+    mocks.randomUUID.mockReturnValueOnce("lock-123").mockReturnValueOnce("claim-123");
 
     mocks.putParameter
       .mockRejectedValueOnce(parameterAlreadyExistsError())
+      .mockResolvedValueOnce(undefined)
       .mockRejectedValueOnce(parameterAlreadyExistsError());
+
     mocks.getParameter
       .mockResolvedValueOnce(JSON.stringify(staleLock))
-      .mockResolvedValueOnce(JSON.stringify(replacementLock))
+      .mockResolvedValueOnce(JSON.stringify(staleLock))
       .mockResolvedValueOnce(JSON.stringify(replacementLock));
+
+    mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
 
     await expect(acquireServerActionLock("restore", "admin@example.com")).rejects.toEqual(
       expect.objectContaining({
         name: "ServerActionLockConflictError",
-        existingLock: expect.objectContaining({ lockId: "stale-2" }),
+        existingLock: expect.objectContaining({ lockId: "lock-999" }),
       })
     );
 
-    expect(mocks.deleteParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameter).toHaveBeenCalledTimes(2);
+    expect(mocks.deleteParameter).toHaveBeenCalledWith(lockParam);
+    expect(mocks.deleteParameter).toHaveBeenCalledWith(`${deleteClaimPrefix}/stale-1`);
   });
 
   it("releases lock only when id, action, and owner match", async () => {
@@ -130,8 +153,10 @@ describe("server-action-lock", () => {
       expiresAt: "2026-04-13T12:20:00.000Z",
     };
 
+    mocks.randomUUID.mockReturnValueOnce("claim-123");
+    mocks.putParameter.mockResolvedValueOnce(undefined);
     mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
-    mocks.deleteParameter.mockResolvedValueOnce(undefined);
+    mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
 
     const released = await releaseServerActionLock("lock-123", {
       action: "resume",
@@ -139,7 +164,14 @@ describe("server-action-lock", () => {
     });
 
     expect(released).toBe(true);
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+    expect(mocks.putParameter).toHaveBeenCalledWith(
+      `${deleteClaimPrefix}/lock-123`,
+      expect.stringContaining('"claimId":"claim-123"'),
+      "String",
+      false
+    );
+    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(1, lockParam);
+    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(2, `${deleteClaimPrefix}/lock-123`);
   });
 
   it("does not release when action metadata mismatches", async () => {
@@ -151,7 +183,9 @@ describe("server-action-lock", () => {
       expiresAt: "2026-04-13T12:20:00.000Z",
     };
 
+    mocks.putParameter.mockResolvedValueOnce(undefined);
     mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
+    mocks.deleteParameter.mockResolvedValueOnce(undefined);
 
     const released = await releaseServerActionLock("lock-123", {
       action: "restore",
@@ -159,7 +193,8 @@ describe("server-action-lock", () => {
     });
 
     expect(released).toBe(false);
-    expect(mocks.deleteParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameter).not.toHaveBeenCalledWith(lockParam);
+    expect(mocks.deleteParameter).toHaveBeenCalledWith(`${deleteClaimPrefix}/lock-123`);
   });
 
   it("returns false when lock disappears during release", async () => {
@@ -171,8 +206,9 @@ describe("server-action-lock", () => {
       expiresAt: "2026-04-13T12:20:00.000Z",
     };
 
+    mocks.putParameter.mockResolvedValueOnce(undefined);
     mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
-    mocks.deleteParameter.mockRejectedValueOnce(parameterNotFoundError());
+    mocks.deleteParameter.mockRejectedValueOnce(parameterNotFoundError()).mockResolvedValueOnce(undefined);
 
     const released = await releaseServerActionLock("lock-123", {
       action: "stop",
@@ -180,6 +216,19 @@ describe("server-action-lock", () => {
     });
 
     expect(released).toBe(false);
+  });
+
+  it("prevents release race when another cleanup already holds delete claim", async () => {
+    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError());
+
+    const released = await releaseServerActionLock("lock-123", {
+      action: "stop",
+      ownerEmail: "admin@example.com",
+    });
+
+    expect(released).toBe(false);
+    expect(mocks.getParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameter).not.toHaveBeenCalledWith(lockParam);
   });
 
   it("throws conflict with existing lock metadata for active lock", async () => {
