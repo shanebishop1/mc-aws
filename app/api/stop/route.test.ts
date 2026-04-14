@@ -64,6 +64,10 @@ describe("POST /api/stop", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("stop-");
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
+    expect(mocks.releaseServerActionLock).toHaveBeenCalledWith("lock-stop-123", {
+      action: "stop",
+      ownerEmail: "admin@example.com",
+    });
   });
 
   it("should return 400 when instance is already stopped", async () => {

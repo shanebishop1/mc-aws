@@ -132,7 +132,7 @@ async function invokeBackupLambda(
     );
   } catch (error) {
     console.error("[BACKUP] Lambda invocation failed:", error);
-    await releaseServerActionLock(lockId).catch((releaseError) => {
+    await releaseServerActionLock(lockId, { action: "backup", ownerEmail: user.email }).catch((releaseError) => {
       console.error("[BACKUP] Failed to release lock after invoke error:", releaseError);
     });
     throw error;

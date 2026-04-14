@@ -93,7 +93,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return NextResponse.json(response);
     } catch (error) {
       console.error("[START] Lambda invocation failed:", error);
-      await releaseServerActionLock(lock.lockId).catch((releaseError) => {
+      await releaseServerActionLock(lock.lockId, { action: "start", ownerEmail: user.email }).catch((releaseError) => {
         console.error("[START] Failed to release lock after invoke error:", releaseError);
       });
       throw error;
@@ -111,6 +111,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    return formatApiErrorResponse<StartServerResponse>(error, "start", undefined, withOperationStatus(operation, "failed"));
+    return formatApiErrorResponse<StartServerResponse>(
+      error,
+      "start",
+      undefined,
+      withOperationStatus(operation, "failed")
+    );
   }
 }
