@@ -57,4 +57,18 @@ describe("scripts/validate-env", () => {
       })
     ).not.toThrow();
   });
+
+  it("fails closed in strict production when placeholders remain", () => {
+    expect(() =>
+      validateEnv({
+        strict: true,
+        target: "worker",
+        nodeEnv: "production",
+        values: {
+          ...baseWorkerValues,
+          NEXT_PUBLIC_APP_URL: "https://panel.yourdomain.com",
+        },
+      })
+    ).toThrow("Strict environment validation failed.");
+  });
 });

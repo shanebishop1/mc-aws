@@ -4,6 +4,7 @@ import {
   resolveEnvValue,
   validateEnvForTarget,
   validateRuntimeStateWranglerConfig,
+  workerSecretAllowlist,
 } from "@/lib/runtime-config-schema";
 import { describe, expect, it } from "vitest";
 
@@ -80,6 +81,33 @@ describe("runtime-config-schema", () => {
 
       expect(report.issues.map((issue) => issue.kind)).toEqual(["invalid", "invalid"]);
       expect(report.issues.map((issue) => issue.name)).toEqual(["ADMIN_EMAIL", "NEXT_PUBLIC_APP_URL"]);
+    });
+
+    it("reports placeholder values for worker target", () => {
+      const report = validateEnvForTarget(
+        {
+          AWS_REGION: "us-east-1",
+          CLOUDFLARE_ZONE_ID: "your-zone-id",
+          CLOUDFLARE_RECORD_ID: "your-record-id",
+          CLOUDFLARE_MC_DOMAIN: "mc.yourdomain.com",
+          CLOUDFLARE_DNS_API_TOKEN: "your-cloudflare-api-token",
+          RUNTIME_STATE_SNAPSHOT_KV_ID: "your-runtime-state-kv-id",
+          AUTH_SECRET: "very-secret-value",
+          ADMIN_EMAIL: "admin@real-domain.dev",
+          GOOGLE_CLIENT_ID: "google-client-id",
+          GOOGLE_CLIENT_SECRET: "google-client-secret",
+          NEXT_PUBLIC_APP_URL: "https://panel.yourdomain.com",
+        },
+        "worker"
+      );
+
+      expect(report.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "CLOUDFLARE_ZONE_ID", kind: "invalid" }),
+          expect.objectContaining({ name: "NEXT_PUBLIC_APP_URL", kind: "invalid" }),
+          expect.objectContaining({ name: "RUNTIME_STATE_SNAPSHOT_KV_ID", kind: "invalid" }),
+        ])
+      );
     });
 
     it("marks forbidden values for local-dev target", () => {
@@ -176,6 +204,25 @@ describe("runtime-config-schema", () => {
           "RUNTIME_STATE_SNAPSHOT_KV preview_id cannot use placeholder values.",
         ])
       );
+    });
+  });
+
+  describe("workerSecretAllowlist", () => {
+    it("contains expected production Worker secret keys", () => {
+      expect(workerSecretAllowlist).toEqual(
+        expect.arrayContaining([
+          "AWS_REGION",
+          "AUTH_SECRET",
+          "CLOUDFLARE_DNS_API_TOKEN",
+          "GOOGLE_CLIENT_ID",
+          "GOOGLE_CLIENT_SECRET",
+          "NEXT_PUBLIC_APP_URL",
+        ])
+      );
+    });
+
+    it("contains unique keys", () => {
+      expect(new Set(workerSecretAllowlist).size).toBe(workerSecretAllowlist.length);
     });
   });
 });

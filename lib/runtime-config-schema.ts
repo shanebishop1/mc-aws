@@ -30,6 +30,7 @@ export interface EnvSchemaEntry {
   enumValues?: readonly string[];
   aliases?: readonly string[];
   defaultValue?: string;
+  placeholderValues?: readonly string[];
   ownership: OwnershipByTarget;
 }
 
@@ -94,6 +95,7 @@ export const envRuntimeSchema = {
   AWS_ACCESS_KEY_ID: {
     description: "AWS access key id",
     valueType: "string",
+    placeholderValues: ["AKIAIOSFODNN7EXAMPLE"],
     ownership: withOwnership({
       worker: { level: "optional", note: "Prefer platform IAM/role where available." },
       lambda: { level: "forbidden" },
@@ -104,6 +106,7 @@ export const envRuntimeSchema = {
   AWS_SECRET_ACCESS_KEY: {
     description: "AWS secret access key",
     valueType: "string",
+    placeholderValues: ["wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"],
     ownership: withOwnership({
       worker: { level: "optional", note: "Prefer platform IAM/role where available." },
       lambda: { level: "forbidden" },
@@ -135,6 +138,7 @@ export const envRuntimeSchema = {
   CLOUDFLARE_ZONE_ID: {
     description: "Cloudflare zone identifier",
     valueType: "string",
+    placeholderValues: ["your-zone-id"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "optional" },
@@ -146,6 +150,7 @@ export const envRuntimeSchema = {
   CLOUDFLARE_RECORD_ID: {
     description: "Cloudflare DNS record identifier",
     valueType: "string",
+    placeholderValues: ["your-record-id"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "optional" },
@@ -157,6 +162,7 @@ export const envRuntimeSchema = {
   CLOUDFLARE_MC_DOMAIN: {
     description: "Public Minecraft DNS name managed in Cloudflare",
     valueType: "string",
+    placeholderValues: ["mc.yourdomain.com"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "optional" },
@@ -168,6 +174,7 @@ export const envRuntimeSchema = {
   CLOUDFLARE_DNS_API_TOKEN: {
     description: "DNS-scoped Cloudflare API token for runtime DNS updates",
     valueType: "string",
+    placeholderValues: ["your-cloudflare-api-token"],
     aliases: ["CLOUDFLARE_API_TOKEN"],
     ownership: withOwnership({
       worker: { level: "required" },
@@ -180,6 +187,7 @@ export const envRuntimeSchema = {
   RUNTIME_STATE_SNAPSHOT_KV_ID: {
     description: "Cloudflare KV namespace id for runtime-state snapshots",
     valueType: "string",
+    placeholderValues: ["your-runtime-state-kv-id", "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_ID"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "forbidden" },
@@ -191,6 +199,7 @@ export const envRuntimeSchema = {
   RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID: {
     description: "Cloudflare preview KV namespace id for runtime-state snapshots",
     valueType: "string",
+    placeholderValues: ["your-runtime-state-kv-preview-id", "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"],
     ownership: withOwnership({
       worker: { level: "optional", note: "Falls back to RUNTIME_STATE_SNAPSHOT_KV_ID in deploy flow." },
       lambda: { level: "forbidden" },
@@ -222,6 +231,7 @@ export const envRuntimeSchema = {
   AUTH_SECRET: {
     description: "JWT/session signing secret",
     valueType: "string",
+    placeholderValues: ["your-secret-here", "dev-secret-change-in-production"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "forbidden" },
@@ -233,6 +243,7 @@ export const envRuntimeSchema = {
   ADMIN_EMAIL: {
     description: "Primary administrator email",
     valueType: "email",
+    placeholderValues: ["your-email@gmail.com"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "required" },
@@ -254,6 +265,7 @@ export const envRuntimeSchema = {
   GOOGLE_CLIENT_ID: {
     description: "Google OAuth client id",
     valueType: "string",
+    placeholderValues: ["123456789-abcdefg.apps.googleusercontent.com"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "forbidden" },
@@ -265,6 +277,7 @@ export const envRuntimeSchema = {
   GOOGLE_CLIENT_SECRET: {
     description: "Google OAuth client secret",
     valueType: "string",
+    placeholderValues: ["GOCSPX-abc123xyz789"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "forbidden" },
@@ -277,6 +290,7 @@ export const envRuntimeSchema = {
     description: "Canonical public panel URL",
     valueType: "url",
     defaultValue: "http://localhost:3000",
+    placeholderValues: ["http://localhost:3000", "https://panel.yourdomain.com", "https://mc.yourdomain.com"],
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "forbidden" },
@@ -300,6 +314,32 @@ export const envRuntimeSchema = {
 } as const satisfies Record<string, EnvSchemaEntry>;
 
 export type EnvVarName = keyof typeof envRuntimeSchema;
+
+export const workerSecretAllowlist = [
+  "AWS_REGION",
+  "AWS_ACCOUNT_ID",
+  "INSTANCE_ID",
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "CLOUDFORMATION_STACK_NAME",
+  "STACK_NAME",
+  "CLOUDFLARE_DNS_API_TOKEN",
+  "CLOUDFLARE_API_TOKEN",
+  "CLOUDFLARE_ZONE_ID",
+  "CLOUDFLARE_RECORD_ID",
+  "CLOUDFLARE_MC_DOMAIN",
+  "GDRIVE_REMOTE",
+  "GDRIVE_ROOT",
+  "AUTH_SECRET",
+  "ADMIN_EMAIL",
+  "ALLOWED_EMAILS",
+  "GOOGLE_CLIENT_ID",
+  "GOOGLE_CLIENT_SECRET",
+  "NEXT_PUBLIC_APP_URL",
+] as const;
+
+export type WorkerSecretAllowlistKey = (typeof workerSecretAllowlist)[number];
 
 export interface ResolvedEnvValue {
   name: EnvVarName;
@@ -437,6 +477,16 @@ const isValidValueType = (entry: EnvSchemaEntry, value: string): boolean => {
   return false;
 };
 
+const isPlaceholderValue = (entry: EnvSchemaEntry, value: string): boolean => {
+  const normalized = value.trim();
+  if (!normalized) {
+    return false;
+  }
+
+  const placeholders = entry.placeholderValues ?? [];
+  return placeholders.some((placeholder) => placeholder === normalized);
+};
+
 export const validateEnvForTarget = (
   values: Record<string, string | undefined>,
   target: RuntimeTarget
@@ -470,6 +520,17 @@ export const validateEnvForTarget = (
 
     if (!isValidValueType(entry, resolved.value)) {
       issues.push(createIssue(name, "invalid", `${name} value is invalid for type ${entry.valueType}.`));
+      continue;
+    }
+
+    if (isPlaceholderValue(entry, resolved.value)) {
+      issues.push(
+        createIssue(
+          name,
+          "invalid",
+          `${name} is using a placeholder value. Replace it with your real deployment value.`
+        )
+      );
     }
   }
 

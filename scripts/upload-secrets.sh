@@ -14,30 +14,30 @@ fi
 echo "📤 Uploading secrets from $ENV_FILE to Cloudflare Workers..."
 echo ""
 
-# Explicit allowlist: only these keys can be uploaded as Worker secrets.
-WORKER_SECRET_ALLOWLIST=(
-  "AWS_REGION"
-  "AWS_ACCOUNT_ID"
-  "INSTANCE_ID"
-  "AWS_ACCESS_KEY_ID"
-  "AWS_SECRET_ACCESS_KEY"
-  "AWS_SESSION_TOKEN"
-  "CLOUDFORMATION_STACK_NAME"
-  "STACK_NAME"
-  "CLOUDFLARE_ZONE_ID"
-  "CLOUDFLARE_RECORD_ID"
-  "CLOUDFLARE_MC_DOMAIN"
-  "CLOUDFLARE_DNS_API_TOKEN"
-  "CLOUDFLARE_API_TOKEN"
-  "GDRIVE_REMOTE"
-  "GDRIVE_ROOT"
-  "AUTH_SECRET"
-  "ADMIN_EMAIL"
-  "ALLOWED_EMAILS"
-  "GOOGLE_CLIENT_ID"
-  "GOOGLE_CLIENT_SECRET"
-  "NEXT_PUBLIC_APP_URL"
-)
+echo "🔍 Running strict worker env preflight..."
+if ! NODE_ENV=production pnpm exec tsx scripts/validate-env.ts --target worker --strict --env-file "$ENV_FILE"; then
+  echo "❌ Error: worker env preflight failed"
+  exit 1
+fi
+echo "✅ Worker env preflight passed"
+echo ""
+
+WORKER_SECRET_ALLOWLIST=()
+
+load_worker_secret_allowlist() {
+  if ! mapfile -t WORKER_SECRET_ALLOWLIST < <(pnpm exec tsx scripts/get-worker-secret-allowlist.ts); then
+    echo "❌ Error: Failed to load Worker secret allowlist from schema"
+    echo "   Tip: run pnpm install and ensure scripts/get-worker-secret-allowlist.ts succeeds"
+    exit 1
+  fi
+
+  if [[ ${#WORKER_SECRET_ALLOWLIST[@]} -eq 0 ]]; then
+    echo "❌ Error: Worker secret allowlist is empty"
+    exit 1
+  fi
+}
+
+load_worker_secret_allowlist
 
 is_worker_secret_allowed() {
   local candidate="$1"
