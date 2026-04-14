@@ -57,13 +57,17 @@ describe("POST /api/start", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("start-");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "start",
-      userEmail: "test@example.com",
-      instanceId: "i-1234",
-      lockId: "lock-start-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "start",
+        userEmail: "test@example.com",
+        instanceId: "i-1234",
+        lockId: "lock-start-123",
+        operationId: body.operation?.id,
+      })
+    );
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
@@ -131,13 +135,17 @@ describe("POST /api/start", () => {
     // Should use the server-side resolved ID, not the caller-provided one
     expect(body.data?.instanceId).toBe("i-1234");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "start",
-      userEmail: "test@example.com",
-      instanceId: "i-1234", // Server-side resolved ID
-      lockId: "lock-start-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "start",
+        userEmail: "test@example.com",
+        instanceId: "i-1234", // Server-side resolved ID
+        lockId: "lock-start-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("should handle lambda invocation failures", async () => {

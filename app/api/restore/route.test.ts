@@ -80,14 +80,18 @@ describe("POST /api/restore", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("restore-");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: ["my-backup-2024"],
-      lockId: "lock-restore-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "restore",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: ["my-backup-2024"],
+        lockId: "lock-restore-123",
+        operationId: body.operation?.id,
+      })
+    );
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
@@ -104,14 +108,18 @@ describe("POST /api/restore", () => {
     expect(body.data?.backupName).toBe("latest");
     expect(body.data?.message).toContain("asynchronously");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: [],
-      lockId: "lock-restore-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "restore",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: [],
+        lockId: "lock-restore-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("should handle empty body gracefully (back-compat)", async () => {
@@ -127,14 +135,18 @@ describe("POST /api/restore", () => {
     expect(body.data?.backupName).toBe("latest");
     expect(body.data?.message).toContain("asynchronously");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: [],
-      lockId: "lock-restore-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "restore",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: [],
+        lockId: "lock-restore-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("should ignore instanceId from request body and use server-side resolution", async () => {
@@ -150,14 +162,18 @@ describe("POST /api/restore", () => {
     expect(body.data?.backupName).toBe("my-backup-2024");
 
     // Should use the server-side resolved ID, not the caller-provided one
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: "i-1234", // Server-side resolved ID
-      userEmail: "admin@example.com",
-      args: ["my-backup-2024"],
-      lockId: "lock-restore-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "restore",
+        instanceId: "i-1234", // Server-side resolved ID
+        userEmail: "admin@example.com",
+        args: ["my-backup-2024"],
+        lockId: "lock-restore-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("should handle lambda invocation failures", async () => {
@@ -190,14 +206,18 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(true);
     expect(body.data?.backupName).toBe("legacy-backup");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: ["legacy-backup"],
-      lockId: "lock-restore-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "restore",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: ["legacy-backup"],
+        lockId: "lock-restore-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("should prefer 'backupName' over 'name' when both are provided", async () => {
@@ -212,14 +232,18 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(true);
     expect(body.data?.backupName).toBe("new-backup");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: ["new-backup"],
-      lockId: "lock-restore-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "restore",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: ["new-backup"],
+        lockId: "lock-restore-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("returns failed operation metadata for auth failures", async () => {

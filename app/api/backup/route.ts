@@ -88,6 +88,7 @@ async function invokeBackupLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  operationId: string,
   backupName?: string
 ): Promise<BackupResponse> {
   console.log(`[BACKUP] Invoking Lambda for backup on ${instanceId}`);
@@ -98,6 +99,7 @@ async function invokeBackupLambda(
     userEmail: user.email,
     args: backupName ? [backupName] : [],
     lockId,
+    operationId,
   });
 
   return {
@@ -155,7 +157,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking backup action");
       }
 
-      return await invokeBackupLambda(resolvedId, user, lock.lockId, backupName);
+      return await invokeBackupLambda(resolvedId, user, lock.lockId, context.operation.id, backupName);
     },
     mapError: ({ stage, error }) => {
       if (stage === "auth" && error instanceof Response) {

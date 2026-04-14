@@ -120,6 +120,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         userEmail: user.email,
         instanceId: resolvedId,
         lockId: lock.lockId,
+        operationId: context.operation.id,
       });
 
       return {
