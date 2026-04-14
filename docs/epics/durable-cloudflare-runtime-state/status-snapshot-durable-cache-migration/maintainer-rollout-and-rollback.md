@@ -31,7 +31,7 @@ The operational toggle is the runtime-state adapter selector:
 - `getRuntimeStateAdapter()` in `lib/runtime-state/provider-selector.ts`
 - Selector rules:
   - `NODE_ENV=test|development` -> always `"in-memory"`
-  - `NODE_ENV=production` + Cloudflare bindings present -> `"cloudflare"`
+  - `NODE_ENV=production` + `RUNTIME_STATE_DURABLE_OBJECT` binding present -> `"cloudflare"`
   - otherwise -> `"in-memory"`
 
 Cloudflare bindings that represent durable backends are defined in `wrangler.jsonc`:
@@ -45,7 +45,10 @@ Status routes currently call `getRuntimeStateAdapter()` without passing Cloudfla
 
 ## Enable durable snapshot path (when binding-injection code is present)
 
-1. Ensure `wrangler.jsonc` has valid (non-placeholder) KV IDs for `RUNTIME_STATE_SNAPSHOT_KV` and the DO migration entry remains intact.
+1. Ensure deploy env config contains valid runtime-state KV IDs:
+   - `RUNTIME_STATE_SNAPSHOT_KV_ID`
+   - optional `RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID` (defaults to primary id in deploy flow)
+   and keep the DO migration entry in `wrangler.jsonc` intact.
 2. Deploy the release that passes runtime bindings into `getRuntimeStateAdapter({ bindings })` for status snapshot routes.
 3. Deploy to Cloudflare (`pnpm deploy:cf`).
 4. Smoke-check cache contract:

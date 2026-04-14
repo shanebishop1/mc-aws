@@ -29,14 +29,14 @@ describe("runtime-state provider selector", () => {
       ).toBe(true);
     });
 
-    it("returns true when kv binding is present", () => {
+    it("returns false when only kv binding is present", () => {
       expect(
         hasCloudflareRuntimeStateBindings({
           snapshotKvNamespace: {
             get: async () => null,
           },
         })
-      ).toBe(true);
+      ).toBe(false);
     });
   });
 
@@ -66,7 +66,7 @@ describe("runtime-state provider selector", () => {
       expect(selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toBe("in-memory");
     });
 
-    it("selects cloudflare in production when bindings are present in cloudflare context", () => {
+    it("selects cloudflare in production when durable object binding is present in cloudflare context", () => {
       (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
         env: {
           RUNTIME_STATE_DURABLE_OBJECT: {
@@ -98,7 +98,7 @@ describe("runtime-state provider selector", () => {
       expect(adapter.kind).toBe("cloudflare");
     });
 
-    it("returns cloudflare adapter when only cloudflare context bindings are present", () => {
+    it("returns in-memory adapter when only cloudflare kv binding is present", () => {
       (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
         env: {
           RUNTIME_STATE_SNAPSHOT_KV: {
@@ -113,7 +113,7 @@ describe("runtime-state provider selector", () => {
         nodeEnv: "production",
       });
 
-      expect(adapter.kind).toBe("cloudflare");
+      expect(adapter.kind).toBe("in-memory");
     });
   });
 });

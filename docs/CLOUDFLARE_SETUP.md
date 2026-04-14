@@ -108,7 +108,16 @@ Notes:
   - `durableObjectNamespace` -> `env.RUNTIME_STATE_DURABLE_OBJECT`
   - `snapshotKvNamespace` -> `env.RUNTIME_STATE_SNAPSHOT_KV`
 - A Durable Object migration tag (`v1-runtime-state-durable-object`) is included in Wrangler config.
-- Replace KV placeholder IDs in `wrangler.jsonc` before remote deployment.
+- Do not manually edit KV IDs in `wrangler.jsonc`.
+- Canonical setup path for runtime-state KV IDs:
+  1. Create namespaces with Wrangler:
+     - `pnpm exec wrangler kv namespace create RUNTIME_STATE_SNAPSHOT_KV`
+     - `pnpm exec wrangler kv namespace create RUNTIME_STATE_SNAPSHOT_KV --preview`
+  2. Add the returned ids to your deploy env file (`.env.production`):
+     - `RUNTIME_STATE_SNAPSHOT_KV_ID`
+     - `RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID` (optional; defaults to `RUNTIME_STATE_SNAPSHOT_KV_ID` in deploy flow)
+  3. Deploy via `pnpm deploy:cf`.
+- Deploy flow injects validated KV ids into a generated Wrangler config and rejects placeholder/invalid values before deployment.
 - Local dev parity: `wrangler dev` uses these bindings against local state storage under `.wrangler/state` by default.
 
 ### Rate-limit fallback policy and telemetry

@@ -15,6 +15,7 @@ set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env.production}"
 WRANGLER_CONFIG_FILE="wrangler.jsonc"
+WRANGLER_DEPLOY_CONFIG_FILE=""
 NEXT_BUILD_ENV_FILE=".env.production.local"
 NEXT_BUILD_ENV_BACKUP_FILE=""
 NEXT_BUILD_ENV_PREPARED="0"
@@ -55,12 +56,20 @@ cleanup_next_build_env_file() {
   rm -f "$NEXT_BUILD_ENV_FILE"
 }
 
+cleanup_deploy_artifacts() {
+  cleanup_next_build_env_file
+
+  if [[ -n "$WRANGLER_DEPLOY_CONFIG_FILE" && -f "$WRANGLER_DEPLOY_CONFIG_FILE" ]]; then
+    rm -f "$WRANGLER_DEPLOY_CONFIG_FILE"
+  fi
+}
+
 resolve_env_file
 
 echo "🧪 Using environment file: $ENV_FILE"
 echo ""
 
-trap cleanup_next_build_env_file EXIT
+trap cleanup_deploy_artifacts EXIT
 
 if [[ ! -f "$WRANGLER_CONFIG_FILE" ]]; then
   echo "❌ Error: $WRANGLER_CONFIG_FILE not found (required to determine Worker name)"
@@ -168,7 +177,69 @@ REQUIRED_VARS=(
   "CLOUDFLARE_ZONE_ID"
   "CLOUDFLARE_RECORD_ID"
   "CLOUDFLARE_MC_DOMAIN"
+  "RUNTIME_STATE_SNAPSHOT_KV_ID"
 )
+
+is_cloudflare_kv_namespace_id() {
+  local value="$1"
+  [[ "$value" =~ ^[A-Fa-f0-9]{32}$ ]]
+}
+
+prepare_wrangler_deploy_config() {
+  local runtime_state_snapshot_kv_id
+  runtime_state_snapshot_kv_id="$(get_env_value "RUNTIME_STATE_SNAPSHOT_KV_ID")"
+
+  local runtime_state_snapshot_kv_preview_id
+  runtime_state_snapshot_kv_preview_id="$(get_env_value "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID")"
+  if [[ -z "$runtime_state_snapshot_kv_preview_id" ]]; then
+    runtime_state_snapshot_kv_preview_id="$runtime_state_snapshot_kv_id"
+  fi
+
+  if ! is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_id"; then
+    echo "❌ Error: RUNTIME_STATE_SNAPSHOT_KV_ID must be a 32-character Cloudflare KV namespace id"
+    exit 1
+  fi
+
+  if ! is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_preview_id"; then
+    echo "❌ Error: RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID must be a 32-character Cloudflare KV namespace id"
+    echo "   Tip: set RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID in $ENV_FILE, or leave it unset to reuse RUNTIME_STATE_SNAPSHOT_KV_ID"
+    exit 1
+  fi
+
+  WRANGLER_DEPLOY_CONFIG_FILE="$(mktemp "${WRANGLER_CONFIG_FILE}.deploy.XXXXXX")"
+
+  if ! node - "$WRANGLER_CONFIG_FILE" "$WRANGLER_DEPLOY_CONFIG_FILE" "$runtime_state_snapshot_kv_id" "$runtime_state_snapshot_kv_preview_id" <<'NODE'; then
+const fs = require("node:fs");
+
+const [sourcePath, outputPath, kvId, kvPreviewId] = process.argv.slice(2);
+
+const raw = fs.readFileSync(sourcePath, "utf8");
+const start = raw.indexOf("{");
+if (start === -1) {
+  console.error("❌ Error: Invalid wrangler config (missing JSON object)");
+  process.exit(1);
+}
+
+const config = JSON.parse(raw.slice(start));
+const kvNamespaces = Array.isArray(config.kv_namespaces) ? config.kv_namespaces : [];
+const runtimeBinding = kvNamespaces.find((entry) => entry && entry.binding === "RUNTIME_STATE_SNAPSHOT_KV");
+
+if (!runtimeBinding) {
+  console.error("❌ Error: wrangler.jsonc is missing kv_namespaces entry for RUNTIME_STATE_SNAPSHOT_KV");
+  process.exit(1);
+}
+
+runtimeBinding.id = kvId;
+runtimeBinding.preview_id = kvPreviewId;
+
+fs.writeFileSync(outputPath, `${JSON.stringify(config, null, 2)}\n`);
+NODE
+    echo "❌ Error: Failed to prepare runtime-state Wrangler deploy config"
+    exit 1
+  fi
+
+  echo "✅ Prepared runtime-state Wrangler config with validated KV namespace ids"
+}
 
 echo "🔍 Validating required secrets..."
 
@@ -521,8 +592,10 @@ fi
 echo "✅ Build successful"
 echo ""
 
+prepare_wrangler_deploy_config
+
 echo "🌐 Deploying to Cloudflare..."
-if ! retry 3 wrangler deploy --name "$WORKER_NAME" --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
+if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
   echo ""
   echo "❌ Error: Failed to deploy to Cloudflare Workers"
   exit 1
