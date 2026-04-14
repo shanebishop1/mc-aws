@@ -76,14 +76,18 @@ describe("POST /api/backup", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("backup-");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "backup",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: ["nightly-2026"],
-      lockId: "lock-backup-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "backup",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: ["nightly-2026"],
+        lockId: "lock-backup-123",
+        operationId: body.operation?.id,
+      })
+    );
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 

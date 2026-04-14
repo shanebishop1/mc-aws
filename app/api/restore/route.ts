@@ -87,6 +87,7 @@ async function invokeRestoreLambda(
   instanceId: string,
   userEmail: string,
   lockId: string,
+  operationId: string,
   backupName?: string
 ): Promise<RestoreResponse> {
   console.log(`[RESTORE] Invoking Lambda for restore on ${instanceId}`);
@@ -97,6 +98,7 @@ async function invokeRestoreLambda(
     userEmail,
     args: backupName ? [backupName] : [],
     lockId,
+    operationId,
   });
 
   return {
@@ -154,7 +156,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking restore action");
       }
 
-      return await invokeRestoreLambda(resolvedId, user.email, lock.lockId, backupName);
+      return await invokeRestoreLambda(resolvedId, user.email, lock.lockId, context.operation.id, backupName);
     },
     mapError: ({ stage, error }) => {
       if (stage === "auth" && error instanceof Response) {

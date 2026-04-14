@@ -64,6 +64,7 @@ async function invokeResumeLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  operationId: string,
   backupName?: string
 ): Promise<ResumeResponse> {
   console.log(`[RESUME] Invoking Lambda for resume on ${instanceId}`);
@@ -74,6 +75,7 @@ async function invokeResumeLambda(
     userEmail: user.email,
     args: backupName ? [backupName] : [],
     lockId,
+    operationId,
   });
 
   return {
@@ -131,7 +133,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking resume action");
       }
 
-      return await invokeResumeLambda(resolvedId, user, lock.lockId, backupName);
+      return await invokeResumeLambda(resolvedId, user, lock.lockId, context.operation.id, backupName);
     },
     mapError: ({ stage, error }) => {
       if (stage === "auth" && error instanceof Response) {

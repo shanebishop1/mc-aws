@@ -78,14 +78,18 @@ describe("POST /api/resume", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("resume-");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "resume",
-      userEmail: "admin@example.com",
-      instanceId: "i-1234",
-      args: [],
-      lockId: "lock-resume-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "resume",
+        userEmail: "admin@example.com",
+        instanceId: "i-1234",
+        args: [],
+        lockId: "lock-resume-123",
+        operationId: body.operation?.id,
+      })
+    );
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
@@ -121,14 +125,18 @@ describe("POST /api/resume", () => {
     expect(body.data?.message).toContain("asynchronously");
     expect(body.data?.restoreOutput).toBe("Restore requested: my-backup-2024");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "resume",
-      userEmail: "admin@example.com",
-      instanceId: "i-1234",
-      args: ["my-backup-2024"],
-      lockId: "lock-resume-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "resume",
+        userEmail: "admin@example.com",
+        instanceId: "i-1234",
+        args: ["my-backup-2024"],
+        lockId: "lock-resume-123",
+        operationId: body.operation?.id,
+      })
+    );
   });
 
   it("should handle lambda invocation failures", async () => {

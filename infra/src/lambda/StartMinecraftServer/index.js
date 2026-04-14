@@ -4,6 +4,7 @@ import { ensureInstanceRunning, getPublicIp } from "./ec2.js";
 
 // Notifications
 import { getSanitizedErrorMessage, sendNotification } from "./notifications.js";
+import { updateOperationState } from "./operation-state.js";
 
 // SSM command execution
 import { deleteParameter, executeSSMCommand, getParameter, putParameter } from "./ssm.js";
@@ -37,28 +38,89 @@ export const handler = async (event) => {
  * Handle API invocation for async commands
  */
 async function handleApiInvocation(event) {
-  const { instanceId, userEmail, command, args, lockId } = event;
+  const { instanceId, userEmail, command, args, lockId, operationId } = event;
   console.log(`[API] Async command '${command}' triggered by ${userEmail}`);
 
   if (!instanceId || !userEmail || !command) {
+    await persistOperationStateSafely({
+      operationId,
+      command,
+      status: "failed",
+      userEmail,
+      instanceId,
+      lockId,
+      error: "Invalid payload",
+      code: "invalid_payload",
+    });
+
     console.error("[API] Invalid API payload:", event);
     return { statusCode: 400, body: "Invalid payload" };
   }
 
   const envResult = validateEnvironment();
-  if (envResult.error) return envResult.error;
+  if (envResult.error) {
+    await persistOperationStateSafely({
+      operationId,
+      command,
+      status: "failed",
+      userEmail,
+      instanceId,
+      lockId,
+      error: "Configuration error",
+      code: "configuration_error",
+    });
+
+    return envResult.error;
+  }
 
   const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").toLowerCase();
 
   try {
+    await persistOperationStateSafely({
+      operationId,
+      command,
+      status: "running",
+      userEmail,
+      instanceId,
+      lockId,
+    });
+
     await executeApiCommand(command, instanceId, userEmail, notificationEmail, args);
+
+    await persistOperationStateSafely({
+      operationId,
+      command,
+      status: "completed",
+      userEmail,
+      instanceId,
+      lockId,
+    });
   } catch (error) {
     console.error(`[API] Command '${command}' failed:`, error);
+
+    await persistOperationStateSafely({
+      operationId,
+      command,
+      status: "failed",
+      userEmail,
+      instanceId,
+      lockId,
+      error: getSanitizedErrorMessage(command),
+      code: "lambda_execution_failed",
+    });
   } finally {
     await releaseServerActionLockIfOwned(lockId, command);
   }
 
   return { statusCode: 202, body: `Async command '${command}' accepted` };
+}
+
+async function persistOperationStateSafely(input) {
+  try {
+    await updateOperationState(input);
+  } catch (error) {
+    console.error("[API] Failed to persist operation state:", error);
+  }
 }
 
 async function releaseServerActionLockIfOwned(lockId, command) {

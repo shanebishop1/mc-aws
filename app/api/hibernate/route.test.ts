@@ -74,14 +74,18 @@ describe("POST /api/hibernate", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("hibernate-");
 
-    expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
-      invocationType: "api",
-      command: "hibernate",
-      instanceId: "i-1234",
-      userEmail: "admin@example.com",
-      args: [],
-      lockId: "lock-hibernate-123",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        invocationType: "api",
+        command: "hibernate",
+        instanceId: "i-1234",
+        userEmail: "admin@example.com",
+        args: [],
+        lockId: "lock-hibernate-123",
+        operationId: body.operation?.id,
+      })
+    );
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 

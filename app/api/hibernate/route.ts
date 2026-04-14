@@ -67,7 +67,8 @@ function validateHibernateState(currentState: string): void {
 async function invokeHibernateLambda(
   instanceId: string,
   user: AuthUser,
-  lockId: string
+  lockId: string,
+  operationId: string
 ): Promise<HibernateResponse> {
   console.log(`[HIBERNATE] Invoking Lambda for hibernate on ${instanceId}`);
   await invokeLambda("StartMinecraftServer", {
@@ -77,6 +78,7 @@ async function invokeHibernateLambda(
     userEmail: user.email,
     args: [],
     lockId,
+    operationId,
   });
 
   return {
@@ -149,7 +151,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking hibernate action");
       }
 
-      return await invokeHibernateLambda(resolvedId, user, lock.lockId);
+      return await invokeHibernateLambda(resolvedId, user, lock.lockId, context.operation.id);
     },
     mapInvokeResult: ({ lock, invokeResult }) => {
       const syntheticLock = lock as typeof lock & { alreadyHibernatingData?: HibernateResponse };

@@ -339,13 +339,14 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Grant Lambda permission to manage server-action lock and startup-triggered-by parameters
+    // Grant Lambda permission to manage server-action lock and durable operation state parameters
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/startup-triggered-by`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/operations/*`,
         ],
       })
     );
