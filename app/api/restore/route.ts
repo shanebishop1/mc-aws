@@ -6,6 +6,7 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import {
@@ -150,6 +151,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return await formatAuthErrorResponse<RestoreResponse>(authResult, withOperationStatus(operation, "failed"));
     }
     console.log("[RESTORE] Admin action by:", authResult.email);
+
+    const throttleResponse = await enforceMutatingRouteThrottle<RestoreResponse>({
+      request,
+      route: "/api/restore",
+      operation,
+      identity: authResult.email,
+    });
+    if (throttleResponse) {
+      return throttleResponse;
+    }
 
     // Parse request body
     const body = await parseRestoreBody(request);

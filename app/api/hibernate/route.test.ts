@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
+  enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -30,6 +31,10 @@ vi.mock("@/lib/server-action-lock", () => ({
   acquireServerActionLock: mocks.acquireServerActionLock,
   releaseServerActionLock: mocks.releaseServerActionLock,
   isServerActionLockConflictError: mocks.isServerActionLockConflictError,
+}));
+
+vi.mock("@/lib/mutating-route-throttle", () => ({
+  enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
 }));
 
 describe("POST /api/hibernate", () => {
@@ -61,6 +66,7 @@ describe("POST /api/hibernate", () => {
       args: [],
       lockId: "lock-hibernate-123",
     });
+    expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
   it("should return completed operation when already hibernating", async () => {

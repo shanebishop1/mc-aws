@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-stop-123" }),
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
+  enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/lib/api-auth", () => ({
@@ -19,6 +20,10 @@ vi.mock("@/lib/server-action-lock", () => ({
   acquireServerActionLock: mocks.acquireServerActionLock,
   releaseServerActionLock: mocks.releaseServerActionLock,
   isServerActionLockConflictError: mocks.isServerActionLockConflictError,
+}));
+
+vi.mock("@/lib/mutating-route-throttle", () => ({
+  enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
 }));
 
 describe("POST /api/stop", () => {
@@ -58,6 +63,7 @@ describe("POST /api/stop", () => {
     expect(body.operation?.type).toBe("stop");
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("stop-");
+    expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
   it("should return 400 when instance is already stopped", async () => {

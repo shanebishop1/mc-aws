@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
+  enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -35,6 +36,10 @@ vi.mock("@/lib/server-action-lock", () => ({
   acquireServerActionLock: mocks.acquireServerActionLock,
   releaseServerActionLock: mocks.releaseServerActionLock,
   isServerActionLockConflictError: mocks.isServerActionLockConflictError,
+}));
+
+vi.mock("@/lib/mutating-route-throttle", () => ({
+  enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
 }));
 
 describe("POST /api/resume", () => {
@@ -65,6 +70,7 @@ describe("POST /api/resume", () => {
       args: [],
       lockId: "lock-resume-123",
     });
+    expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
   it("should return 400 when instance is already running", async () => {

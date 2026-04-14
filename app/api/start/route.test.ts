@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   requireAllowed: vi.fn().mockResolvedValue({ email: "test@example.com", role: "admin" }),
+  enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -30,6 +31,10 @@ vi.mock("@/lib/server-action-lock", () => ({
   acquireServerActionLock: mocks.acquireServerActionLock,
   releaseServerActionLock: mocks.releaseServerActionLock,
   isServerActionLockConflictError: mocks.isServerActionLockConflictError,
+}));
+
+vi.mock("@/lib/mutating-route-throttle", () => ({
+  enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
 }));
 
 describe("POST /api/start", () => {
@@ -59,6 +64,30 @@ describe("POST /api/start", () => {
       instanceId: "i-1234",
       lockId: "lock-start-123",
     });
+    expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
+  });
+
+  it("returns 429 when mutating route throttle is exceeded", async () => {
+    mocks.enforceMutatingRouteThrottle.mockResolvedValueOnce(
+      Response.json(
+        {
+          success: false,
+          error: "Too many start requests. Please retry shortly.",
+          timestamp: new Date().toISOString(),
+        },
+        { status: 429 }
+      )
+    );
+
+    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(429);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Too many start requests");
+    expect(mocks.getInstanceState).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("should return 400 when instance is already running", async () => {
