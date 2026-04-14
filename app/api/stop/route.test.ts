@@ -56,7 +56,7 @@ describe("POST /api/stop", () => {
     const req = createMockNextRequest("http://localhost/api/stop", { method: "POST" });
     const res = await POST(req);
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     const body = await parseNextResponse<ApiResponse<StopServerResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("stop command sent successfully");

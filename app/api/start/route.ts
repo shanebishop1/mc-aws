@@ -9,15 +9,20 @@ import { type AuthUser, requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import {
+  createMutatingActionLockConflictFailure,
+  mapMutatingActionExecutionToApiResponse,
+} from "@/lib/mutating-action-response";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
+import { createMutatingActionFailure, createMutatingActionSuccess } from "@/lib/mutating-action-contract";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
   releaseServerActionLock,
 } from "@/lib/server-action-lock";
 import type { ApiResponse, StartServerResponse } from "@/lib/types";
-import { type NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
   const operation = createOperationInfo("start", "running");
@@ -54,14 +59,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // If running, return error (per requirement)
     if (currentState === "running") {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Server is already running",
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 400 }
+      return mapMutatingActionExecutionToApiResponse(
+        operation,
+        createMutatingActionFailure("Server is already running", { httpStatus: 400, code: "already_running" })
       );
     }
 
@@ -79,18 +79,17 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       });
 
       // Return immediately with pending status (fire-and-forget)
-      const response: ApiResponse<StartServerResponse> = {
-        success: true,
-        data: {
-          instanceId: resolvedId,
-          domain: env.CLOUDFLARE_MC_DOMAIN,
-          message: "Server start initiated. This may take 1-2 minutes.",
-        },
-        operation: withOperationStatus(operation, "accepted"),
-        timestamp: new Date().toISOString(),
-      };
-
-      return NextResponse.json(response);
+      return mapMutatingActionExecutionToApiResponse(
+        operation,
+        createMutatingActionSuccess(
+          {
+            instanceId: resolvedId,
+            domain: env.CLOUDFLARE_MC_DOMAIN,
+            message: "Server start initiated. This may take 1-2 minutes.",
+          },
+          "accepted"
+        )
+      );
     } catch (error) {
       console.error("[START] Lambda invocation failed:", error);
       await releaseServerActionLock(lock.lockId, { action: "start", ownerEmail: user.email }).catch((releaseError) => {
@@ -100,15 +99,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
   } catch (error) {
     if (isServerActionLockConflictError(error)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Another operation is already in progress. Please wait for it to complete.",
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
+      return mapMutatingActionExecutionToApiResponse(operation, createMutatingActionLockConflictFailure(error));
     }
 
     return formatApiErrorResponse<StartServerResponse>(

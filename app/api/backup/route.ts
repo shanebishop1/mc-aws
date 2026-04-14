@@ -7,6 +7,11 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { createMutatingActionFailure, createMutatingActionSuccess } from "@/lib/mutating-action-contract";
+import {
+  createMutatingActionLockConflictFailure,
+  mapMutatingActionExecutionToApiResponse,
+} from "@/lib/mutating-action-response";
 import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
@@ -16,7 +21,7 @@ import {
   releaseServerActionLock,
 } from "@/lib/server-action-lock";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
-import { type NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 
 /**
  * Validate server state for backup
@@ -27,14 +32,12 @@ async function validateBackupState(
 ): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
   const currentState = await getInstanceState(instanceId);
   if (currentState !== "running") {
-    return NextResponse.json(
-      {
-        success: false,
-        error: `Cannot backup when server is ${currentState}. Server must be running.`,
-        operation: withOperationStatus(operationId, "failed"),
-        timestamp: new Date().toISOString(),
-      },
-      { status: 400 }
+    return mapMutatingActionExecutionToApiResponse(
+      operationId,
+      createMutatingActionFailure(`Cannot backup when server is ${currentState}. Server must be running.`, {
+        httpStatus: 400,
+        code: "invalid_state",
+      })
     );
   }
   return null;
@@ -54,14 +57,12 @@ async function validateServiceReady(
 
     if (trimmedOutput !== "active") {
       console.log("[BACKUP] Minecraft service not ready, status:", trimmedOutput);
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Minecraft service is still initializing. Please wait a moment.",
-          operation: withOperationStatus(operationId, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
+      return mapMutatingActionExecutionToApiResponse(
+        operationId,
+        createMutatingActionFailure("Minecraft service is still initializing. Please wait a moment.", {
+          httpStatus: 409,
+          code: "service_not_ready",
+        })
       );
     }
 
@@ -98,18 +99,13 @@ async function invokeBackupLambda(
       lockId,
     });
 
-    return NextResponse.json(
-      {
-        success: true,
-        data: {
-          backupName,
-          message: "Backup started asynchronously. You will receive an email upon completion.",
-          output: "",
-        },
-        operation: withOperationStatus(operationId, "accepted"),
-        timestamp: new Date().toISOString(),
-      },
-      { status: 202 }
+    return mapMutatingActionExecutionToApiResponse(
+      operationId,
+      createMutatingActionSuccess({
+        backupName,
+        message: "Backup started asynchronously. You will receive an email upon completion.",
+        output: "",
+      })
     );
   } catch (error) {
     console.error("[BACKUP] Lambda invocation failed:", error);
@@ -177,15 +173,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     return await invokeBackupLambda(resolvedId, user, lock.lockId, operation, backupName);
   } catch (error) {
     if (isServerActionLockConflictError(error)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Another operation is already in progress. Please wait for it to complete.",
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
+      return mapMutatingActionExecutionToApiResponse(operation, createMutatingActionLockConflictFailure(error));
     }
 
     return buildBackupErrorResponse(error, operation);

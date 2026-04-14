@@ -49,7 +49,7 @@ describe("POST /api/start", () => {
     const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
     const res = await POST(req);
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("initiated");
@@ -116,7 +116,7 @@ describe("POST /api/start", () => {
     });
     const res = await POST(req);
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(202);
     const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
     expect(body.success).toBe(true);
     // Should use the server-side resolved ID, not the caller-provided one

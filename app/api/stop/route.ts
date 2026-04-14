@@ -6,6 +6,11 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
+import { createMutatingActionFailure, createMutatingActionSuccess } from "@/lib/mutating-action-contract";
+import {
+  createMutatingActionLockConflictFailure,
+  mapMutatingActionExecutionToApiResponse,
+} from "@/lib/mutating-action-response";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
@@ -15,7 +20,7 @@ import {
 } from "@/lib/server-action-lock";
 import type { ApiResponse, StopServerResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
-import { type NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
   const operation = createOperationInfo("stop", "running");
@@ -53,26 +58,19 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // If already stopped, return error (per requirement)
     if (currentState === ServerState.Stopped || currentState === ServerState.Hibernating) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Server is already stopped",
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 400 }
+      return mapMutatingActionExecutionToApiResponse(
+        operation,
+        createMutatingActionFailure("Server is already stopped", { httpStatus: 400, code: "already_stopped" })
       );
     }
 
     if (currentState !== ServerState.Running && currentState !== ServerState.Pending) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: `Cannot stop server in state: ${currentState}`,
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 400 }
+      return mapMutatingActionExecutionToApiResponse(
+        operation,
+        createMutatingActionFailure(`Cannot stop server in state: ${currentState}`, {
+          httpStatus: 400,
+          code: "invalid_state",
+        })
       );
     }
 
@@ -88,28 +86,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       });
     }
 
-    const response: ApiResponse<StopServerResponse> = {
-      success: true,
-      data: {
+    return mapMutatingActionExecutionToApiResponse(
+      operation,
+      createMutatingActionSuccess({
         instanceId: resolvedId,
         message: "Server stop command sent successfully",
-      },
-      operation: withOperationStatus(operation, "accepted"),
-      timestamp: new Date().toISOString(),
-    };
-
-    return NextResponse.json(response);
+      })
+    );
   } catch (error) {
     if (isServerActionLockConflictError(error)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Another operation is already in progress. Please wait for it to complete.",
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
+      return mapMutatingActionExecutionToApiResponse(operation, createMutatingActionLockConflictFailure(error));
     }
 
     return formatApiErrorResponse<StopServerResponse>(
