@@ -31,7 +31,7 @@ bash ./setup.sh
 
 ### Accounts/credentials you should have ready
 
-- AWS account (for EC2/Lambda/SSM/SES/CDK)
+- AWS account (for EC2/Lambda/SSM/CDK; SES is optional for email features)
 - Cloudflare zone + DNS API token (for runtime DNS updates)
 - Google OAuth client (for web app sign-in)
 - GitHub token (`repo` scope) plus repo/user values (currently required by CDK setup in this repo)
@@ -71,6 +71,12 @@ Local auth options:
 - `ADMIN_EMAIL`: full access
 - `ALLOWED_EMAILS`: can check status and start
 - signed-in users not listed above: status-only
+
+### Optional SES email features
+
+- `VERIFIED_SENDER`, `NOTIFICATION_EMAIL`, and `START_KEYWORD` are optional.
+- If they are not configured, core panel/server flows still work.
+- Without `VERIFIED_SENDER`, email-triggered commands and SES notification sending are disabled.
 
 ## CLI Addendum (Optional)
 

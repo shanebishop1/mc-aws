@@ -26,8 +26,16 @@ export function getSanitizedErrorMessage(commandName) {
  * @returns {Promise<void>}
  */
 export async function sendNotification(to, subject, body) {
+  const sender = process.env.VERIFIED_SENDER;
+  if (!sender) {
+    console.warn(
+      "[EMAIL] Skipping notification send because VERIFIED_SENDER is not configured. Core command execution will continue."
+    );
+    return;
+  }
+
   const emailParams = {
-    Source: process.env.VERIFIED_SENDER,
+    Source: sender,
     Destination: {
       ToAddresses: [to],
     },
