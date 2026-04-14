@@ -4,7 +4,7 @@
  */
 
 import { NextResponse } from "next/server";
-import type { ApiResponse } from "./types";
+import type { ApiResponse, OperationInfo } from "./types";
 
 /**
  * Known validation error messages that should be exposed to clients
@@ -63,7 +63,8 @@ const GENERIC_ERROR_MESSAGES = {
 export function formatApiErrorResponse<T>(
   error: unknown,
   operationType: keyof typeof GENERIC_ERROR_MESSAGES,
-  customGenericMessage?: string
+  customGenericMessage?: string,
+  operation?: OperationInfo
 ): NextResponse<ApiResponse<T>> {
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
@@ -74,6 +75,7 @@ export function formatApiErrorResponse<T>(
       {
         success: false,
         error: errorMessage,
+        operation,
         timestamp: new Date().toISOString(),
       },
       { status: 400 }
@@ -89,6 +91,7 @@ export function formatApiErrorResponse<T>(
     {
       success: false,
       error: safeMessage,
+      operation,
       timestamp: new Date().toISOString(),
     },
     { status: 500 }
@@ -107,7 +110,8 @@ export function formatApiErrorResponse<T>(
 export function formatApiErrorResponseWithStatus<T>(
   error: unknown,
   statusCode: number,
-  safeMessage: string
+  safeMessage: string,
+  operation?: OperationInfo
 ): NextResponse<ApiResponse<T>> {
   // Log the full error
   console.error("[API] Error:", error);
@@ -116,6 +120,7 @@ export function formatApiErrorResponseWithStatus<T>(
     {
       success: false,
       error: safeMessage,
+      operation,
       timestamp: new Date().toISOString(),
     },
     { status: statusCode }

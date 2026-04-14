@@ -29,7 +29,18 @@ export interface ApiResponse<T = unknown> {
   success: boolean;
   data?: T;
   error?: string;
+  operation?: OperationInfo;
   timestamp: string;
+}
+
+export type OperationStatus = "accepted" | "running" | "completed" | "failed";
+
+export type OperationType = "start" | "stop" | "backup" | "restore" | "hibernate" | "resume";
+
+export interface OperationInfo {
+  id: string;
+  type: OperationType;
+  status: OperationStatus;
 }
 
 export interface StartServerResponse {
