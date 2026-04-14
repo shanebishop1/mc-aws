@@ -9,6 +9,7 @@ import { type AuthUser, requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
@@ -25,6 +26,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   try {
     user = await requireAllowed(request);
     console.log("[START] Action by:", user.email, "role:", user.role);
+
+    const throttleResponse = await enforceMutatingRouteThrottle<StartServerResponse>({
+      request,
+      route: "/api/start",
+      operation,
+      identity: user.email,
+    });
+    if (throttleResponse) {
+      return throttleResponse;
+    }
   } catch (error) {
     if (error instanceof Response) {
       return await formatAuthErrorResponse<StartServerResponse>(error, withOperationStatus(operation, "failed"));

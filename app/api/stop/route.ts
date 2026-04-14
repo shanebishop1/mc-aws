@@ -6,6 +6,7 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
+import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
@@ -24,6 +25,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const user = await requireAdmin(request);
     userEmail = user.email;
     console.log("[STOP] Action by:", user.email, "role:", user.role);
+
+    const throttleResponse = await enforceMutatingRouteThrottle<StopServerResponse>({
+      request,
+      route: "/api/stop",
+      operation,
+      identity: user.email,
+    });
+    if (throttleResponse) {
+      return throttleResponse;
+    }
   } catch (error) {
     if (error instanceof Response) {
       return await formatAuthErrorResponse<StopServerResponse>(error, withOperationStatus(operation, "failed"));

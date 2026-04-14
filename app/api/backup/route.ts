@@ -7,6 +7,7 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import {
@@ -157,6 +158,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     try {
       user = await requireAdmin(request);
       console.log("[BACKUP] Admin action by:", user.email);
+
+      const throttleResponse = await enforceMutatingRouteThrottle<BackupResponse>({
+        request,
+        route: "/api/backup",
+        operation,
+        identity: user.email,
+      });
+      if (throttleResponse) {
+        return throttleResponse;
+      }
     } catch (error) {
       if (error instanceof Response) {
         return await formatAuthErrorResponse<BackupResponse>(error, withOperationStatus(operation, "failed"));
