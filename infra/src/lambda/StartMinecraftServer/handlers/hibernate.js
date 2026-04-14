@@ -7,6 +7,12 @@ import {
   ec2,
 } from "../clients.js";
 import { getSanitizedErrorMessage, sendNotification } from "../notifications.js";
+import {
+  INSTANCE_STATE_MAX_ATTEMPTS,
+  INSTANCE_STATE_POLL_INTERVAL_MS,
+  VOLUME_DETACH_MAX_ATTEMPTS,
+  VOLUME_DETACH_POLL_INTERVAL_MS,
+} from "../runtime-budgets.js";
 import { executeSSMCommand } from "../ssm.js";
 
 /**
@@ -45,12 +51,12 @@ async function stopInstanceAndWait(instanceId) {
   await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
   console.log("Stop command sent, waiting for instance to stop...");
 
-  for (let attempt = 1; attempt <= 60; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+  for (let attempt = 1; attempt <= INSTANCE_STATE_MAX_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, INSTANCE_STATE_POLL_INTERVAL_MS));
     const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
     const state = Reservations?.[0]?.Instances?.[0]?.State?.Name;
 
-    console.log(`Instance state poll (attempt ${attempt}/60): ${state}`);
+    console.log(`Instance state poll (attempt ${attempt}/${INSTANCE_STATE_MAX_ATTEMPTS}): ${state}`);
     if (state === "stopped") {
       console.log(`Instance ${instanceId} is now stopped`);
       return;
@@ -77,8 +83,8 @@ async function detachVolume(volumeId) {
   console.log(`Detaching volume ${volumeId}...`);
   await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId }));
 
-  for (let attempt = 1; attempt <= 30; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+  for (let attempt = 1; attempt <= VOLUME_DETACH_MAX_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, VOLUME_DETACH_POLL_INTERVAL_MS));
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
     const attachmentState = response.Volumes?.[0]?.Attachments?.[0]?.State;
 
