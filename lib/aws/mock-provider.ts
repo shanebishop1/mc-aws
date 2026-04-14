@@ -7,7 +7,7 @@
 import type { Stack } from "@aws-sdk/client-cloudformation";
 import { type CostData, type OperationStatus, type OperationType, ServerState } from "../types";
 import { getMockStateStore } from "./mock-state-store";
-import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount } from "./types";
+import type { AwsProvider, BackupInfo, InstanceDetails, ParameterStoreEntry, PlayerCount } from "./types";
 
 // Re-export scenario engine functions for convenience
 export {
@@ -59,7 +59,14 @@ const STOPPING_DELAY_MS = 2500; // 2.5 seconds
 const POLL_INTERVAL_MS = 500; // 0.5 seconds for polling
 const operationStateParamPrefix = "/minecraft/operations";
 const operationStatuses: ReadonlySet<OperationStatus> = new Set(["accepted", "running", "completed", "failed"]);
-const operationTypes: ReadonlySet<OperationType> = new Set(["start", "stop", "backup", "restore", "hibernate", "resume"]);
+const operationTypes: ReadonlySet<OperationType> = new Set([
+  "start",
+  "stop",
+  "backup",
+  "restore",
+  "hibernate",
+  "resume",
+]);
 const transitionSources = new Set<MockOperationStateTransitionSource>(["api", "lambda"]);
 const operationStatusPriority: Record<OperationStatus, number> = {
   accepted: 1,
@@ -193,7 +200,10 @@ function parseOperationState(raw: string | null): MockOperationState | null {
             return [];
           }
 
-          if (!operationStatuses.has(status as OperationStatus) || !transitionSources.has(source as MockOperationStateTransitionSource)) {
+          if (
+            !operationStatuses.has(status as OperationStatus) ||
+            !transitionSources.has(source as MockOperationStateTransitionSource)
+          ) {
             return [];
           }
 
@@ -314,7 +324,11 @@ async function persistMockOperationStateTransition(input: PersistMockOperationSt
     return;
   }
 
-  if (!operationTypes.has(type as OperationType) || !operationStatuses.has(input.status) || !transitionSources.has(input.source)) {
+  if (
+    !operationTypes.has(type as OperationType) ||
+    !operationStatuses.has(input.status) ||
+    !transitionSources.has(input.source)
+  ) {
     return;
   }
 
@@ -368,7 +382,9 @@ async function persistMockOperationStateTransition(input: PersistMockOperationSt
   await stateStore.setParameter(parameterName, JSON.stringify(nextState), "String");
 }
 
-async function persistMockOperationStateTransitionSafely(input: PersistMockOperationStateTransitionInput): Promise<void> {
+async function persistMockOperationStateTransitionSafely(
+  input: PersistMockOperationStateTransitionInput
+): Promise<void> {
   try {
     await persistMockOperationStateTransition(input);
   } catch (error) {
@@ -793,6 +809,28 @@ export const mockProvider: AwsProvider = {
     await stateStore.deleteParameter(name);
   },
 
+  listParametersByPath: async (path: string): Promise<ParameterStoreEntry[]> => {
+    await applyFaultInjection("listParametersByPath");
+    const normalizedPath = path.trim().replace(/\/$/, "");
+    if (!normalizedPath) {
+      return [];
+    }
+
+    console.log("[MOCK] listParametersByPath called for:", normalizedPath);
+    const stateStore = getMockStateStore();
+    const allParameters = await stateStore.getAllParameters();
+
+    return Object.entries(allParameters)
+      .filter(([name]) => name === normalizedPath || name.startsWith(`${normalizedPath}/`))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, parameter]) => ({
+        name,
+        value: parameter.value,
+        type: parameter.type,
+        lastModifiedAt: parameter.lastModified,
+      }));
+  },
+
   // SSM - Application-Specific Parameters
   getEmailAllowlist: async (): Promise<string[]> => {
     await applyFaultInjection("getEmailAllowlist");
@@ -1038,7 +1076,7 @@ export const mockProvider: AwsProvider = {
           return;
         }
 
-        if (operationType && command !== "start") {
+        if (operationType && typeof command === "string" && command !== "start") {
           scheduleCommandCompletion(500, command);
         }
       } catch (error) {

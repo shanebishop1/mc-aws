@@ -8,7 +8,7 @@ import { getProvider } from "./provider-selector";
 
 // Re-export types for backward compatibility
 export type { CostBreakdown } from "./cost-client";
-export type { AwsProvider, InstanceDetails, PlayerCount, BackupInfo } from "./types";
+export type { AwsProvider, InstanceDetails, PlayerCount, BackupInfo, ParameterStoreEntry } from "./types";
 
 // Re-export constants for backward compatibility
 export { MAX_POLL_ATTEMPTS, POLL_INTERVAL_MS } from "./ec2-client";
@@ -93,6 +93,10 @@ export async function putParameter(
 
 export async function deleteParameter(name: string): Promise<void> {
   return getProvider().deleteParameter(name);
+}
+
+export async function listParametersByPath(path: string) {
+  return getProvider().listParametersByPath(path);
 }
 
 // Volume operations
