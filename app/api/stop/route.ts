@@ -4,7 +4,7 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { formatApiErrorResponse } from "@/lib/api-error";
+import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
@@ -26,7 +26,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     console.log("[STOP] Action by:", user.email, "role:", user.role);
   } catch (error) {
     if (error instanceof Response) {
-      return error as NextResponse<ApiResponse<StopServerResponse>>;
+      return await formatAuthErrorResponse<StopServerResponse>(error, withOperationStatus(operation, "failed"));
     }
     throw error;
   }

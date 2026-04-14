@@ -5,7 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { formatApiErrorResponse } from "@/lib/api-error";
+import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
@@ -123,7 +123,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       console.log("[RESUME] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {
-        return error as NextResponse<ApiResponse<ResumeResponse>>;
+        return await formatAuthErrorResponse<ResumeResponse>(error, withOperationStatus(operation, "failed"));
       }
       throw error;
     }

@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-backup-123" }),
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
+  requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -21,7 +22,7 @@ vi.mock("@/lib/aws", () => ({
 }));
 
 vi.mock("@/lib/api-auth", () => ({
-  requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
+  requireAdmin: mocks.requireAdmin,
 }));
 
 vi.mock("@/lib/sanitization", () => ({
@@ -76,6 +77,51 @@ describe("POST /api/backup", () => {
     expect(body.error).toContain("must be running");
     expect(body.operation?.type).toBe("backup");
     expect(body.operation?.status).toBe("failed");
+
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("returns failed operation metadata for auth failures", async () => {
+    mocks.requireAdmin.mockRejectedValueOnce(
+      new Response(JSON.stringify({ success: false, error: "Insufficient permissions" }), {
+        status: 403,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const req = createMockNextRequest("http://localhost/api/backup", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(403);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Insufficient permissions");
+    expect(body.operation?.type).toBe("backup");
+    expect(body.operation?.status).toBe("failed");
+    expect(body.operation?.id).toContain("backup-");
+
+    expect(mocks.findInstanceId).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("returns failed operation metadata for lock conflicts", async () => {
+    mocks.getInstanceState.mockResolvedValueOnce("running");
+    mocks.acquireServerActionLock.mockRejectedValueOnce(new Error("lock conflict"));
+    mocks.isServerActionLockConflictError.mockReturnValueOnce(true);
+
+    const req = createMockNextRequest("http://localhost/api/backup", {
+      method: "POST",
+      body: JSON.stringify({ name: "nightly-2026" }),
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(409);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Another operation is already in progress");
+    expect(body.operation?.type).toBe("backup");
+    expect(body.operation?.status).toBe("failed");
+    expect(body.operation?.id).toContain("backup-");
 
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });

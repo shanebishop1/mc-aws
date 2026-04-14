@@ -6,7 +6,7 @@
  */
 
 import { type AuthUser, requireAllowed } from "@/lib/api-auth";
-import { formatApiErrorResponse } from "@/lib/api-error";
+import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
@@ -27,7 +27,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     console.log("[START] Action by:", user.email, "role:", user.role);
   } catch (error) {
     if (error instanceof Response) {
-      return error as NextResponse<ApiResponse<StartServerResponse>>;
+      return await formatAuthErrorResponse<StartServerResponse>(error, withOperationStatus(operation, "failed"));
     }
     throw error;
   }

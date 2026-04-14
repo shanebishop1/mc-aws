@@ -5,7 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { formatApiErrorResponse } from "@/lib/api-error";
+import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import { sanitizeBackupName } from "@/lib/sanitization";
@@ -159,7 +159,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       console.log("[BACKUP] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {
-        return error as NextResponse<ApiResponse<BackupResponse>>;
+        return await formatAuthErrorResponse<BackupResponse>(error, withOperationStatus(operation, "failed"));
       }
       throw error;
     }
