@@ -14,7 +14,7 @@ interface BackupInfo {
 interface ResumeModalProps {
   isOpen: boolean;
   onClose: () => void;
-  onResume: (backupName?: string) => void;
+  onResume: (input: { restoreMode: "fresh" | "named"; backupName?: string }) => void;
 }
 
 export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => {
@@ -80,7 +80,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
 
   const handleConfirmRestore = () => {
     if (selectedBackup) {
-      onResume(selectedBackup);
+      onResume({ restoreMode: "named", backupName: selectedBackup });
     }
   };
 
@@ -91,7 +91,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
   };
 
   const handleStartFresh = () => {
-    onResume(undefined);
+    onResume({ restoreMode: "fresh" });
   };
 
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {

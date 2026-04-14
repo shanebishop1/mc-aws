@@ -40,6 +40,7 @@ vi.mock("@/lib/mutating-route-throttle", () => ({
 describe("POST /api/start", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireAllowed.mockResolvedValue({ email: "test@example.com", role: "admin" });
   });
 
   it("should trigger async lambda when server is stopped", async () => {
@@ -69,6 +70,23 @@ describe("POST /api/start", () => {
       })
     );
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
+  });
+
+  it("allows non-admin allowed users to start stopped intact instances", async () => {
+    mocks.requireAllowed.mockResolvedValueOnce({ email: "allowed@example.com", role: "allowed" });
+    mocks.getInstanceState.mockResolvedValueOnce(ServerState.Stopped);
+
+    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(202);
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        command: "start",
+        userEmail: "allowed@example.com",
+      })
+    );
   });
 
   it("returns 429 when mutating route throttle is exceeded", async () => {
@@ -116,6 +134,20 @@ describe("POST /api/start", () => {
     expect(body.operation?.status).toBe("failed");
 
     expect(mocks.acquireServerActionLock).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("returns 400 when start is requested for hibernating state", async () => {
+    mocks.getInstanceState.mockResolvedValueOnce(ServerState.Hibernating);
+
+    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(400);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Use resume instead");
+    expect(body.operation?.status).toBe("failed");
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 

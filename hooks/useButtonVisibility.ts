@@ -26,7 +26,7 @@ export function useButtonVisibility(
   const showResume = isHibernating;
   const showStart = isStopped && !isTransitioning;
   const showStop = isRunning && !isTransitioning;
-  const showHibernate = (isRunning || isStopped) && !isHibernating && !isTransitioning;
+  const showHibernate = isRunning && !isHibernating && !isTransitioning;
   const showBackupRestore = isRunning && !isTransitioning && serviceActive !== false;
 
   const actionsEnabled = !isTransitioning;

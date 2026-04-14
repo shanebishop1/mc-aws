@@ -85,12 +85,36 @@ describe("POST /api/resume", () => {
         command: "resume",
         userEmail: "admin@example.com",
         instanceId: "i-1234",
+        restoreMode: "fresh",
         args: [],
         lockId: "lock-resume-123",
         operationId: body.operation?.id,
       })
     );
+    expect(body.data?.restoreOutput).toBe("Fresh world requested");
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses explicit latest restore mode when requested", async () => {
+    const req = createMockNextRequest("http://localhost/api/resume", {
+      method: "POST",
+      body: JSON.stringify({ restoreMode: "latest" }),
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(202);
+    const body = await parseNextResponse<ApiResponse<ResumeResponse>>(res);
+    expect(body.success).toBe(true);
+    expect(body.data?.restoreOutput).toBe("Restore requested: latest");
+
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({
+        command: "resume",
+        restoreMode: "latest",
+        args: [],
+      })
+    );
   });
 
   it("should return 400 when instance is already running", async () => {
@@ -132,11 +156,26 @@ describe("POST /api/resume", () => {
         command: "resume",
         userEmail: "admin@example.com",
         instanceId: "i-1234",
+        restoreMode: "named",
         args: ["my-backup-2024"],
         lockId: "lock-resume-123",
         operationId: body.operation?.id,
       })
     );
+  });
+
+  it("rejects inconsistent restore mode and backupName combinations", async () => {
+    const req = createMockNextRequest("http://localhost/api/resume", {
+      method: "POST",
+      body: JSON.stringify({ restoreMode: "fresh", backupName: "named-backup" }),
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(400);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("cannot be used with a backup name");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("should handle lambda invocation failures", async () => {

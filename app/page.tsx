@@ -180,9 +180,12 @@ export default function Home() {
     setIsResumeModalOpen(true);
   };
 
-  const handleResumeFromModal = (backupName?: string) => {
+  const handleResumeFromModal = (input: { restoreMode: "fresh" | "named"; backupName?: string }) => {
     setIsResumeModalOpen(false);
-    handleAction("Resume", "/api/resume", backupName ? { backupName } : undefined);
+    handleAction("Resume", "/api/resume", {
+      restoreMode: input.restoreMode,
+      ...(input.backupName ? { backupName: input.backupName } : {}),
+    });
   };
 
   // Loading state - stack status check (show main UI with connecting state instead)

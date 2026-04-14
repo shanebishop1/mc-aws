@@ -1,6 +1,6 @@
 import { ensureInstanceRunning } from "../ec2.js";
 import { getSanitizedErrorMessage, sendNotification } from "../notifications.js";
-import { sanitizeBackupName } from "../sanitization.js";
+import { normalizeBackupArchiveName } from "../restore-contract.js";
 import { executeSSMCommand } from "../ssm.js";
 
 /**
@@ -35,13 +35,13 @@ export async function handleRestore(instanceId, args, adminEmail) {
       console.log("Step 2: Restoring specific backup:", backupName);
     }
 
-    // Build command: if backup name provided, sanitize it; otherwise run with no arg for latest
+    // Build command: latest restore is explicit; named restores normalize to archive filename.
     let command;
     if (isLatest) {
-      command = "/usr/local/bin/mc-restore.sh";
+      command = "/usr/local/bin/mc-restore.sh latest";
     } else {
-      const sanitizedBackupName = sanitizeBackupName(backupName);
-      command = `/usr/local/bin/mc-restore.sh ${sanitizedBackupName}`;
+      const backupArchiveName = normalizeBackupArchiveName(backupName);
+      command = `/usr/local/bin/mc-restore.sh ${backupArchiveName}`;
     }
 
     const output = await executeSSMCommand(instanceId, [command]);
