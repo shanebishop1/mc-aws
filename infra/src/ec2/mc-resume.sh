@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Resume server: create new EBS, start EC2, restore from Drive
-# Usage: mc-resume.sh [backup-name]
+# Resume server after instance boot
+# Usage: mc-resume.sh <fresh|latest|named> [backup-archive]
 # Note: This runs on boot via user_data if "resume" flag is set
 
 set -euo pipefail
@@ -14,36 +14,60 @@ MAINTENANCE_LOCK="/tmp/mc-maintenance.lock"
 touch "$MAINTENANCE_LOCK"
 trap "rm -f $MAINTENANCE_LOCK" EXIT
 
-BACKUP_NAME="${1:-}"
+RESTORE_MODE="${1:-fresh}"
+BACKUP_NAME="${2:-}"
 
 log "Starting resume process"
 
-# If no backup specified, find the latest
-if [[ -z "$BACKUP_NAME" ]]; then
-  log "No backup specified, finding latest..."
-  GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
-  GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
-  
-  # List backups and get latest
-  BACKUP_NAME=$(rclone lsf "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" \
-    | grep '.tar.gz$' \
-    | sort -r \
-    | head -1 \
-    | sed 's/.tar.gz$//' || true)
+if [[ "$RESTORE_MODE" != "fresh" && "$RESTORE_MODE" != "latest" && "$RESTORE_MODE" != "named" ]]; then
+  # Backward compatibility for legacy invocation: mc-resume.sh <backup-archive>
+  BACKUP_NAME="$RESTORE_MODE"
+  RESTORE_MODE="named"
 fi
 
-if [[ -z "$BACKUP_NAME" ]]; then
-  log "ERROR: No backups found in Google Drive"
+case "$RESTORE_MODE" in
+  fresh)
+    log "Fresh resume requested (no restore)"
+    ;;
+  latest)
+    log "Latest-backup resume requested"
+    ;;
+  named)
+    if [[ -z "$BACKUP_NAME" ]]; then
+      log "ERROR: Backup archive name is required for named resume"
+      exit 1
+    fi
+    log "Named-backup resume requested: $BACKUP_NAME"
+    ;;
+esac
+
+if [[ "$RESTORE_MODE" == "latest" ]]; then
+  log "Restoring latest backup..."
+  /usr/local/bin/mc-restore.sh latest || {
+    log "ERROR: Latest backup restore failed"
+    exit 1
+  }
+fi
+
+if [[ "$RESTORE_MODE" == "named" ]]; then
+  log "Restoring named backup..."
+  /usr/local/bin/mc-restore.sh "$BACKUP_NAME" || {
+    log "ERROR: Named backup restore failed"
+    exit 1
+  }
+fi
+
+log "Starting Minecraft server service..."
+if ! systemctl start minecraft; then
+  log "ERROR: Failed to start minecraft service"
   exit 1
 fi
 
-log "Using backup: $BACKUP_NAME"
-
-# Restore from backup
-log "Restoring from backup..."
-/usr/local/bin/mc-restore.sh "$BACKUP_NAME" || {
-  log "ERROR: Restore failed"
+sleep 3
+if ! systemctl is-active --quiet minecraft; then
+  log "ERROR: Minecraft service is not active after resume"
+  systemctl status minecraft --no-pager -l || true
   exit 1
-}
+fi
 
-log "SUCCESS: Resumed from ${BACKUP_NAME}.tar.gz"
+log "SUCCESS: Resume completed (${RESTORE_MODE})"

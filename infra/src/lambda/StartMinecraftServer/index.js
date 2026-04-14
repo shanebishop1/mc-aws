@@ -15,6 +15,7 @@ import { extractEmails, getAllowlist, updateAllowlist } from "./allowlist.js";
 // Parsers
 import { parseCommand } from "./command-parser.js";
 import { parseEmailFromEvent } from "./email-parser.js";
+import { resolveResumeRestoreStrategy } from "./restore-contract.js";
 
 // Command handlers
 import { handleBackup } from "./handlers/backup.js";
@@ -85,7 +86,7 @@ async function handleApiInvocation(event) {
       lockId,
     });
 
-    await executeApiCommand(command, instanceId, userEmail, notificationEmail, args);
+    await executeApiCommand(command, instanceId, userEmail, notificationEmail, args, event.restoreMode);
 
     await persistOperationStateSafely({
       operationId,
@@ -170,10 +171,10 @@ async function releaseServerActionLockIfOwned(lockId, command) {
 /**
  * Execute API command based on command type
  */
-async function executeApiCommand(command, instanceId, userEmail, notificationEmail, args) {
+async function executeApiCommand(command, instanceId, userEmail, notificationEmail, args, restoreMode) {
   const handlers = {
     start: () => handleStartCommand(instanceId, userEmail, notificationEmail),
-    resume: () => handleResumeCommand(instanceId, userEmail, notificationEmail, args),
+    resume: () => handleResumeCommand(instanceId, userEmail, notificationEmail, args, restoreMode),
     backup: () => handleBackup(instanceId, args || [], notificationEmail),
     restore: () => handleRestore(instanceId, args || [], notificationEmail),
     hibernate: () => handleHibernate(instanceId, args || [], notificationEmail),
@@ -351,7 +352,7 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
       case "hibernate":
         return { statusCode: 200, body: await handleHibernate(instanceId, parsedCommand.args, notificationEmail) };
       case "resume":
-        return await handleResumeCommand(instanceId, senderEmail, notificationEmail);
+        return await handleResumeCommand(instanceId, senderEmail, notificationEmail, parsedCommand.args);
       default:
         return { statusCode: 400, body: `Unknown command: ${parsedCommand.command}` };
     }
@@ -376,7 +377,6 @@ async function handleStartCommand(instanceId, senderEmail, _notificationEmail) {
     await putParameter("/minecraft/startup-triggered-by", senderEmail, "String");
   }
 
-  await handleResume(instanceId);
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
 
@@ -385,7 +385,7 @@ async function handleStartCommand(instanceId, senderEmail, _notificationEmail) {
   return { statusCode: 200, body: `Instance started at IP: ${publicIp}` };
 }
 
-async function handleResumeCommand(instanceId, senderEmail, notificationEmail, args) {
+async function handleResumeCommand(instanceId, senderEmail, notificationEmail, args, restoreMode) {
   console.log(`Resuming instance ${instanceId} triggered by ${senderEmail}`);
 
   // Store sender email in SSM for EC2 to include in consolidated notification
@@ -393,23 +393,31 @@ async function handleResumeCommand(instanceId, senderEmail, notificationEmail, a
     await putParameter("/minecraft/startup-triggered-by", senderEmail, "String");
   }
 
+  const restoreStrategy = resolveResumeRestoreStrategy({
+    args,
+    restoreMode,
+  });
+
+  console.log(`[RESUME] Restore strategy selected: ${restoreStrategy.mode}`);
+
   await handleResume(instanceId);
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
-  const resumeOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-resume.sh"]);
+  const resumeCommandByMode = {
+    fresh: "/usr/local/bin/mc-resume.sh fresh",
+    latest: "/usr/local/bin/mc-resume.sh latest",
+    named: `/usr/local/bin/mc-resume.sh named ${restoreStrategy.backupArchiveName}`,
+  };
+  const resumeCommand = resumeCommandByMode[restoreStrategy.mode];
+  const resumeOutput = await executeSSMCommand(instanceId, [resumeCommand]);
 
-  let restoreMsg = "";
-  if (args && args.length > 0) {
-    console.log(`[RESUME] Restore requested with args: ${args.join(" ")}`);
-    try {
-      // Helper to run restore which handles its own notifications
-      await handleRestore(instanceId, args, notificationEmail);
-      const backupDescription = args[0] ? `backup: ${args[0]}` : "latest backup";
-      restoreMsg = `\n\nRestored from ${backupDescription}`;
-    } catch (e) {
-      console.error("Resume succeeded but restore failed:", e);
-      restoreMsg = `\n\nWARNING: Restore failed: ${e.message}`;
-    }
+  let restoreMsg = "\n\nFresh world requested (no backup restore).";
+  if (restoreStrategy.mode === "latest") {
+    restoreMsg = "\n\nRestored from latest backup.";
+  }
+
+  if (restoreStrategy.mode === "named") {
+    restoreMsg = `\n\nRestored from backup: ${restoreStrategy.backupArchiveName}`;
   }
 
   if (notificationEmail) {

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Restore Minecraft server from Google Drive
-# Usage: mc-restore.sh <backup-name>
+# Usage: mc-restore.sh <latest|backup-archive>
 
 set -euo pipefail
 
@@ -31,9 +31,9 @@ GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 SERVER_DIR="/opt/minecraft/server"
 
-BACKUP_NAME="${1:-}"
-if [[ -z "$BACKUP_NAME" ]]; then
-  log "Backup name not provided, finding latest backup..."
+BACKUP_REF="${1:-latest}"
+if [[ "$BACKUP_REF" == "latest" ]]; then
+  log "Latest backup requested, finding latest backup file..."
   # Get latest backup file from GDrive (supports .tar.gz and .gz)
   BACKUP_FILE=$(rclone lsf "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" --sort time --reverse --files-only | grep -E "\.(tar\.gz|gz)$" | head -n 1)
   if [[ -z "$BACKUP_FILE" ]]; then
@@ -42,8 +42,12 @@ if [[ -z "$BACKUP_NAME" ]]; then
   fi
   log "Found latest backup: $BACKUP_FILE"
 else
-  # Use the backup name as-is (it includes the extension from the UI)
-  BACKUP_FILE="$BACKUP_NAME"
+  # Named restore: use explicit archive filename. Back-compat: add .tar.gz when no extension is provided.
+  if [[ "$BACKUP_REF" =~ \.(tar\.gz|gz)$ ]]; then
+    BACKUP_FILE="$BACKUP_REF"
+  else
+    BACKUP_FILE="${BACKUP_REF}.tar.gz"
+  fi
 fi
 
 log "Starting restore from: $BACKUP_FILE"

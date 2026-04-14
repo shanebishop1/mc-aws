@@ -5,10 +5,14 @@ import type { NextRequest } from "next/server";
 const mutatingActionTypes = ["start", "stop", "backup", "restore", "hibernate", "resume"] as const;
 
 const backupNameFieldAliases = ["backupName", "name"] as const;
+const resumeModeFieldAliases = ["restoreMode", "mode"] as const;
+
+export type ResumeRestoreMode = "fresh" | "latest" | "named";
 
 export type MutatingActionRequestPayloadByType = Omit<MutatingActionCommandPayloadByType, "restore"> & {
   // Back-compat: routes currently allow restore with no explicit backupName ("latest").
   restore: { backupName?: string };
+  resume: { backupName?: string; restoreMode?: ResumeRestoreMode };
 };
 
 function isObjectRecord(value: unknown): value is Record<string, unknown> {
@@ -69,6 +73,24 @@ export function normalizeAndSanitizeBackupName(body: Record<string, unknown>): s
   return undefined;
 }
 
+function normalizeResumeRestoreMode(body: Record<string, unknown>): ResumeRestoreMode | undefined {
+  for (const field of resumeModeFieldAliases) {
+    const candidate = normalizeOptionalString(body[field]);
+    if (!candidate) {
+      continue;
+    }
+
+    const normalized = candidate.toLowerCase();
+    if (normalized === "fresh" || normalized === "latest" || normalized === "named") {
+      return normalized;
+    }
+
+    throw new Error("Restore mode must be one of: fresh, latest, named");
+  }
+
+  return undefined;
+}
+
 export async function parseMutatingActionRequestPayload<TAction extends MutatingActionType>(
   request: NextRequest,
   action: TAction
@@ -76,8 +98,17 @@ export async function parseMutatingActionRequestPayload<TAction extends Mutating
   const body = await parseOptionalMutatingJsonBody(request);
 
   if (action === "backup" || action === "restore" || action === "resume") {
+    const backupName = normalizeAndSanitizeBackupName(body);
+
+    if (action === "resume") {
+      return {
+        backupName,
+        restoreMode: normalizeResumeRestoreMode(body),
+      } as MutatingActionRequestPayloadByType[TAction];
+    }
+
     return {
-      backupName: normalizeAndSanitizeBackupName(body),
+      backupName,
     } as MutatingActionRequestPayloadByType[TAction];
   }
 

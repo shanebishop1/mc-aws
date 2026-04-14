@@ -92,7 +92,7 @@ describe("mutating-action-validation", () => {
       });
       const resumeRequest = createMockNextRequest("http://localhost/api/resume", {
         method: "POST",
-        body: JSON.stringify({ backupName: "resume-point" }),
+        body: JSON.stringify({ backupName: "resume-point", restoreMode: "named" }),
       });
 
       await expect(parseMutatingActionRequestPayload(backupRequest, "backup")).resolves.toEqual({
@@ -103,7 +103,31 @@ describe("mutating-action-validation", () => {
       });
       await expect(parseMutatingActionRequestPayload(resumeRequest, "resume")).resolves.toEqual({
         backupName: "resume-point",
+        restoreMode: "named",
       });
+    });
+
+    it("defaults resume payload to no backup and no explicit mode", async () => {
+      const resumeRequest = createMockNextRequest("http://localhost/api/resume", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+
+      await expect(parseMutatingActionRequestPayload(resumeRequest, "resume")).resolves.toEqual({
+        backupName: undefined,
+        restoreMode: undefined,
+      });
+    });
+
+    it("rejects invalid resume restore mode values", async () => {
+      const resumeRequest = createMockNextRequest("http://localhost/api/resume", {
+        method: "POST",
+        body: JSON.stringify({ restoreMode: "random" }),
+      });
+
+      await expect(parseMutatingActionRequestPayload(resumeRequest, "resume")).rejects.toThrow(
+        "Restore mode must be one of: fresh, latest, named"
+      );
     });
 
     it("returns empty payload for no-arg mutating actions", async () => {

@@ -27,6 +27,7 @@ import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import type { NextRequest, NextResponse } from "next/server";
 
 const alreadyRunningErrorCode = "already_running";
+const invalidStateErrorCode = "invalid_state";
 
 class StartAlreadyRunningError extends Error {
   code = alreadyRunningErrorCode;
@@ -37,8 +38,25 @@ class StartAlreadyRunningError extends Error {
   }
 }
 
+class StartInvalidStateError extends Error {
+  code = invalidStateErrorCode;
+
+  constructor(currentState: string) {
+    super(
+      currentState === "hibernating"
+        ? "Cannot start a hibernated server. Use resume instead."
+        : `Cannot start server while it is ${currentState}.`
+    );
+    this.name = "StartInvalidStateError";
+  }
+}
+
 function isAlreadyRunningError(error: unknown): error is StartAlreadyRunningError {
   return error instanceof StartAlreadyRunningError;
+}
+
+function isInvalidStateError(error: unknown): error is StartInvalidStateError {
+  return error instanceof StartInvalidStateError;
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
@@ -106,6 +124,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new StartAlreadyRunningError();
       }
 
+      if (currentState !== "stopped") {
+        throw new StartInvalidStateError(currentState);
+      }
+
       return await acquireServerActionLock("start", user.email);
     },
     invoke: async ({ user, lock }) => {
@@ -147,6 +169,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         return createMutatingActionFailure("Server is already running", {
           httpStatus: 400,
           code: alreadyRunningErrorCode,
+          cause: error,
+        });
+      }
+
+      if (isInvalidStateError(error)) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: invalidStateErrorCode,
           cause: error,
         });
       }

@@ -14,7 +14,7 @@ import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
+import { parseMutatingActionRequestPayload, type ResumeRestoreMode } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
@@ -42,6 +42,10 @@ const validationErrorPatterns = [
   "Backup name exceeds maximum length",
   "Backup name cannot be empty",
   "Backup name contains invalid characters",
+  "Restore mode must be one of",
+  "Restore mode 'fresh' cannot be used with a backup name",
+  "Restore mode 'latest' cannot be used with a backup name",
+  "Backup name is required when restore mode is 'named'",
 ] as const;
 
 class ResumeAlreadyRunningError extends Error {
@@ -65,6 +69,7 @@ async function invokeResumeLambda(
   user: AuthUser,
   lockId: string,
   operationId: string,
+  restoreMode: ResumeRestoreMode,
   backupName?: string
 ): Promise<ResumeResponse> {
   console.log(`[RESUME] Invoking Lambda for resume on ${instanceId}`);
@@ -73,17 +78,44 @@ async function invokeResumeLambda(
     command: "resume",
     instanceId,
     userEmail: user.email,
+    restoreMode,
     args: backupName ? [backupName] : [],
     lockId,
     operationId,
   });
 
+  const restoreOutputByMode: Record<ResumeRestoreMode, string> = {
+    fresh: "Fresh world requested",
+    latest: "Restore requested: latest",
+    named: `Restore requested: ${backupName ?? "(missing backup)"}`,
+  };
+
   return {
     message: "Resume started asynchronously. You will receive an email upon completion.",
     instanceId,
     domain: env.CLOUDFLARE_MC_DOMAIN,
-    restoreOutput: backupName ? `Restore requested: ${backupName}` : undefined,
+    restoreOutput: restoreOutputByMode[restoreMode],
   };
+}
+
+function resolveResumeRestoreMode(backupName?: string, restoreMode?: ResumeRestoreMode): ResumeRestoreMode {
+  if (restoreMode === "named" && !backupName) {
+    throw new Error("Backup name is required when restore mode is 'named'");
+  }
+
+  if (restoreMode === "fresh" && backupName) {
+    throw new Error("Restore mode 'fresh' cannot be used with a backup name");
+  }
+
+  if (restoreMode === "latest" && backupName) {
+    throw new Error("Restore mode 'latest' cannot be used with a backup name");
+  }
+
+  if (backupName) {
+    return "named";
+  }
+
+  return restoreMode === "latest" ? "latest" : "fresh";
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<ResumeResponse>>> {
@@ -94,6 +126,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
   let throttleCacheControlHeader: string | undefined;
   let resolvedId: string | null = null;
   let backupName: string | undefined;
+  let restoreMode: ResumeRestoreMode = "fresh";
 
   const outcome = await runMutatingActionLifecycle<AuthUser, ResumeResponse, void>({
     context,
@@ -121,6 +154,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     acquireLock: async ({ user }) => {
       const payload = await parseMutatingActionRequestPayload(context.request, "resume");
       backupName = payload.backupName;
+      restoreMode = resolveResumeRestoreMode(payload.backupName, payload.restoreMode);
 
       resolvedId = await findInstanceId();
       const currentState = await getInstanceState(resolvedId);
@@ -133,7 +167,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking resume action");
       }
 
-      return await invokeResumeLambda(resolvedId, user, lock.lockId, context.operation.id, backupName);
+      return await invokeResumeLambda(resolvedId, user, lock.lockId, context.operation.id, restoreMode, backupName);
     },
     mapError: ({ stage, error }) => {
       if (stage === "auth" && error instanceof Response) {
