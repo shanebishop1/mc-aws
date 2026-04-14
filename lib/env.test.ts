@@ -5,7 +5,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 // Import the actual module without mocking
-import { env, getBackendMode, getEnv, getNodeEnv, validateAwsCredentials } from "./env";
+import { env, getBackendMode, getEnv, getNodeEnv, validateAwsCredentials, validateRuntimeEnvironment } from "./env";
 
 describe("Environment Variables", () => {
   beforeEach(() => {
@@ -116,6 +116,22 @@ describe("Environment Variables", () => {
       // INSTANCE_ID is required - must be set in .env file
 
       expect(() => validateAwsCredentials()).not.toThrow();
+    });
+  });
+
+  describe("validateRuntimeEnvironment()", () => {
+    it("should throw in production when worker-required config is missing", () => {
+      vi.stubEnv("NODE_ENV", "production");
+      vi.stubEnv("AUTH_SECRET", undefined);
+
+      expect(() => validateRuntimeEnvironment()).toThrow("Strict production runtime validation failed");
+    });
+
+    it("should not throw outside production when worker-required config is missing", () => {
+      vi.stubEnv("NODE_ENV", "development");
+      vi.stubEnv("AUTH_SECRET", undefined);
+
+      expect(() => validateRuntimeEnvironment()).not.toThrow();
     });
   });
 });

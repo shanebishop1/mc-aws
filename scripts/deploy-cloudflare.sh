@@ -277,6 +277,14 @@ if grep -q "AUTH_SECRET=your-secret-here" "$ENV_FILE" || grep -q "AUTH_SECRET=de
   echo ""
 fi
 
+echo "🔍 Running strict production schema validation..."
+if ! NODE_ENV=production pnpm exec tsx scripts/validate-env.ts --target worker --strict --env-file "$ENV_FILE"; then
+  echo "❌ Error: strict production schema validation failed"
+  exit 1
+fi
+echo "✅ Production schema validation passed"
+echo ""
+
 MISSING_VARS=()
 for key in "${REQUIRED_VARS[@]}"; do
   value="$(get_env_value "$key")"
