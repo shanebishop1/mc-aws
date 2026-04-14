@@ -5,7 +5,7 @@
  */
 
 import type { Stack } from "@aws-sdk/client-cloudformation";
-import { type CostData, ServerState } from "../types";
+import { type CostData, type OperationStatus, type OperationType, ServerState } from "../types";
 import { getMockStateStore } from "./mock-state-store";
 import type { AwsProvider, BackupInfo, InstanceDetails, PlayerCount } from "./types";
 
@@ -57,6 +57,324 @@ async function applyFaultInjection(operation: string): Promise<void> {
 const PENDING_DELAY_MS = 2500; // 2.5 seconds
 const STOPPING_DELAY_MS = 2500; // 2.5 seconds
 const POLL_INTERVAL_MS = 500; // 0.5 seconds for polling
+const operationStateParamPrefix = "/minecraft/operations";
+const operationStatuses: ReadonlySet<OperationStatus> = new Set(["accepted", "running", "completed", "failed"]);
+const operationTypes: ReadonlySet<OperationType> = new Set(["start", "stop", "backup", "restore", "hibernate", "resume"]);
+const transitionSources = new Set<MockOperationStateTransitionSource>(["api", "lambda"]);
+const operationStatusPriority: Record<OperationStatus, number> = {
+  accepted: 1,
+  running: 2,
+  completed: 3,
+  failed: 3,
+};
+
+type MockOperationStateTransitionSource = "api" | "lambda";
+
+interface MockOperationStateTransition {
+  status: OperationStatus;
+  at: string;
+  source: MockOperationStateTransitionSource;
+  error?: string;
+  code?: string;
+}
+
+interface MockOperationState {
+  id: string;
+  type: OperationType;
+  route: string;
+  status: OperationStatus;
+  requestedAt: string;
+  updatedAt: string;
+  requestedBy?: string;
+  lockId?: string;
+  instanceId?: string;
+  lastError?: string;
+  code?: string;
+  history: MockOperationStateTransition[];
+}
+
+interface PersistMockOperationStateTransitionInput {
+  operationId?: string;
+  type?: string;
+  status: OperationStatus;
+  source: MockOperationStateTransitionSource;
+  route?: string;
+  requestedAt?: string;
+  requestedBy?: string;
+  lockId?: string;
+  instanceId?: string;
+  error?: string;
+  code?: string;
+  timestamp?: string;
+}
+
+function getOperationStateParameterName(operationId: string): string {
+  return `${operationStateParamPrefix}/${operationId}`;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function normalizeOptionalText(value: unknown): string | undefined {
+  if (typeof value !== "string") {
+    return undefined;
+  }
+
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
+
+function isTerminalOperationStatus(status: OperationStatus): boolean {
+  return status === "completed" || status === "failed";
+}
+
+function shouldApplyStatusTransition(
+  existing: MockOperationState | null,
+  next: OperationStatus,
+  source: MockOperationStateTransitionSource
+): boolean {
+  if (!existing) {
+    return true;
+  }
+
+  const current = existing.status;
+
+  if (current === next) {
+    return true;
+  }
+
+  if (isTerminalOperationStatus(current)) {
+    return false;
+  }
+
+  if (current === "running" && next === "accepted") {
+    const latestSource = existing.history.at(-1)?.source;
+    return latestSource === "api" && source === "api";
+  }
+
+  return operationStatusPriority[next] >= operationStatusPriority[current];
+}
+
+function parseOperationState(raw: string | null): MockOperationState | null {
+  if (!raw) {
+    return null;
+  }
+
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(trimmed) as Partial<MockOperationState>;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+
+    if (!parsed.id || !parsed.type || !parsed.route || !parsed.status || !parsed.requestedAt || !parsed.updatedAt) {
+      return null;
+    }
+
+    if (!operationTypes.has(parsed.type) || !operationStatuses.has(parsed.status)) {
+      return null;
+    }
+
+    const history: MockOperationStateTransition[] = Array.isArray(parsed.history)
+      ? parsed.history.flatMap((entry) => {
+          if (!isObject(entry)) {
+            return [];
+          }
+
+          const status = entry.status;
+          const at = entry.at;
+          const source = entry.source;
+          if (typeof status !== "string" || typeof at !== "string" || typeof source !== "string") {
+            return [];
+          }
+
+          if (!operationStatuses.has(status as OperationStatus) || !transitionSources.has(source as MockOperationStateTransitionSource)) {
+            return [];
+          }
+
+          return [
+            {
+              status: status as OperationStatus,
+              at,
+              source: source as MockOperationStateTransitionSource,
+              error: normalizeOptionalText(entry.error),
+              code: normalizeOptionalText(entry.code),
+            },
+          ];
+        })
+      : [];
+
+    return {
+      id: parsed.id,
+      type: parsed.type,
+      route: parsed.route,
+      status: parsed.status,
+      requestedAt: parsed.requestedAt,
+      updatedAt: parsed.updatedAt,
+      requestedBy: normalizeOptionalText(parsed.requestedBy),
+      lockId: normalizeOptionalText(parsed.lockId),
+      instanceId: normalizeOptionalText(parsed.instanceId),
+      lastError: normalizeOptionalText(parsed.lastError),
+      code: normalizeOptionalText(parsed.code),
+      history,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function shouldAppendTransition(
+  history: MockOperationStateTransition[],
+  nextStatus: OperationStatus,
+  source: MockOperationStateTransitionSource,
+  error?: string,
+  code?: string
+): boolean {
+  const lastTransition = history.at(-1);
+  if (!lastTransition) {
+    return true;
+  }
+
+  return (
+    lastTransition.status !== nextStatus ||
+    lastTransition.source !== source ||
+    lastTransition.error !== error ||
+    lastTransition.code !== code
+  );
+}
+
+function buildNextTransitionHistory(input: {
+  existingHistory: MockOperationStateTransition[];
+  applyIncomingStatus: boolean;
+  nextStatus: OperationStatus;
+  source: MockOperationStateTransitionSource;
+  now: string;
+  error?: string;
+  code?: string;
+}): MockOperationStateTransition[] {
+  const history = [...input.existingHistory];
+  if (!input.applyIncomingStatus) {
+    return history;
+  }
+
+  if (!shouldAppendTransition(history, input.nextStatus, input.source, input.error, input.code)) {
+    return history;
+  }
+
+  history.push({
+    status: input.nextStatus,
+    at: input.now,
+    source: input.source,
+    error: input.nextStatus === "failed" ? input.error : undefined,
+    code: input.nextStatus === "failed" ? input.code : undefined,
+  });
+
+  return history;
+}
+
+function resolveLastErrorMetadata(input: {
+  existing: MockOperationState | null;
+  applyIncomingStatus: boolean;
+  nextStatus: OperationStatus;
+  error?: string;
+  code?: string;
+}): {
+  lastError?: string;
+  code?: string;
+} {
+  if (!input.applyIncomingStatus) {
+    return {
+      lastError: input.existing?.lastError,
+      code: input.existing?.code,
+    };
+  }
+
+  if (input.nextStatus !== "failed") {
+    return {
+      lastError: undefined,
+      code: undefined,
+    };
+  }
+
+  return {
+    lastError: input.error ?? input.existing?.lastError ?? "Operation failed",
+    code: input.code ?? input.existing?.code,
+  };
+}
+
+async function persistMockOperationStateTransition(input: PersistMockOperationStateTransitionInput): Promise<void> {
+  const operationId = normalizeOptionalText(input.operationId);
+  const type = normalizeOptionalText(input.type);
+  if (!operationId || !type) {
+    return;
+  }
+
+  if (!operationTypes.has(type as OperationType) || !operationStatuses.has(input.status) || !transitionSources.has(input.source)) {
+    return;
+  }
+
+  const stateStore = getMockStateStore();
+  const now = input.timestamp ?? new Date().toISOString();
+  const parameterName = getOperationStateParameterName(operationId);
+  const existing = parseOperationState(await stateStore.getParameter(parameterName));
+  const route = existing?.route ?? input.route ?? `/api/${type}`;
+  const requestedAt = existing?.requestedAt ?? input.requestedAt ?? now;
+  const requestedBy = normalizeOptionalText(input.requestedBy) ?? existing?.requestedBy;
+  const lockId = normalizeOptionalText(input.lockId) ?? existing?.lockId;
+  const instanceId = normalizeOptionalText(input.instanceId) ?? existing?.instanceId;
+
+  const currentStatus = existing?.status ?? input.status;
+  const applyIncomingStatus = shouldApplyStatusTransition(existing, input.status, input.source);
+  const nextStatus = applyIncomingStatus ? input.status : currentStatus;
+  const normalizedError = normalizeOptionalText(input.error);
+  const normalizedCode = normalizeOptionalText(input.code);
+  const history = buildNextTransitionHistory({
+    existingHistory: existing?.history ?? [],
+    applyIncomingStatus,
+    nextStatus,
+    source: input.source,
+    now,
+    error: normalizedError,
+    code: normalizedCode,
+  });
+  const { lastError, code } = resolveLastErrorMetadata({
+    existing,
+    applyIncomingStatus,
+    nextStatus,
+    error: normalizedError,
+    code: normalizedCode,
+  });
+
+  const nextState: MockOperationState = {
+    id: existing?.id ?? operationId,
+    type: existing?.type ?? (type as OperationType),
+    route,
+    status: nextStatus,
+    requestedAt,
+    updatedAt: now,
+    requestedBy,
+    lockId,
+    instanceId,
+    lastError,
+    code,
+    history,
+  };
+
+  await stateStore.setParameter(parameterName, JSON.stringify(nextState), "String");
+}
+
+async function persistMockOperationStateTransitionSafely(input: PersistMockOperationStateTransitionInput): Promise<void> {
+  try {
+    await persistMockOperationStateTransition(input);
+  } catch (error) {
+    console.error("[MOCK] Failed to persist operation state transition:", error);
+  }
+}
 
 /**
  * Mock AWS provider for testing and local development
@@ -628,7 +946,24 @@ export const mockProvider: AwsProvider = {
     // Simulate StartMinecraftServer lambda
     if (functionName === "StartMinecraftServer" || functionName.includes("StartMinecraftServer")) {
       const parsedPayload = typeof payload === "string" ? JSON.parse(payload) : payload;
-      const lockId = parsedPayload.lockId;
+      const lockId = normalizeOptionalText(parsedPayload?.lockId);
+      const command = normalizeOptionalText(parsedPayload?.command);
+      const operationId = normalizeOptionalText(parsedPayload?.operationId);
+      const userEmail = normalizeOptionalText(parsedPayload?.userEmail);
+      const instanceId = normalizeOptionalText(parsedPayload?.instanceId);
+      const operationType = operationTypes.has((command ?? "") as OperationType) ? command : undefined;
+
+      if (operationType && operationId) {
+        await persistMockOperationStateTransitionSafely({
+          operationId,
+          type: operationType,
+          status: "running",
+          source: "lambda",
+          requestedBy: userEmail,
+          lockId,
+          instanceId,
+        });
+      }
 
       const releaseLockIfOwned = async () => {
         if (!lockId) {
@@ -652,41 +987,78 @@ export const mockProvider: AwsProvider = {
         await mockProvider.deleteParameter("/minecraft/server-action");
       };
 
-      if (parsedPayload.command === "start") {
-        console.log("[MOCK] Simulating async start by triggering startInstance");
-
-        // Check for startInstance fault injection BEFORE starting
-        // This ensures errors are propagated back to the API caller
-        await applyFaultInjection("startInstance");
-
-        // Start the instance (this will transition to pending, then running after delay)
-        await mockProvider.startInstance(parsedPayload.instanceId);
-
-        // Simulate the Lambda clearing the lock AFTER the instance reaches running state
-        // The real Lambda does DNS updates after the instance is running, then clears the lock
-        // We'll clear the lock after a realistic delay (after PENDING_DELAY_MS)
-        const lockClearDelay = PENDING_DELAY_MS + 500; // Clear lock shortly after instance reaches running
-        const lockClearTimeout = setTimeout(async () => {
+      const scheduleCommandCompletion = (delayMs: number, commandName: string): void => {
+        const completeTimeout = setTimeout(async () => {
           try {
             await releaseLockIfOwned();
-            console.log("[MOCK] Cleared server-action lock after start completion");
-          } catch {
-            // Ignore if lock doesn't exist
-          }
-        }, lockClearDelay);
-        stateStore.registerTimeout(lockClearTimeout);
-      }
 
-      if (["resume", "backup", "restore", "hibernate"].includes(parsedPayload.command)) {
-        const lockClearTimeout = setTimeout(async () => {
-          try {
-            await releaseLockIfOwned();
-            console.log(`[MOCK] Cleared server-action lock after ${parsedPayload.command} completion`);
-          } catch {
-            // Ignore if lock doesn't exist
+            if (operationType && operationId) {
+              await persistMockOperationStateTransitionSafely({
+                operationId,
+                type: operationType,
+                status: "completed",
+                source: "lambda",
+                requestedBy: userEmail,
+                lockId,
+                instanceId,
+              });
+            }
+
+            console.log(`[MOCK] Cleared server-action lock after ${commandName} completion`);
+          } catch (error) {
+            if (operationType && operationId) {
+              const errorMessage = error instanceof Error ? error.message : "Mock lambda operation failed";
+              await persistMockOperationStateTransitionSafely({
+                operationId,
+                type: operationType,
+                status: "failed",
+                source: "lambda",
+                requestedBy: userEmail,
+                lockId,
+                instanceId,
+                error: errorMessage,
+                code: "lambda_execution_failed",
+              });
+            }
+            console.error(`[MOCK] Failed to finalize ${commandName} operation:`, error);
           }
-        }, 500);
-        stateStore.registerTimeout(lockClearTimeout);
+        }, delayMs);
+        stateStore.registerTimeout(completeTimeout);
+      };
+
+      try {
+        if (command === "start") {
+          console.log("[MOCK] Simulating async start by triggering startInstance");
+
+          // Start the instance (this transitions to pending, then running after delay)
+          await mockProvider.startInstance(instanceId);
+
+          // Simulate Lambda lock cleanup shortly after instance reaches running
+          scheduleCommandCompletion(PENDING_DELAY_MS + 500, "start");
+          return;
+        }
+
+        if (operationType && command !== "start") {
+          scheduleCommandCompletion(500, command);
+        }
+      } catch (error) {
+        if (operationType && operationId) {
+          const errorMessage = error instanceof Error ? error.message : "Mock lambda operation failed";
+          await persistMockOperationStateTransitionSafely({
+            operationId,
+            type: operationType,
+            status: "failed",
+            source: "lambda",
+            requestedBy: userEmail,
+            lockId,
+            instanceId,
+            error: errorMessage,
+            code: "lambda_execution_failed",
+          });
+        }
+
+        await releaseLockIfOwned();
+        console.error("[MOCK] Async lambda command failed:", error);
       }
     }
   },
