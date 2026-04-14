@@ -180,6 +180,48 @@ REQUIRED_VARS=(
   "RUNTIME_STATE_SNAPSHOT_KV_ID"
 )
 
+# Explicit allowlist: only these keys can be uploaded as Worker secrets.
+WORKER_SECRET_ALLOWLIST=(
+  "AWS_REGION"
+  "AWS_ACCOUNT_ID"
+  "INSTANCE_ID"
+  "AWS_ACCESS_KEY_ID"
+  "AWS_SECRET_ACCESS_KEY"
+  "AWS_SESSION_TOKEN"
+  "CLOUDFORMATION_STACK_NAME"
+  "STACK_NAME"
+  "CLOUDFLARE_DNS_API_TOKEN"
+  "CLOUDFLARE_API_TOKEN"
+  "CLOUDFLARE_ZONE_ID"
+  "CLOUDFLARE_RECORD_ID"
+  "CLOUDFLARE_MC_DOMAIN"
+  "GDRIVE_REMOTE"
+  "GDRIVE_ROOT"
+  "AUTH_SECRET"
+  "ADMIN_EMAIL"
+  "ALLOWED_EMAILS"
+  "GOOGLE_CLIENT_ID"
+  "GOOGLE_CLIENT_SECRET"
+  "NEXT_PUBLIC_APP_URL"
+)
+
+is_worker_secret_allowed() {
+  local candidate="$1"
+  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
+    if [[ "$allowed" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+print_worker_secret_allowlist() {
+  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
+    echo "  - $allowed"
+  done
+}
+
 is_cloudflare_kv_namespace_id() {
   local value="$1"
   [[ "$value" =~ ^[A-Fa-f0-9]{32}$ ]]
@@ -649,6 +691,14 @@ while IFS= read -r line || [[ -n "$line" ]]; do
     echo ""
     echo "❌ Error: Invalid env var name in $ENV_FILE:$LINE_NO: '$key'"
     echo "Secrets must be uppercase letters/numbers/underscores (e.g. FOO_BAR)."
+    exit 1
+  fi
+
+  if ! is_worker_secret_allowed "$key"; then
+    echo ""
+    echo "❌ Error: Refusing to upload unapproved Worker secret key '$key' from $ENV_FILE:$LINE_NO"
+    echo "Allowed Worker secret keys:"
+    print_worker_secret_allowlist
     exit 1
   fi
 
