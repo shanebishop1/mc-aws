@@ -216,6 +216,13 @@ export class MinecraftStack extends cdk.Stack {
     });
 
     // 6. Lambda Function to Start Server
+    // Story 1.1 runtime budget alignment:
+    // - Mutating flows now budget up to ~12 minutes in worst-case chained paths (resume + restore).
+    // - Keep timeout at Lambda maximum to avoid premature termination of legitimate long-running operations.
+    // - Disable async retries to avoid duplicate non-idempotent mutating actions.
+    const startMinecraftLambdaTimeout = cdk.Duration.minutes(15);
+    const startMinecraftLambdaMaxEventAge = cdk.Duration.minutes(15);
+
     const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const allowedEmails = (process.env.ALLOWED_EMAILS || "")
@@ -262,7 +269,9 @@ export class MinecraftStack extends cdk.Stack {
         GDRIVE_REMOTE: driveRemote,
         GDRIVE_ROOT: driveRoot,
       },
-      timeout: cdk.Duration.seconds(60), // 60 seconds for start operation
+      timeout: startMinecraftLambdaTimeout,
+      maxEventAge: startMinecraftLambdaMaxEventAge,
+      retryAttempts: 0,
     });
 
     // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
