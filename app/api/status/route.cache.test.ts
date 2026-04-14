@@ -158,4 +158,37 @@ describe("GET /api/status cache contract", () => {
     expect(findInstanceIdMock).not.toHaveBeenCalled();
     expect(getInstanceDetailsMock).not.toHaveBeenCalled();
   });
+
+  it("propagates runtime-state misconfiguration as a route fallback error", async () => {
+    vi.resetModules();
+    vi.stubEnv("NODE_ENV", "production");
+
+    getRuntimeStateAdapterMock.mockImplementation(() => {
+      throw new Error(
+        "[RUNTIME-STATE] Missing or invalid Cloudflare runtime-state binding in production. Ensure RUNTIME_STATE_DURABLE_OBJECT is configured; production cannot fall back to in-memory runtime-state."
+      );
+    });
+
+    const { GET } = await import("./route");
+    const req = createMockNextRequest("http://localhost/api/status");
+    const response = await GET(req);
+    const body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(response);
+
+    expect(response.status).toBe(500);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Failed to fetch server status");
+    expect(response.headers.get("Cache-Control")).toBe("no-store");
+
+    expect(findInstanceIdMock).not.toHaveBeenCalled();
+    expect(getInstanceDetailsMock).not.toHaveBeenCalled();
+    expect(emitRuntimeStateTelemetryMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operation: "status.snapshot-cache",
+        outcome: "FALLBACK",
+        route: "/api/status",
+        key: snapshotCacheKeys.status,
+        reason: "status_fetch_failed",
+      })
+    );
+  });
 });
