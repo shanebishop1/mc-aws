@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-restore-123" }),
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
+  requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -23,7 +24,7 @@ vi.mock("@/lib/aws", () => ({
 
 // Mock requireAdmin to return a fake admin user
 vi.mock("@/lib/api-auth", () => ({
-  requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
+  requireAdmin: mocks.requireAdmin,
 }));
 
 // Mock sanitizeBackupName
@@ -197,5 +198,52 @@ describe("POST /api/restore", () => {
       args: ["new-backup"],
       lockId: "lock-restore-123",
     });
+  });
+
+  it("returns failed operation metadata for auth failures", async () => {
+    mocks.requireAdmin.mockRejectedValueOnce(
+      new Response(JSON.stringify({ success: false, error: "Authentication required" }), {
+        status: 401,
+        headers: { "Content-Type": "application/json" },
+      })
+    );
+
+    const req = createMockNextRequest("http://localhost/api/restore", {
+      method: "POST",
+      body: JSON.stringify({ backupName: "my-backup-2024" }),
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(401);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Authentication required");
+    expect(body.operation?.type).toBe("restore");
+    expect(body.operation?.status).toBe("failed");
+    expect(body.operation?.id).toContain("restore-");
+
+    expect(mocks.findInstanceId).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("returns failed operation metadata for lock conflicts", async () => {
+    mocks.acquireServerActionLock.mockRejectedValueOnce(new Error("lock conflict"));
+    mocks.isServerActionLockConflictError.mockReturnValueOnce(true);
+
+    const req = createMockNextRequest("http://localhost/api/restore", {
+      method: "POST",
+      body: JSON.stringify({ backupName: "my-backup-2024" }),
+    });
+    const res = await POST(req);
+
+    expect(res.status).toBe(409);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Another operation is already in progress");
+    expect(body.operation?.type).toBe("restore");
+    expect(body.operation?.status).toBe("failed");
+    expect(body.operation?.id).toContain("restore-");
+
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 });

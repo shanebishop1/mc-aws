@@ -5,7 +5,7 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { formatApiErrorResponse, formatApiErrorResponseWithStatus } from "@/lib/api-error";
+import { formatApiErrorResponse, formatApiErrorResponseWithStatus, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
@@ -147,7 +147,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       console.log("[HIBERNATE] Admin action by:", user.email);
     } catch (error) {
       if (error instanceof Response) {
-        return error as NextResponse<ApiResponse<HibernateResponse>>;
+        return await formatAuthErrorResponse<HibernateResponse>(error, withOperationStatus(operation, "failed"));
       }
       throw error;
     }

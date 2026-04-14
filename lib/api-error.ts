@@ -7,6 +7,35 @@ import { NextResponse } from "next/server";
 import type { ApiResponse, OperationInfo } from "./types";
 
 /**
+ * Format an auth/authorization response so mutating routes keep operation metadata
+ */
+export async function formatAuthErrorResponse<T>(
+  authError: Response,
+  operation: OperationInfo
+): Promise<NextResponse<ApiResponse<T>>> {
+  let errorMessage = authError.status === 403 ? "Insufficient permissions" : "Authentication required";
+
+  try {
+    const body = (await authError.json()) as { error?: unknown };
+    if (typeof body.error === "string" && body.error.length > 0) {
+      errorMessage = body.error;
+    }
+  } catch {
+    // Fall back to generic auth message when response body is unavailable
+  }
+
+  return NextResponse.json(
+    {
+      success: false,
+      error: errorMessage,
+      operation,
+      timestamp: new Date().toISOString(),
+    },
+    { status: authError.status }
+  );
+}
+
+/**
  * Known validation error messages that should be exposed to clients
  * These are safe because they don't leak internal implementation details
  */
