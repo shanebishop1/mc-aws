@@ -15,6 +15,9 @@ This index tracks epic-level planning docs in the canonical hierarchy:
 3. **Testing Expansion for High-Risk Paths**
    - Epic overview: `docs/epics/testing-expansion-high-risk-paths/epic-overview/prds/testing-expansion-high-risk-paths-epic.md`
    - Feature index: `docs/epics/testing-expansion-high-risk-paths/INDEX.md`
+4. **High-Signal Improvements Implementation**
+   - Epic overview: `docs/epics/high-signal-improvements-implementation/epic-overview/prds/high-signal-improvements-implementation-epic.md`
+   - Feature index: `docs/epics/high-signal-improvements-implementation/INDEX.md`
 
 ## Notes
 
