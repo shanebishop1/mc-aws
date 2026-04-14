@@ -6,6 +6,7 @@ import {
   SendCommandCommand,
   ssm,
 } from "./clients.js";
+import { SSM_MAX_ATTEMPTS, SSM_POLL_INTERVAL_MS } from "./runtime-budgets.js";
 
 /**
  * Execute an SSM command on an EC2 instance and wait for completion
@@ -32,10 +33,10 @@ async function executeSSMCommand(instanceId, commands) {
 }
 
 async function waitForSSMCompletion(commandId, instanceId) {
-  const maxAttempts = 60;
+  const maxAttempts = SSM_MAX_ATTEMPTS;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, SSM_POLL_INTERVAL_MS));
 
     try {
       const response = await ssm.send(
@@ -57,7 +58,7 @@ async function waitForSSMCompletion(commandId, instanceId) {
     }
   }
 
-  throw new Error(`SSM command did not complete within ${maxAttempts * 2} seconds`);
+  throw new Error(`SSM command did not complete within ${(maxAttempts * SSM_POLL_INTERVAL_MS) / 1000} seconds`);
 }
 
 async function deleteParameter(name) {

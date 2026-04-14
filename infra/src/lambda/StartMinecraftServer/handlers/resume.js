@@ -6,6 +6,12 @@ import {
   DescribeVolumesCommand,
   ec2,
 } from "../clients.js";
+import {
+  VOLUME_ATTACH_MAX_ATTEMPTS,
+  VOLUME_ATTACH_POLL_INTERVAL_MS,
+  VOLUME_AVAILABLE_MAX_ATTEMPTS,
+  VOLUME_AVAILABLE_POLL_INTERVAL_MS,
+} from "../runtime-budgets.js";
 
 /**
  * Handle resuming a hibernated instance by creating and attaching a root volume
@@ -93,14 +99,16 @@ async function createAndAttachVolume(instanceId, az, snapshotId) {
 
 async function waitForVolumeAvailable(volumeId) {
   console.log("Waiting for volume to become available...");
-  for (let attempt = 1; attempt <= 60; attempt++) {
+  for (let attempt = 1; attempt <= VOLUME_AVAILABLE_MAX_ATTEMPTS; attempt++) {
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
     if (response.Volumes?.[0]?.State === "available") {
       console.log(`Volume ${volumeId} is now available`);
       return;
     }
-    console.log(`Volume state: ${response.Volumes?.[0]?.State}. Waiting... (attempt ${attempt}/60)`);
-    await new Promise((resolve) => setTimeout(resolve, 5000));
+    console.log(
+      `Volume state: ${response.Volumes?.[0]?.State}. Waiting... (attempt ${attempt}/${VOLUME_AVAILABLE_MAX_ATTEMPTS})`
+    );
+    await new Promise((resolve) => setTimeout(resolve, VOLUME_AVAILABLE_POLL_INTERVAL_MS));
   }
   throw new Error(`Volume ${volumeId} did not become available within timeout`);
 }
@@ -116,16 +124,16 @@ async function attachVolumeToInstance(volumeId, instanceId) {
   );
 
   console.log("Waiting for volume attachment to complete...");
-  for (let attempt = 1; attempt <= 60; attempt++) {
+  for (let attempt = 1; attempt <= VOLUME_ATTACH_MAX_ATTEMPTS; attempt++) {
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
     if (response.Volumes?.[0]?.Attachments?.[0]?.State === "attached") {
       console.log(`Volume ${volumeId} is now attached`);
       return;
     }
     console.log(
-      `Attachment state: ${response.Volumes?.[0]?.Attachments?.[0]?.State}. Waiting... (attempt ${attempt}/60)`
+      `Attachment state: ${response.Volumes?.[0]?.Attachments?.[0]?.State}. Waiting... (attempt ${attempt}/${VOLUME_ATTACH_MAX_ATTEMPTS})`
     );
-    await new Promise((resolve) => setTimeout(resolve, 2000));
+    await new Promise((resolve) => setTimeout(resolve, VOLUME_ATTACH_POLL_INTERVAL_MS));
   }
   throw new Error(`Volume ${volumeId} attachment did not complete within timeout`);
 }

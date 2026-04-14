@@ -1,9 +1,15 @@
 import { DescribeInstancesCommand, StartInstancesCommand, ec2 } from "./clients.js";
+import {
+  INSTANCE_STATE_MAX_ATTEMPTS,
+  INSTANCE_STATE_POLL_INTERVAL_MS,
+  PUBLIC_IP_MAX_ATTEMPTS,
+  PUBLIC_IP_POLL_INTERVAL_MS,
+} from "./runtime-budgets.js";
 
-// Max attempts to get IP (e.g., 300 attempts * 1s = 5 minutes)
-export const MAX_POLL_ATTEMPTS = 300;
-// Wait 1 second between polls
-export const POLL_INTERVAL_MS = 1000;
+// Max attempts to get IP
+export const MAX_POLL_ATTEMPTS = PUBLIC_IP_MAX_ATTEMPTS;
+// Wait between public IP polls
+export const POLL_INTERVAL_MS = PUBLIC_IP_POLL_INTERVAL_MS;
 
 /**
  * Check if instance is running, start it if stopped, and wait for running state
@@ -46,11 +52,11 @@ export async function ensureInstanceRunning(instanceId) {
   console.log(`Waiting for instance ${instanceId} to reach running state...`);
   let running = false;
   let attempts = 0;
-  const maxAttempts = 60; // 60 * 5 seconds = 5 minutes
+  const maxAttempts = INSTANCE_STATE_MAX_ATTEMPTS;
 
   while (!running && attempts < maxAttempts) {
     attempts++;
-    await new Promise((resolve) => setTimeout(resolve, 5000)); // Wait 5 seconds
+    await new Promise((resolve) => setTimeout(resolve, INSTANCE_STATE_POLL_INTERVAL_MS));
 
     try {
       const { Reservations: updatedReservations } = await ec2.send(
