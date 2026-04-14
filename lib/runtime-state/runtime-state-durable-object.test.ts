@@ -10,10 +10,10 @@ const createDurableObject = () => {
   const storage = new Map<string, unknown>();
   const state = {
     storage: {
-      get: vi.fn(async <T>(key: string) => storage.get(key) as T | undefined),
-      put: vi.fn(async (key: string, value: unknown) => {
+      get: async <T>(key: string): Promise<T | undefined> => storage.get(key) as T | undefined,
+      put: async <T>(key: string, value: T): Promise<void> => {
         storage.set(key, value);
-      }),
+      },
     },
   };
 
