@@ -299,6 +299,17 @@ export const envRuntimeSchema = {
       ci: { level: "required" },
     }),
   },
+  MC_OPERATION_STATE_RETENTION_DAYS: {
+    description: "Retention window (in days) for durable operation-state records stored in SSM",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "optional" },
+      ec2: { level: "optional" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
   ENABLE_DEV_LOGIN: {
     description: "Local development bypass for authentication",
     valueType: "enum",
@@ -337,6 +348,7 @@ export const workerSecretAllowlist = [
   "GOOGLE_CLIENT_ID",
   "GOOGLE_CLIENT_SECRET",
   "NEXT_PUBLIC_APP_URL",
+  "MC_OPERATION_STATE_RETENTION_DAYS",
 ] as const;
 
 export type WorkerSecretAllowlistKey = (typeof workerSecretAllowlist)[number];

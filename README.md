@@ -85,7 +85,12 @@ pnpm server:hibernate
 pnpm server:backup
 pnpm server:backups
 pnpm server:restore -- <backup-name>
+pnpm operations:cleanup
+pnpm operations:cleanup -- --dry-run --retention-days=14
 ```
+
+Durable operation-state records in SSM (`/minecraft/operations/*`) default to a 30-day retention window.
+Set `MC_OPERATION_STATE_RETENTION_DAYS` to override that window.
 
 Manual EC2 shell access (advanced):
 

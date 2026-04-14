@@ -35,6 +35,16 @@ export interface BackupInfo {
 }
 
 /**
+ * Parameter Store entry returned from path lookups
+ */
+export interface ParameterStoreEntry {
+  name: string;
+  value: string;
+  type?: string;
+  lastModifiedAt?: string;
+}
+
+/**
  * AWS Provider interface
  * Defines all AWS operations needed by the application
  */
@@ -62,6 +72,7 @@ export interface AwsProvider {
   getParameter(name: string): Promise<string | null>;
   putParameter(name: string, value: string, type?: "String" | "SecureString", overwrite?: boolean): Promise<void>;
   deleteParameter(name: string): Promise<void>;
+  listParametersByPath(path: string): Promise<ParameterStoreEntry[]>;
 
   // SSM - Application-Specific Parameters
   getEmailAllowlist(): Promise<string[]>;

@@ -5,12 +5,7 @@
  * Environment-specific behavior (dev/prod) is handled by package.json scripts
  */
 
-import {
-  type BackendMode,
-  parseBackendMode,
-  resolveEnvValue,
-  validateEnvForTarget,
-} from "@/lib/runtime-config-schema";
+import { type BackendMode, parseBackendMode, resolveEnvValue, validateEnvForTarget } from "@/lib/runtime-config-schema";
 
 export function getEnv(name: string, optional = false): string {
   const value = process.env[name];
@@ -129,6 +124,7 @@ export const env = {
   GOOGLE_CLIENT_ID: getEnv("GOOGLE_CLIENT_ID", true),
   GOOGLE_CLIENT_SECRET: getEnv("GOOGLE_CLIENT_SECRET", true),
   NEXT_PUBLIC_APP_URL: getEnv("NEXT_PUBLIC_APP_URL", true) || "http://localhost:3000",
+  MC_OPERATION_STATE_RETENTION_DAYS: getEnv("MC_OPERATION_STATE_RETENTION_DAYS", true),
 
   // Development
   ENABLE_DEV_LOGIN: getEnv("ENABLE_DEV_LOGIN", true),

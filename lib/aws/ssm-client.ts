@@ -6,6 +6,7 @@ import {
   DeleteParameterCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
+  GetParametersByPathCommand,
   PutParameterCommand,
   SSMClient,
   SendCommandCommand,
@@ -14,6 +15,7 @@ import { env } from "../env";
 import type { BackupInfo } from "../types";
 import { getAwsClientConfig } from "./aws-client-config";
 import { resolveInstanceId } from "./instance-resolver";
+import type { ParameterStoreEntry } from "./types";
 
 // Lazy initialization of SSM client
 let _ssmClient: SSMClient | null = null;
@@ -252,6 +254,49 @@ export async function getParameter(name: string): Promise<string | null> {
     }
     throw error;
   }
+}
+
+/**
+ * List parameters under a path from SSM Parameter Store
+ */
+export async function listParametersByPath(path: string): Promise<ParameterStoreEntry[]> {
+  const trimmedPath = path.trim();
+  if (!trimmedPath) {
+    return [];
+  }
+
+  const normalizedPath = trimmedPath.endsWith("/") ? trimmedPath.slice(0, -1) : trimmedPath;
+  const entries: ParameterStoreEntry[] = [];
+  let nextToken: string | undefined;
+
+  do {
+    const response = await ssm.send(
+      new GetParametersByPathCommand({
+        Path: normalizedPath,
+        Recursive: true,
+        WithDecryption: true,
+        MaxResults: 10,
+        NextToken: nextToken,
+      })
+    );
+
+    for (const parameter of response.Parameters ?? []) {
+      if (!parameter.Name || typeof parameter.Value !== "string") {
+        continue;
+      }
+
+      entries.push({
+        name: parameter.Name,
+        value: parameter.Value,
+        type: parameter.Type,
+        lastModifiedAt: parameter.LastModifiedDate?.toISOString(),
+      });
+    }
+
+    nextToken = response.NextToken;
+  } while (nextToken);
+
+  return entries;
 }
 
 /**

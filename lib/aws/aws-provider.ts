@@ -29,6 +29,7 @@ import {
   getParameter,
   getPlayerCount,
   listBackups,
+  listParametersByPath,
   putParameter,
   updateEmailAllowlist,
 } from "./ssm-client";
@@ -62,6 +63,7 @@ export const awsProvider: AwsProvider = {
   getParameter,
   putParameter,
   deleteParameter,
+  listParametersByPath,
 
   // SSM - Application-Specific Parameters
   getEmailAllowlist,

@@ -21,6 +21,7 @@
     "server:backup": "tsx scripts/server-cli.ts backup",
     "server:restore": "tsx scripts/server-cli.ts restore",
     "server:backups": "tsx scripts/server-cli.ts backups",
+    "operations:cleanup": "tsx scripts/cleanup-operation-state.ts",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
