@@ -14,6 +14,16 @@ const mocks = vi.hoisted(() => ({
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
   enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
+  mapMutatingRouteThrottleFailure: vi.fn(async (response: Response, operation: string) => ({
+    decision: {
+      allowed: false,
+      httpStatus: response.status,
+      code: "throttled",
+      message: `Too many ${operation} requests. Please retry shortly.`,
+    },
+    retryAfterHeader: response.headers.get("Retry-After") ?? undefined,
+    cacheControlHeader: response.headers.get("Cache-Control") ?? undefined,
+  })),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -35,11 +45,17 @@ vi.mock("@/lib/server-action-lock", () => ({
 
 vi.mock("@/lib/mutating-route-throttle", () => ({
   enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
+  mapMutatingRouteThrottleFailure: mocks.mapMutatingRouteThrottleFailure,
 }));
 
 describe("POST /api/hibernate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.requireAdmin.mockResolvedValue({ email: "admin@example.com", role: "admin" });
+    mocks.enforceMutatingRouteThrottle.mockResolvedValue(null);
+    mocks.isServerActionLockConflictError.mockReturnValue(false);
+    mocks.getInstanceState.mockResolvedValue(ServerState.Running);
+    mocks.invokeLambda.mockResolvedValue(undefined);
   });
 
   it("should hibernate successfully when running", async () => {
@@ -102,7 +118,7 @@ describe("POST /api/hibernate", () => {
   it("should handle lambda invocation failures", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Running);
-    mocks.invokeLambda.mockRejectedValue(new Error("Lambda failure"));
+    mocks.invokeLambda.mockRejectedValueOnce(new Error("Lambda failure"));
 
     const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
     const res = await POST(req);
@@ -150,11 +166,62 @@ describe("POST /api/hibernate", () => {
     expect(res.status).toBe(409);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toContain("Another operation is in progress");
+    expect(body.error).toContain("Another operation is already in progress");
     expect(body.operation?.type).toBe("hibernate");
     expect(body.operation?.status).toBe("failed");
     expect(body.operation?.id).toContain("hibernate-");
 
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("returns 429 with throttle headers when mutating throttle is exceeded", async () => {
+    mocks.enforceMutatingRouteThrottle.mockResolvedValueOnce(
+      Response.json(
+        {
+          success: false,
+          error: "Too many hibernate requests. Please retry shortly.",
+          timestamp: new Date().toISOString(),
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "8",
+            "Cache-Control": "no-store",
+          },
+        }
+      )
+    );
+
+    const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(429);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Too many hibernate requests");
+    expect(res.headers.get("Retry-After")).toBe("8");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(mocks.findInstanceId).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it("runs lifecycle stages in auth -> throttle -> lock -> invoke order", async () => {
+    mocks.getInstanceState.mockResolvedValueOnce(ServerState.Running);
+
+    const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(202);
+
+    const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
+    const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
+    const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
+    const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
+    const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
+
+    expect(authOrder).toBeLessThan(throttleOrder);
+    expect(throttleOrder).toBeLessThan(findInstanceOrder);
+    expect(findInstanceOrder).toBeLessThan(lockOrder);
+    expect(lockOrder).toBeLessThan(invokeOrder);
   });
 });
