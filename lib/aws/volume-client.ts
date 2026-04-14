@@ -231,16 +231,16 @@ export async function handleResume(instanceId?: string) {
 
   await waitForVolumeAvailable(volumeId);
 
-  console.log(`Attaching volume ${volumeId} to instance ${instanceId} at /dev/xvda...`);
+  console.log(`Attaching volume ${volumeId} to instance ${resolvedId} at /dev/xvda...`);
   await ec2.send(
     new AttachVolumeCommand({
       VolumeId: volumeId,
-      InstanceId: instanceId,
+      InstanceId: resolvedId,
       Device: "/dev/xvda",
     })
   );
 
-  await waitForVolumeAttached(volumeId, instanceId);
+  await waitForVolumeAttached(volumeId, resolvedId);
 
-  console.log(`Successfully restored volume for instance ${instanceId}`);
+  console.log(`Successfully restored volume for instance ${resolvedId}`);
 }
