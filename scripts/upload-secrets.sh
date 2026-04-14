@@ -1,8 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 # Upload all secrets to Cloudflare Workers from a deployment env file.
 # Usage: ENV_FILE=.env.production ./scripts/upload-secrets.sh
 
-set -e
+set -euo pipefail
 
 ENV_FILE="${ENV_FILE:-.env.production}"
 
@@ -14,17 +14,97 @@ fi
 echo "📤 Uploading secrets from $ENV_FILE to Cloudflare Workers..."
 echo ""
 
+# Explicit allowlist: only these keys can be uploaded as Worker secrets.
+WORKER_SECRET_ALLOWLIST=(
+  "AWS_REGION"
+  "AWS_ACCOUNT_ID"
+  "INSTANCE_ID"
+  "AWS_ACCESS_KEY_ID"
+  "AWS_SECRET_ACCESS_KEY"
+  "AWS_SESSION_TOKEN"
+  "CLOUDFORMATION_STACK_NAME"
+  "STACK_NAME"
+  "CLOUDFLARE_ZONE_ID"
+  "CLOUDFLARE_RECORD_ID"
+  "CLOUDFLARE_MC_DOMAIN"
+  "CLOUDFLARE_DNS_API_TOKEN"
+  "CLOUDFLARE_API_TOKEN"
+  "GDRIVE_REMOTE"
+  "GDRIVE_ROOT"
+  "AUTH_SECRET"
+  "ADMIN_EMAIL"
+  "ALLOWED_EMAILS"
+  "GOOGLE_CLIENT_ID"
+  "GOOGLE_CLIENT_SECRET"
+  "NEXT_PUBLIC_APP_URL"
+)
+
+is_worker_secret_allowed() {
+  local candidate="$1"
+  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
+    if [[ "$allowed" == "$candidate" ]]; then
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+print_worker_secret_allowlist() {
+  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
+    echo "  - $allowed"
+  done
+}
+
 # Read env file and upload each non-empty, non-comment line as a secret
-while IFS='=' read -r key value; do
+LINE_NO=0
+while IFS= read -r line || [[ -n "$line" ]]; do
+  LINE_NO=$((LINE_NO + 1))
+
   # Skip empty lines and comments
-  [[ -z "$key" || "$key" =~ ^#.* ]] && continue
-  
+  [[ -z "$line" ]] && continue
+  [[ "$line" =~ ^#.* ]] && continue
+
+  # Only KEY=VALUE lines
+  if [[ "$line" != *=* ]]; then
+    continue
+  fi
+
+  key="${line%%=*}"
+  value="${line#*=}"
+
+  # Allow (and ignore) optional 'export ' prefix.
+  if [[ "$key" == export\ * ]]; then
+    key="${key#export }"
+  fi
+
+  # Trim whitespace around key.
+  key="${key#${key%%[![:space:]]*}}"
+  key="${key%${key##*[![:space:]]}}"
+
+  # Skip empty keys
+  [[ -z "$key" ]] && continue
+
+  # Wrangler secret names must be env-var style.
+  if [[ ! "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+    echo "❌ Error: Invalid env var name in $ENV_FILE:$LINE_NO: '$key'"
+    echo "Secrets must be uppercase letters/numbers/underscores (e.g. FOO_BAR)."
+    exit 1
+  fi
+
+  if ! is_worker_secret_allowed "$key"; then
+    echo "❌ Error: Refusing to upload unapproved Worker secret key '$key' from $ENV_FILE:$LINE_NO"
+    echo "Allowed Worker secret keys:"
+    print_worker_secret_allowlist
+    exit 1
+  fi
+
   # Remove quotes from value if present
   value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-  
+
   # Skip if value is empty
   [[ -z "$value" ]] && continue
-  
+
   echo "Setting: $key"
   echo "$value" | wrangler secret put "$key" --env production
 done < "$ENV_FILE"
