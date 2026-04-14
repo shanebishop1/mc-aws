@@ -23,14 +23,78 @@ jobs:
   real-environment-smoke:
     name: Real-environment smoke contract (S1-S5)
     runs-on: ubuntu-latest
+    environment:
+      name: real-environment-smoke
     timeout-minutes: 25
     concurrency:
       group: real-environment-smoke
       cancel-in-progress: false
+    env:
+      SMOKE_ENVIRONMENT_LABEL: ${{ vars.SMOKE_ENVIRONMENT_LABEL || 'real-smoke' }}
+      SMOKE_EXPECT_DOMAIN: ${{ vars.SMOKE_EXPECT_DOMAIN || '' }}
+      SMOKE_EXPECT_BACKEND_MODE: ${{ vars.SMOKE_EXPECT_BACKEND_MODE || 'aws' }}
+      SMOKE_ENABLE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_s5_environment_probe || vars.SMOKE_ENABLE_S5_ENVIRONMENT_PROBE || 'false' }}
+      SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_s5_environment_probe || vars.SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE || 'false' }}
+      SMOKE_SUMMARY_OUTPUT_PATH: artifacts/real-environment-smoke-summary.md
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Validate required smoke environment configuration
+        env:
+          SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
+          SMOKE_SESSION_COOKIE: ${{ secrets.SMOKE_SESSION_COOKIE }}
+        run: |
+          set -euo pipefail
+
+          echo "::add-mask::${SMOKE_BASE_URL}"
+          echo "::add-mask::${SMOKE_SESSION_COOKIE}"
+
+          missing=()
+
+          if [ -z "${SMOKE_BASE_URL:-}" ]; then
+            missing+=("secret: SMOKE_BASE_URL")
+          fi
+
+          if [ -z "${SMOKE_SESSION_COOKIE:-}" ]; then
+            missing+=("secret: SMOKE_SESSION_COOKIE")
+          fi
+
+          if [ -z "${SMOKE_ENVIRONMENT_LABEL:-}" ]; then
+            missing+=("variable: SMOKE_ENVIRONMENT_LABEL")
+          fi
+
+          if [ ${#missing[@]} -gt 0 ]; then
+            echo "::error title=Missing smoke CI configuration::Required values are missing in GitHub Environment 'real-environment-smoke': ${missing[*]}"
+            echo "See setup checklist: docs/epics/high-signal-improvements-implementation/production-like-smoke-verification/real-environment-smoke-ci-credentials-setup.md"
+            exit 1
+          fi
+
+          lower_base_url="$(printf '%s' "$SMOKE_BASE_URL" | tr '[:upper:]' '[:lower:]')"
+          if [ "${SMOKE_BASE_URL#https://}" = "$SMOKE_BASE_URL" ]; then
+            echo "::error title=Invalid SMOKE_BASE_URL::SMOKE_BASE_URL must use https:// for real-environment smoke runs."
+            exit 1
+          fi
+
+          if [[ "$lower_base_url" =~ (changeme|placeholder|replace-me|example\.com|your-value) ]]; then
+            echo "::error title=Invalid SMOKE_BASE_URL::SMOKE_BASE_URL appears to still be a placeholder value."
+            exit 1
+          fi
+
+          lower_session_cookie="$(printf '%s' "$SMOKE_SESSION_COOKIE" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$lower_session_cookie" =~ (changeme|placeholder|replace-me|your-value|example) ]]; then
+            echo "::error title=Invalid SMOKE_SESSION_COOKIE::SMOKE_SESSION_COOKIE appears to still be a placeholder value."
+            exit 1
+          fi
+
+          if [ "${#SMOKE_SESSION_COOKIE}" -lt 16 ]; then
+            echo "::error title=Invalid SMOKE_SESSION_COOKIE::SMOKE_SESSION_COOKIE is unexpectedly short; verify a current session token value was stored."
+            exit 1
+          fi
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -52,12 +116,6 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
           SMOKE_SESSION_COOKIE: ${{ secrets.SMOKE_SESSION_COOKIE }}
-          SMOKE_ENVIRONMENT_LABEL: ${{ vars.SMOKE_ENVIRONMENT_LABEL || 'real-smoke' }}
-          SMOKE_EXPECT_DOMAIN: ${{ vars.SMOKE_EXPECT_DOMAIN || '' }}
-          SMOKE_EXPECT_BACKEND_MODE: ${{ vars.SMOKE_EXPECT_BACKEND_MODE || 'aws' }}
-          SMOKE_ENABLE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_s5_environment_probe || vars.SMOKE_ENABLE_S5_ENVIRONMENT_PROBE || 'false' }}
-          SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_s5_environment_probe || vars.SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE || 'false' }}
-          SMOKE_SUMMARY_OUTPUT_PATH: artifacts/real-environment-smoke-summary.md
         run: pnpm exec tsx scripts/run-real-environment-smoke.ts
 
       - name: Upload smoke summary artifact
