@@ -24,9 +24,22 @@ describe("runtime-state provider selector", () => {
         hasCloudflareRuntimeStateBindings({
           durableObjectNamespace: {
             idFromName: () => "id",
+            get: () => ({
+              fetch: async () => new Response(),
+            }),
           },
         })
       ).toBe(true);
+    });
+
+    it("returns false when durable object binding shape is invalid", () => {
+      expect(
+        hasCloudflareRuntimeStateBindings({
+          durableObjectNamespace: {
+            idFromName: () => "id",
+          },
+        })
+      ).toBe(false);
     });
 
     it("returns false when only kv binding is present", () => {
@@ -56,14 +69,19 @@ describe("runtime-state provider selector", () => {
           bindings: {
             durableObjectNamespace: {
               idFromName: () => "id",
+              get: () => ({
+                fetch: async () => new Response(),
+              }),
             },
           },
         })
       ).toBe("cloudflare");
     });
 
-    it("falls back to in-memory in production when no bindings are present", () => {
-      expect(selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toBe("in-memory");
+    it("fails fast in production when no bindings are present", () => {
+      expect(() => selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toThrow(
+        /Missing or invalid Cloudflare runtime-state binding in production/
+      );
     });
 
     it("selects cloudflare in production when durable object binding is present in cloudflare context", () => {
@@ -71,11 +89,18 @@ describe("runtime-state provider selector", () => {
         env: {
           RUNTIME_STATE_DURABLE_OBJECT: {
             idFromName: () => "id",
+            get: () => ({
+              fetch: async () => new Response(),
+            }),
           },
         },
       };
 
       expect(selectRuntimeStateAdapterKind({ nodeEnv: "production" })).toBe("cloudflare");
+    });
+
+    it("keeps non-production fallback behavior for unspecified environments", () => {
+      expect(selectRuntimeStateAdapterKind({ nodeEnv: "staging", bindings: {} })).toBe("in-memory");
     });
   });
 
@@ -91,6 +116,9 @@ describe("runtime-state provider selector", () => {
         bindings: {
           durableObjectNamespace: {
             idFromName: () => "id",
+            get: () => ({
+              fetch: async () => new Response(),
+            }),
           },
         },
       });
@@ -98,7 +126,25 @@ describe("runtime-state provider selector", () => {
       expect(adapter.kind).toBe("cloudflare");
     });
 
-    it("returns in-memory adapter when only cloudflare kv binding is present", () => {
+    it("fails fast in production when only cloudflare kv binding is present", () => {
+      (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
+        env: {
+          RUNTIME_STATE_SNAPSHOT_KV: {
+            get: async () => null,
+            put: async () => undefined,
+            delete: async () => undefined,
+          },
+        },
+      };
+
+      expect(() =>
+        getRuntimeStateAdapter({
+          nodeEnv: "production",
+        })
+      ).toThrow(/Missing or invalid Cloudflare runtime-state binding in production/);
+    });
+
+    it("returns in-memory adapter in development when only cloudflare kv binding is present", () => {
       (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
         env: {
           RUNTIME_STATE_SNAPSHOT_KV: {
@@ -110,7 +156,7 @@ describe("runtime-state provider selector", () => {
       };
 
       const adapter = getRuntimeStateAdapter({
-        nodeEnv: "production",
+        nodeEnv: "development",
       });
 
       expect(adapter.kind).toBe("in-memory");

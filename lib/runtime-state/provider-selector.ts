@@ -17,6 +17,9 @@ const normalizeNodeEnv = (nodeEnv: string | undefined): string => {
   return nodeEnv?.trim().toLowerCase() ?? "";
 };
 
+const productionBindingErrorMessage =
+  "[RUNTIME-STATE] Missing or invalid Cloudflare runtime-state binding in production. Ensure RUNTIME_STATE_DURABLE_OBJECT is configured; production cannot fall back to in-memory runtime-state.";
+
 const isPresentBinding = (binding: unknown): boolean => {
   if (binding === null || binding === undefined) {
     return false;
@@ -29,6 +32,15 @@ const isPresentBinding = (binding: unknown): boolean => {
   return true;
 };
 
+const hasValidDurableObjectNamespaceBinding = (binding: unknown): boolean => {
+  if (!isPresentBinding(binding) || typeof binding !== "object") {
+    return false;
+  }
+
+  const namespace = binding as Record<string, unknown>;
+  return typeof namespace.idFromName === "function" && typeof namespace.get === "function";
+};
+
 export const hasCloudflareRuntimeStateBindings = (
   bindings: RuntimeStateCloudflareBindings | null | undefined
 ): boolean => {
@@ -36,7 +48,7 @@ export const hasCloudflareRuntimeStateBindings = (
     return false;
   }
 
-  return isPresentBinding(bindings.durableObjectNamespace);
+  return hasValidDurableObjectNamespaceBinding(bindings.durableObjectNamespace);
 };
 
 const getCloudflareContextBindings = (): RuntimeStateCloudflareBindings | null => {
@@ -83,12 +95,19 @@ export const selectRuntimeStateAdapterKind = ({
     return "cloudflare";
   }
 
+  if (normalizedNodeEnv === "production") {
+    throw new Error(productionBindingErrorMessage);
+  }
+
   return "in-memory";
 };
 
 export const getRuntimeStateAdapter = (input: RuntimeStateSelectorInput = {}): RuntimeStateAdapter => {
   const resolvedBindings = resolveRuntimeStateBindings(input.bindings);
-  const adapterKind = selectRuntimeStateAdapterKind(input);
+  const adapterKind = selectRuntimeStateAdapterKind({
+    ...input,
+    bindings: resolvedBindings,
+  });
 
   if (adapterKind === "cloudflare") {
     return createCloudflareRuntimeStateAdapter(resolvedBindings ?? {});
