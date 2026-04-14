@@ -143,6 +143,11 @@ vi.mock("@/lib/env", () => ({
     }
     // INSTANCE_ID is required - must be set in .env file
   },
+  validateRuntimeEnvironment: () => {
+    if (process.env.NODE_ENV === "production" && !process.env.AUTH_SECRET) {
+      throw new Error("[ENV] Strict production runtime validation failed: AUTH_SECRET is required for worker.");
+    }
+  },
 }));
 
 // Global cleanup

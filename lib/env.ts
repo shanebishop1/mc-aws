@@ -5,7 +5,12 @@
  * Environment-specific behavior (dev/prod) is handled by package.json scripts
  */
 
-import { type BackendMode, parseBackendMode, resolveEnvValue } from "@/lib/runtime-config-schema";
+import {
+  type BackendMode,
+  parseBackendMode,
+  resolveEnvValue,
+  validateEnvForTarget,
+} from "@/lib/runtime-config-schema";
 
 export function getEnv(name: string, optional = false): string {
   const value = process.env[name];
@@ -45,6 +50,36 @@ export function getBackendMode(): BackendMode {
  */
 export function getNodeEnv(): string | undefined {
   return process.env.NODE_ENV;
+}
+
+const formatIssueLine = (message: string): string => {
+  return `  - ${message}`;
+};
+
+export function validateRuntimeEnvironment(nodeEnv = getNodeEnv()): void {
+  const report = validateEnvForTarget(process.env, "worker");
+  const blockingIssues = report.issues.filter(
+    (issue) => issue.kind === "missing" || issue.kind === "invalid" || issue.kind === "forbidden"
+  );
+  const deprecatedIssues = report.issues.filter((issue) => issue.kind === "deprecated");
+
+  if (deprecatedIssues.length > 0) {
+    console.warn("[ENV] ⚠️ Deprecated runtime env aliases detected:");
+    deprecatedIssues.forEach((issue) => console.warn(formatIssueLine(issue.message)));
+  }
+
+  if (blockingIssues.length === 0) {
+    return;
+  }
+
+  if (nodeEnv === "production") {
+    const details = blockingIssues.map((issue) => issue.message).join("; ");
+    throw new Error(`[ENV] Strict production runtime validation failed: ${details}`);
+  }
+
+  console.warn("[ENV] ⚠️ Runtime env is incomplete for worker target:");
+  blockingIssues.forEach((issue) => console.warn(formatIssueLine(issue.message)));
+  console.warn("[ENV] ℹ️ Startup continues outside production; production startup will fail closed.");
 }
 
 export const env = {
@@ -98,6 +133,8 @@ export const env = {
   // Development
   ENABLE_DEV_LOGIN: getEnv("ENABLE_DEV_LOGIN", true),
 };
+
+validateRuntimeEnvironment();
 
 /**
  * Check if authentication is properly configured
