@@ -7,6 +7,17 @@ set -euo pipefail
 
 log() { echo "[$(date -Is)] $*"; }
 
+restart_minecraft_or_fail() {
+  local context="$1"
+  log "Restarting Minecraft server (${context})..."
+  if ! systemctl start minecraft; then
+    log "ERROR: Restart failed after ${context}"
+    return 1
+  fi
+
+  log "Minecraft server restart succeeded (${context})"
+}
+
 export RCLONE_CONFIG="/opt/setup/rclone/rclone.conf"
 
 # Create operation lock to prevent concurrent backup/restore operations
@@ -44,7 +55,7 @@ log "Creating tar archive..."
 cd /opt/minecraft
 tar -czf "/tmp/${BACKUP_NAME}.tar.gz" server/ || {
   log "ERROR: Failed to create tar archive"
-  systemctl start minecraft || log "Warning: Failed to restart minecraft service"
+  restart_minecraft_or_fail "tar failure recovery" || log "CRITICAL: minecraft service remains down"
   exit 1
 }
 
@@ -53,7 +64,7 @@ log "Uploading to Google Drive..."
 rclone copy "/tmp/${BACKUP_NAME}.tar.gz" "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" || {
   log "ERROR: Failed to upload to Google Drive"
   rm -f "/tmp/${BACKUP_NAME}.tar.gz"
-  systemctl start minecraft || log "Warning: Failed to restart minecraft service"
+  restart_minecraft_or_fail "upload failure recovery" || log "CRITICAL: minecraft service remains down"
   exit 1
 }
 
@@ -62,7 +73,9 @@ log "Cleaning up temporary files..."
 rm -f "/tmp/${BACKUP_NAME}.tar.gz"
 
 # Restart server
-log "Restarting Minecraft server..."
-systemctl start minecraft || log "Warning: Failed to restart minecraft service"
+if ! restart_minecraft_or_fail "post-backup"; then
+  log "PARTIAL FAILURE: Backup ${BACKUP_NAME}.tar.gz uploaded, but minecraft restart failed"
+  exit 1
+fi
 
 log "SUCCESS: Backup ${BACKUP_NAME}.tar.gz uploaded to Google Drive"

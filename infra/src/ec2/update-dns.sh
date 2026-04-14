@@ -6,11 +6,27 @@ set -euo pipefail
 
 log() { echo "[$(date -Is)] $*"; }
 
+require_command() {
+  local cmd="$1"
+  if ! command -v "$cmd" >/dev/null 2>&1; then
+    log "ERROR: Required command '$cmd' not found"
+    exit 1
+  fi
+}
+
+for cmd in aws curl jq; do
+  require_command "$cmd"
+done
+
 # Get instance metadata from IMDSv2
 log "Getting instance metadata..."
 TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
 PUBLIC_IP=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/public-ipv4")
 AWS_REGION=$(curl -s -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/placement/region")
+if [[ -z "$TOKEN" || -z "$PUBLIC_IP" || -z "$AWS_REGION" ]]; then
+  log "ERROR: Failed to resolve required EC2 metadata (token/public-ip/region)"
+  exit 1
+fi
 log "Public IP: $PUBLIC_IP"
 log "AWS Region: $AWS_REGION"
 

@@ -32,6 +32,19 @@ async function executeSSMCommand(instanceId, commands) {
   return await waitForSSMCompletion(commandId, instanceId);
 }
 
+function buildSSMFailureOutput(response) {
+  const errorOutput = response.StandardErrorContent || "";
+  const standardOutput = response.StandardOutputContent || "";
+  const failureOutput = errorOutput || standardOutput || "No command output available";
+
+  console.error(`SSM command failed. Error output: ${errorOutput}`);
+  if (standardOutput) {
+    console.error(`SSM command failed. Standard output: ${standardOutput}`);
+  }
+
+  return failureOutput;
+}
+
 async function waitForSSMCompletion(commandId, instanceId) {
   const maxAttempts = SSM_MAX_ATTEMPTS;
 
@@ -48,9 +61,7 @@ async function waitForSSMCompletion(commandId, instanceId) {
 
       if (status === "Success") return response.StandardOutputContent || "";
       if (status === "Failed") {
-        const errorOutput = response.StandardErrorContent || "";
-        console.error(`SSM command failed. Error output: ${errorOutput}`);
-        throw new Error(`SSM command failed: ${errorOutput}`);
+        throw new Error(`SSM command failed: ${buildSSMFailureOutput(response)}`);
       }
     } catch (error) {
       if (error.name !== "InvocationDoesNotExist") throw error;
