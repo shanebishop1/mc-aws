@@ -27,7 +27,7 @@ vi.mock("@/lib/api-auth", () => ({
 }));
 
 vi.mock("@/lib/sanitization", () => ({
-  sanitizeBackupName: vi.fn(),
+  sanitizeBackupName: vi.fn((value: string) => value),
 }));
 
 vi.mock("@/lib/server-action-lock", () => ({

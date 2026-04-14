@@ -6,28 +6,16 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
-import { sanitizeBackupName } from "@/lib/sanitization";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
   releaseServerActionLock,
 } from "@/lib/server-action-lock";
-import type { ApiResponse, RestoreRequest, RestoreResponse } from "@/lib/types";
+import type { ApiResponse, RestoreResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-
-/**
- * Parse request body for restore endpoint
- */
-async function parseRestoreBody(request: NextRequest): Promise<RestoreRequest> {
-  try {
-    return await request.json();
-  } catch {
-    // Empty body is valid - will use latest backup
-    return {};
-  }
-}
 
 /**
  * Validate server state for restore
@@ -167,15 +155,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       return throttleResponse;
     }
 
-    // Parse request body
-    const body = await parseRestoreBody(request);
-    const backupName = body.backupName || body.name;
+    // Parse and sanitize optional backup name (backupName takes precedence over legacy name)
+    const { backupName } = await parseMutatingActionRequestPayload(request, "restore");
     const resolvedId = await findInstanceId();
-
-    // Validate backup name if provided
-    if (backupName) {
-      sanitizeBackupName(backupName);
-    }
 
     // Check current state - must be running
     const stateError = await validateRestoreState(resolvedId, operation);

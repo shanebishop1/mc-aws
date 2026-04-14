@@ -8,9 +8,9 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
-import { sanitizeBackupName } from "@/lib/sanitization";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
@@ -19,24 +19,6 @@ import {
 import type { ApiResponse, ResumeResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-
-interface ResumeRequestBody {
-  backupName?: string;
-}
-
-/**
- * Parse request body for resume endpoint
- */
-async function parseResumeBody(request: NextRequest): Promise<ResumeRequestBody> {
-  try {
-    const body = await request.clone().json();
-    return {
-      backupName: body?.backupName,
-    };
-  } catch {
-    return {};
-  }
-}
 
 /**
  * Check if server is already running
@@ -139,8 +121,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
-    // Parse body for optional backup name
-    const { backupName } = await parseResumeBody(request);
+    // Parse and sanitize optional backup name
+    const { backupName } = await parseMutatingActionRequestPayload(request, "resume");
     const resolvedId = await findInstanceId();
 
     // Check current state
@@ -150,11 +132,6 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const alreadyRunning = checkAlreadyRunning(currentState, operation);
     if (alreadyRunning) {
       return alreadyRunning;
-    }
-
-    // Validate backup name (defense in depth)
-    if (backupName) {
-      sanitizeBackupName(backupName);
     }
 
     // Invoke Lambda for resume

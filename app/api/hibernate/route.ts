@@ -7,6 +7,7 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatApiErrorResponseWithStatus, formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
@@ -17,18 +18,6 @@ import {
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-
-/**
- * Parse request body for hibernate endpoint
- */
-async function parseHibernateBody(request: NextRequest): Promise<void> {
-  try {
-    await request.clone().json();
-    // We don't use any body parameters, just consume it
-  } catch {
-    // Empty or invalid body is fine
-  }
-}
 
 /**
  * Check if server is already hibernating
@@ -168,8 +157,8 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
-    // Parse body (we don't use any parameters, just consume it)
-    await parseHibernateBody(request);
+    // Consume optional JSON body for consistent mutating request parsing behavior.
+    await parseMutatingActionRequestPayload(request, "hibernate");
     const resolvedId = await findInstanceId();
 
     // Check current state

@@ -7,9 +7,9 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
 import { createOperationInfo, withOperationStatus } from "@/lib/operation";
-import { sanitizeBackupName } from "@/lib/sanitization";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
@@ -17,25 +17,6 @@ import {
 } from "@/lib/server-action-lock";
 import type { ApiResponse, BackupResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
-
-interface BackupRequestBody {
-  name?: string;
-}
-
-/**
- * Parse request body for backup endpoint
- */
-async function parseBackupBody(request: NextRequest): Promise<BackupRequestBody> {
-  try {
-    const body = await request.json();
-    return {
-      name: body?.name,
-    };
-  } catch {
-    // Empty or invalid body is fine
-    return {};
-  }
-}
 
 /**
  * Validate server state for backup
@@ -175,14 +156,9 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       throw error;
     }
 
-    // Parse body for backup name
-    const { name: backupName } = await parseBackupBody(request);
+    // Parse and sanitize optional backup name
+    const { backupName } = await parseMutatingActionRequestPayload(request, "backup");
     const resolvedId = await findInstanceId();
-
-    // Validate backup name (defense in depth)
-    if (backupName) {
-      sanitizeBackupName(backupName);
-    }
 
     // Check current state - must be running
     const stateError = await validateBackupState(resolvedId, operation);
