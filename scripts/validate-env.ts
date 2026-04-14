@@ -6,14 +6,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import dotenv from "dotenv";
-
-const requiredEnvVars = [
-  "GOOGLE_CLIENT_ID",
-  "GOOGLE_CLIENT_SECRET",
-  "AUTH_SECRET",
-  "ADMIN_EMAIL",
-  "NEXT_PUBLIC_APP_URL",
-];
+import { getEnvVarNamesByRequirement, validateEnvForTarget } from "../lib/runtime-config-schema";
 
 const buildLifecycleEvents = new Set(["build", "prebuild", "deploy:cf", "preview:cf"]);
 
@@ -57,9 +50,18 @@ export function validateEnv(): void {
 
   loadEnvironmentFiles(nodeEnv);
 
+  const requiredEnvVars = getEnvVarNamesByRequirement("ci", "required");
+  const schemaReport = validateEnvForTarget(process.env, "ci");
+  const invalidVars = schemaReport.issues.filter((issue) => issue.kind === "invalid").map((issue) => issue.name);
+
   const missing = requiredEnvVars.filter((name) => !process.env[name]);
 
   if (missing.length === 0) {
+    if (invalidVars.length > 0) {
+      console.warn("[ENV] ⚠️ Environment variables have invalid values:");
+      invalidVars.forEach((name) => console.warn(`  - ${name}`));
+    }
+
     console.log("[ENV] ✅ All required environment variables are set");
     return;
   }
