@@ -41,6 +41,9 @@ describe("POST /api/stop", () => {
     const body = await parseNextResponse<ApiResponse<StopServerResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("stop command sent successfully");
+    expect(body.operation?.type).toBe("stop");
+    expect(body.operation?.status).toBe("accepted");
+    expect(body.operation?.id).toContain("stop-");
   });
 
   it("should return 400 when instance is already stopped", async () => {
@@ -67,5 +70,6 @@ describe("POST /api/stop", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("already stopped");
+    expect(body.operation?.status).toBe("failed");
   });
 });

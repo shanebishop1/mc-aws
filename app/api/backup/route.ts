@@ -7,7 +7,7 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
-import { env } from "@/lib/env";
+import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import {
   acquireServerActionLock,
@@ -39,13 +39,17 @@ async function parseBackupBody(request: NextRequest): Promise<BackupRequestBody>
 /**
  * Validate server state for backup
  */
-async function validateBackupState(instanceId: string): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
+async function validateBackupState(
+  instanceId: string,
+  operationId: ReturnType<typeof createOperationInfo>
+): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
   const currentState = await getInstanceState(instanceId);
   if (currentState !== "running") {
     return NextResponse.json(
       {
         success: false,
         error: `Cannot backup when server is ${currentState}. Server must be running.`,
+        operation: withOperationStatus(operationId, "failed"),
         timestamp: new Date().toISOString(),
       },
       { status: 400 }
@@ -57,7 +61,10 @@ async function validateBackupState(instanceId: string): Promise<NextResponse<Api
 /**
  * Validate Minecraft service is ready for backup
  */
-async function validateServiceReady(instanceId: string): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
+async function validateServiceReady(
+  instanceId: string,
+  operationId: ReturnType<typeof createOperationInfo>
+): Promise<NextResponse<ApiResponse<BackupResponse>> | null> {
   try {
     console.log("[BACKUP] Checking Minecraft service status on instance:", instanceId);
     const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
@@ -69,6 +76,7 @@ async function validateServiceReady(instanceId: string): Promise<NextResponse<Ap
         {
           success: false,
           error: "Minecraft service is still initializing. Please wait a moment.",
+          operation: withOperationStatus(operationId, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
@@ -94,6 +102,7 @@ async function invokeBackupLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  operationId: ReturnType<typeof createOperationInfo>,
   backupName?: string
 ): Promise<NextResponse<ApiResponse<BackupResponse>>> {
   try {
@@ -115,6 +124,7 @@ async function invokeBackupLambda(
           message: "Backup started asynchronously. You will receive an email upon completion.",
           output: "",
         },
+        operation: withOperationStatus(operationId, "accepted"),
         timestamp: new Date().toISOString(),
       },
       { status: 202 }
@@ -131,11 +141,16 @@ async function invokeBackupLambda(
 /**
  * Build error response for backup endpoint
  */
-function buildBackupErrorResponse(error: unknown): NextResponse<ApiResponse<BackupResponse>> {
-  return formatApiErrorResponse<BackupResponse>(error, "backup");
+function buildBackupErrorResponse(
+  error: unknown,
+  operationId: ReturnType<typeof createOperationInfo>
+): NextResponse<ApiResponse<BackupResponse>> {
+  return formatApiErrorResponse<BackupResponse>(error, "backup", undefined, withOperationStatus(operationId, "failed"));
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<BackupResponse>>> {
+  const operation = createOperationInfo("backup", "running");
+
   try {
     // Check admin authorization
     let user: AuthUser;
@@ -159,32 +174,33 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Check current state - must be running
-    const stateError = await validateBackupState(resolvedId);
+    const stateError = await validateBackupState(resolvedId, operation);
     if (stateError) {
       return stateError;
     }
 
     // Check Minecraft service is ready
-    const serviceError = await validateServiceReady(resolvedId);
+    const serviceError = await validateServiceReady(resolvedId, operation);
     if (serviceError) {
       return serviceError;
     }
 
     // Invoke Lambda for backup
     const lock = await acquireServerActionLock("backup", user.email);
-    return await invokeBackupLambda(resolvedId, user, lock.lockId, backupName);
+    return await invokeBackupLambda(resolvedId, user, lock.lockId, operation, backupName);
   } catch (error) {
     if (isServerActionLockConflictError(error)) {
       return NextResponse.json(
         {
           success: false,
           error: "Another operation is already in progress. Please wait for it to complete.",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
       );
     }
 
-    return buildBackupErrorResponse(error);
+    return buildBackupErrorResponse(error, operation);
   }
 }

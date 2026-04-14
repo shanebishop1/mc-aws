@@ -7,7 +7,7 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse, formatApiErrorResponseWithStatus } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
-import { env } from "@/lib/env";
+import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
@@ -34,7 +34,8 @@ async function parseHibernateBody(request: NextRequest): Promise<void> {
  */
 function checkAlreadyHibernating(
   currentState: string,
-  resolvedId: string
+  resolvedId: string,
+  operationId: ReturnType<typeof createOperationInfo>
 ): NextResponse<ApiResponse<HibernateResponse>> | null {
   if (currentState === ServerState.Hibernating) {
     return NextResponse.json({
@@ -44,6 +45,7 @@ function checkAlreadyHibernating(
         instanceId: resolvedId,
         backupOutput: "Skipped - already hibernating",
       },
+      operation: withOperationStatus(operationId, "completed"),
       timestamp: new Date().toISOString(),
     });
   }
@@ -53,12 +55,16 @@ function checkAlreadyHibernating(
 /**
  * Validate server state for hibernation
  */
-function validateHibernateState(currentState: string): NextResponse<ApiResponse<HibernateResponse>> | null {
+function validateHibernateState(
+  currentState: string,
+  operationId: ReturnType<typeof createOperationInfo>
+): NextResponse<ApiResponse<HibernateResponse>> | null {
   if (currentState !== ServerState.Running) {
     return NextResponse.json(
       {
         success: false,
         error: `Cannot hibernate when server is ${currentState}. Server must be running.`,
+        operation: withOperationStatus(operationId, "failed"),
         timestamp: new Date().toISOString(),
       },
       { status: 400 }
@@ -73,7 +79,8 @@ function validateHibernateState(currentState: string): NextResponse<ApiResponse<
 async function invokeHibernateLambda(
   instanceId: string,
   user: AuthUser,
-  lockId: string
+  lockId: string,
+  operationId: ReturnType<typeof createOperationInfo>
 ): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
   try {
     console.log(`[HIBERNATE] Invoking Lambda for hibernate on ${instanceId}`);
@@ -94,6 +101,7 @@ async function invokeHibernateLambda(
           instanceId: instanceId,
           backupOutput: "",
         },
+        operation: withOperationStatus(operationId, "accepted"),
         timestamp: new Date().toISOString(),
       },
       { status: 202 }
@@ -110,21 +118,27 @@ async function invokeHibernateLambda(
 /**
  * Build error response for hibernate endpoint
  */
-function buildHibernateErrorResponse(error: unknown): NextResponse<ApiResponse<HibernateResponse>> {
+function buildHibernateErrorResponse(
+  error: unknown,
+  operationId: ReturnType<typeof createOperationInfo>
+): NextResponse<ApiResponse<HibernateResponse>> {
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
   if (isServerActionLockConflictError(error) || errorMessage.includes("Another operation is in progress")) {
     return formatApiErrorResponseWithStatus<HibernateResponse>(
       error,
       409,
-      "Another operation is in progress. Please wait for it to complete."
+      "Another operation is in progress. Please wait for it to complete.",
+      withOperationStatus(operationId, "failed")
     );
   }
 
-  return formatApiErrorResponse<HibernateResponse>(error, "hibernate");
+  return formatApiErrorResponse<HibernateResponse>(error, "hibernate", undefined, withOperationStatus(operationId, "failed"));
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
+  const operation = createOperationInfo("hibernate", "running");
+
   try {
     // Check admin authorization
     let user: AuthUser;
@@ -147,21 +161,21 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     console.log("[HIBERNATE] Current state:", currentState);
 
     // Check if already hibernating
-    const alreadyHibernating = checkAlreadyHibernating(currentState, resolvedId);
+    const alreadyHibernating = checkAlreadyHibernating(currentState, resolvedId, operation);
     if (alreadyHibernating) {
       return alreadyHibernating;
     }
 
     // Validate state
-    const stateError = validateHibernateState(currentState);
+    const stateError = validateHibernateState(currentState, operation);
     if (stateError) {
       return stateError;
     }
 
     // Invoke Lambda for hibernate
     const lock = await acquireServerActionLock("hibernate", user.email);
-    return await invokeHibernateLambda(resolvedId, user, lock.lockId);
+    return await invokeHibernateLambda(resolvedId, user, lock.lockId, operation);
   } catch (error) {
-    return buildHibernateErrorResponse(error);
+    return buildHibernateErrorResponse(error, operation);
   }
 }

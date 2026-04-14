@@ -9,6 +9,7 @@ import { type AuthUser, requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
@@ -18,6 +19,8 @@ import type { ApiResponse, StartServerResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StartServerResponse>>> {
+  const operation = createOperationInfo("start", "running");
+
   let user: AuthUser;
   try {
     user = await requireAllowed(request);
@@ -44,6 +47,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         {
           success: false,
           error: "Server is already running",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 400 }
@@ -71,6 +75,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
           domain: env.CLOUDFLARE_MC_DOMAIN,
           message: "Server start initiated. This may take 1-2 minutes.",
         },
+        operation: withOperationStatus(operation, "accepted"),
         timestamp: new Date().toISOString(),
       };
 
@@ -88,12 +93,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         {
           success: false,
           error: "Another operation is already in progress. Please wait for it to complete.",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
       );
     }
 
-    return formatApiErrorResponse<StartServerResponse>(error, "start");
+    return formatApiErrorResponse<StartServerResponse>(error, "start", undefined, withOperationStatus(operation, "failed"));
   }
 }

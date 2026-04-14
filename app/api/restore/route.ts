@@ -6,6 +6,7 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import {
   acquireServerActionLock,
@@ -30,13 +31,17 @@ async function parseRestoreBody(request: NextRequest): Promise<RestoreRequest> {
 /**
  * Validate server state for restore
  */
-async function validateRestoreState(instanceId: string): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
+async function validateRestoreState(
+  instanceId: string,
+  operationId: ReturnType<typeof createOperationInfo>
+): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
   const currentState = await getInstanceState(instanceId);
   if (currentState !== "running") {
     return NextResponse.json(
       {
         success: false,
         error: `Cannot restore when server is ${currentState}. Server must be running.`,
+        operation: withOperationStatus(operationId, "failed"),
         timestamp: new Date().toISOString(),
       },
       { status: 400 }
@@ -48,7 +53,10 @@ async function validateRestoreState(instanceId: string): Promise<NextResponse<Ap
 /**
  * Validate Minecraft service is ready for restore
  */
-async function validateServiceReady(instanceId: string): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
+async function validateServiceReady(
+  instanceId: string,
+  operationId: ReturnType<typeof createOperationInfo>
+): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
   try {
     console.log("[RESTORE] Checking Minecraft service status on instance:", instanceId);
     const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
@@ -60,6 +68,7 @@ async function validateServiceReady(instanceId: string): Promise<NextResponse<Ap
         {
           success: false,
           error: "Minecraft service is still initializing. Please wait a moment.",
+          operation: withOperationStatus(operationId, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
@@ -85,6 +94,7 @@ async function invokeRestoreLambda(
   instanceId: string,
   userEmail: string,
   lockId: string,
+  operationId: ReturnType<typeof createOperationInfo>,
   backupName?: string
 ): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
   try {
@@ -106,6 +116,7 @@ async function invokeRestoreLambda(
           message: "Restore started asynchronously. You will receive an email upon completion.",
           output: "",
         },
+        operation: withOperationStatus(operationId, "accepted"),
         timestamp: new Date().toISOString(),
       },
       { status: 202 }
@@ -122,11 +133,16 @@ async function invokeRestoreLambda(
 /**
  * Build error response for restore endpoint
  */
-function buildRestoreErrorResponse(error: unknown): NextResponse<ApiResponse<RestoreResponse>> {
-  return formatApiErrorResponse<RestoreResponse>(error, "restore");
+function buildRestoreErrorResponse(
+  error: unknown,
+  operationId: ReturnType<typeof createOperationInfo>
+): NextResponse<ApiResponse<RestoreResponse>> {
+  return formatApiErrorResponse<RestoreResponse>(error, "restore", undefined, withOperationStatus(operationId, "failed"));
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
+  const operation = createOperationInfo("restore", "running");
+
   try {
     // Check admin authorization
     const authResult = await requireAdmin(request).catch((e) => e);
@@ -146,32 +162,33 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     // Check current state - must be running
-    const stateError = await validateRestoreState(resolvedId);
+    const stateError = await validateRestoreState(resolvedId, operation);
     if (stateError) {
       return stateError;
     }
 
     // Check Minecraft service is ready
-    const serviceError = await validateServiceReady(resolvedId);
+    const serviceError = await validateServiceReady(resolvedId, operation);
     if (serviceError) {
       return serviceError;
     }
 
     // Invoke Lambda for restore
     const lock = await acquireServerActionLock("restore", authResult.email);
-    return await invokeRestoreLambda(resolvedId, authResult.email, lock.lockId, backupName);
+    return await invokeRestoreLambda(resolvedId, authResult.email, lock.lockId, operation, backupName);
   } catch (error) {
     if (isServerActionLockConflictError(error)) {
       return NextResponse.json(
         {
           success: false,
           error: "Another operation is already in progress. Please wait for it to complete.",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
       );
     }
 
-    return buildRestoreErrorResponse(error);
+    return buildRestoreErrorResponse(error, operation);
   }
 }

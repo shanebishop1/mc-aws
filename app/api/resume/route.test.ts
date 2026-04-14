@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   invokeLambda: vi.fn(),
   getInstanceState: vi.fn(),
   findInstanceId: vi.fn().mockResolvedValue("i-1234"),
+  acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-resume-123" }),
+  releaseServerActionLock: vi.fn().mockResolvedValue(true),
+  isServerActionLockConflictError: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -27,6 +30,12 @@ vi.mock("@/lib/sanitization", () => ({
   sanitizeBackupName: vi.fn(),
 }));
 
+vi.mock("@/lib/server-action-lock", () => ({
+  acquireServerActionLock: mocks.acquireServerActionLock,
+  releaseServerActionLock: mocks.releaseServerActionLock,
+  isServerActionLockConflictError: mocks.isServerActionLockConflictError,
+}));
+
 describe("POST /api/resume", () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -43,6 +52,9 @@ describe("POST /api/resume", () => {
     const body = await parseNextResponse<ApiResponse<ResumeResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("asynchronously");
+    expect(body.operation?.type).toBe("resume");
+    expect(body.operation?.status).toBe("accepted");
+    expect(body.operation?.id).toContain("resume-");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
@@ -50,6 +62,7 @@ describe("POST /api/resume", () => {
       userEmail: "admin@example.com",
       instanceId: "i-1234",
       args: [],
+      lockId: "lock-resume-123",
     });
   });
 
@@ -64,6 +77,7 @@ describe("POST /api/resume", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("already running");
+    expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
@@ -90,6 +104,7 @@ describe("POST /api/resume", () => {
       userEmail: "admin@example.com",
       instanceId: "i-1234",
       args: ["my-backup-2024"],
+      lockId: "lock-resume-123",
     });
   });
 
@@ -105,6 +120,7 @@ describe("POST /api/resume", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toBe("Failed to resume server");
+    expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });
