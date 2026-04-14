@@ -139,7 +139,7 @@ export class MinecraftStack extends cdk.Stack {
         actions: ["kms:Decrypt"],
         resources: [`arn:aws:kms:${this.region}:${this.account}:key/*`],
         conditions: {
-          StringEquals: {
+          StringLike: {
             "kms:EncryptionContext:PARAMETER_ARN": `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`,
           },
         },

@@ -18,8 +18,8 @@ rpm --import https://yum.corretto.aws/corretto.key
 curl -L -o /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
 
 # 3. Install Java 21, unzip, git, Python3 & pip3, and cron
-log "Installing Java, Git, Python, pip, cron, rsync (core deps)..."
-dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip cronie rsync screen
+log "Installing Java, Git, Python, pip, cron, rsync, jq (core deps)..."
+dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip cronie rsync screen jq
 log "Installing rclone (upstream binary)..."
 curl -L -o /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-arm64.zip
 unzip -o /tmp/rclone.zip -d /tmp/rclone
@@ -39,6 +39,14 @@ fi
 if ! command -v unzip >/dev/null 2>&1; then
   log "unzip missing after install; retrying..."
   dnf install -y unzip
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  log "jq missing after install; retrying..."
+  dnf install -y jq
+fi
+if ! command -v jq >/dev/null 2>&1; then
+  log "ERROR: jq is required for update-dns.sh but is not installed"
+  exit 1
 fi
 systemctl enable --now crond
 
