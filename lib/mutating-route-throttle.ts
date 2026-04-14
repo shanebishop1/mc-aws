@@ -1,7 +1,8 @@
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { withOperationStatus } from "@/lib/operation";
+import { createMutatingActionFailure } from "@/lib/mutating-action-contract";
+import { mapMutatingActionExecutionToApiResponse } from "@/lib/mutating-action-response";
 import type { ApiResponse, OperationInfo } from "@/lib/types";
-import { type NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 
 const MUTATING_ROUTE_RATE_LIMIT_WINDOW_MS = 30_000;
 const MUTATING_ROUTE_RATE_LIMIT_MAX_REQUESTS = 4;
@@ -43,14 +44,12 @@ export async function enforceMutatingRouteThrottle<T>({
     return null;
   }
 
-  const response = NextResponse.json(
-    {
-      success: false,
-      error: `Too many ${operation.type} requests. Please retry shortly.`,
-      operation: withOperationStatus(operation, "failed"),
-      timestamp: new Date().toISOString(),
-    },
-    { status: 429 }
+  const response = mapMutatingActionExecutionToApiResponse<T>(
+    operation,
+    createMutatingActionFailure(`Too many ${operation.type} requests. Please retry shortly.`, {
+      httpStatus: 429,
+      code: "throttled",
+    })
   );
 
   response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
