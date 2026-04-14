@@ -14,6 +14,7 @@
    - `docs/epics/high-signal-improvements-implementation/production-like-smoke-verification/prds/production-like-smoke-verification-prd.md`
    - `docs/epics/high-signal-improvements-implementation/production-like-smoke-verification/minimum-real-environment-smoke-contract.md`
    - `docs/epics/high-signal-improvements-implementation/production-like-smoke-verification/real-environment-smoke-ci-credentials-setup.md`
+   - `docs/epics/high-signal-improvements-implementation/production-like-smoke-verification/maintainer-smoke-runbook-and-failure-triage.md`
 4. Workstream 4: Control-Plane Consolidation
    - `docs/epics/high-signal-improvements-implementation/control-plane-consolidation/prds/control-plane-consolidation-prd.md`
 5. Workstream 5: Deploy and Config Hardening

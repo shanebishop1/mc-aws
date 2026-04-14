@@ -46,6 +46,7 @@ Add a narrow, reproducible real-environment confidence lane that validates infra
     - Definition of Done: Smoke lane runs with least privilege against dedicated environment and disallows destructive operations by default.
   - T-3.4 | Lane: WS3-L2 | Task: Add maintainer smoke runbook and failure triage guide
     - Action: Document rerun/debug steps, common failure modes, escalation, and release-blocking criteria.
+    - Artifact: `docs/epics/high-signal-improvements-implementation/production-like-smoke-verification/maintainer-smoke-runbook-and-failure-triage.md`
     - Definition of Done: Maintainers can rerun, debug, and triage smoke failures without ad hoc tribal knowledge.
 
 ## 6) Acceptance Criteria
