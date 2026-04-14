@@ -5,12 +5,7 @@
  * Environment-specific behavior (dev/prod) is handled by package.json scripts
  */
 
-/**
- * Valid backend modes for the application
- * - aws: Real AWS SDK clients (default)
- * - mock: Offline, in-process mock backend for local development/testing
- */
-export type BackendMode = "aws" | "mock";
+import { type BackendMode, parseBackendMode, resolveEnvValue } from "@/lib/runtime-config-schema";
 
 export function getEnv(name: string, optional = false): string {
   const value = process.env[name];
@@ -19,18 +14,6 @@ export function getEnv(name: string, optional = false): string {
     return ""; // Return empty string to allow build to proceed
   }
   return value || "";
-}
-
-/**
- * Validate and parse the MC_BACKEND_MODE environment variable
- * @throws Error if the value is not "aws" or "mock"
- */
-function validateBackendMode(value: string): BackendMode {
-  const normalizedValue = value.toLowerCase().trim();
-  if (normalizedValue !== "aws" && normalizedValue !== "mock") {
-    throw new Error(`Invalid MC_BACKEND_MODE value: "${value}". Must be "aws" or "mock".`);
-  }
-  return normalizedValue as BackendMode;
 }
 
 /**
@@ -43,7 +26,7 @@ export function getBackendMode(): BackendMode {
   if (!mode) {
     return "aws"; // Default to aws mode
   }
-  const validatedMode = validateBackendMode(mode);
+  const validatedMode = parseBackendMode(mode);
 
   // Hard-fail if mock mode is enabled in production
   // Use a function to get NODE_ENV to allow for test mocking
@@ -84,16 +67,18 @@ export const env = {
   CLOUDFLARE_RECORD_ID: getEnv("CLOUDFLARE_RECORD_ID"),
   CLOUDFLARE_MC_DOMAIN: getEnv("CLOUDFLARE_MC_DOMAIN"),
   CLOUDFLARE_DNS_API_TOKEN: (() => {
-    const newToken = getEnv("CLOUDFLARE_DNS_API_TOKEN", true);
-    const oldToken = getEnv("CLOUDFLARE_API_TOKEN", true);
-    if (newToken) return newToken;
-    if (oldToken) {
+    const resolved = resolveEnvValue(process.env, "CLOUDFLARE_DNS_API_TOKEN");
+    if (!resolved) {
+      return getEnv("CLOUDFLARE_DNS_API_TOKEN"); // Will warn about missing required var
+    }
+
+    if (resolved.usedAlias) {
       console.warn(
         "[DEPRECATION] CLOUDFLARE_API_TOKEN is deprecated. Please rename to CLOUDFLARE_DNS_API_TOKEN in your env files."
       );
-      return oldToken;
     }
-    return getEnv("CLOUDFLARE_DNS_API_TOKEN"); // Will warn about missing required var
+
+    return resolved.value;
   })(),
 
   // Google Drive Configuration (optional)
