@@ -15,6 +15,8 @@ export type RequirementLevel = (typeof requirementLevels)[number];
 
 export type EnvValueType = "string" | "url" | "email" | "enum";
 
+const cloudflareKvNamespaceIdPattern = /^[a-f0-9]{32}$/i;
+
 export interface TargetOwnership {
   level: RequirementLevel;
   note?: string;
@@ -170,6 +172,28 @@ export const envRuntimeSchema = {
     ownership: withOwnership({
       worker: { level: "required" },
       lambda: { level: "optional" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  RUNTIME_STATE_SNAPSHOT_KV_ID: {
+    description: "Cloudflare KV namespace id for runtime-state snapshots",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "required" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID: {
+    description: "Cloudflare preview KV namespace id for runtime-state snapshots",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Falls back to RUNTIME_STATE_SNAPSHOT_KV_ID in deploy flow." },
+      lambda: { level: "forbidden" },
       ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },
       ci: { level: "optional" },
@@ -465,6 +489,7 @@ export const runtimeStateWranglerSchema = {
   durableObjectBindingName: "RUNTIME_STATE_DURABLE_OBJECT",
   durableObjectClassName: "RuntimeStateDurableObject",
   snapshotKvBindingName: "RUNTIME_STATE_SNAPSHOT_KV",
+  placeholderKvIdPattern: /^REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV(_PREVIEW)?_ID$/,
   migrationTagPattern: /^v\d+-runtime-state-durable-object$/,
 } as const;
 
@@ -518,6 +543,34 @@ export const validateRuntimeStateWranglerConfig = (config: unknown): RuntimeStat
 
   if (!hasExpectedKvBinding) {
     errors.push(`kv_namespaces must include binding ${runtimeStateWranglerSchema.snapshotKvBindingName}.`);
+  }
+
+  for (const binding of kvNamespaces) {
+    const record = asRecord(binding);
+    if (record?.binding !== runtimeStateWranglerSchema.snapshotKvBindingName) {
+      continue;
+    }
+
+    const kvId = typeof record.id === "string" ? record.id.trim() : "";
+    const previewId = typeof record.preview_id === "string" ? record.preview_id.trim() : "";
+
+    if (!kvId) {
+      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} id is required.`);
+    } else if (runtimeStateWranglerSchema.placeholderKvIdPattern.test(kvId)) {
+      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} id cannot use placeholder values.`);
+    } else if (!cloudflareKvNamespaceIdPattern.test(kvId)) {
+      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} id must be a Cloudflare KV namespace id.`);
+    }
+
+    if (!previewId) {
+      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} preview_id is required.`);
+    } else if (runtimeStateWranglerSchema.placeholderKvIdPattern.test(previewId)) {
+      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} preview_id cannot use placeholder values.`);
+    } else if (!cloudflareKvNamespaceIdPattern.test(previewId)) {
+      errors.push(
+        `${runtimeStateWranglerSchema.snapshotKvBindingName} preview_id must be a Cloudflare KV namespace id.`
+      );
+    }
   }
 
   const migrations = Array.isArray(root.migrations) ? root.migrations : [];

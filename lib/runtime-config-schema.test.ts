@@ -60,6 +60,12 @@ describe("runtime-config-schema", () => {
       ]);
     });
 
+    it("marks runtime-state kv namespace ids as required for worker target", () => {
+      expect(getEnvVarNamesByRequirement("worker", "required")).toEqual(
+        expect.arrayContaining(["RUNTIME_STATE_SNAPSHOT_KV_ID"])
+      );
+    });
+
     it("reports missing and invalid values for target", () => {
       const report = validateEnvForTarget(
         {
@@ -109,6 +115,8 @@ describe("runtime-config-schema", () => {
         kv_namespaces: [
           {
             binding: "RUNTIME_STATE_SNAPSHOT_KV",
+            id: "0123456789abcdef0123456789abcdef",
+            preview_id: "fedcba9876543210fedcba9876543210",
           },
         ],
         migrations: [
@@ -134,6 +142,40 @@ describe("runtime-config-schema", () => {
 
       expect(report.isValid).toBe(false);
       expect(report.errors).toHaveLength(3);
+    });
+
+    it("fails when runtime-state kv binding uses placeholder ids", () => {
+      const report = validateRuntimeStateWranglerConfig({
+        durable_objects: {
+          bindings: [
+            {
+              name: "RUNTIME_STATE_DURABLE_OBJECT",
+              class_name: "RuntimeStateDurableObject",
+            },
+          ],
+        },
+        kv_namespaces: [
+          {
+            binding: "RUNTIME_STATE_SNAPSHOT_KV",
+            id: "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_ID",
+            preview_id: "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID",
+          },
+        ],
+        migrations: [
+          {
+            tag: "v1-runtime-state-durable-object",
+            new_sqlite_classes: ["RuntimeStateDurableObject"],
+          },
+        ],
+      });
+
+      expect(report.isValid).toBe(false);
+      expect(report.errors).toEqual(
+        expect.arrayContaining([
+          "RUNTIME_STATE_SNAPSHOT_KV id cannot use placeholder values.",
+          "RUNTIME_STATE_SNAPSHOT_KV preview_id cannot use placeholder values.",
+        ])
+      );
     });
   });
 });

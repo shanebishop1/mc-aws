@@ -19,8 +19,8 @@
   "kv_namespaces": [
     {
       "binding": "RUNTIME_STATE_SNAPSHOT_KV",
-      "id": "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_ID",
-      "preview_id": "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"
+      "id": "",
+      "preview_id": ""
     }
   ],
   "migrations": [

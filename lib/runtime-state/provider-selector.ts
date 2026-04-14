@@ -36,7 +36,7 @@ export const hasCloudflareRuntimeStateBindings = (
     return false;
   }
 
-  return isPresentBinding(bindings.durableObjectNamespace) || isPresentBinding(bindings.snapshotKvNamespace);
+  return isPresentBinding(bindings.durableObjectNamespace);
 };
 
 const getCloudflareContextBindings = (): RuntimeStateCloudflareBindings | null => {
