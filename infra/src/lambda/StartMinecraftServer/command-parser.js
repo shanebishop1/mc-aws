@@ -5,36 +5,53 @@
  * @returns {Object|null} { command, args } or null if no valid command
  */
 export function parseCommand(subject, startKeyword) {
-  const lowerSubject = subject.toLowerCase();
+  const normalizedSubject = String(subject || "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedSubject) return null;
 
-  // Check for start command
-  if (lowerSubject.includes(startKeyword.toLowerCase())) {
-    return { command: "start", args: [] };
+  const tokens = normalizedSubject.split(/\s+/);
+  const normalizedStartKeyword = String(startKeyword || "start")
+    .trim()
+    .toLowerCase();
+  const commandTokens = new Set([normalizedStartKeyword, "backup", "restore", "hibernate", "resume"]);
+  const foundCommandTokens = tokens.filter((token) => commandTokens.has(token));
+
+  // Reject ambiguous subjects containing multiple commands (e.g. "backup restore")
+  if (foundCommandTokens.length !== 1) {
+    return null;
   }
 
-  // Check for backup command (optional: backup name)
-  if (lowerSubject.includes("backup")) {
-    const match = lowerSubject.match(/backup\s+(\S+)?/);
-    const args = match?.[1] ? [match[1]] : [];
-    return { command: "backup", args };
+  const commandToken = foundCommandTokens[0];
+  const commandIndex = tokens.indexOf(commandToken);
+
+  // Require command token to be the first token for deterministic parsing.
+  if (commandIndex !== 0) {
+    return null;
   }
 
-  // Check for restore command (optional: restore name)
-  if (lowerSubject.includes("restore")) {
-    const match = lowerSubject.match(/restore\s+(\S+)?/);
-    const args = match?.[1] ? [match[1]] : [];
-    return { command: "restore", args };
+  const args = tokens.slice(1);
+
+  if (commandToken === normalizedStartKeyword) {
+    return parseNoArgCommand("start", args);
   }
 
-  // Check for hibernate command
-  if (lowerSubject.includes("hibernate")) {
-    return { command: "hibernate", args: [] };
+  if (commandToken === "backup" || commandToken === "restore") {
+    return parseSingleOptionalArgCommand(commandToken, args);
   }
 
-  // Check for resume command
-  if (lowerSubject.includes("resume")) {
-    return { command: "resume", args: [] };
+  if (commandToken === "hibernate" || commandToken === "resume") {
+    return parseNoArgCommand(commandToken, args);
   }
 
   return null;
+}
+
+function parseNoArgCommand(command, args) {
+  return args.length === 0 ? { command, args: [] } : null;
+}
+
+function parseSingleOptionalArgCommand(command, args) {
+  if (args.length > 1) return null;
+  return { command, args };
 }
