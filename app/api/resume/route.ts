@@ -8,6 +8,7 @@ import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { env } from "@/lib/env";
+import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import { sanitizeBackupName } from "@/lib/sanitization";
 import {
   acquireServerActionLock,
@@ -39,12 +40,16 @@ async function parseResumeBody(request: NextRequest): Promise<ResumeRequestBody>
 /**
  * Check if server is already running
  */
-function checkAlreadyRunning(currentState: string): NextResponse<ApiResponse<ResumeResponse>> | null {
+function checkAlreadyRunning(
+  currentState: string,
+  operationId: ReturnType<typeof createOperationInfo>
+): NextResponse<ApiResponse<ResumeResponse>> | null {
   if (currentState === ServerState.Running) {
     return NextResponse.json(
       {
         success: false,
         error: "Server is already running",
+        operation: withOperationStatus(operationId, "failed"),
         timestamp: new Date().toISOString(),
       },
       { status: 400 }
@@ -60,6 +65,7 @@ async function invokeResumeLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  operationId: ReturnType<typeof createOperationInfo>,
   backupName?: string
 ): Promise<NextResponse<ApiResponse<ResumeResponse>>> {
   try {
@@ -82,6 +88,7 @@ async function invokeResumeLambda(
           domain: env.CLOUDFLARE_MC_DOMAIN,
           restoreOutput: backupName ? `Restore requested: ${backupName}` : undefined,
         },
+        operation: withOperationStatus(operationId, "accepted"),
         timestamp: new Date().toISOString(),
       },
       { status: 202 }
@@ -98,11 +105,16 @@ async function invokeResumeLambda(
 /**
  * Build error response for resume endpoint
  */
-function buildResumeErrorResponse(error: unknown): NextResponse<ApiResponse<ResumeResponse>> {
-  return formatApiErrorResponse<ResumeResponse>(error, "resume");
+function buildResumeErrorResponse(
+  error: unknown,
+  operationId: ReturnType<typeof createOperationInfo>
+): NextResponse<ApiResponse<ResumeResponse>> {
+  return formatApiErrorResponse<ResumeResponse>(error, "resume", undefined, withOperationStatus(operationId, "failed"));
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<ResumeResponse>>> {
+  const operation = createOperationInfo("resume", "running");
+
   try {
     // Check admin authorization
     let user: AuthUser;
@@ -124,7 +136,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     const currentState = await getInstanceState(resolvedId);
 
     // Check if already running
-    const alreadyRunning = checkAlreadyRunning(currentState);
+    const alreadyRunning = checkAlreadyRunning(currentState, operation);
     if (alreadyRunning) {
       return alreadyRunning;
     }
@@ -136,19 +148,20 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     // Invoke Lambda for resume
     const lock = await acquireServerActionLock("resume", user.email);
-    return await invokeResumeLambda(resolvedId, user, lock.lockId, backupName);
+    return await invokeResumeLambda(resolvedId, user, lock.lockId, operation, backupName);
   } catch (error) {
     if (isServerActionLockConflictError(error)) {
       return NextResponse.json(
         {
           success: false,
           error: "Another operation is already in progress. Please wait for it to complete.",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
       );
     }
 
-    return buildResumeErrorResponse(error);
+    return buildResumeErrorResponse(error, operation);
   }
 }

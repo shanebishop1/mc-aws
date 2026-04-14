@@ -6,6 +6,7 @@
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
+import { createOperationInfo, withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
@@ -16,6 +17,7 @@ import { ServerState } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<StopServerResponse>>> {
+  const operation = createOperationInfo("stop", "running");
   let userEmail = "unknown";
 
   try {
@@ -44,6 +46,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         {
           success: false,
           error: "Server is already stopped",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 400 }
@@ -55,6 +58,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         {
           success: false,
           error: `Cannot stop server in state: ${currentState}`,
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 400 }
@@ -79,6 +83,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         instanceId: resolvedId,
         message: "Server stop command sent successfully",
       },
+      operation: withOperationStatus(operation, "accepted"),
       timestamp: new Date().toISOString(),
     };
 
@@ -89,12 +94,13 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         {
           success: false,
           error: "Another operation is already in progress. Please wait for it to complete.",
+          operation: withOperationStatus(operation, "failed"),
           timestamp: new Date().toISOString(),
         },
         { status: 409 }
       );
     }
 
-    return formatApiErrorResponse<StopServerResponse>(error, "stop");
+    return formatApiErrorResponse<StopServerResponse>(error, "stop", undefined, withOperationStatus(operation, "failed"));
   }
 }

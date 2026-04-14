@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   invokeLambda: vi.fn(),
   getInstanceState: vi.fn(),
   findInstanceId: vi.fn().mockResolvedValue("i-1234"),
+  acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-start-123" }),
+  releaseServerActionLock: vi.fn().mockResolvedValue(true),
+  isServerActionLockConflictError: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -20,6 +23,12 @@ vi.mock("@/lib/aws", () => ({
 // Mock requireAllowed to return a fake user
 vi.mock("@/lib/api-auth", () => ({
   requireAllowed: vi.fn().mockResolvedValue({ email: "test@example.com", role: "admin" }),
+}));
+
+vi.mock("@/lib/server-action-lock", () => ({
+  acquireServerActionLock: mocks.acquireServerActionLock,
+  releaseServerActionLock: mocks.releaseServerActionLock,
+  isServerActionLockConflictError: mocks.isServerActionLockConflictError,
 }));
 
 describe("POST /api/start", () => {
@@ -38,12 +47,16 @@ describe("POST /api/start", () => {
     const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("initiated");
+    expect(body.operation?.type).toBe("start");
+    expect(body.operation?.status).toBe("accepted");
+    expect(body.operation?.id).toContain("start-");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
       command: "start",
       userEmail: "test@example.com",
       instanceId: "i-1234",
+      lockId: "lock-start-123",
     });
   });
 
@@ -58,6 +71,7 @@ describe("POST /api/start", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("already running");
+    expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
@@ -83,6 +97,7 @@ describe("POST /api/start", () => {
       command: "start",
       userEmail: "test@example.com",
       instanceId: "i-1234", // Server-side resolved ID
+      lockId: "lock-start-123",
     });
   });
 
@@ -98,6 +113,7 @@ describe("POST /api/start", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toBe("Failed to start server");
+    expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });

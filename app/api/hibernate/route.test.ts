@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   invokeLambda: vi.fn(),
   getInstanceState: vi.fn(),
   findInstanceId: vi.fn().mockResolvedValue("i-1234"),
+  acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-hibernate-123" }),
+  releaseServerActionLock: vi.fn().mockResolvedValue(true),
+  isServerActionLockConflictError: vi.fn().mockReturnValue(false),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -20,6 +23,12 @@ vi.mock("@/lib/aws", () => ({
 // Mock requireAdmin to return a fake admin user
 vi.mock("@/lib/api-auth", () => ({
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
+}));
+
+vi.mock("@/lib/server-action-lock", () => ({
+  acquireServerActionLock: mocks.acquireServerActionLock,
+  releaseServerActionLock: mocks.releaseServerActionLock,
+  isServerActionLockConflictError: mocks.isServerActionLockConflictError,
 }));
 
 describe("POST /api/hibernate", () => {
@@ -39,6 +48,9 @@ describe("POST /api/hibernate", () => {
     expect(body.success).toBe(true);
     expect(body.data?.message).toContain("asynchronously");
     expect(body.data?.instanceId).toBe("i-1234");
+    expect(body.operation?.type).toBe("hibernate");
+    expect(body.operation?.status).toBe("accepted");
+    expect(body.operation?.id).toContain("hibernate-");
 
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
@@ -46,7 +58,22 @@ describe("POST /api/hibernate", () => {
       instanceId: "i-1234",
       userEmail: "admin@example.com",
       args: [],
+      lockId: "lock-hibernate-123",
     });
+  });
+
+  it("should return completed operation when already hibernating", async () => {
+    mocks.getInstanceState.mockResolvedValue(ServerState.Hibernating);
+
+    const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(200);
+    const body = await parseNextResponse<ApiResponse<HibernateResponse>>(res);
+    expect(body.success).toBe(true);
+    expect(body.operation?.status).toBe("completed");
+    expect(body.data?.backupOutput).toContain("already hibernating");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("should return 400 when instance is not running", async () => {
@@ -60,6 +87,7 @@ describe("POST /api/hibernate", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("must be running");
+    expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
@@ -76,6 +104,7 @@ describe("POST /api/hibernate", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toBe("Failed to hibernate server");
+    expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });
