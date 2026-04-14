@@ -5,11 +5,21 @@
 
 import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
-import { formatApiErrorResponse, formatApiErrorResponseWithStatus, formatAuthErrorResponse } from "@/lib/api-error";
+import { formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import {
+  createMutatingActionFailure,
+  createMutatingActionRequestContext,
+  createMutatingActionSuccess,
+} from "@/lib/mutating-action-contract";
+import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
+import {
+  createMutatingActionLockConflictFailure,
+  mapMutatingActionExecutionToApiResponse,
+} from "@/lib/mutating-action-response";
 import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
-import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
-import { createOperationInfo, withOperationStatus } from "@/lib/operation";
+import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
+import { withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
@@ -17,50 +27,38 @@ import {
 } from "@/lib/server-action-lock";
 import type { ApiResponse, HibernateResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
-import { type NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 
 /**
  * Check if server is already hibernating
  */
 function checkAlreadyHibernating(
   currentState: string,
-  resolvedId: string,
-  operationId: ReturnType<typeof createOperationInfo>
-): NextResponse<ApiResponse<HibernateResponse>> | null {
+  resolvedId: string
+): HibernateResponse | null {
   if (currentState === ServerState.Hibernating) {
-    return NextResponse.json({
-      success: true,
-      data: {
-        message: "Server is already hibernating (stopped with no volumes)",
-        instanceId: resolvedId,
-        backupOutput: "Skipped - already hibernating",
-      },
-      operation: withOperationStatus(operationId, "completed"),
-      timestamp: new Date().toISOString(),
-    });
+    return {
+      message: "Server is already hibernating (stopped with no volumes)",
+      instanceId: resolvedId,
+      backupOutput: "Skipped - already hibernating",
+    };
   }
   return null;
 }
 
-/**
- * Validate server state for hibernation
- */
-function validateHibernateState(
-  currentState: string,
-  operationId: ReturnType<typeof createOperationInfo>
-): NextResponse<ApiResponse<HibernateResponse>> | null {
-  if (currentState !== ServerState.Running) {
-    return NextResponse.json(
-      {
-        success: false,
-        error: `Cannot hibernate when server is ${currentState}. Server must be running.`,
-        operation: withOperationStatus(operationId, "failed"),
-        timestamp: new Date().toISOString(),
-      },
-      { status: 400 }
-    );
+class HibernateInvalidStateError extends Error {
+  code = "invalid_state";
+
+  constructor(currentState: string) {
+    super(`Cannot hibernate when server is ${currentState}. Server must be running.`);
+    this.name = "HibernateInvalidStateError";
   }
-  return null;
+}
+
+function validateHibernateState(currentState: string): void {
+  if (currentState !== ServerState.Running) {
+    throw new HibernateInvalidStateError(currentState);
+  }
 }
 
 /**
@@ -69,118 +67,155 @@ function validateHibernateState(
 async function invokeHibernateLambda(
   instanceId: string,
   user: AuthUser,
-  lockId: string,
-  operationId: ReturnType<typeof createOperationInfo>
-): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
-  try {
-    console.log(`[HIBERNATE] Invoking Lambda for hibernate on ${instanceId}`);
-    await invokeLambda("StartMinecraftServer", {
-      invocationType: "api",
-      command: "hibernate",
-      instanceId: instanceId,
-      userEmail: user.email,
-      args: [],
-      lockId,
-    });
+  lockId: string
+): Promise<HibernateResponse> {
+  console.log(`[HIBERNATE] Invoking Lambda for hibernate on ${instanceId}`);
+  await invokeLambda("StartMinecraftServer", {
+    invocationType: "api",
+    command: "hibernate",
+    instanceId,
+    userEmail: user.email,
+    args: [],
+    lockId,
+  });
 
-    return NextResponse.json(
-      {
-        success: true,
-        data: {
-          message: "Hibernate started asynchronously. You will receive an email upon completion.",
-          instanceId: instanceId,
-          backupOutput: "",
-        },
-        operation: withOperationStatus(operationId, "accepted"),
-        timestamp: new Date().toISOString(),
-      },
-      { status: 202 }
-    );
-  } catch (error) {
-    console.error("[HIBERNATE] Lambda invocation failed:", error);
-    await releaseServerActionLock(lockId, { action: "hibernate", ownerEmail: user.email }).catch((releaseError) => {
-      console.error("[HIBERNATE] Failed to release lock after invoke error:", releaseError);
-    });
-    throw error;
-  }
-}
-
-/**
- * Build error response for hibernate endpoint
- */
-function buildHibernateErrorResponse(
-  error: unknown,
-  operationId: ReturnType<typeof createOperationInfo>
-): NextResponse<ApiResponse<HibernateResponse>> {
-  const errorMessage = error instanceof Error ? error.message : "Unknown error";
-
-  if (isServerActionLockConflictError(error) || errorMessage.includes("Another operation is in progress")) {
-    return formatApiErrorResponseWithStatus<HibernateResponse>(
-      error,
-      409,
-      "Another operation is in progress. Please wait for it to complete.",
-      withOperationStatus(operationId, "failed")
-    );
-  }
-
-  return formatApiErrorResponse<HibernateResponse>(
-    error,
-    "hibernate",
-    undefined,
-    withOperationStatus(operationId, "failed")
-  );
+  return {
+    message: "Hibernate started asynchronously. You will receive an email upon completion.",
+    instanceId,
+    backupOutput: "",
+  };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {
-  const operation = createOperationInfo("hibernate", "running");
+  const context = createMutatingActionRequestContext(request, "/api/hibernate", "hibernate");
 
-  try {
-    // Check admin authorization
-    let user: AuthUser;
-    try {
-      user = await requireAdmin(request);
+  let authFailureResponse: Response | null = null;
+  let throttleRetryAfterHeader: string | undefined;
+  let throttleCacheControlHeader: string | undefined;
+  let resolvedId: string | null = null;
+
+  const outcome = await runMutatingActionLifecycle<AuthUser, HibernateResponse, void>({
+    context,
+    authenticate: async () => {
+      const user = await requireAdmin(context.request);
       console.log("[HIBERNATE] Admin action by:", user.email);
-
+      return user;
+    },
+    throttle: async ({ user }) => {
       const throttleResponse = await enforceMutatingRouteThrottle<HibernateResponse>({
-        request,
-        route: "/api/hibernate",
-        operation,
+        request: context.request,
+        route: context.route,
+        operation: context.operation,
         identity: user.email,
       });
-      if (throttleResponse) {
-        return throttleResponse;
+      if (!throttleResponse) {
+        return { allowed: true };
       }
-    } catch (error) {
-      if (error instanceof Response) {
-        return await formatAuthErrorResponse<HibernateResponse>(error, withOperationStatus(operation, "failed"));
+
+      const throttleFailure = await mapMutatingRouteThrottleFailure(throttleResponse, context.operation.type);
+      throttleRetryAfterHeader = throttleFailure.retryAfterHeader;
+      throttleCacheControlHeader = throttleFailure.cacheControlHeader;
+      return throttleFailure.decision;
+    },
+    acquireLock: async ({ user }) => {
+      await parseMutatingActionRequestPayload(context.request, "hibernate");
+
+      resolvedId = await findInstanceId();
+      const currentState = await getInstanceState(resolvedId);
+      console.log("[HIBERNATE] Current state:", currentState);
+
+      const alreadyHibernatingData = checkAlreadyHibernating(currentState, resolvedId);
+      if (alreadyHibernatingData) {
+        return {
+          lockId: "already-hibernating",
+          action: "hibernate",
+          ownerEmail: user.email,
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date().toISOString(),
+          alreadyHibernatingData,
+        };
       }
-      throw error;
-    }
 
-    // Consume optional JSON body for consistent mutating request parsing behavior.
-    await parseMutatingActionRequestPayload(request, "hibernate");
-    const resolvedId = await findInstanceId();
+      validateHibernateState(currentState);
+      return await acquireServerActionLock("hibernate", user.email);
+    },
+    invoke: async ({ user, lock }) => {
+      const syntheticLock = lock as typeof lock & { alreadyHibernatingData?: HibernateResponse };
+      if (syntheticLock.alreadyHibernatingData) {
+        return syntheticLock.alreadyHibernatingData;
+      }
 
-    // Check current state
-    const currentState = await getInstanceState(resolvedId);
-    console.log("[HIBERNATE] Current state:", currentState);
+      if (!resolvedId) {
+        throw new Error("Resolved instance ID is required before invoking hibernate action");
+      }
 
-    // Check if already hibernating
-    const alreadyHibernating = checkAlreadyHibernating(currentState, resolvedId, operation);
-    if (alreadyHibernating) {
-      return alreadyHibernating;
-    }
+      return await invokeHibernateLambda(resolvedId, user, lock.lockId);
+    },
+    mapInvokeResult: ({ lock, invokeResult }) => {
+      const syntheticLock = lock as typeof lock & { alreadyHibernatingData?: HibernateResponse };
+      if (syntheticLock.alreadyHibernatingData) {
+        return createMutatingActionSuccess(invokeResult, "completed", 200);
+      }
 
-    // Validate state
-    const stateError = validateHibernateState(currentState, operation);
-    if (stateError) {
-      return stateError;
-    }
+      return createMutatingActionSuccess(invokeResult);
+    },
+    mapError: ({ stage, error }) => {
+      if (stage === "auth" && error instanceof Response) {
+        authFailureResponse = error;
+        return createMutatingActionFailure("Authentication required", {
+          httpStatus: error.status,
+          code: "auth_error",
+          cause: error,
+        });
+      }
 
-    // Invoke Lambda for hibernate
-    const lock = await acquireServerActionLock("hibernate", user.email);
-    return await invokeHibernateLambda(resolvedId, user, lock.lockId, operation);
-  } catch (error) {
-    return buildHibernateErrorResponse(error, operation);
+      if (isServerActionLockConflictError(error)) {
+        return createMutatingActionLockConflictFailure(error);
+      }
+
+      if (error instanceof HibernateInvalidStateError) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: error.code,
+          cause: error,
+        });
+      }
+
+      return createMutatingActionFailure("Failed to hibernate server", {
+        cause: error,
+      });
+    },
+    finalize: async ({ execution, lock, user }) => {
+      const syntheticLock = lock as (typeof lock & { alreadyHibernatingData?: HibernateResponse }) | undefined;
+      if (execution.ok || !lock || syntheticLock?.alreadyHibernatingData) {
+        return;
+      }
+
+      const ownerEmail = user?.email ?? "unknown";
+      await releaseServerActionLock(lock.lockId, { action: "hibernate", ownerEmail }).catch((releaseError) => {
+        console.error("[HIBERNATE] Failed to release lock after invoke error:", releaseError);
+      });
+    },
+  });
+
+  if (authFailureResponse) {
+    return await formatAuthErrorResponse<HibernateResponse>(
+      authFailureResponse,
+      withOperationStatus(context.operation, "failed")
+    );
   }
+
+  const response = mapMutatingActionExecutionToApiResponse(context.operation, outcome.execution);
+
+  if (!outcome.execution.ok && outcome.execution.code === "throttled") {
+    if (throttleRetryAfterHeader) {
+      response.headers.set("Retry-After", throttleRetryAfterHeader);
+    }
+
+    if (throttleCacheControlHeader) {
+      response.headers.set("Cache-Control", throttleCacheControlHeader);
+    }
+  }
+
+  return response;
 }

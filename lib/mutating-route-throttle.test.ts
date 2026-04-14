@@ -134,4 +134,33 @@ describe("enforceMutatingRouteThrottle", () => {
       failureMode: "closed",
     });
   });
+
+  it("maps throttle response payload and headers to lifecycle decision", async () => {
+    const { mapMutatingRouteThrottleFailure } = await import("./mutating-route-throttle");
+
+    const throttled = Response.json(
+      {
+        success: false,
+        error: "Too many backup requests. Please retry shortly.",
+      },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": "15",
+          "Cache-Control": "no-store",
+        },
+      }
+    );
+
+    const mapped = await mapMutatingRouteThrottleFailure(throttled, "backup");
+
+    expect(mapped.decision).toEqual({
+      allowed: false,
+      httpStatus: 429,
+      code: "throttled",
+      message: "Too many backup requests. Please retry shortly.",
+    });
+    expect(mapped.retryAfterHeader).toBe("15");
+    expect(mapped.cacheControlHeader).toBe("no-store");
+  });
 });

@@ -10,6 +10,16 @@ const mocks = vi.hoisted(() => ({
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
+  mapMutatingRouteThrottleFailure: vi.fn(async (response: Response, operation: string) => ({
+    decision: {
+      allowed: false,
+      httpStatus: response.status,
+      code: "throttled",
+      message: `Too many ${operation} requests. Please retry shortly.`,
+    },
+    retryAfterHeader: response.headers.get("Retry-After") ?? undefined,
+    cacheControlHeader: response.headers.get("Cache-Control") ?? undefined,
+  })),
 }));
 
 vi.mock("@/lib/api-auth", () => ({
@@ -24,6 +34,7 @@ vi.mock("@/lib/server-action-lock", () => ({
 
 vi.mock("@/lib/mutating-route-throttle", () => ({
   enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
+  mapMutatingRouteThrottleFailure: mocks.mapMutatingRouteThrottleFailure,
 }));
 
 describe("POST /api/stop", () => {
@@ -32,6 +43,9 @@ describe("POST /api/stop", () => {
   beforeEach(() => {
     previousBackendMode = process.env.MC_BACKEND_MODE;
     process.env.MC_BACKEND_MODE = "aws";
+    mocks.requireAdmin.mockResolvedValue({ email: "admin@example.com", role: "admin" });
+    mocks.enforceMutatingRouteThrottle.mockResolvedValue(null);
+    mocks.isServerActionLockConflictError.mockReturnValue(false);
     resetProvider();
   });
 
@@ -134,5 +148,59 @@ describe("POST /api/stop", () => {
     expect(body.operation?.type).toBe("stop");
     expect(body.operation?.status).toBe("failed");
     expect(body.operation?.id).toContain("stop-");
+  });
+
+  it("returns 429 with throttle headers when mutating throttle is exceeded", async () => {
+    const { mockEC2Client } = await import("@/tests/mocks/aws");
+
+    mocks.enforceMutatingRouteThrottle.mockResolvedValueOnce(
+      Response.json(
+        {
+          success: false,
+          error: "Too many stop requests. Please retry shortly.",
+          timestamp: new Date().toISOString(),
+        },
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "5",
+            "Cache-Control": "no-store",
+          },
+        }
+      )
+    );
+
+    const req = createMockNextRequest("http://localhost/api/stop", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(429);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Too many stop requests");
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(mockEC2Client.send).not.toHaveBeenCalled();
+  });
+
+  it("runs lifecycle stages in auth -> throttle -> lock order", async () => {
+    const { mockEC2Client } = await import("@/tests/mocks/aws");
+
+    mockEC2Client.send
+      .mockResolvedValueOnce({ Reservations: [{ Instances: [{ State: { Name: "running" }, InstanceId: "i-1234" }] }] })
+      .mockResolvedValueOnce({});
+
+    const req = createMockNextRequest("http://localhost/api/stop", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(202);
+
+    const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
+    const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
+    const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
+    const releaseOrder = mocks.releaseServerActionLock.mock.invocationCallOrder[0];
+
+    expect(authOrder).toBeLessThan(throttleOrder);
+    expect(throttleOrder).toBeLessThan(lockOrder);
+    expect(lockOrder).toBeLessThan(releaseOrder);
   });
 });

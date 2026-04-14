@@ -4,48 +4,62 @@
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { formatApiErrorResponse, formatAuthErrorResponse } from "@/lib/api-error";
+import { formatAuthErrorResponse } from "@/lib/api-error";
 import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { createMutatingActionFailure, createMutatingActionRequestContext } from "@/lib/mutating-action-contract";
+import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
+import {
+  createMutatingActionLockConflictFailure,
+  mapMutatingActionExecutionToApiResponse,
+} from "@/lib/mutating-action-response";
 import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
-import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
-import { createOperationInfo, withOperationStatus } from "@/lib/operation";
+import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
+import { withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
   isServerActionLockConflictError,
   releaseServerActionLock,
 } from "@/lib/server-action-lock";
 import type { ApiResponse, RestoreResponse } from "@/lib/types";
-import { type NextRequest, NextResponse } from "next/server";
+import type { NextRequest, NextResponse } from "next/server";
 
-/**
- * Validate server state for restore
- */
-async function validateRestoreState(
-  instanceId: string,
-  operationId: ReturnType<typeof createOperationInfo>
-): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
-  const currentState = await getInstanceState(instanceId);
-  if (currentState !== "running") {
-    return NextResponse.json(
-      {
-        success: false,
-        error: `Cannot restore when server is ${currentState}. Server must be running.`,
-        operation: withOperationStatus(operationId, "failed"),
-        timestamp: new Date().toISOString(),
-      },
-      { status: 400 }
-    );
+const validationErrorPatterns = [
+  "Backup name is required",
+  "Backup name exceeds maximum length",
+  "Backup name cannot be empty",
+  "Backup name contains invalid characters",
+] as const;
+
+class RestoreInvalidStateError extends Error {
+  code = "invalid_state";
+
+  constructor(currentState: string) {
+    super(`Cannot restore when server is ${currentState}. Server must be running.`);
+    this.name = "RestoreInvalidStateError";
   }
-  return null;
 }
 
-/**
- * Validate Minecraft service is ready for restore
- */
-async function validateServiceReady(
-  instanceId: string,
-  operationId: ReturnType<typeof createOperationInfo>
-): Promise<NextResponse<ApiResponse<RestoreResponse>> | null> {
+class RestoreServiceNotReadyError extends Error {
+  code = "service_not_ready";
+
+  constructor() {
+    super("Minecraft service is still initializing. Please wait a moment.");
+    this.name = "RestoreServiceNotReadyError";
+  }
+}
+
+function isValidationErrorMessage(message: string): boolean {
+  return validationErrorPatterns.some((pattern) => message.includes(pattern));
+}
+
+async function validateRestoreState(instanceId: string): Promise<void> {
+  const currentState = await getInstanceState(instanceId);
+  if (currentState !== "running") {
+    throw new RestoreInvalidStateError(currentState);
+  }
+}
+
+async function validateServiceReady(instanceId: string): Promise<void> {
   try {
     console.log("[RESTORE] Checking Minecraft service status on instance:", instanceId);
     const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
@@ -53,140 +67,167 @@ async function validateServiceReady(
 
     if (trimmedOutput !== "active") {
       console.log("[RESTORE] Minecraft service not ready, status:", trimmedOutput);
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Minecraft service is still initializing. Please wait a moment.",
-          operation: withOperationStatus(operationId, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
+      throw new RestoreServiceNotReadyError();
     }
 
     console.log("[RESTORE] Minecraft service is active and ready");
-    return null;
   } catch (error) {
+    if (error instanceof RestoreServiceNotReadyError) {
+      throw error;
+    }
+
     console.error("[RESTORE] Error checking Minecraft service status:", error);
     // If we can't check the service status, allow the restore to proceed
     // This prevents blocking restores due to transient SSM issues
     console.warn("[RESTORE] Proceeding with restore despite service check failure");
-
-    return null;
   }
 }
 
-/**
- * Invoke restore Lambda and return response
- */
 async function invokeRestoreLambda(
   instanceId: string,
   userEmail: string,
   lockId: string,
-  operationId: ReturnType<typeof createOperationInfo>,
   backupName?: string
-): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
-  try {
-    console.log(`[RESTORE] Invoking Lambda for restore on ${instanceId}`);
-    await invokeLambda("StartMinecraftServer", {
-      invocationType: "api",
-      command: "restore",
-      instanceId: instanceId,
-      userEmail: userEmail,
-      args: backupName ? [backupName] : [],
-      lockId,
-    });
+): Promise<RestoreResponse> {
+  console.log(`[RESTORE] Invoking Lambda for restore on ${instanceId}`);
+  await invokeLambda("StartMinecraftServer", {
+    invocationType: "api",
+    command: "restore",
+    instanceId,
+    userEmail,
+    args: backupName ? [backupName] : [],
+    lockId,
+  });
 
-    return NextResponse.json(
-      {
-        success: true,
-        data: {
-          backupName: backupName || "latest",
-          message: "Restore started asynchronously. You will receive an email upon completion.",
-          output: "",
-        },
-        operation: withOperationStatus(operationId, "accepted"),
-        timestamp: new Date().toISOString(),
-      },
-      { status: 202 }
-    );
-  } catch (error) {
-    console.error("[RESTORE] Lambda invocation failed:", error);
-    await releaseServerActionLock(lockId, { action: "restore", ownerEmail: userEmail }).catch((releaseError) => {
-      console.error("[RESTORE] Failed to release lock after invoke error:", releaseError);
-    });
-    throw error;
-  }
-}
-
-/**
- * Build error response for restore endpoint
- */
-function buildRestoreErrorResponse(
-  error: unknown,
-  operationId: ReturnType<typeof createOperationInfo>
-): NextResponse<ApiResponse<RestoreResponse>> {
-  return formatApiErrorResponse<RestoreResponse>(
-    error,
-    "restore",
-    undefined,
-    withOperationStatus(operationId, "failed")
-  );
+  return {
+    backupName: backupName || "latest",
+    message: "Restore started asynchronously. You will receive an email upon completion.",
+    output: "",
+  };
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {
-  const operation = createOperationInfo("restore", "running");
+  const context = createMutatingActionRequestContext(request, "/api/restore", "restore");
 
-  try {
-    // Check admin authorization
-    const authResult = await requireAdmin(request).catch((e) => e);
-    if (authResult instanceof Response) {
-      return await formatAuthErrorResponse<RestoreResponse>(authResult, withOperationStatus(operation, "failed"));
-    }
-    console.log("[RESTORE] Admin action by:", authResult.email);
+  let authFailureResponse: Response | null = null;
+  let throttleRetryAfterHeader: string | undefined;
+  let throttleCacheControlHeader: string | undefined;
+  let resolvedId: string | null = null;
+  let backupName: string | undefined;
 
-    const throttleResponse = await enforceMutatingRouteThrottle<RestoreResponse>({
-      request,
-      route: "/api/restore",
-      operation,
-      identity: authResult.email,
-    });
-    if (throttleResponse) {
-      return throttleResponse;
-    }
+  const outcome = await runMutatingActionLifecycle<{ email: string; role: string }, RestoreResponse, void>({
+    context,
+    authenticate: async () => {
+      const user = await requireAdmin(context.request);
+      console.log("[RESTORE] Admin action by:", user.email);
+      return user;
+    },
+    throttle: async ({ user }) => {
+      const throttleResponse = await enforceMutatingRouteThrottle<RestoreResponse>({
+        request: context.request,
+        route: context.route,
+        operation: context.operation,
+        identity: user.email,
+      });
 
-    // Parse and sanitize optional backup name (backupName takes precedence over legacy name)
-    const { backupName } = await parseMutatingActionRequestPayload(request, "restore");
-    const resolvedId = await findInstanceId();
+      if (!throttleResponse) {
+        return { allowed: true };
+      }
 
-    // Check current state - must be running
-    const stateError = await validateRestoreState(resolvedId, operation);
-    if (stateError) {
-      return stateError;
-    }
+      const throttleFailure = await mapMutatingRouteThrottleFailure(throttleResponse, context.operation.type);
+      throttleRetryAfterHeader = throttleFailure.retryAfterHeader;
+      throttleCacheControlHeader = throttleFailure.cacheControlHeader;
+      return throttleFailure.decision;
+    },
+    acquireLock: async ({ user }) => {
+      const payload = await parseMutatingActionRequestPayload(context.request, "restore");
+      backupName = payload.backupName;
 
-    // Check Minecraft service is ready
-    const serviceError = await validateServiceReady(resolvedId, operation);
-    if (serviceError) {
-      return serviceError;
-    }
+      resolvedId = await findInstanceId();
+      await validateRestoreState(resolvedId);
+      await validateServiceReady(resolvedId);
 
-    // Invoke Lambda for restore
-    const lock = await acquireServerActionLock("restore", authResult.email);
-    return await invokeRestoreLambda(resolvedId, authResult.email, lock.lockId, operation, backupName);
-  } catch (error) {
-    if (isServerActionLockConflictError(error)) {
-      return NextResponse.json(
-        {
-          success: false,
-          error: "Another operation is already in progress. Please wait for it to complete.",
-          operation: withOperationStatus(operation, "failed"),
-          timestamp: new Date().toISOString(),
-        },
-        { status: 409 }
-      );
-    }
+      return await acquireServerActionLock("restore", user.email);
+    },
+    invoke: async ({ user, lock }) => {
+      if (!resolvedId) {
+        throw new Error("Resolved instance ID is required before invoking restore action");
+      }
 
-    return buildRestoreErrorResponse(error, operation);
+      return await invokeRestoreLambda(resolvedId, user.email, lock.lockId, backupName);
+    },
+    mapError: ({ stage, error }) => {
+      if (stage === "auth" && error instanceof Response) {
+        authFailureResponse = error;
+        return createMutatingActionFailure("Authentication required", {
+          httpStatus: error.status,
+          code: "auth_error",
+          cause: error,
+        });
+      }
+
+      if (isServerActionLockConflictError(error)) {
+        return createMutatingActionLockConflictFailure(error);
+      }
+
+      if (error instanceof RestoreInvalidStateError) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: error.code,
+          cause: error,
+        });
+      }
+
+      if (error instanceof RestoreServiceNotReadyError) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 409,
+          code: error.code,
+          cause: error,
+        });
+      }
+
+      if (error instanceof Error && isValidationErrorMessage(error.message)) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: "invalid_payload",
+          cause: error,
+        });
+      }
+
+      return createMutatingActionFailure("Failed to restore backup", {
+        cause: error,
+      });
+    },
+    finalize: async ({ execution, lock, user }) => {
+      if (execution.ok || !lock) {
+        return;
+      }
+
+      const ownerEmail = user?.email ?? "unknown";
+      await releaseServerActionLock(lock.lockId, { action: "restore", ownerEmail }).catch((releaseError) => {
+        console.error("[RESTORE] Failed to release lock after invoke error:", releaseError);
+      });
+    },
+  });
+
+  if (authFailureResponse) {
+    return await formatAuthErrorResponse<RestoreResponse>(
+      authFailureResponse,
+      withOperationStatus(context.operation, "failed")
+    );
   }
+
+  const response = mapMutatingActionExecutionToApiResponse(context.operation, outcome.execution);
+
+  if (!outcome.execution.ok && outcome.execution.code === "throttled") {
+    if (throttleRetryAfterHeader) {
+      response.headers.set("Retry-After", throttleRetryAfterHeader);
+    }
+
+    if (throttleCacheControlHeader) {
+      response.headers.set("Cache-Control", throttleCacheControlHeader);
+    }
+  }
+
+  return response;
 }

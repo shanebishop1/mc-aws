@@ -1,7 +1,8 @@
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { createMutatingActionFailure } from "@/lib/mutating-action-contract";
+import type { MutatingActionThrottleDecision } from "@/lib/mutating-action-lifecycle";
 import { mapMutatingActionExecutionToApiResponse } from "@/lib/mutating-action-response";
-import type { ApiResponse, OperationInfo } from "@/lib/types";
+import type { ApiResponse, OperationInfo, OperationType } from "@/lib/types";
 import type { NextRequest, NextResponse } from "next/server";
 
 const MUTATING_ROUTE_RATE_LIMIT_WINDOW_MS = 30_000;
@@ -12,6 +13,12 @@ interface EnforceMutatingRouteThrottleOptions {
   route: string;
   operation: OperationInfo;
   identity?: string;
+}
+
+export interface MutatingRouteThrottleFailure {
+  decision: Extract<MutatingActionThrottleDecision, { allowed: false }>;
+  retryAfterHeader?: string;
+  cacheControlHeader?: string;
 }
 
 function normalizeIdentity(identity: string): string {
@@ -56,4 +63,32 @@ export async function enforceMutatingRouteThrottle<T>({
   response.headers.set("Cache-Control", "no-store");
 
   return response;
+}
+
+export async function mapMutatingRouteThrottleFailure(
+  throttleResponse: Response,
+  operation: OperationType
+): Promise<MutatingRouteThrottleFailure> {
+  const defaultMessage = `Too many ${operation} requests. Please retry shortly.`;
+  let message = defaultMessage;
+
+  try {
+    const payload = await throttleResponse.clone().json();
+    if (typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string") {
+      message = payload.error;
+    }
+  } catch {
+    // Keep fallback message when JSON payload is unavailable
+  }
+
+  return {
+    decision: {
+      allowed: false,
+      httpStatus: throttleResponse.status,
+      code: "throttled",
+      message,
+    },
+    retryAfterHeader: throttleResponse.headers.get("Retry-After") ?? undefined,
+    cacheControlHeader: throttleResponse.headers.get("Cache-Control") ?? undefined,
+  };
 }
