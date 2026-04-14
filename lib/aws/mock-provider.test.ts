@@ -8,6 +8,50 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProvider } from "./mock-provider";
 import { getMockStateStore, resetMockStateStore } from "./mock-state-store";
 
+interface PersistedOperationTransition {
+  status: string;
+  source: string;
+}
+
+interface PersistedOperationState {
+  status: string;
+  lastError?: string;
+  code?: string;
+  history: PersistedOperationTransition[];
+}
+
+function buildAcceptedOperationState(operationId: string, type: string): string {
+  const now = new Date().toISOString();
+  return JSON.stringify({
+    id: operationId,
+    type,
+    route: `/api/${type}`,
+    status: "accepted",
+    requestedAt: now,
+    updatedAt: now,
+    requestedBy: "admin@example.com",
+    lockId: "lock-123",
+    instanceId: "i-mock1234567890abcdef",
+    history: [
+      {
+        status: "accepted",
+        at: now,
+        source: "api",
+      },
+    ],
+  });
+}
+
+async function readOperationState(operationId: string): Promise<PersistedOperationState> {
+  const stateStore = getMockStateStore();
+  const raw = await stateStore.getParameter(`/minecraft/operations/${operationId}`);
+  if (!raw) {
+    throw new Error(`Missing operation state for ${operationId}`);
+  }
+
+  return JSON.parse(raw) as PersistedOperationState;
+}
+
 describe("Mock Provider Core", () => {
   beforeEach(() => {
     // Reset the mock state store before each test for isolation
@@ -499,6 +543,84 @@ describe("Mock Provider Core", () => {
       const playerCount = await mockProvider.getPlayerCount();
       expect(playerCount.count).toBe(10);
       expect(playerCount.lastUpdated).toBeDefined();
+    });
+  });
+
+  describe("Lambda Durable Operation Lifecycle", () => {
+    it("persists running -> completed transitions for async mock commands", async () => {
+      const stateStore = getMockStateStore();
+      const operationId = "backup-op-123";
+      const lockId = "lock-123";
+
+      await stateStore.setParameter(`/minecraft/operations/${operationId}`, buildAcceptedOperationState(operationId, "backup"));
+      await stateStore.setParameter(
+        "/minecraft/server-action",
+        JSON.stringify({ lockId, action: "backup", ownerEmail: "admin@example.com" })
+      );
+
+      await mockProvider.invokeLambda("StartMinecraftServer", {
+        invocationType: "api",
+        command: "backup",
+        userEmail: "admin@example.com",
+        instanceId: "i-mock1234567890abcdef",
+        lockId,
+        operationId,
+      });
+
+      await new Promise((resolve) => setTimeout(resolve, 700));
+
+      const operation = await readOperationState(operationId);
+      expect(operation.status).toBe("completed");
+      expect(operation.history.map((entry) => `${entry.source}:${entry.status}`)).toEqual([
+        "api:accepted",
+        "lambda:running",
+        "lambda:completed",
+      ]);
+
+      const lock = await stateStore.getParameter("/minecraft/server-action");
+      expect(lock).toBeNull();
+    });
+
+    it("persists failed transition when async mock command errors", async () => {
+      const stateStore = getMockStateStore();
+      const operationId = "start-op-123";
+      const lockId = "lock-123";
+
+      await stateStore.setParameter(`/minecraft/operations/${operationId}`, buildAcceptedOperationState(operationId, "start"));
+      await stateStore.setParameter(
+        "/minecraft/server-action",
+        JSON.stringify({ lockId, action: "start", ownerEmail: "admin@example.com" })
+      );
+      await stateStore.setOperationFailure("startInstance", {
+        failNext: true,
+        alwaysFail: false,
+        errorCode: "MockStartFailure",
+        errorMessage: "Mock start failed",
+      });
+
+      await expect(
+        mockProvider.invokeLambda("StartMinecraftServer", {
+          invocationType: "api",
+          command: "start",
+          userEmail: "admin@example.com",
+          instanceId: "i-mock1234567890abcdef",
+          lockId,
+          operationId,
+        })
+      ).resolves.toBeUndefined();
+
+      const operation = await readOperationState(operationId);
+      expect(operation.status).toBe("failed");
+      expect(operation.code).toBe("lambda_execution_failed");
+      expect(operation.lastError).toContain("Mock start failed");
+      expect(operation.history.map((entry) => `${entry.source}:${entry.status}`)).toEqual([
+        "api:accepted",
+        "lambda:running",
+        "lambda:failed",
+      ]);
+
+      const lock = await stateStore.getParameter("/minecraft/server-action");
+      expect(lock).toBeNull();
     });
   });
 
