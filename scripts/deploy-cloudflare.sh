@@ -155,55 +155,20 @@ get_env_value() {
   echo "$value"
 }
 
-is_placeholder() {
-  local value="$1"
-  [[ -z "$value" ]] && return 0
-  [[ "$value" == your-* ]] && return 0
-  [[ "$value" == "https://mc.yourdomain.com" ]] && return 0
-  [[ "$value" == "http://localhost:3000" ]] && return 0
-  return 1
+WORKER_SECRET_ALLOWLIST=()
+
+load_worker_secret_allowlist() {
+  if ! mapfile -t WORKER_SECRET_ALLOWLIST < <(pnpm exec tsx scripts/get-worker-secret-allowlist.ts); then
+    echo "❌ Error: Failed to load Worker secret allowlist from schema"
+    echo "   Tip: run pnpm install and ensure scripts/get-worker-secret-allowlist.ts succeeds"
+    exit 1
+  fi
+
+  if [[ ${#WORKER_SECRET_ALLOWLIST[@]} -eq 0 ]]; then
+    echo "❌ Error: Worker secret allowlist is empty"
+    exit 1
+  fi
 }
-
-# Define required env vars from the selected deployment env file
-REQUIRED_VARS=(
-  "NEXT_PUBLIC_APP_URL"
-  "GOOGLE_CLIENT_ID"
-  "GOOGLE_CLIENT_SECRET"
-  "ADMIN_EMAIL"
-  "AWS_REGION"
-  "AWS_ACCESS_KEY_ID"
-  "AWS_SECRET_ACCESS_KEY"
-  "CLOUDFLARE_DNS_API_TOKEN"
-  "CLOUDFLARE_ZONE_ID"
-  "CLOUDFLARE_RECORD_ID"
-  "CLOUDFLARE_MC_DOMAIN"
-  "RUNTIME_STATE_SNAPSHOT_KV_ID"
-)
-
-# Explicit allowlist: only these keys can be uploaded as Worker secrets.
-WORKER_SECRET_ALLOWLIST=(
-  "AWS_REGION"
-  "AWS_ACCOUNT_ID"
-  "INSTANCE_ID"
-  "AWS_ACCESS_KEY_ID"
-  "AWS_SECRET_ACCESS_KEY"
-  "AWS_SESSION_TOKEN"
-  "CLOUDFORMATION_STACK_NAME"
-  "STACK_NAME"
-  "CLOUDFLARE_DNS_API_TOKEN"
-  "CLOUDFLARE_API_TOKEN"
-  "CLOUDFLARE_ZONE_ID"
-  "CLOUDFLARE_RECORD_ID"
-  "CLOUDFLARE_MC_DOMAIN"
-  "GDRIVE_REMOTE"
-  "GDRIVE_ROOT"
-  "AUTH_SECRET"
-  "ADMIN_EMAIL"
-  "ALLOWED_EMAILS"
-  "GOOGLE_CLIENT_ID"
-  "GOOGLE_CLIENT_SECRET"
-  "NEXT_PUBLIC_APP_URL"
-)
 
 is_worker_secret_allowed() {
   local candidate="$1"
@@ -327,24 +292,15 @@ fi
 echo "✅ Production schema validation passed"
 echo ""
 
-MISSING_VARS=()
-for key in "${REQUIRED_VARS[@]}"; do
-  value="$(get_env_value "$key")"
-  if is_placeholder "$value"; then
-    MISSING_VARS+=("$key")
-  fi
-done
-
-if [[ ${#MISSING_VARS[@]} -ne 0 ]]; then
-  echo "❌ Error: Missing required values in $ENV_FILE:"
-  for key in "${MISSING_VARS[@]}"; do
-    echo "  - $key"
-  done
+echo "🔍 Validating runtime-state Wrangler setup..."
+if ! pnpm exec tsx scripts/validate-runtime-state-deploy.ts --env-file "$ENV_FILE" --wrangler-config "$WRANGLER_CONFIG_FILE"; then
+  echo "❌ Error: runtime-state deployment preflight failed"
   exit 1
 fi
-
-echo "✅ All required secrets are set"
+echo "✅ Runtime-state setup validation passed"
 echo ""
+
+load_worker_secret_allowlist
 
 NEXT_PUBLIC_APP_URL="$(get_env_value "NEXT_PUBLIC_APP_URL")"
 
