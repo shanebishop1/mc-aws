@@ -75,7 +75,13 @@ describe("POST /api/start", () => {
           error: "Too many start requests. Please retry shortly.",
           timestamp: new Date().toISOString(),
         },
-        { status: 429 }
+        {
+          status: 429,
+          headers: {
+            "Retry-After": "7",
+            "Cache-Control": "no-store",
+          },
+        }
       )
     );
 
@@ -86,6 +92,8 @@ describe("POST /api/start", () => {
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
     expect(body.error).toContain("Too many start requests");
+    expect(res.headers.get("Retry-After")).toBe("7");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
     expect(mocks.getInstanceState).not.toHaveBeenCalled();
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
@@ -103,6 +111,7 @@ describe("POST /api/start", () => {
     expect(body.error).toContain("already running");
     expect(body.operation?.status).toBe("failed");
 
+    expect(mocks.acquireServerActionLock).not.toHaveBeenCalled();
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
@@ -150,6 +159,29 @@ describe("POST /api/start", () => {
       action: "start",
       ownerEmail: "test@example.com",
     });
+  });
+
+  it("runs shared lifecycle stages in order on success", async () => {
+    mocks.getInstanceState.mockResolvedValueOnce(ServerState.Stopped);
+    mocks.invokeLambda.mockResolvedValueOnce(undefined);
+
+    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(202);
+
+    const authOrder = mocks.requireAllowed.mock.invocationCallOrder[0];
+    const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
+    const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
+    const stateOrder = mocks.getInstanceState.mock.invocationCallOrder[0];
+    const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
+    const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
+
+    expect(authOrder).toBeLessThan(throttleOrder);
+    expect(throttleOrder).toBeLessThan(findInstanceOrder);
+    expect(findInstanceOrder).toBeLessThan(stateOrder);
+    expect(stateOrder).toBeLessThan(lockOrder);
+    expect(lockOrder).toBeLessThan(invokeOrder);
   });
 
   it("returns failed operation metadata for auth failures", async () => {
