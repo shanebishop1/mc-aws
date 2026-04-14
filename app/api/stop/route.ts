@@ -83,7 +83,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       console.log("[STOP] Sending stop command...");
       await stopInstance(resolvedId);
     } finally {
-      await releaseServerActionLock(lock.lockId).catch((releaseError) => {
+      await releaseServerActionLock(lock.lockId, { action: "stop", ownerEmail: userEmail }).catch((releaseError) => {
         console.error("[STOP] Failed to release lock:", releaseError);
       });
     }
@@ -112,6 +112,11 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    return formatApiErrorResponse<StopServerResponse>(error, "stop", undefined, withOperationStatus(operation, "failed"));
+    return formatApiErrorResponse<StopServerResponse>(
+      error,
+      "stop",
+      undefined,
+      withOperationStatus(operation, "failed")
+    );
   }
 }

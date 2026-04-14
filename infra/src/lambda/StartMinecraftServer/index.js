@@ -78,7 +78,15 @@ async function releaseServerActionLockIfOwned(lockId, command) {
     try {
       lock = JSON.parse(lockValue);
     } catch {
-      console.warn(`[API] Lock format invalid for '${command}', skipping release`);
+      console.warn(`[API] Lock format invalid for '${command}', removing malformed lock`);
+      await deleteParameter("/minecraft/server-action");
+      return;
+    }
+
+    if (lock.action && lock.action !== command) {
+      console.warn(
+        `[API] Lock action mismatch for '${command}'. current=${lock.action || "unknown"} provided=${command}`
+      );
       return;
     }
 

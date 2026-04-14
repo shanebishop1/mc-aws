@@ -109,7 +109,7 @@ async function invokeHibernateLambda(
     );
   } catch (error) {
     console.error("[HIBERNATE] Lambda invocation failed:", error);
-    await releaseServerActionLock(lockId).catch((releaseError) => {
+    await releaseServerActionLock(lockId, { action: "hibernate", ownerEmail: user.email }).catch((releaseError) => {
       console.error("[HIBERNATE] Failed to release lock after invoke error:", releaseError);
     });
     throw error;
@@ -134,7 +134,12 @@ function buildHibernateErrorResponse(
     );
   }
 
-  return formatApiErrorResponse<HibernateResponse>(error, "hibernate", undefined, withOperationStatus(operationId, "failed"));
+  return formatApiErrorResponse<HibernateResponse>(
+    error,
+    "hibernate",
+    undefined,
+    withOperationStatus(operationId, "failed")
+  );
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<HibernateResponse>>> {

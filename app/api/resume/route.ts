@@ -96,7 +96,7 @@ async function invokeResumeLambda(
     );
   } catch (error) {
     console.error("[RESUME] Lambda invocation failed:", error);
-    await releaseServerActionLock(lockId).catch((releaseError) => {
+    await releaseServerActionLock(lockId, { action: "resume", ownerEmail: user.email }).catch((releaseError) => {
       console.error("[RESUME] Failed to release lock after invoke error:", releaseError);
     });
     throw error;

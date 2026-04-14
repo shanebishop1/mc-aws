@@ -124,7 +124,7 @@ async function invokeRestoreLambda(
     );
   } catch (error) {
     console.error("[RESTORE] Lambda invocation failed:", error);
-    await releaseServerActionLock(lockId).catch((releaseError) => {
+    await releaseServerActionLock(lockId, { action: "restore", ownerEmail: userEmail }).catch((releaseError) => {
       console.error("[RESTORE] Failed to release lock after invoke error:", releaseError);
     });
     throw error;
@@ -138,7 +138,12 @@ function buildRestoreErrorResponse(
   error: unknown,
   operationId: ReturnType<typeof createOperationInfo>
 ): NextResponse<ApiResponse<RestoreResponse>> {
-  return formatApiErrorResponse<RestoreResponse>(error, "restore", undefined, withOperationStatus(operationId, "failed"));
+  return formatApiErrorResponse<RestoreResponse>(
+    error,
+    "restore",
+    undefined,
+    withOperationStatus(operationId, "failed")
+  );
 }
 
 export async function POST(request: NextRequest): Promise<NextResponse<ApiResponse<RestoreResponse>>> {

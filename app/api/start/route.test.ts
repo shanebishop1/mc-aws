@@ -146,6 +146,10 @@ describe("POST /api/start", () => {
     expect(body.operation?.status).toBe("failed");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
+    expect(mocks.releaseServerActionLock).toHaveBeenCalledWith("lock-start-123", {
+      action: "start",
+      ownerEmail: "test@example.com",
+    });
   });
 
   it("returns failed operation metadata for auth failures", async () => {
