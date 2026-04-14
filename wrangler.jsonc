@@ -3,7 +3,7 @@
   "name": "mc-aws-panel",
   "compatibility_date": "2024-09-23",
   "compatibility_flags": ["nodejs_compat"],
-  "main": ".open-next/worker.js",
+  "main": "worker.mjs",
   "assets": {
     "directory": ".open-next/assets",
     "binding": "ASSETS"
