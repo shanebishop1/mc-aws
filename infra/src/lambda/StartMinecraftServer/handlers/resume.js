@@ -37,37 +37,49 @@ export async function handleResume(instanceId) {
   const az = instance.Placement?.AvailabilityZone;
   if (!az) throw new Error(`Could not determine availability zone for instance ${instanceId}`);
 
-  const snapshotId = await findLatestAL2023Snapshot();
-  const volumeId = await createAndAttachVolume(instanceId, az, snapshotId);
+  const imageId = instance.ImageId;
+  if (!imageId) throw new Error(`Could not determine source AMI for instance ${instanceId}`);
+
+  const rootDeviceName = instance.RootDeviceName;
+  if (!rootDeviceName) throw new Error(`Could not determine root device name for instance ${instanceId}`);
+
+  const snapshotId = await resolvePinnedRootSnapshot(instanceId, imageId, rootDeviceName);
+  const volumeId = await createAndAttachVolume(instanceId, az, imageId, snapshotId);
 
   console.log(`Successfully restored volume ${volumeId} for instance ${instanceId}`);
 }
 
-async function findLatestAL2023Snapshot() {
-  console.log("Looking up Amazon Linux 2023 ARM64 AMI...");
+async function resolvePinnedRootSnapshot(instanceId, imageId, rootDeviceName) {
+  console.log(`Resolving reconstruction source from instance AMI ${imageId} (root device: ${rootDeviceName})...`);
   const response = await ec2.send(
     new DescribeImagesCommand({
-      Owners: ["amazon"],
-      Filters: [
-        { Name: "name", Values: ["al2023-ami-2023*-arm64"] },
-        { Name: "state", Values: ["available"] },
-      ],
+      ImageIds: [imageId],
     })
   );
 
-  if (!response.Images?.length) throw new Error("Could not find Amazon Linux 2023 ARM64 AMI");
+  const sourceImage = response.Images?.find((image) => image.ImageId === imageId) ?? response.Images?.[0];
+  if (!sourceImage) {
+    throw new Error(`Source AMI ${imageId} for instance ${instanceId} was not found`);
+  }
 
-  const sortedImages = response.Images.sort(
-    (a, b) => new Date(b.CreationDate).getTime() - new Date(a.CreationDate).getTime()
+  if (sourceImage.State && sourceImage.State !== "available") {
+    throw new Error(`Source AMI ${imageId} is not available (state: ${sourceImage.State})`);
+  }
+
+  const rootBlockDeviceMapping = sourceImage.BlockDeviceMappings?.find(
+    (mapping) => mapping.DeviceName === rootDeviceName
   );
-  const snapshotId = sortedImages[0].BlockDeviceMappings?.[0]?.Ebs?.SnapshotId;
+  const snapshotId = rootBlockDeviceMapping?.Ebs?.SnapshotId;
 
-  if (!snapshotId) throw new Error(`Could not find snapshot for AMI ${sortedImages[0].ImageId}`);
-  console.log(`Using snapshot: ${snapshotId}`);
+  if (!snapshotId) {
+    throw new Error(`Could not resolve root snapshot for source AMI ${imageId} and device ${rootDeviceName}`);
+  }
+
+  console.log(`Using pinned root snapshot ${snapshotId} from source AMI ${imageId}`);
   return snapshotId;
 }
 
-async function createAndAttachVolume(instanceId, az, snapshotId) {
+async function createAndAttachVolume(instanceId, az, sourceImageId, snapshotId) {
   console.log("Creating new 8GB GP3 volume from snapshot...");
   const createResponse = await ec2.send(
     new CreateVolumeCommand({
@@ -82,6 +94,8 @@ async function createAndAttachVolume(instanceId, az, snapshotId) {
           Tags: [
             { Key: "Name", Value: "MinecraftServerVolume" },
             { Key: "Backup", Value: "weekly" },
+            { Key: "ReconstructionSourceImageId", Value: sourceImageId },
+            { Key: "ReconstructionSourceSnapshotId", Value: snapshotId },
           ],
         },
       ],

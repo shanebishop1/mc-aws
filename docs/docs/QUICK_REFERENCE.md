@@ -104,7 +104,7 @@ See [../MOCK_MODE_DEVELOPER_GUIDE.md](../MOCK_MODE_DEVELOPER_GUIDE.md) for compr
 
 ### Start Server Features
 - ✅ Hibernation detection (stopped + no volumes)
-- ✅ Automatic volume creation from latest AMI
+- ✅ Automatic root-volume reconstruction from instance-pinned AMI snapshot source
 - ✅ Volume attachment with timeout
 - ✅ Instance startup polling
 - ✅ Public IP polling (up to 5 minutes)

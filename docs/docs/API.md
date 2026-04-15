@@ -54,6 +54,8 @@ Notes:
 - Async routes (`hibernate`, `resume`, `backup`, `restore`) return accepted-style responses while work continues.
 - `start` is fire-and-forget but currently returns `200` with initiation message.
 - `400` is used for invalid state transitions (for example already running/stopped).
+- Hibernate is a destructive zero-EBS-cost path: attached instance volumes are detached/deleted before completion.
+- Resume reconstructs root storage from the instance-pinned AMI source (`ImageId` + `RootDeviceName`), with explicit failure when source metadata is unavailable.
 
 ## Status and Monitoring
 
