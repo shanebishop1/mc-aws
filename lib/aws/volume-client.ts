@@ -58,6 +58,9 @@ export async function detachAndDeleteVolumes(instanceId?: string): Promise<void>
   const blockDeviceMappings = instance?.BlockDeviceMappings || [];
   console.log(`Found ${blockDeviceMappings.length} block device mappings`);
 
+  // Cost-model contract: hibernate is a zero-EBS-cost mode, so all attached instance volumes are removed.
+  // Resume is responsible for recreating the root volume from an explicit, pinned source.
+
   for (const mapping of blockDeviceMappings) {
     const volumeId = mapping.Ebs?.VolumeId;
     if (!volumeId) {
@@ -149,6 +152,51 @@ async function waitForVolumeAttached(
   }
 }
 
+interface ResumeRootSource {
+  imageId: string;
+  rootDeviceName: string;
+  snapshotId: string;
+}
+
+async function resolveResumeRootSource(
+  instanceId: string,
+  imageId: string,
+  rootDeviceName: string
+): Promise<ResumeRootSource> {
+  console.log(
+    `[RESUME] Resolving reconstruction source from instance AMI ${imageId} (root device: ${rootDeviceName})...`
+  );
+
+  const imagesResponse = await ec2.send(
+    new DescribeImagesCommand({
+      ImageIds: [imageId],
+    })
+  );
+
+  const sourceImage = imagesResponse.Images?.find((image) => image.ImageId === imageId) ?? imagesResponse.Images?.[0];
+  if (!sourceImage) {
+    throw new Error(`Source AMI ${imageId} for instance ${instanceId} was not found`);
+  }
+
+  if (sourceImage.State && sourceImage.State !== "available") {
+    throw new Error(`Source AMI ${imageId} is not available (state: ${sourceImage.State})`);
+  }
+
+  const rootBlockDeviceMapping = sourceImage.BlockDeviceMappings?.find(
+    (mapping) => mapping.DeviceName === rootDeviceName
+  );
+
+  if (!rootBlockDeviceMapping?.Ebs?.SnapshotId) {
+    throw new Error(`Could not resolve root snapshot for source AMI ${imageId} and device ${rootDeviceName}`);
+  }
+
+  return {
+    imageId,
+    rootDeviceName,
+    snapshotId: rootBlockDeviceMapping.Ebs.SnapshotId,
+  };
+}
+
 /**
  * Handle hibernation recovery by creating and attaching a volume if needed
  */
@@ -156,7 +204,7 @@ export async function handleResume(instanceId?: string) {
   const resolvedId = instanceId || (await findInstanceId());
   console.log(`Checking if instance ${resolvedId} needs volume restoration...`);
 
-  const { blockDeviceMappings, az } = await getInstanceDetails(resolvedId);
+  const { blockDeviceMappings, az, instance } = await getInstanceDetails(resolvedId);
 
   if (blockDeviceMappings.length > 0) {
     console.log(`Instance ${resolvedId} already has ${blockDeviceMappings.length} volume(s). Skipping resume.`);
@@ -169,45 +217,24 @@ export async function handleResume(instanceId?: string) {
     throw new Error(`Could not determine availability zone for instance ${resolvedId}`);
   }
 
-  console.log("Looking up Amazon Linux 2023 ARM64 AMI...");
-  const imagesResponse = await ec2.send(
-    new DescribeImagesCommand({
-      Owners: ["amazon"],
-      Filters: [
-        { Name: "name", Values: ["al2023-ami-2023*-arm64"] },
-        { Name: "state", Values: ["available"] },
-      ],
-    })
-  );
-
-  if (!imagesResponse.Images || imagesResponse.Images.length === 0) {
-    throw new Error("Could not find Amazon Linux 2023 ARM64 AMI");
+  const sourceImageId = instance.ImageId;
+  if (!sourceImageId) {
+    throw new Error(`Could not determine source AMI for instance ${resolvedId}`);
   }
 
-  const sortedImages = imagesResponse.Images.sort(
-    (a: (typeof imagesResponse.Images)[0], b: (typeof imagesResponse.Images)[0]) => {
-      const dateA = new Date(a.CreationDate || "").getTime();
-      const dateB = new Date(b.CreationDate || "").getTime();
-      return dateB - dateA;
-    }
-  );
-
-  const amiId = sortedImages[0].ImageId;
-  console.log(`Found latest AMI: ${amiId}`);
-
-  const blockDeviceMapping = sortedImages[0].BlockDeviceMappings?.[0];
-  if (!blockDeviceMapping || !blockDeviceMapping.Ebs?.SnapshotId) {
-    throw new Error(`Could not find snapshot for AMI ${amiId}`);
+  const rootDeviceName = instance.RootDeviceName;
+  if (!rootDeviceName) {
+    throw new Error(`Could not determine root device name for instance ${resolvedId}`);
   }
 
-  const snapshotId = blockDeviceMapping.Ebs.SnapshotId;
-  console.log(`Using snapshot: ${snapshotId}`);
+  const resumeSource = await resolveResumeRootSource(resolvedId, sourceImageId, rootDeviceName);
+  console.log(`[RESUME] Using pinned root snapshot ${resumeSource.snapshotId} from source AMI ${resumeSource.imageId}`);
 
   console.log("Creating new 8GB GP3 volume from snapshot...");
   const createVolumeResponse = await ec2.send(
     new CreateVolumeCommand({
       AvailabilityZone: az,
-      SnapshotId: snapshotId,
+      SnapshotId: resumeSource.snapshotId,
       VolumeType: "gp3",
       Size: 8,
       Encrypted: true,
@@ -217,6 +244,8 @@ export async function handleResume(instanceId?: string) {
           Tags: [
             { Key: "Name", Value: "MinecraftServerVolume" },
             { Key: "Backup", Value: "weekly" },
+            { Key: "ReconstructionSourceImageId", Value: resumeSource.imageId },
+            { Key: "ReconstructionSourceSnapshotId", Value: resumeSource.snapshotId },
           ],
         },
       ],

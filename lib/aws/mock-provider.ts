@@ -668,12 +668,11 @@ export const mockProvider: AwsProvider = {
       throw new Error(`Could not determine availability zone for instance ${resolvedId}`);
     }
 
-    console.log("[MOCK] Looking up Amazon Linux 2023 ARM64 AMI...");
     const amiId = "ami-mock1234567890abcdef";
-    console.log(`[MOCK] Found latest AMI: ${amiId}`);
+    console.log(`[MOCK] Using pinned source AMI: ${amiId}`);
 
     const snapshotId = "snap-mock1234567890abcdef";
-    console.log(`[MOCK] Using snapshot: ${snapshotId}`);
+    console.log(`[MOCK] Using pinned root snapshot: ${snapshotId}`);
 
     console.log("[MOCK] Creating new 8GB GP3 volume from snapshot...");
     const volumeId = `vol-mock${Date.now().toString(16)}`;

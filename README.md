@@ -78,6 +78,13 @@ Local auth options:
 - If they are not configured, core panel/server flows still work.
 - Without `VERIFIED_SENDER`, email-triggered commands and SES notification sending are disabled.
 
+### Hibernate/resume reconstruction rule
+
+- Hibernate intentionally detaches and deletes all attached instance volumes (zero-EBS-cost mode).
+- Resume reconstructs the root volume from the instance's own source AMI root snapshot (`ImageId` + `RootDeviceName`).
+- Resume does **not** use drifting "latest" public AMI lookups.
+- If pinned source metadata cannot be resolved, resume fails explicitly instead of silently falling back.
+
 ## CLI Addendum (Optional)
 
 The web app is the default workflow. If you want terminal control, these commands are available:
