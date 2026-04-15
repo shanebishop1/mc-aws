@@ -18,8 +18,10 @@ This index tracks epic-level planning docs in the canonical hierarchy:
 4. **High-Signal Improvements Implementation**
    - Epic overview: `docs/epics/high-signal-improvements-implementation/epic-overview/prds/high-signal-improvements-implementation-epic.md`
    - Feature index: `docs/epics/high-signal-improvements-implementation/INDEX.md`
+5. **High-Signal Findings Remediation**
+   - Feature index: `docs/epics/high-signal-findings-remediation/INDEX.md`
 
 ## Notes
 
-- Feature-level PRDs now exist for all three approved priorities.
+- Feature-level PRDs exist for prior approved priorities plus the confirmed findings remediation backlog.
 - Implementation tasks are defined in each feature PRD Section 5 using `ST-*`/`T-*` lines.
