@@ -151,6 +151,21 @@ describe("POST /api/start", () => {
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
+  it("blocks non-admin users from using start on resumable states", async () => {
+    mocks.requireAllowed.mockResolvedValueOnce({ email: "allowed@example.com", role: "allowed" });
+    mocks.getInstanceState.mockResolvedValueOnce(ServerState.Hibernating);
+
+    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const res = await POST(req);
+
+    expect(res.status).toBe(400);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toContain("Use resume instead");
+    expect(body.operation?.status).toBe("failed");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
   it("should ignore instanceId from request body and use server-side resolution", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Stopped);
