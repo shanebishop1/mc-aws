@@ -18,16 +18,18 @@ const THIRTY_DAYS_IN_SECONDS = 30 * 24 * 60 * 60;
  * @returns The user's role: 'admin' | 'allowed' | 'public'
  */
 export function getUserRole(email: string, allowedEmails: string[] = []): UserRole {
+  const normalizeEmail = (value: string) => value.trim().toLowerCase();
+
   // Local dev convenience account. Only applies when dev-login is explicitly enabled.
   // Playwright runs the Next server via `next start` (NODE_ENV=production), so we key off ENABLE_DEV_LOGIN.
-  if (email.toLowerCase() === "dev@localhost" && process.env.ENABLE_DEV_LOGIN === "true") {
+  if (normalizeEmail(email) === "dev@localhost" && process.env.ENABLE_DEV_LOGIN === "true") {
     return "admin";
   }
 
   const adminEmail = env.ADMIN_EMAIL;
 
   // Check if admin
-  if (email === adminEmail) {
+  if (normalizeEmail(email) === normalizeEmail(adminEmail)) {
     return "admin";
   }
 
@@ -35,9 +37,8 @@ export function getUserRole(email: string, allowedEmails: string[] = []): UserRo
   // Note: We now expect the caller to provide the authoritative list (from SSM)
   // The env.ALLOWED_EMAILS is deprecated for auth logic.
   if (allowedEmails.length > 0) {
-    const normalize = (e: string) => e.trim().toLowerCase();
-    const normalizedList = allowedEmails.map(normalize);
-    if (normalizedList.includes(normalize(email))) {
+    const normalizedList = allowedEmails.map(normalizeEmail);
+    if (normalizedList.includes(normalizeEmail(email))) {
       return "allowed";
     }
   }
