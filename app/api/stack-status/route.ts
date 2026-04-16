@@ -105,7 +105,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     }
 
     console.log("[STACK-STATUS] Checking CloudFormation stack status");
-    const stack = await getStackStatus("MinecraftStack");
+    const configuredStackName = process.env.CLOUDFORMATION_STACK_NAME || process.env.STACK_NAME || "MinecraftStack";
+    const stack = await getStackStatus(configuredStackName);
 
     const snapshot: CachedStackStatusSnapshot = stack
       ? {

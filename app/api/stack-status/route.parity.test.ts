@@ -153,6 +153,35 @@ describe("GET /api/stack-status mock/aws parity", () => {
     }
   });
 
+  it("uses configured CloudFormation stack name in aws mode", async () => {
+    getAuthUserMock.mockResolvedValue(null);
+
+    const runtimeStateFixture = createRuntimeStateAdapterFixture();
+    getRuntimeStateAdapterMock.mockReturnValue(runtimeStateFixture.adapter);
+    resetProvider();
+    vi.stubEnv("MC_BACKEND_MODE", "aws");
+    vi.stubEnv("CLOUDFORMATION_STACK_NAME", "CustomMinecraftStack");
+    cloudformationSendMock.mockReset();
+    cloudformationSendMock.mockResolvedValue({
+      Stacks: [
+        {
+          StackStatus: "CREATE_COMPLETE",
+          StackId: "stack-123",
+        },
+      ],
+    });
+
+    const response = await GET(createMockNextRequest("http://localhost/api/stack-status"));
+
+    expect(response.status).toBe(200);
+    expect(cloudformationSendMock).toHaveBeenCalledTimes(1);
+    expect(cloudformationSendMock.mock.calls[0]?.[0]).toMatchObject({
+      input: {
+        StackName: "CustomMinecraftStack",
+      },
+    });
+  });
+
   it("maps provider failures to same error contract with no-store caching", async () => {
     getAuthUserMock.mockResolvedValue(null);
 
