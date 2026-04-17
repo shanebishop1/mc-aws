@@ -49,7 +49,7 @@ test.describe("Error Handling", () => {
     // Inject fault for stopInstance operation
     await injectFault(page, {
       operation: "stopInstance",
-      failNext: true,
+      alwaysFail: true,
       errorCode: "IncorrectState",
       errorMessage: "Instance is in an incorrect state for this operation",
     });

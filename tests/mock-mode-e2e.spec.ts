@@ -187,7 +187,7 @@ test.describe("Mock Mode E2E Tests", () => {
 
     // Click start button and wait for the start API to complete
     const startResponse = page.waitForResponse(
-      (response) => response.url().includes("/api/start") && response.status() === 200
+      (response) => response.url().includes("/api/start") && response.status() === 202
     );
     await page.getByRole("button", { name: /start server/i }).click();
 

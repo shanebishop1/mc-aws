@@ -34,8 +34,8 @@ test.describe("Homepage States", () => {
     await expect(page.getByRole("button", { name: /start/i })).toBeVisible();
     await expect(page.getByRole("button", { name: /start server/i })).toBeVisible();
 
-    // Should show Hibernate button
-    await expect(page.getByRole("button", { name: /hibernate/i })).toBeVisible();
+    // Hibernate is only available while running
+    await expect(page.getByRole("button", { name: /hibernate/i })).not.toBeVisible();
 
     // Should not show Stop, Resume, or Backup/Restore buttons
     await expect(page.getByRole("button", { name: /stop/i })).not.toBeVisible();

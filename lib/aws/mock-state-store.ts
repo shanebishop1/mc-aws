@@ -186,11 +186,6 @@ function createDefaultSSMParameters(): Record<string, MockSSMParameter> {
       type: "String",
       lastModified: now,
     },
-    "/minecraft/server-action": {
-      value: "",
-      type: "String",
-      lastModified: now,
-    },
     "/minecraft/gdrive-token": {
       value: "",
       type: "SecureString",
