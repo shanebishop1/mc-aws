@@ -4,8 +4,7 @@ This guide helps you get started with mock mode in under 5 minutes. Mock mode le
 
 ## Prerequisites
 
-- Node.js 18+ installed
-- pnpm installed (`npm install -g pnpm`)
+- `mise` (recommended) or the repo-pinned toolchain: Node.js 22.15.1 + pnpm 10.30.3
 - Git installed
 
 ## Step 1: Clone and Install
@@ -16,18 +15,20 @@ git clone https://github.com/your-username/mc-aws.git
 cd mc-aws
 
 # Install dependencies
-pnpm install
+pnpm install --frozen-lockfile
 ```
+
+If you do not already have the pinned Node.js / pnpm versions, run `bash ./setup.sh` once or install them with `mise`.
 
 ## Step 2: Configure Environment
 
 Copy the minimal mock mode configuration:
 
 ```bash
-cp .env.example .env
+cp .env.mock.example .env.local
 ```
 
-The `.env` file now contains the minimal configuration needed for mock mode:
+The `.env.local` file now contains the minimal configuration needed for mock mode:
 
 ```bash
 MC_BACKEND_MODE=mock

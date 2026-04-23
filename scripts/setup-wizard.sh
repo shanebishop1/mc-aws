@@ -43,6 +43,34 @@ readonly WIZARD_TOTAL=10
 readonly LOCAL_ENV_FILE=".env.local"
 readonly PRODUCTION_ENV_FILE=".env.production"
 
+template_for_env_file() {
+  local env_file="$1"
+
+  case "$env_file" in
+    ".env.local")
+      printf '%s\n' ".env.local.example"
+      ;;
+    ".env.production")
+      printf '%s\n' ".env.production.example"
+      ;;
+    *)
+      printf '%s\n' ""
+      ;;
+  esac
+}
+
+seed_env_file_if_missing() {
+  local env_file="$1"
+  local template_file
+  template_file="$(template_for_env_file "$env_file")"
+
+  if [[ -z "$template_file" || -f "$env_file" || ! -f "$template_file" ]]; then
+    return 0
+  fi
+
+  cp "$template_file" "$env_file"
+}
+
 mask_value() {
   local value="$1"
   local len=${#value}
@@ -186,6 +214,7 @@ write_env() {
   local value="$3"
 
   # Avoid sed escaping issues (URLs contain '/') by rewriting the file.
+  seed_env_file_if_missing "$env_file"
   touch "$env_file"
 
   local tmp
@@ -279,6 +308,7 @@ validate_aws_credentials() {
   local access_key="$1"
   local secret_key="$2"
   local region="$3"
+  local session_token="${4:-}"
 
   log "Validating AWS credentials..."
 
@@ -286,6 +316,7 @@ validate_aws_credentials() {
   export AWS_ACCESS_KEY_ID="$access_key"
   export AWS_SECRET_ACCESS_KEY="$secret_key"
   export AWS_DEFAULT_REGION="$region"
+  export AWS_SESSION_TOKEN="$session_token"
 
   # Try to get caller identity
   if aws sts get-caller-identity &>/dev/null; then
@@ -302,10 +333,12 @@ get_aws_account_id() {
   local access_key="$1"
   local secret_key="$2"
   local region="$3"
+  local session_token="${4:-}"
 
   export AWS_ACCESS_KEY_ID="$access_key"
   export AWS_SECRET_ACCESS_KEY="$secret_key"
   export AWS_DEFAULT_REGION="$region"
+  export AWS_SESSION_TOKEN="$session_token"
 
   aws sts get-caller-identity --query Account --output text 2>/dev/null || echo ""
 }
@@ -442,21 +475,23 @@ collect_aws_core() {
   echo "  3. Click 'Create access key'"
   echo "  4. Choose 'Application running outside AWS' and create"
   echo "  5. Copy the Access key ID and Secret access key"
+  echo "  6. If you are using temporary credentials (STS/SSO), also copy the session token"
   echo ""
 
   prompt AWS_ACCESS_KEY_ID "Enter AWS Access Key ID" "${AWS_ACCESS_KEY_ID:-}"
   prompt AWS_SECRET_ACCESS_KEY "Enter AWS Secret Access Key" "${AWS_SECRET_ACCESS_KEY:-}" true
+  prompt_optional AWS_SESSION_TOKEN "Enter AWS Session Token (optional for temporary credentials)" "${AWS_SESSION_TOKEN:-}" true
   echo ""
 
   # Validate AWS credentials
-  if ! validate_aws_credentials "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_REGION"; then
+  if ! validate_aws_credentials "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_REGION" "$AWS_SESSION_TOKEN"; then
     log_error "Failed to validate AWS credentials. Please check your keys and try again."
     exit 1
   fi
 
   # Get account ID
   log "Retrieving AWS account ID..."
-  CDK_DEFAULT_ACCOUNT=$(get_aws_account_id "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_REGION")
+  CDK_DEFAULT_ACCOUNT=$(get_aws_account_id "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_REGION" "$AWS_SESSION_TOKEN")
 
   if [[ -z "$CDK_DEFAULT_ACCOUNT" ]]; then
     log_error "Failed to retrieve AWS account ID"
@@ -473,6 +508,7 @@ collect_aws_core() {
   write_env_files "AWS_REGION" "$AWS_REGION"
   write_env_files "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
   write_env_files "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
+  write_env_files "AWS_SESSION_TOKEN" "$AWS_SESSION_TOKEN"
   write_env_files "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
   write_env_files "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
 

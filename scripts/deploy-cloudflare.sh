@@ -82,7 +82,7 @@ unset CLOUDFLARE_DNS_API_TOKEN
 
 WRANGLER_BIN="./node_modules/.bin/wrangler"
 if [[ ! -x "$WRANGLER_BIN" ]]; then
-  echo "❌ Error: wrangler is not installed. Run: pnpm install"
+  echo "❌ Error: wrangler is not installed. Run: pnpm install --frozen-lockfile"
   exit 1
 fi
 
@@ -155,12 +155,37 @@ get_env_value() {
   echo "$value"
 }
 
+update_env_value() {
+  local key="$1"
+  local value="$2"
+
+  local tmp_file
+  tmp_file="$(mktemp "${ENV_FILE}.tmp.XXXXXX")"
+
+  local found="0"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" == "${key}="* ]]; then
+      printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+      found="1"
+      continue
+    fi
+
+    printf '%s\n' "$line" >> "$tmp_file"
+  done < "$ENV_FILE"
+
+  if [[ "$found" == "0" ]]; then
+    printf '%s=%s\n' "$key" "$value" >> "$tmp_file"
+  fi
+
+  mv "$tmp_file" "$ENV_FILE"
+}
+
 WORKER_SECRET_ALLOWLIST=()
 
 load_worker_secret_allowlist() {
   if ! mapfile -t WORKER_SECRET_ALLOWLIST < <(pnpm exec tsx scripts/get-worker-secret-allowlist.ts); then
     echo "❌ Error: Failed to load Worker secret allowlist from schema"
-    echo "   Tip: run pnpm install and ensure scripts/get-worker-secret-allowlist.ts succeeds"
+    echo "   Tip: run pnpm install --frozen-lockfile and ensure scripts/get-worker-secret-allowlist.ts succeeds"
     exit 1
   fi
 
@@ -190,6 +215,90 @@ print_worker_secret_allowlist() {
 is_cloudflare_kv_namespace_id() {
   local value="$1"
   [[ "$value" =~ ^[A-Fa-f0-9]{32}$ ]]
+}
+
+extract_cloudflare_kv_namespace_id() {
+  local raw_output="$1"
+
+  printf '%s\n' "$raw_output" | grep -Eo '[A-Fa-f0-9]{32}' | head -n 1 || true
+}
+
+create_cloudflare_kv_namespace() {
+  local binding_name="$1"
+  local preview_mode="$2"
+  local output
+
+  if [[ "$preview_mode" == "preview" ]]; then
+    if ! output="$(wrangler kv namespace create "$binding_name" --preview 2>&1)"; then
+      printf '%s\n' "$output"
+      return 1
+    fi
+  else
+    if ! output="$(wrangler kv namespace create "$binding_name" 2>&1)"; then
+      printf '%s\n' "$output"
+      return 1
+    fi
+  fi
+
+  printf '%s\n' "$output"
+  return 0
+}
+
+ensure_runtime_state_kv_namespace_ids() {
+  local runtime_state_snapshot_kv_id
+  runtime_state_snapshot_kv_id="$(get_env_value "RUNTIME_STATE_SNAPSHOT_KV_ID")"
+
+  local runtime_state_snapshot_kv_preview_id
+  runtime_state_snapshot_kv_preview_id="$(get_env_value "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID")"
+
+  if is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_id" &&
+    { [[ -z "$runtime_state_snapshot_kv_preview_id" ]] || is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_preview_id"; }; then
+    return 0
+  fi
+
+  echo "🪣 Ensuring runtime-state KV namespaces exist..."
+
+  if ! is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_id"; then
+    local create_output
+    if ! create_output="$(create_cloudflare_kv_namespace "RUNTIME_STATE_SNAPSHOT_KV" standard)"; then
+      echo "$create_output"
+      echo "❌ Error: Failed to create RUNTIME_STATE_SNAPSHOT_KV namespace"
+      exit 1
+    fi
+    runtime_state_snapshot_kv_id="$(extract_cloudflare_kv_namespace_id "$create_output")"
+
+    if ! is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_id"; then
+      echo "$create_output"
+      echo "❌ Error: Failed to create or parse RUNTIME_STATE_SNAPSHOT_KV namespace id"
+      exit 1
+    fi
+
+    update_env_value "RUNTIME_STATE_SNAPSHOT_KV_ID" "$runtime_state_snapshot_kv_id"
+    echo "✅ Created RUNTIME_STATE_SNAPSHOT_KV_ID and saved it to $ENV_FILE"
+  fi
+
+  if [[ -n "$runtime_state_snapshot_kv_preview_id" ]] && is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_preview_id"; then
+    echo ""
+    return 0
+  fi
+
+  local preview_output
+  if ! preview_output="$(create_cloudflare_kv_namespace "RUNTIME_STATE_SNAPSHOT_KV" preview)"; then
+    echo "$preview_output"
+    echo "❌ Error: Failed to create RUNTIME_STATE_SNAPSHOT_KV preview namespace"
+    exit 1
+  fi
+  runtime_state_snapshot_kv_preview_id="$(extract_cloudflare_kv_namespace_id "$preview_output")"
+
+  if ! is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_preview_id"; then
+    echo "$preview_output"
+    echo "❌ Error: Failed to create or parse RUNTIME_STATE_SNAPSHOT_KV preview namespace id"
+    exit 1
+  fi
+
+  update_env_value "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID" "$runtime_state_snapshot_kv_preview_id"
+  echo "✅ Created RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID and saved it to $ENV_FILE"
+  echo ""
 }
 
 prepare_wrangler_deploy_config() {
@@ -565,6 +674,8 @@ fi
 
 echo "✅ Authenticated with Cloudflare"
 echo ""
+
+ensure_runtime_state_kv_namespace_ids
 
 echo "🚀 Deploying to Cloudflare Workers..."
 echo "   Domain: $DOMAIN"

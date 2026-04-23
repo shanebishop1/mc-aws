@@ -27,7 +27,7 @@ WORKER_SECRET_ALLOWLIST=()
 load_worker_secret_allowlist() {
   if ! mapfile -t WORKER_SECRET_ALLOWLIST < <(pnpm exec tsx scripts/get-worker-secret-allowlist.ts); then
     echo "❌ Error: Failed to load Worker secret allowlist from schema"
-    echo "   Tip: run pnpm install and ensure scripts/get-worker-secret-allowlist.ts succeeds"
+    echo "   Tip: run pnpm install --frozen-lockfile and ensure scripts/get-worker-secret-allowlist.ts succeeds"
     exit 1
   fi
 

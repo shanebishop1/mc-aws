@@ -6,6 +6,20 @@ set -euo pipefail
 
 PRODUCTION_ENV_FILE=".env.production"
 LOCAL_ENV_FILE=".env.local"
+TOOL_VERSIONS_FILE=".tool-versions"
+
+read_tool_version() {
+  local tool_name="$1"
+
+  if [[ ! -f "$TOOL_VERSIONS_FILE" ]]; then
+    return 1
+  fi
+
+  awk -v tool="$tool_name" '$1 == tool { print $2 }' "$TOOL_VERSIONS_FILE"
+}
+
+NODE_VERSION_PIN="$(read_tool_version node 2>/dev/null || true)"
+PNPM_VERSION_PIN="$(read_tool_version pnpm 2>/dev/null || true)"
 
 # Log function
 log() {
@@ -63,11 +77,40 @@ load_env_file() {
   return 0
 }
 
+template_for_env_file() {
+  local env_file="$1"
+
+  case "$env_file" in
+    ".env.local")
+      printf '%s\n' ".env.local.example"
+      ;;
+    ".env.production")
+      printf '%s\n' ".env.production.example"
+      ;;
+    *)
+      printf '%s\n' ""
+      ;;
+  esac
+}
+
+seed_env_file_if_missing() {
+  local env_file="$1"
+  local template_file
+  template_file="$(template_for_env_file "$env_file")"
+
+  if [[ -z "$template_file" || -f "$env_file" || ! -f "$template_file" ]]; then
+    return 0
+  fi
+
+  cp "$template_file" "$env_file"
+}
+
 write_env() {
   local env_file="$1"
   local key="$2"
   local value="$3"
 
+  seed_env_file_if_missing "$env_file"
   touch "$env_file"
 
   local tmp
@@ -233,9 +276,40 @@ activate_mise_for_current_shell() {
     return 1
   fi
 
-  # Ensure this script can immediately use tools from mise without
-  # requiring the user to open a new shell first.
-  eval "$(mise activate bash)"
+  return 0
+}
+
+run_with_mise() {
+  if ! command_exists mise; then
+    error_exit "mise is required but not available in PATH"
+  fi
+
+  mise exec -- "$@"
+}
+
+verify_pinned_tool_versions() {
+  local actual_node_version
+  local actual_pnpm_version
+
+  actual_node_version="$(run_with_mise node --version | tr -d 'v')"
+  actual_pnpm_version="$(run_with_mise pnpm --version)"
+
+  if [[ -n "$NODE_VERSION_PIN" && "$actual_node_version" != "$NODE_VERSION_PIN" ]]; then
+    error_exit "Expected Node.js $NODE_VERSION_PIN from $TOOL_VERSIONS_FILE but found $actual_node_version"
+  fi
+
+  if [[ -n "$PNPM_VERSION_PIN" && "$actual_pnpm_version" != "$PNPM_VERSION_PIN" ]]; then
+    error_exit "Expected pnpm $PNPM_VERSION_PIN from $TOOL_VERSIONS_FILE but found $actual_pnpm_version"
+  fi
+}
+
+print_mise_shell_hint() {
+  echo ""
+  info "Optional: enable mise automatically in future shells:"
+  info "  zsh:  echo 'eval \"\$(mise activate zsh)\"' >> ~/.zshrc"
+  info "  bash: echo 'eval \"\$(mise activate bash)\"' >> ~/.bashrc"
+  info "  fish: echo 'mise activate fish | source' >> ~/.config/fish/config.fish"
+  echo ""
 }
 
 # Print error and exit
@@ -275,12 +349,10 @@ main() {
 
   local mise_install_dir="$HOME/.local/bin"
   local mise_executable="$mise_install_dir/mise"
-  local zshrc_file="$HOME/.zshrc"
 
   # Check if mise is already available in PATH
   if command_exists mise; then
     success "mise is already installed: $(mise --version)"
-    info "mise will automatically activate when you cd into this directory"
   else
     # Check if mise is installed but not in PATH
     if [[ -f "$mise_executable" ]]; then
@@ -299,67 +371,27 @@ main() {
         error_exit "Failed to install mise. Please install manually and try again."
       fi
     fi
-
-    # Check and update ~/.zshrc
-    if [[ -f "$zshrc_file" ]]; then
-      local mise_path_added="0"
-      local mise_activate_added="0"
-
-      # Check if PATH export for mise is already in zshrc
-      if grep -q 'export PATH="\$HOME/\.local/bin:\$PATH"' "$zshrc_file" 2>/dev/null; then
-        mise_path_added="1"
-      fi
-
-      # Check if mise activate is already in zshrc
-      if grep -q 'mise activate' "$zshrc_file" 2>/dev/null; then
-        mise_activate_added="1"
-      fi
-
-      # Add mise to PATH if not present
-      if [[ "$mise_path_added" == "0" ]]; then
-        info "Adding mise to PATH in ~/.zshrc..."
-        echo '' >> "$zshrc_file"
-        echo '# mise version manager' >> "$zshrc_file"
-        echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$zshrc_file"
-        success "Added mise to PATH in ~/.zshrc"
-      fi
-
-      # Add mise activation if not present
-      if [[ "$mise_activate_added" == "0" ]]; then
-        info "Adding mise activation to ~/.zshrc..."
-        echo 'eval "$(~/.local/bin/mise activate zsh)"' >> "$zshrc_file"
-        success "Added mise activation to ~/.zshrc"
-      fi
-
-      if [[ "$mise_path_added" == "0" ]] || [[ "$mise_activate_added" == "0" ]]; then
-        echo ""
-        info "⚠️  Your ~/.zshrc has been updated."
-        info "   Please restart your terminal or run: source ~/.zshrc"
-        echo ""
-      fi
-    else
-      info "Note: ~/.zshrc not found. You may need to manually add mise to your shell configuration."
-    fi
   fi
 
   if ! activate_mise_for_current_shell; then
-    error_exit "mise is installed but could not be activated for this setup session. Restart your terminal and re-run ./setup.sh"
+    error_exit "mise is installed but could not be prepared for this setup session. Restart your terminal and re-run ./setup.sh"
   fi
+
+  print_mise_shell_hint
 
   # Step 2: Install tools with mise
   step "Installing Node.js and pnpm with mise"
   log "Running 'mise install' to ensure correct versions..."
   mise install
-  if ! command_exists node || ! command_exists pnpm; then
-    error_exit "mise finished but Node.js or pnpm is still unavailable. Restart your terminal and re-run ./setup.sh"
-  fi
+  verify_pinned_tool_versions
   success "Node.js and pnpm are ready"
-  info "mise will automatically activate Node.js 22 and pnpm 10 when you cd into this directory"
+  info "Pinned toolchain: Node.js ${NODE_VERSION_PIN:-unknown}, pnpm ${PNPM_VERSION_PIN:-unknown}"
 
   # Step 3: Install project dependencies
   step "Installing project dependencies"
-  log "Running 'pnpm install' in project root..."
-  pnpm install
+  log "Running 'pnpm install --frozen-lockfile' in project root..."
+  run_with_mise pnpm install --frozen-lockfile
+  run_with_mise pnpm repo:doctor -- --toolchain-only
   success "Project dependencies installed"
 
   # Step 4: Validate AWS/CDK tooling
@@ -367,8 +399,8 @@ main() {
   if ! command_exists aws; then
     error_exit "AWS CLI is not installed. Install it, then re-run ./setup.sh\n\n  https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html"
   fi
-  if ! pnpm exec cdk --version >/dev/null 2>&1; then
-    error_exit "CDK CLI is not available. Ensure 'pnpm install' completed successfully, then re-run ./setup.sh"
+  if ! run_with_mise pnpm exec cdk --version >/dev/null 2>&1; then
+    error_exit "CDK CLI is not available. Ensure 'pnpm install --frozen-lockfile' completed successfully, then re-run ./setup.sh"
   fi
   success "AWS CLI + CDK detected"
 
@@ -404,7 +436,7 @@ main() {
     error_exit "GITHUB_TOKEN is required for CDK deploy (used to seed SSM). Run the wizard and set it, then re-run ./setup.sh"
   fi
 
-  (cd infra && pnpm exec cdk deploy --parameters GithubTokenParam="$GITHUB_TOKEN" --require-approval never)
+  (cd infra && run_with_mise pnpm exec cdk deploy --parameters GithubTokenParam="$GITHUB_TOKEN" --require-approval never)
   success "CDK deployment complete"
 
   # Step 7: Capture INSTANCE_ID from stack outputs
@@ -421,7 +453,7 @@ main() {
 
   # Step 8: Deploy Cloudflare Workers frontend
   step "Deploying Cloudflare Workers frontend"
-  if ! pnpm deploy:cf; then
+  if ! run_with_mise pnpm deploy:cf; then
     echo ""
     error_exit "Cloudflare deployment failed. Check the error messages above."
   fi
