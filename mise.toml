@@ -1,6 +1,6 @@
 [tools]
-node = "22"
-pnpm = "10"
+node = "22.15.1"
+pnpm = "10.30.3"
 
 [env]
 # Add node_modules/.bin to PATH for local CLI tools (biome, vitest, wrangler, tsx, etc.)

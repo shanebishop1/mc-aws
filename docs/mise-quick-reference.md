@@ -2,7 +2,7 @@
 
 ## What Was Done
 
-✅ Created `mise.toml` with Node.js 22 and pnpm 10 configuration
+✅ Created `mise.toml` with pinned Node.js 22.15.1 and pnpm 10.30.3 configuration
 ✅ Updated `setup.sh` with intelligent, idempotent mise setup
 ✅ Kept `.tool-versions` for asdf backward compatibility
 
@@ -19,13 +19,13 @@
 - Default location: `~/.local/bin/mise`
 
 ### Shell Configuration
-- Adds mise to PATH in `~/.zshrc`
-- Adds mise activation in `~/.zshrc`
-- Prevents duplicates (idempotent)
+- Does not modify your shell config automatically
+- Prints optional shell-specific activation hints for zsh, bash, and fish
+- Keeps setup portable across machines and shells
 
 ### Automatic Activation
-- When you `cd` into this directory, mise automatically activates Node.js 22 and pnpm 10
-- No manual activation needed
+- `./setup.sh` uses `mise exec` so setup works immediately without shell activation
+- Optional shell activation can still be enabled manually for future sessions
 
 ### Idempotent
 - Safe to run `./setup.sh` multiple times
@@ -49,9 +49,9 @@ mise which pnpm
 
 After running `./setup.sh`:
 
-1. Restart your terminal or run: `source ~/.zshrc`
-2. `cd` into the project directory
-3. mise automatically activates the correct versions
+1. Run `pnpm repo:doctor` to verify the pinned toolchain is active
+2. Optionally add `mise activate` to your shell config if you want automatic activation outside setup
+3. `cd` into the project directory
 4. Run `node --version` and `pnpm --version` to verify
 
 ## Documentation

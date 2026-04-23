@@ -124,10 +124,10 @@ pnpm dev:mock
 
 1. Copy the example configuration:
    ```bash
-   cp .env.example .env
+   cp .env.mock.example .env.local
    ```
 
-2. The `.env.example` file already has the minimal mock mode configuration:
+2. The `.env.local` file now has the minimal mock mode configuration:
    ```bash
    MC_BACKEND_MODE=mock
    ENABLE_DEV_LOGIN=true
@@ -137,7 +137,8 @@ pnpm dev:mock
 
 3. Start the dev server:
    ```bash
-   pnpm dev
+   pnpm install --frozen-lockfile
+   pnpm dev:mock
    ```
 
 4. Visit the dev login endpoint:
@@ -173,7 +174,7 @@ curl -X POST http://localhost:3000/api/auth/logout
 ### Common Issues
 
 **Dev login returns 403:**
-- Ensure `ENABLE_DEV_LOGIN=true` is set in `.env`
+- Ensure `ENABLE_DEV_LOGIN=true` is set in `.env.local`
 - Restart the dev server after changing environment variables
 
 **Dev login returns 404:**
@@ -186,7 +187,7 @@ curl -X POST http://localhost:3000/api/auth/logout
 
 **Protected routes still block access:**
 - Verify the session cookie was set (check browser dev tools → Application → Cookies)
-- Check that `AUTH_SECRET` is set in `.env`
+- Check that `AUTH_SECRET` is set in `.env.local`
 
 ### E2E Testing with Dev Login
 

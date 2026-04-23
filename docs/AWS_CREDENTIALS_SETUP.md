@@ -25,6 +25,7 @@ Use a dedicated IAM user (or role) instead of root credentials.
 4. Save:
 - `AWS_ACCESS_KEY_ID`
 - `AWS_SECRET_ACCESS_KEY`
+- `AWS_SESSION_TOKEN` (only if you are using temporary credentials)
 
 ## Permissions (pragmatic starter set)
 
@@ -44,8 +45,8 @@ You can tighten this later with least-privilege policies after confirming your w
 Copy from template first:
 
 ```bash
-cp .env.example .env.production
-cp .env.example .env.local
+cp .env.production.example .env.production
+cp .env.local.example .env.local
 ```
 
 Set values in your deployment env file:
@@ -54,6 +55,7 @@ Set values in your deployment env file:
 AWS_REGION=us-west-1
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=...
+AWS_SESSION_TOKEN=... # optional for temporary credentials
 AWS_ACCOUNT_ID=123456789012
 CDK_DEFAULT_ACCOUNT=123456789012
 CDK_DEFAULT_REGION=us-west-1

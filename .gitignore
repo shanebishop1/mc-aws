@@ -52,6 +52,9 @@ tests/*-results.txt
 # env files - using parent directory .env
 .env*
 !.env.example
+!.env.local.example
+!.env.production.example
+!.env.mock.example
 
 # vercel
 .vercel

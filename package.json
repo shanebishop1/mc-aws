@@ -2,10 +2,20 @@
   "name": "mc-aws-frontend",
   "version": "0.1.0",
   "private": true,
+  "packageManager": "pnpm@10.30.3",
+  "engines": {
+    "node": "22.15.1",
+    "pnpm": "10.30.3"
+  },
   "scripts": {
     "dev": "ENABLE_DEV_LOGIN=true next dev -p 3000",
     "dev:mock": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3000",
     "setup": "./setup.sh",
+    "doctor": "tsx scripts/doctor.ts",
+    "repo:doctor": "tsx scripts/doctor.ts",
+    "env:check:local": "tsx scripts/validate-env.ts --target local-dev",
+    "env:check:worker": "tsx scripts/validate-env.ts --target worker --env-file .env.production",
+    "env:check:ci": "tsx scripts/validate-env.ts --target ci --strict",
     "prebuild": "tsx scripts/validate-env.ts",
     "build": "next build",
     "start": "next start",

@@ -10,7 +10,7 @@ This project is web-app first. CLI/manual shell flows are supported as optional 
 
 If you want the fastest path from clone to a live panel and server, just run the setup script.
 
-You do not need Node.js, `pnpm`, or `mise` installed ahead of time. `./setup.sh` checks for `mise`, installs it if needed, activates it for the current setup session, and then uses it to install the correct Node.js and `pnpm` versions for this project.
+You do not need Node.js or `pnpm` installed ahead of time. `./setup.sh` checks for `mise`, installs it if needed, and then uses the repo-pinned toolchain (`Node.js 22.15.1`, `pnpm 10.30.3`) for the current setup run without editing your shell config.
 
 ```bash
 git clone <your-repo-url>
@@ -21,13 +21,19 @@ bash ./setup.sh
 `./setup.sh` automatically:
 
 1. Installs/verifies `mise`
-2. Activates `mise` for the current setup run and your future shell sessions
+2. Uses the repo-pinned Node.js and `pnpm` versions for the current setup run
 3. Uses `mise` to install the correct Node.js and `pnpm` versions for this project
-4. Installs project dependencies
+4. Installs project dependencies with `pnpm install --frozen-lockfile`
 5. Launches the credential wizard (`scripts/setup-wizard.sh`)
 6. Deploys AWS infrastructure with CDK
 7. Stores deployment outputs (including `INSTANCE_ID`) in `.env.production` and `.env.local`
 8. Deploys the Next.js app to Cloudflare Workers
+
+If you want to verify your machine matches the pinned toolchain later:
+
+```bash
+pnpm repo:doctor
+```
 
 ### Accounts/credentials you should have ready
 
@@ -47,11 +53,19 @@ Setup guides:
 ### Run locally against AWS
 
 ```bash
-cp .env.example .env.local
+cp .env.local.example .env.local
 pnpm dev
 ```
 
 Open `http://localhost:3000`.
+
+If you want an offline dev-only environment instead, use:
+
+```bash
+cp .env.mock.example .env.local
+pnpm install --frozen-lockfile
+pnpm dev:mock
+```
 
 Local auth options:
 
@@ -89,6 +103,8 @@ Local auth options:
 
 The web app is the default workflow. If you want terminal control, these commands are available:
 
+The CLI talks to the app's HTTP API. By default it targets `http://localhost:3000/api`, and you can override that with `API_BASE`.
+
 ```bash
 pnpm server:status
 pnpm server:start
@@ -125,6 +141,8 @@ pnpm deploy:cf
 
 It also writes a temporary `.env.production.local` during build so `next build` cannot be overridden by `.env.local`.
 
+If `RUNTIME_STATE_SNAPSHOT_KV_ID`, `RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID`, or `CLOUDFLARE_RECORD_ID` are missing, the deploy flow now creates and persists them for you.
+
 For explicit control:
 
 ```bash
@@ -148,9 +166,9 @@ pnpm cdk:deploy
 
 ### `node` or `pnpm` is not found
 
-- Re-run `./setup.sh` so it can finish the `mise` setup step
+- Re-run `./setup.sh` so it can reinstall the pinned toolchain with `mise`
 - If it still fails, check whether `mise` was installed to `~/.local/bin/mise`
-- Restart your terminal, then run `./setup.sh` again
+- Run `pnpm repo:doctor` after install to confirm the pinned versions are active
 
 ### Google login redirect mismatch
 

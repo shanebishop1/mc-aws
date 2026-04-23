@@ -12,8 +12,8 @@ A modern mise configuration file was created with the following content:
 
 ```toml
 [tools]
-node = "22"
-pnpm = "10"
+node = "22.15.1"
+pnpm = "10.30.3"
 
 [env]
 # Add node_modules/.bin to PATH for local tooling
@@ -21,7 +21,7 @@ _.path = ["{{config_root}}/node_modules/.bin"]
 ```
 
 **Features:**
-- Defines Node.js version 22 and pnpm version 10
+- Defines exact Node.js and pnpm versions used locally and in CI
 - Automatically adds `node_modules/.bin` to PATH for local tooling
 - Uses modern TOML format (preferred over `.tool-versions`)
 
@@ -38,32 +38,30 @@ The mise setup logic was completely rewritten to be intelligent and idempotent:
 - Default installation location: `~/.local/bin/mise`
 
 **b) Shell Configuration:**
-- Checks `~/.zshrc` for existing mise configuration
-- Adds `export PATH="$HOME/.local/bin:$PATH"` if not present
-- Adds `eval "$(~/.local/bin/mise activate zsh)"` if not present
-- Prevents duplicate entries (idempotent)
-- Notifies user to restart terminal or run `source ~/.zshrc` if changes were made
+- Does not edit shell startup files automatically
+- Prints optional activation commands for zsh, bash, and fish
+- Keeps setup behavior portable across shells and machines
 
 **c) Automatic Activation:**
-- Once mise is activated in zshrc, it automatically activates when entering any directory with a `mise.toml` or `.tool-versions` file
-- No manual activation needed per directory
+- `setup.sh` uses `mise exec` so the pinned toolchain works immediately for the setup run
+- Users can still enable automatic activation manually in their preferred shell later
 
 **d) Tool Installation:**
-- Runs `mise install` to ensure Node.js 22 and pnpm 10 are available
+- Runs `mise install` to ensure Node.js 22.15.1 and pnpm 10.30.3 are available
 - Provides clear feedback about what's happening
 
 **e) User-Friendly Messages:**
 - Clear success/info/error messages with emojis
-- Explains what mise will do automatically
-- Warns user when shell configuration is updated
+- Explains the pinned versions being used
+- Prints an optional shell-activation hint instead of mutating dotfiles
 
 ### 3. Kept `.tool-versions` for Backward Compatibility
 
 The existing `.tool-versions` file was kept unchanged:
 
 ```
-node 22
-pnpm 10
+node 22.15.1
+pnpm 10.30.3
 ```
 
 This ensures compatibility with asdf users. mise can read both `.tool-versions` and `mise.toml` files.
@@ -75,26 +73,21 @@ This ensures compatibility with asdf users. mise can read both `.tool-versions` 
 1. User runs `./setup.sh`
 2. Script detects mise is not installed
 3. Installs mise using `curl https://mise.run | sh`
-4. Adds mise to `~/.zshrc` (PATH and activation)
-5. Runs `mise install` to install Node.js 22 and pnpm 10
+4. Runs `mise install` to install Node.js 22.15.1 and pnpm 10.30.3
+5. Uses `mise exec` for the rest of setup
 6. Continues with rest of setup
 
 ### Subsequent Runs (mise already installed):
 
 1. User runs `./setup.sh`
 2. Script detects mise is in PATH
-3. Skips installation and shell configuration
+3. Skips installation
 4. Runs `mise install` to ensure tools are up-to-date
 5. Continues with rest of setup
 
-### Automatic Activation:
+### Optional Future-Shell Activation:
 
-Once mise is configured in `~/.zshrc`:
-
-1. User opens new terminal (or runs `source ~/.zshrc`)
-2. User `cd`s into the mc-aws directory
-3. mise automatically activates Node.js 22 and pnpm 10
-4. User can run `node`, `pnpm`, etc. with correct versions
+If the user wants automatic activation outside `setup.sh`, they can add the appropriate `mise activate` command to their shell config.
 
 ## Testing
 
@@ -103,7 +96,7 @@ The setup was tested with:
 1. **Bash syntax validation:** `bash -n setup.sh` passed
 2. **mise config validation:** `mise ls` successfully parsed `mise.toml`
 3. **Tool detection:** `mise which node` and `mise which pnpm` found the correct versions
-4. **Logic verification:** Test script confirmed all branches of the setup logic work correctly
+4. **Doctor verification:** `pnpm repo:doctor -- --toolchain-only` verifies the pinned versions and required files
 
 ## Idempotency
 
@@ -111,7 +104,6 @@ The setup is fully idempotent:
 
 - Running `./setup.sh` multiple times is safe
 - Won't reinstall mise if already installed
-- Won't duplicate entries in `~/.zshrc`
 - Won't fail if configuration already exists
 
 ## Files Modified/Created
@@ -124,7 +116,7 @@ The setup is fully idempotent:
 
 1. **Automatic version management:** No manual Node.js or pnpm version switching
 2. **Project-specific versions:** Each project can have its own versions
-3. **Shell integration:** Automatic activation when entering project directory
+3. **Shell agnostic:** Setup works in bash, zsh, and fish without mutating dotfiles
 4. **Backward compatible:** Works with asdf's `.tool-versions` format
 5. **User-friendly:** Clear messages and automatic setup
 6. **Idempotent:** Safe to run multiple times
@@ -133,28 +125,19 @@ The setup is fully idempotent:
 
 If mise doesn't activate automatically:
 
-1. Ensure `~/.zshrc` contains:
-   ```bash
-   export PATH="$HOME/.local/bin:$PATH"
-   eval "$(~/.local/bin/mise activate zsh)"
-   ```
-
-2. Restart your terminal or run:
-   ```bash
-   source ~/.zshrc
-   ```
-
-3. Verify mise is working:
+1. Verify mise is working:
    ```bash
    mise --version
    mise ls
    ```
 
-4. Check if tools are installed:
+2. Check if tools are installed:
    ```bash
    mise which node
    mise which pnpm
    ```
+
+3. If you want future shells to auto-activate the toolchain, add the matching `mise activate` command for your shell (`zsh`, `bash`, or `fish`).
 
 ## References
 
