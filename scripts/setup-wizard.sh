@@ -518,7 +518,7 @@ collect_aws_core() {
 collect_ec2_access() {
   step_section 2 "EC2 Access"
 
-  log "You need an EC2 key pair to SSH into your Minecraft server."
+  log "An EC2 key pair is optional. Add one only if you want SSH key access to the instance."
   echo ""
 
   echo "To create an EC2 key pair:"
@@ -531,9 +531,13 @@ collect_ec2_access() {
   echo "  7. Save the .pem file securely - you cannot download it again!"
   echo ""
 
-  prompt KEY_PAIR_NAME "Enter your EC2 key pair name" "${KEY_PAIR_NAME:-}"
+  prompt_optional KEY_PAIR_NAME "Enter your EC2 key pair name" "${KEY_PAIR_NAME:-}"
 
-  log_success "Using key pair: $KEY_PAIR_NAME"
+  if [[ -n "${KEY_PAIR_NAME:-}" ]]; then
+    log_success "Using key pair: $KEY_PAIR_NAME"
+  else
+    log_success "No EC2 key pair configured"
+  fi
   echo ""
 
   # Write to env files
@@ -824,45 +828,29 @@ collect_email_settings() {
 }
 
 collect_github_settings() {
-  step_section 8 "Optional: GitHub Configuration Sync"
+  step_section 8 "GitHub Repo Access"
 
-  log "Configure GitHub integration for backing up server configuration."
-  log "This allows syncing server.properties and other config files to GitHub."
+  log "Configure GitHub access so the EC2 instance can clone your fork during setup."
   echo ""
 
-  echo "Leave these empty to skip GitHub configuration."
+  echo "Use your fork of this repository."
   echo ""
 
-  prompt_optional GITHUB_USER "Enter GitHub username" "${GITHUB_USER:-}"
+  prompt GITHUB_USER "Enter GitHub username" "${GITHUB_USER:-}"
 
-  if [[ -n "$GITHUB_USER" ]]; then
-    prompt_optional GITHUB_REPO "Enter GitHub repository name" "${GITHUB_REPO:-}"
+  prompt GITHUB_REPO "Enter GitHub repository name" "${GITHUB_REPO:-}"
 
-    if [[ -n "$GITHUB_REPO" ]]; then
-      echo ""
-      echo "To create a GitHub personal access token:"
-      echo "  1. Go to GitHub → Settings → Developer settings → Personal access tokens"
-      echo "  2. Click 'Tokens (classic)' → 'Generate new token (classic)'"
-      echo "  3. Select scopes: repo (full control)"
-      echo "  4. Generate and copy the token"
-      echo ""
+  echo ""
+  echo "To create a GitHub personal access token:"
+  echo "  1. Go to GitHub → Settings → Developer settings → Personal access tokens"
+  echo "  2. Create a token that can read your fork"
+  echo "  3. If using a classic token, select scope: repo"
+  echo "  4. Generate and copy the token"
+  echo ""
 
-      prompt_optional GITHUB_TOKEN "Enter GitHub personal access token" "${GITHUB_TOKEN:-}" true
+  prompt GITHUB_TOKEN "Enter GitHub personal access token" "${GITHUB_TOKEN:-}" true
 
-      if [[ -n "$GITHUB_TOKEN" ]]; then
-        log_success "GitHub settings configured"
-      else
-        log_warning "GitHub settings incomplete - skipping"
-        GITHUB_USER=""
-        GITHUB_REPO=""
-      fi
-    else
-      log_warning "Skipping GitHub configuration"
-      GITHUB_USER=""
-    fi
-  else
-    log_warning "Skipping GitHub configuration"
-  fi
+  log_success "GitHub settings configured"
   echo ""
 
   # Write to env files
