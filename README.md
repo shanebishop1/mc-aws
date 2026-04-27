@@ -2,108 +2,102 @@
 
 <p align="center"><img width="320" height="320" alt="mc-aws-image" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
-Run your own Minecraft server on AWS, control it from a web app, and keep idle cost low by stopping or hibernating when nobody is playing.
+Run a Minecraft server on AWS without paying to leave it running all the time.
 
-This project is web-app first. CLI/manual shell flows are supported as optional add-ons.
+Friends can sign in, check the server status, and start it when they want to play.
 
-## Quick Setup (Production)
+## Features
 
-If you want the fastest path from clone to a live panel and server, just run the setup script.
+- Web panel for start, stop, resume, and hibernate
+- Google sign-in with admin and allowed-user roles
+- Cloudflare DNS updates when the server IP changes
+- Backup and restore with Google Drive
+- Optional CLI commands
 
-You do not need Node.js or `pnpm` installed ahead of time. `./setup.sh` checks for `mise`, installs it if needed, and then uses the repo-pinned toolchain (`Node.js 22.15.1`, `pnpm 10.30.3`) for the current setup run without editing your shell config.
+## Before Setup
+
+Complete these first:
+
+- [Fork this repo](docs/setup/GITHUB_REPO_SETUP.md)
+- [Create a GitHub token](docs/setup/GITHUB_TOKEN_SETUP.md)
+- [Prepare your AWS account](docs/setup/AWS_ACCOUNT_SETUP.md)
+- [Set up a Cloudflare-managed domain](docs/setup/CLOUDFLARE_SETUP.md)
+- [Create a Google OAuth client](docs/setup/GOOGLE_OAUTH_SETUP.md)
+
+Optional:
+
+- [Create an EC2 key pair](docs/setup/EC2_KEY_PAIR_SETUP.md), if you want SSH key access
+- [Configure SES email features](docs/setup/SES_SETUP.md), if you want email-triggered actions and notifications
+- [Configure Google Drive backups](docs/setup/GOOGLE_DRIVE_SETUP.md), if you want backup, restore, and hibernate workflows
+
+## Setup
+
+After the prerequisites are done, run the setup script from your fork:
 
 ```bash
-git clone <your-repo-url>
+git clone https://github.com/<you>/mc-aws.git
 cd mc-aws
 bash ./setup.sh
 ```
 
-`./setup.sh` automatically:
+The script installs the project toolchain, collects credentials, deploys AWS infrastructure, writes deployment outputs, and deploys the web app to Cloudflare.
 
-1. Installs/verifies `mise`
-2. Uses the repo-pinned Node.js and `pnpm` versions for the current setup run
-3. Uses `mise` to install the correct Node.js and `pnpm` versions for this project
-4. Installs project dependencies with `pnpm install --frozen-lockfile`
-5. Launches the credential wizard (`scripts/setup-wizard.sh`)
-6. Deploys AWS infrastructure with CDK
-7. Stores deployment outputs (including `INSTANCE_ID`) in `.env.production` and `.env.local`
-8. Deploys the Next.js app to Cloudflare Workers
+For the full walkthrough, use [Setup and Run](docs/setup/SETUP_AND_RUN.md).
 
-If you want to verify your machine matches the pinned toolchain later:
+## Local Development
+
+Use mock mode if you want to work on the app without AWS:
 
 ```bash
-pnpm repo:doctor
-```
-
-### Accounts/credentials you should have ready
-
-- AWS account (for EC2/Lambda/SSM/CDK; SES is optional for email features)
-- Cloudflare zone + DNS API token (for runtime DNS updates)
-- Google OAuth client (for web app sign-in)
-- GitHub token (`repo` scope) plus repo/user values (currently required by CDK setup in this repo)
-
-Setup guides:
-
-- [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md)
-- [Cloudflare Setup](docs/CLOUDFLARE_SETUP.md)
-- [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md)
-
-## Web App Usage (Primary Interface)
-
-### Run locally against AWS
-
-```bash
-cp .env.local.example .env.local
-pnpm dev
-```
-
-Open `http://localhost:3000`.
-
-If you want an offline dev-only environment instead, use:
-
-```bash
-cp .env.mock.example .env.local
-pnpm install --frozen-lockfile
+pnpm install
 pnpm dev:mock
 ```
 
-Local auth options:
+Open `http://localhost:3000/api/auth/dev-login` to sign in as a local admin.
 
-- Google sign-in (when OAuth env vars are configured)
-- Dev login route: `http://localhost:3000/api/auth/dev-login` (`pnpm dev` enables this by default)
+More detail:
 
-### What the panel handles
+- [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md)
+- [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
+
+## Using the Panel
+
+The web app is the primary interface. It handles:
 
 - Server status, health, and player visibility
 - Start, stop, resume, and hibernate operations
 - Backup, restore, and backup listing
 - Cost views and email allowlist management
-- Admin shortcuts for common operational tasks
+- Admin shortcuts for common operations
 
-### Role model
+Roles:
 
 - `ADMIN_EMAIL`: full access
 - `ALLOWED_EMAILS`: can check status and start
-- signed-in users not listed above: status-only
+- Other signed-in users: status-only
 
-### Optional SES email features
+## Start, Stop, Resume, Hibernate
 
-- `VERIFIED_SENDER`, `NOTIFICATION_EMAIL`, and `START_KEYWORD` are optional.
-- If they are not configured, core panel/server flows still work.
-- Without `VERIFIED_SENDER`, email-triggered commands and SES notification sending are disabled.
+- `start`: starts the server in the normal path
+- `stop`: stops the instance but keeps storage attached
+- `hibernate`: backs up the server, stops the instance, and deletes attached instance volumes
+- `resume`: recreates storage and brings a hibernated server back online
 
-### Hibernate/resume reconstruction rule
+Use `stop` for shorter pauses. Use `hibernate` when the server will be idle long enough that you want to avoid EBS storage cost too.
 
-- Hibernate intentionally detaches and deletes all attached instance volumes (zero-EBS-cost mode).
-- Resume reconstructs the root volume from the instance's own source AMI root snapshot (`ImageId` + `RootDeviceName`).
-- Resume does **not** use drifting "latest" public AMI lookups.
-- If pinned source metadata cannot be resolved, resume fails explicitly instead of silently falling back.
+Hibernate is intentionally destructive. Resume reconstructs the root volume from the instance's own source AMI metadata. If that metadata cannot be resolved, resume fails instead of guessing.
 
-## CLI Addendum (Optional)
+## Backups
 
-The web app is the default workflow. If you want terminal control, these commands are available:
+Backup and restore use Google Drive.
 
-The CLI talks to the app's HTTP API. By default it targets `http://localhost:3000/api`, and you can override that with `API_BASE`.
+If Google Drive is not configured, backup, restore, and hibernate flows are not useful. Configure it during setup or from the web panel before relying on those operations.
+
+See [Operations Guide](docs/OPERATIONS_GUIDE.md) for day-to-day backup, restore, and recovery notes.
+
+## CLI
+
+The CLI is optional. It calls the app API and defaults to `http://localhost:3000/api`.
 
 ```bash
 pnpm server:status
@@ -114,14 +108,15 @@ pnpm server:hibernate
 pnpm server:backup
 pnpm server:backups
 pnpm server:restore -- <backup-name>
-pnpm operations:cleanup
-pnpm operations:cleanup -- --dry-run --retention-days=14
 ```
 
-Durable operation-state records in SSM (`/minecraft/operations/*`) default to a 30-day retention window.
-Set `MC_OPERATION_STATE_RETENTION_DAYS` to override that window.
+To point it at another panel API:
 
-Manual EC2 shell access (advanced):
+```bash
+API_BASE=https://panel.yourdomain.com/api pnpm server:status
+```
+
+Advanced shell access:
 
 ```bash
 ./bin/connect.sh
@@ -130,23 +125,10 @@ Manual EC2 shell access (advanced):
 
 ## Deploying Updates
 
-After initial setup, normal app updates are usually:
+For app updates:
 
 ```bash
-wrangler login
 pnpm deploy:cf
-```
-
-`pnpm deploy:cf` uses `.env.production` by default.
-
-It also writes a temporary `.env.production.local` during build so `next build` cannot be overridden by `.env.local`.
-
-If `RUNTIME_STATE_SNAPSHOT_KV_ID`, `RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID`, or `CLOUDFLARE_RECORD_ID` are missing, the deploy flow now creates and persists them for you.
-
-For explicit control:
-
-```bash
-ENV_FILE=.env.production pnpm deploy:cf
 ```
 
 For infrastructure changes:
@@ -156,37 +138,51 @@ pnpm cdk:diff
 pnpm cdk:deploy
 ```
 
-## Troubleshooting (Quick)
+## Cost Notes
 
-### `./setup.sh` fails
+This can reduce idle cost compared with leaving a server running all the time, but it does not make AWS free.
 
-- Ensure `aws sts get-caller-identity` works
-- Ensure `.env.production` has required values from the wizard
-- Re-run `./setup.sh`
+- `stop` stops compute, but attached EBS storage still costs money
+- `hibernate` removes attached instance volumes after backup, so it is better for longer idle periods
+- Cloudflare, AWS, Google, and GitHub setup are still your responsibility
+- Check AWS Billing and Cost Explorer after deployment, especially while testing
 
-### `node` or `pnpm` is not found
+## Docs
 
-- Re-run `./setup.sh` so it can reinstall the pinned toolchain with `mise`
-- If it still fails, check whether `mise` was installed to `~/.local/bin/mise`
-- Run `pnpm repo:doctor` after install to confirm the pinned versions are active
+Setup:
 
-### Google login redirect mismatch
+- [Fork this repo](docs/setup/GITHUB_REPO_SETUP.md)
+- [Create a GitHub token](docs/setup/GITHUB_TOKEN_SETUP.md)
+- [AWS account setup](docs/setup/AWS_ACCOUNT_SETUP.md)
+- [Cloudflare setup](docs/setup/CLOUDFLARE_SETUP.md)
+- [Google OAuth setup](docs/setup/GOOGLE_OAUTH_SETUP.md)
+- [Setup and Run](docs/setup/SETUP_AND_RUN.md)
 
-- Add exact callback URLs in Google Console:
-  - `http://localhost:3000/api/auth/callback`
-  - `https://<your-panel-domain>/api/auth/callback`
-- Make sure `NEXT_PUBLIC_APP_URL` matches the deployed panel URL
+Operations:
 
-### Cloudflare deployment auth issues
+- [Operations Guide](docs/OPERATIONS_GUIDE.md)
+- [API Reference](docs/docs/API.md)
 
-- Use Wrangler OAuth: `wrangler login`
-- Keep DNS runtime token in your deployment env file as `CLOUDFLARE_DNS_API_TOKEN`
-- Avoid exporting `CLOUDFLARE_DNS_API_TOKEN` globally in your shell
+Development:
 
-## Key Docs
-
-- [AWS Credentials Setup](docs/AWS_CREDENTIALS_SETUP.md)
-- [Cloudflare Setup](docs/CLOUDFLARE_SETUP.md)
-- [Google OAuth Setup](docs/GOOGLE_OAUTH_SETUP.md)
 - [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md)
 - [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
+
+## Troubleshooting
+
+### Setup fails
+
+- Run `aws sts get-caller-identity` and confirm AWS CLI access works
+- Check `.env.production` for missing values
+- Re-run `bash ./setup.sh`
+
+### Google login fails
+
+- Add the exact callback URLs in Google Cloud
+- Make sure `NEXT_PUBLIC_APP_URL` matches the deployed panel URL
+
+### Cloudflare deployment auth fails
+
+- Use Wrangler OAuth for deployment auth
+- Keep `CLOUDFLARE_DNS_API_TOKEN` for runtime DNS updates only
+- Do not export the DNS token globally in your shell
