@@ -29,6 +29,7 @@ Run a Minecraft server on AWS without paying to leave it running all the time. F
   </td>
 </tr>
 </table>
+
 - Web panel for start, stop, resume, and hibernate
 - Google sign-in with admin and allowed-user roles
 - Cloudflare DNS updates when the server IP changes
