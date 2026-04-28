@@ -2,9 +2,7 @@
 
 <p align="center"><img width="320" height="320" alt="mc-aws-image" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
 
-Run a Minecraft server on AWS without paying to leave it running all the time.
-
-Friends can sign in, check the server status, and start it when they want to play.
+Run a Minecraft server on AWS without paying to leave it running all the time. Friends can sign in, check the server status, and start it when they want to play.
 
 ## Features
 
