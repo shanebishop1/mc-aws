@@ -38,7 +38,7 @@ Run a Minecraft server on AWS without paying to leave it running all the time. F
 
 ## Before Setup
 
-Complete these first:
+Complete these first. These are very common and well-documented paths, so ask your AI to help you if you get stuck:
 
 - [Fork this repo](docs/setup/GITHUB_REPO_SETUP.md)
 - [Create a GitHub token](docs/setup/GITHUB_TOKEN_SETUP.md)
