@@ -36,6 +36,32 @@ Run a Minecraft server on AWS without paying to leave it running all the time. F
 - Backup and restore with Google Drive
 - Optional CLI commands
 
+## Why?
+
+Most Minecraft hosting is priced like you are going to use the server all month. If you only play occasionally, that means paying for a box that sits idle most of the time.
+
+Self-hosting at home avoids the monthly bill, but it creates a different problem: if your friends want to play, you either leave the server running all the time or you have to be around to start it.
+
+This project is the middle path. The server runs on AWS, friends can start it from the control panel, and the instance can shut down when nobody is playing.
+
+The cost model is different from a flat monthly host:
+
+| State | What You Pay For | Rough Cost |
+| --- | --- | --- |
+| Hibernated | No EC2 compute, no attached EBS volume | `$0.00/month` for server compute/storage |
+| Stopped | EBS volume remains attached | about `$0.75/month` for an 8 GB GP3 volume |
+| Running | EC2 compute while people play | about `$0.03-0.04/hour` for the default instance class |
+
+If you play for 8 hours in a month and hibernate the rest of the time, the server compute cost is measured in cents, not a fixed monthly fee. Exact pricing depends on region, instance type, storage size, backups, and AWS pricing changes.
+
+On-demand providers like Exaroton or ServerWave can be a better fit if you want less setup. They are easier to use and have their own feature sets. The reason to use this project is not just penny-level savings. The reason is control.
+
+You own the infrastructure. You can change the instance size, replace the backup flow, add plugins, edit the startup scripts, build a Discord or web portal, add custom scheduled behavior, wire in AWS services, or extend the CDK stack however you want.
+
+That matters more now that AI can do a lot of the glue work. You can ask an agent to add a new admin route, generate a plugin workflow, change the deploy stack, add a custom automation, or build a small portal around your server without waiting for a hosting provider to expose that feature.
+
+You are not at the whim of a provider's dashboard, pricing model, plugin support, or product roadmap. It is your server and your hosting platform.
+
 ## Before Setup
 
 Complete these first. These are very common and well-documented paths, so ask your AI to help you if you get stuck:
