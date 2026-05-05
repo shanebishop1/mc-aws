@@ -36,7 +36,7 @@ The wizard collects:
 - optional EC2 key pair name
 - Google OAuth client ID and secret
 - admin and allowed-user emails
-- Cloudflare DNS token, zone, record, and Minecraft domain
+- Minecraft connection mode: Cloudflare custom domain, DuckDNS free subdomain, or raw public IP
 - production panel URL
 - optional SES email settings
 - GitHub repo and token values
@@ -51,7 +51,13 @@ After setup finishes:
 2. Sign in with `ADMIN_EMAIL`.
 3. Check server status.
 4. Start the server.
-5. Connect from Minecraft using `CLOUDFLARE_MC_DOMAIN`.
+5. Connect from Minecraft using the hostname or public IP shown in the panel.
+
+Connection modes:
+
+- Cloudflare: uses `CLOUDFLARE_MC_DOMAIN` and updates the A record when EC2 gets a new IP.
+- DuckDNS: uses `DUCKDNS_DOMAIN.duckdns.org` and updates it when EC2 gets a new IP.
+- No domain: shows the current EC2 public IP in the panel. The IP can change after restarts.
 
 ## 5. Local Run Against AWS
 

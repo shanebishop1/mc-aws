@@ -92,14 +92,14 @@ export const env = {
   // CloudFormation
   CLOUDFORMATION_STACK_NAME: getEnv("CLOUDFORMATION_STACK_NAME", true) || getEnv("STACK_NAME", true),
 
-  // Cloudflare Configuration
-  CLOUDFLARE_ZONE_ID: getEnv("CLOUDFLARE_ZONE_ID"),
-  CLOUDFLARE_RECORD_ID: getEnv("CLOUDFLARE_RECORD_ID"),
-  CLOUDFLARE_MC_DOMAIN: getEnv("CLOUDFLARE_MC_DOMAIN"),
+  // Minecraft DNS Configuration
+  CLOUDFLARE_ZONE_ID: getEnv("CLOUDFLARE_ZONE_ID", true),
+  CLOUDFLARE_RECORD_ID: getEnv("CLOUDFLARE_RECORD_ID", true),
+  CLOUDFLARE_MC_DOMAIN: getEnv("CLOUDFLARE_MC_DOMAIN", true),
   CLOUDFLARE_DNS_API_TOKEN: (() => {
     const resolved = resolveEnvValue(process.env, "CLOUDFLARE_DNS_API_TOKEN");
     if (!resolved) {
-      return getEnv("CLOUDFLARE_DNS_API_TOKEN"); // Will warn about missing required var
+      return getEnv("CLOUDFLARE_DNS_API_TOKEN", true);
     }
 
     if (resolved.usedAlias) {
@@ -110,6 +110,8 @@ export const env = {
 
     return resolved.value;
   })(),
+  DUCKDNS_DOMAIN: getEnv("DUCKDNS_DOMAIN", true),
+  DUCKDNS_TOKEN: getEnv("DUCKDNS_TOKEN", true),
 
   // Google Drive Configuration (optional)
   GDRIVE_REMOTE: getEnv("GDRIVE_REMOTE", true),

@@ -436,7 +436,15 @@ main() {
     error_exit "GITHUB_TOKEN is required for CDK deploy (used to seed SSM). Run the wizard and set it, then re-run ./setup.sh"
   fi
 
-  (cd infra && run_with_mise pnpm exec cdk deploy --parameters GithubTokenParam="$GITHUB_TOKEN" --require-approval never)
+  cdk_parameters=(--parameters "GithubTokenParam=$GITHUB_TOKEN")
+  if [[ -n "${CLOUDFLARE_DNS_API_TOKEN:-}" ]]; then
+    cdk_parameters+=(--parameters "CloudflareTokenParam=$CLOUDFLARE_DNS_API_TOKEN")
+  fi
+  if [[ -n "${DUCKDNS_TOKEN:-}" ]]; then
+    cdk_parameters+=(--parameters "DuckDnsTokenParam=$DUCKDNS_TOKEN")
+  fi
+
+  (cd infra && run_with_mise pnpm exec cdk deploy "${cdk_parameters[@]}" --require-approval never)
   success "CDK deployment complete"
 
   # Step 7: Capture INSTANCE_ID from stack outputs

@@ -8,7 +8,7 @@
 import { type AuthUser, requireAllowed } from "@/lib/api-auth";
 import { formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
-import { env } from "@/lib/env";
+import { resolveDnsMode } from "@/lib/dns-mode";
 import { createMutatingActionRequestContext, createMutatingActionFailure } from "@/lib/mutating-action-contract";
 import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
 import {
@@ -145,10 +145,15 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         operationId: context.operation.id,
       });
 
+      const dnsMode = resolveDnsMode();
+
       return {
         instanceId: resolvedId,
-        domain: env.CLOUDFLARE_MC_DOMAIN,
-        message: "Server start initiated. This may take 1-2 minutes.",
+        domain: dnsMode.hostname,
+        message:
+          dnsMode.mode === "none"
+            ? "Server start initiated. The connection IP will appear once the server is running."
+            : "Server start initiated. This may take 1-2 minutes.",
       };
     },
     mapError: ({ stage, error }) => {

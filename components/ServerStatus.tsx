@@ -9,12 +9,13 @@ import { ServerState } from "@/lib/types";
 interface ServerStatusProps {
   state: ServerState;
   domain?: string;
+  publicIp?: string;
   playerCount?: number;
   className?: string;
   isLoading?: boolean;
 }
 
-export const ServerStatus = ({ state, domain, playerCount, className, isLoading }: ServerStatusProps) => {
+export const ServerStatus = ({ state, domain, publicIp, playerCount, className, isLoading }: ServerStatusProps) => {
   const stateLabels: Record<ServerState, string> = {
     [ServerState.Running]: "Online",
     [ServerState.Stopped]: "Stopped",
@@ -26,6 +27,7 @@ export const ServerStatus = ({ state, domain, playerCount, className, isLoading 
   };
 
   const label = isLoading ? "Connecting..." : stateLabels[state] || state;
+  const connectionAddress = domain ?? publicIp;
 
   // Determine color: Neutral for loading, Red for unknown/error, Green for running, Black for others
   const renderColor = () => {
@@ -100,8 +102,8 @@ export const ServerStatus = ({ state, domain, playerCount, className, isLoading 
         <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
           {/* Domain - always reserve space to prevent layout shift */}
           <div className="h-6 flex items-center justify-center">
-            {!isLoading && domain ? (
-              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/50 uppercase">{domain}</span>
+            {!isLoading && connectionAddress ? (
+              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/50 uppercase">{connectionAddress}</span>
             ) : (
               <span className="font-sans text-xs tracking-[0.2em] text-transparent uppercase">mc.example.com</span>
             )}

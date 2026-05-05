@@ -19,6 +19,11 @@ export class MinecraftStack extends cdk.Stack {
 
     const driveRemote = process.env.GDRIVE_REMOTE || "gdrive";
     const driveRoot = process.env.GDRIVE_ROOT || "mc-backups";
+    const cloudflareZoneId = process.env.CLOUDFLARE_ZONE_ID?.trim() ?? "";
+    const cloudflareDomain = process.env.CLOUDFLARE_MC_DOMAIN?.trim() ?? "";
+    const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "").trim();
+    const duckdnsDomain = process.env.DUCKDNS_DOMAIN?.trim() ?? "";
+    const duckdnsToken = process.env.DUCKDNS_TOKEN?.trim() ?? "";
 
     // 0. SSM Parameters (GitHub Credentials)
     new ssm.StringParameter(this, "GithubUserParam", {
@@ -66,52 +71,77 @@ export class MinecraftStack extends cdk.Stack {
       ]),
     });
 
-    // 0.5 SSM Parameters (Cloudflare Credentials for EC2 DNS updates)
-    new ssm.StringParameter(this, "CloudflareZoneId", {
-      parameterName: "/minecraft/cloudflare-zone-id",
-      stringValue: process.env.CLOUDFLARE_ZONE_ID || "error-missing-zone-id",
-      description: "Cloudflare Zone ID for DNS updates",
-    });
-
-    new ssm.StringParameter(this, "CloudflareDomain", {
-      parameterName: "/minecraft/cloudflare-domain",
-      stringValue: process.env.CLOUDFLARE_MC_DOMAIN || "error-missing-domain",
-      description: "Domain name to update (e.g., mc.example.com)",
-    });
-
-    // Cloudflare API Token (SecureString via Custom Resource)
-    const cloudflareTokenParam = new cdk.CfnParameter(this, "CloudflareTokenParam", {
-      type: "String",
-      description: "Cloudflare API Token for DNS updates",
-      noEcho: true,
-    });
-
-    new cr.AwsCustomResource(this, "CloudflareTokenSecureParam", {
-      onUpdate: {
-        service: "SSM",
-        action: "putParameter",
-        parameters: {
-          Name: "/minecraft/cloudflare-api-token",
-          Value: cloudflareTokenParam.valueAsString,
-          Type: "SecureString",
-          Overwrite: true,
+    const createSecureStringParameter = (id: string, parameterName: string, valueParameter: cdk.CfnParameter) => {
+      new cr.AwsCustomResource(this, id, {
+        onUpdate: {
+          service: "SSM",
+          action: "putParameter",
+          parameters: {
+            Name: parameterName,
+            Value: valueParameter.valueAsString,
+            Type: "SecureString",
+            Overwrite: true,
+          },
+          physicalResourceId: cr.PhysicalResourceId.of(id),
         },
-        physicalResourceId: cr.PhysicalResourceId.of("CloudflareTokenSecureParam"),
-      },
-      onDelete: {
-        service: "SSM",
-        action: "deleteParameter",
-        parameters: {
-          Name: "/minecraft/cloudflare-api-token",
+        onDelete: {
+          service: "SSM",
+          action: "deleteParameter",
+          parameters: {
+            Name: parameterName,
+          },
         },
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
-          resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/cloudflare-api-token`],
-        }),
-      ]),
-    });
+        policy: cr.AwsCustomResourcePolicy.fromStatements([
+          new iam.PolicyStatement({
+            actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
+            resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${parameterName}`],
+          }),
+        ]),
+      });
+    };
+
+    // 0.5 Optional DNS provider SSM parameters for EC2 DNS updates.
+    if (cloudflareZoneId) {
+      new ssm.StringParameter(this, "CloudflareZoneId", {
+        parameterName: "/minecraft/cloudflare-zone-id",
+        stringValue: cloudflareZoneId,
+        description: "Cloudflare Zone ID for DNS updates",
+      });
+    }
+
+    if (cloudflareDomain) {
+      new ssm.StringParameter(this, "CloudflareDomain", {
+        parameterName: "/minecraft/cloudflare-domain",
+        stringValue: cloudflareDomain,
+        description: "Domain name to update (e.g., mc.example.com)",
+      });
+    }
+
+    if (cloudflareToken) {
+      const cloudflareTokenParam = new cdk.CfnParameter(this, "CloudflareTokenParam", {
+        type: "String",
+        description: "Cloudflare API Token for DNS updates",
+        noEcho: true,
+      });
+      createSecureStringParameter("CloudflareTokenSecureParam", "/minecraft/cloudflare-api-token", cloudflareTokenParam);
+    }
+
+    if (duckdnsDomain) {
+      new ssm.StringParameter(this, "DuckDnsDomain", {
+        parameterName: "/minecraft/duckdns-domain",
+        stringValue: duckdnsDomain,
+        description: "DuckDNS subdomain without .duckdns.org",
+      });
+    }
+
+    if (duckdnsToken) {
+      const duckDnsTokenParam = new cdk.CfnParameter(this, "DuckDnsTokenParam", {
+        type: "String",
+        description: "DuckDNS token for DNS updates",
+        noEcho: true,
+      });
+      createSecureStringParameter("DuckDnsTokenSecureParam", "/minecraft/duckdns-token", duckDnsTokenParam);
+    }
 
     // 1. VPC
     const vpc = ec2.Vpc.fromLookup(this, "DefaultVpc", {

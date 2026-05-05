@@ -66,7 +66,7 @@ export const envRuntimeSchema = {
     description: "Primary AWS region used by app clients",
     valueType: "string",
     ownership: withOwnership({
-      worker: { level: "required" },
+      worker: { level: "optional" },
       lambda: { level: "required" },
       ec2: { level: "required" },
       ci: { level: "optional" },
@@ -140,7 +140,7 @@ export const envRuntimeSchema = {
     valueType: "string",
     placeholderValues: ["your-zone-id"],
     ownership: withOwnership({
-      worker: { level: "required" },
+      worker: { level: "optional" },
       lambda: { level: "optional" },
       ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },
@@ -152,7 +152,7 @@ export const envRuntimeSchema = {
     valueType: "string",
     placeholderValues: ["your-record-id"],
     ownership: withOwnership({
-      worker: { level: "required" },
+      worker: { level: "optional" },
       lambda: { level: "optional" },
       ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },
@@ -164,7 +164,7 @@ export const envRuntimeSchema = {
     valueType: "string",
     placeholderValues: ["mc.yourdomain.com"],
     ownership: withOwnership({
-      worker: { level: "required" },
+      worker: { level: "optional" },
       lambda: { level: "optional" },
       ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },
@@ -177,7 +177,30 @@ export const envRuntimeSchema = {
     placeholderValues: ["your-cloudflare-api-token"],
     aliases: ["CLOUDFLARE_API_TOKEN"],
     ownership: withOwnership({
-      worker: { level: "required" },
+      worker: { level: "optional" },
+      lambda: { level: "optional" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  DUCKDNS_DOMAIN: {
+    description: "DuckDNS subdomain without .duckdns.org",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "optional" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  DUCKDNS_TOKEN: {
+    description: "DuckDNS account token for DNS updates",
+    valueType: "string",
+    placeholderValues: ["your-duckdns-token"],
+    ownership: withOwnership({
+      worker: { level: "optional" },
       lambda: { level: "optional" },
       ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },
@@ -340,6 +363,8 @@ export const workerSecretAllowlist = [
   "CLOUDFLARE_ZONE_ID",
   "CLOUDFLARE_RECORD_ID",
   "CLOUDFLARE_MC_DOMAIN",
+  "DUCKDNS_DOMAIN",
+  "DUCKDNS_TOKEN",
   "GDRIVE_REMOTE",
   "GDRIVE_ROOT",
   "AUTH_SECRET",
@@ -429,6 +454,52 @@ const createIssue = (
     kind,
     message,
   };
+};
+
+const getResolvedString = (values: Record<string, string | undefined>, name: EnvVarName): string => {
+  return resolveEnvValue(values, name)?.value.trim() ?? "";
+};
+
+const validateMinecraftDnsConfig = (
+  values: Record<string, string | undefined>,
+  issues: EnvSchemaValidationIssue[]
+): void => {
+  const cloudflareNames: EnvVarName[] = [
+    "CLOUDFLARE_ZONE_ID",
+    "CLOUDFLARE_RECORD_ID",
+    "CLOUDFLARE_MC_DOMAIN",
+    "CLOUDFLARE_DNS_API_TOKEN",
+  ];
+  const duckdnsNames: EnvVarName[] = ["DUCKDNS_DOMAIN", "DUCKDNS_TOKEN"];
+  const cloudflareSet = cloudflareNames.filter((name) => getResolvedString(values, name));
+  const duckdnsSet = duckdnsNames.filter((name) => getResolvedString(values, name));
+
+  if (cloudflareSet.length > 0 && duckdnsSet.length > 0) {
+    issues.push(
+      createIssue(
+        "DUCKDNS_DOMAIN",
+        "invalid",
+        "Cloudflare and DuckDNS Minecraft DNS configuration are mutually exclusive. Configure only one provider."
+      )
+    );
+    return;
+  }
+
+  if (cloudflareSet.length > 0 && cloudflareSet.length !== cloudflareNames.length) {
+    const missing = cloudflareNames.filter((name) => !getResolvedString(values, name));
+    issues.push(
+      createIssue(
+        missing[0],
+        "missing",
+        `Cloudflare DNS configuration is incomplete. Missing: ${missing.join(", ")}.`
+      )
+    );
+  }
+
+  if (duckdnsSet.length > 0 && duckdnsSet.length !== duckdnsNames.length) {
+    const missing = duckdnsNames.filter((name) => !getResolvedString(values, name));
+    issues.push(createIssue(missing[0], "missing", `DuckDNS configuration is incomplete. Missing: ${missing.join(", ")}.`));
+  }
 };
 
 const validateRuleAndPresence = ({
@@ -545,6 +616,8 @@ export const validateEnvForTarget = (
       );
     }
   }
+
+  validateMinecraftDnsConfig(values, issues);
 
   return {
     target,

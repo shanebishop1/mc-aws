@@ -89,4 +89,37 @@ describe("scripts/validate-env", () => {
       })
     ).not.toThrow();
   });
+
+  it("allows strict production no-domain worker config", () => {
+    const { CLOUDFLARE_DNS_API_TOKEN, CLOUDFLARE_MC_DOMAIN, CLOUDFLARE_RECORD_ID, CLOUDFLARE_ZONE_ID, ...values } =
+      baseWorkerValues;
+    void CLOUDFLARE_DNS_API_TOKEN;
+    void CLOUDFLARE_MC_DOMAIN;
+    void CLOUDFLARE_RECORD_ID;
+    void CLOUDFLARE_ZONE_ID;
+
+    expect(() =>
+      validateEnv({
+        strict: true,
+        target: "worker",
+        nodeEnv: "production",
+        values,
+      })
+    ).not.toThrow();
+  });
+
+  it("fails strict production when DNS providers are mixed", () => {
+    expect(() =>
+      validateEnv({
+        strict: true,
+        target: "worker",
+        nodeEnv: "production",
+        values: {
+          ...baseWorkerValues,
+          DUCKDNS_DOMAIN: "myserver",
+          DUCKDNS_TOKEN: "duck-token",
+        },
+      })
+    ).toThrow("Strict environment validation failed.");
+  });
 });

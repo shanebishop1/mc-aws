@@ -3,9 +3,11 @@
 Cloudflare is used for two separate things:
 
 - Workers deployment for the web app
-- DNS updates for the Minecraft server and panel domains
+- Optional DNS updates for the Minecraft server and panel domains
 
 Do not mix these credentials up.
+
+You do not need a Cloudflare-managed custom domain to run mc-aws. The panel can run on Cloudflare Workers' `*.workers.dev` URL, and the Minecraft server can use either [DuckDNS](DUCKDNS_SETUP.md) or raw public IP mode.
 
 ## 1. Add Your Domain To Cloudflare
 

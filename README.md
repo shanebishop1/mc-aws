@@ -32,7 +32,7 @@ Run a Minecraft server on AWS without paying to leave it running all the time. F
 
 - Web panel for start, stop, resume, and hibernate
 - Google sign-in with admin and allowed-user roles
-- Cloudflare DNS updates when the server IP changes
+- Optional Minecraft DNS: Cloudflare, free DuckDNS, or raw public IP mode
 - Backup and restore with Google Drive
 - Optional CLI commands
 
@@ -69,11 +69,12 @@ Complete these first. These are very common and well-documented paths, so ask yo
 - [Fork this repo](docs/setup/GITHUB_REPO_SETUP.md)
 - [Create a GitHub token](docs/setup/GITHUB_TOKEN_SETUP.md)
 - [Prepare your AWS account](docs/setup/AWS_ACCOUNT_SETUP.md)
-- [Set up a Cloudflare-managed domain](docs/setup/CLOUDFLARE_SETUP.md)
 - [Create a Google OAuth client](docs/setup/GOOGLE_OAUTH_SETUP.md)
 
 Optional:
 
+- [Set up a Cloudflare-managed domain](docs/setup/CLOUDFLARE_SETUP.md), if you want a custom Minecraft hostname
+- [Set up DuckDNS](docs/setup/DUCKDNS_SETUP.md), if you want a free Minecraft hostname
 - [Create an EC2 key pair](docs/setup/EC2_KEY_PAIR_SETUP.md), if you want SSH key access
 - [Configure SES email features](docs/setup/SES_SETUP.md), if you want email-triggered actions and notifications
 - [Configure Google Drive backups](docs/setup/GOOGLE_DRIVE_SETUP.md), if you want backup, restore, and hibernate workflows
@@ -89,6 +90,12 @@ bash ./setup.sh
 ```
 
 The script installs the project toolchain, collects credentials, deploys AWS infrastructure, writes deployment outputs, and deploys the web app to Cloudflare.
+
+For the Minecraft connection address, setup supports three modes:
+
+- Cloudflare custom domain: friends connect to `mc.example.com`.
+- DuckDNS free subdomain: friends connect to `myserver.duckdns.org`.
+- No-domain mode: friends connect to the public IP shown in the panel.
 
 For the full walkthrough, use [Setup and Run](docs/setup/SETUP_AND_RUN.md).
 

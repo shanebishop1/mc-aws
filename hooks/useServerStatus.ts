@@ -33,6 +33,7 @@ interface PendingAction {
 interface UseServerStatusReturn {
   status: ServerState;
   domain: string | undefined;
+  publicIp: string | undefined;
   hasVolume: boolean;
   playerCount: number | undefined;
   isInitialLoad: boolean;
@@ -68,6 +69,7 @@ export function useServerStatus(): UseServerStatusReturn {
   const actualStatus = statusQuery.data?.data?.state ?? ServerState.Unknown;
   const hasVolume = statusQuery.data?.data?.hasVolume ?? false;
   const domain = actualStatus === ServerState.Running ? statusQuery.data?.data?.domain : undefined;
+  const publicIp = actualStatus === ServerState.Running ? statusQuery.data?.data?.publicIp : undefined;
 
   useEffect(() => {
     if (statusQuery.data || statusQuery.error) {
@@ -201,6 +203,7 @@ export function useServerStatus(): UseServerStatusReturn {
   return {
     status,
     domain,
+    publicIp,
     hasVolume,
     playerCount: actualStatus === ServerState.Running ? playerCountQuery.data?.data?.count : undefined,
     isInitialLoad: !hasLoadedOnce,

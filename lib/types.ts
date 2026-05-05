@@ -16,6 +16,7 @@ export interface ServerStatusResponse {
   state: ServerState;
   instanceId: string;
   domain?: string;
+  publicIp?: string;
   hasVolume?: boolean;
   lastUpdated: string;
   serverAction?: { action: string; timestamp: number } | null;
@@ -45,7 +46,8 @@ export interface OperationInfo {
 
 export interface StartServerResponse {
   instanceId: string;
-  domain: string;
+  domain?: string;
+  publicIp?: string;
   message: string;
 }
 
@@ -79,7 +81,8 @@ export interface HibernateResponse {
 
 export interface ResumeResponse {
   instanceId: string;
-  domain: string;
+  domain?: string;
+  publicIp?: string;
   message: string;
   restoreOutput?: string;
 }

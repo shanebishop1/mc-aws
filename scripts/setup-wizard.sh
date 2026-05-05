@@ -397,6 +397,32 @@ validate_domain() {
   fi
 }
 
+validate_duckdns_domain() {
+  local domain="$1"
+  if [[ "$domain" =~ ^[A-Za-z0-9][A-Za-z0-9-]*[A-Za-z0-9]$|^[A-Za-z0-9]$ ]]; then
+    return 0
+  else
+    return 1
+  fi
+}
+
+validate_duckdns_token() {
+  local domain="$1"
+  local token="$2"
+
+  log "Validating DuckDNS token..."
+  local response
+  response=$(curl -fsS "https://www.duckdns.org/update?domains=${domain}&token=${token}&verbose=true" 2>/dev/null || echo "KO")
+
+  if [[ "$response" == OK* ]]; then
+    log_success "DuckDNS token is valid"
+    return 0
+  fi
+
+  log_error "DuckDNS token or subdomain validation failed"
+  return 1
+}
+
 # Generate AUTH_SECRET
 generate_auth_secret_value() {
   openssl rand -base64 48
@@ -721,6 +747,80 @@ collect_cloudflare() {
   log_success "Cloudflare credentials saved"
 }
 
+collect_duckdns() {
+  step_section 5 "DuckDNS Credentials"
+
+  log "DuckDNS provides a free subdomain like myserver.duckdns.org."
+  echo "Create the subdomain and copy your token from https://www.duckdns.org."
+  echo ""
+
+  while true; do
+    prompt DUCKDNS_DOMAIN "Enter DuckDNS subdomain name (without .duckdns.org)" "${DUCKDNS_DOMAIN:-}"
+
+    if validate_duckdns_domain "$DUCKDNS_DOMAIN"; then
+      break
+    fi
+
+    log_error "Use only letters, numbers, and hyphens. Do not include .duckdns.org."
+  done
+
+  while true; do
+    prompt DUCKDNS_TOKEN "Enter DuckDNS token" "${DUCKDNS_TOKEN:-}" true
+
+    if validate_duckdns_token "$DUCKDNS_DOMAIN" "$DUCKDNS_TOKEN"; then
+      break
+    fi
+
+    DUCKDNS_TOKEN=""
+  done
+
+  write_env_files "DUCKDNS_DOMAIN" "$DUCKDNS_DOMAIN"
+  write_env_files "DUCKDNS_TOKEN" "$DUCKDNS_TOKEN"
+  write_env_files "CLOUDFLARE_DNS_API_TOKEN" ""
+  write_env_files "CLOUDFLARE_ZONE_ID" ""
+  write_env_files "CLOUDFLARE_RECORD_ID" ""
+  write_env_files "CLOUDFLARE_MC_DOMAIN" ""
+
+  log_success "DuckDNS credentials saved"
+}
+
+collect_dns_mode() {
+  step_section 5 "Minecraft Connection DNS"
+
+  echo "Choose how you want to connect to the Minecraft server:"
+  echo ""
+  echo "  1. Custom domain (e.g. mc.example.com) - requires domain purchase"
+  echo "  2. Free DuckDNS subdomain (e.g. myserver.duckdns.org)"
+  echo "  3. No domain - connect via raw IP address"
+  echo ""
+
+  prompt dns_choice "Enter choice" "2"
+
+  case "$dns_choice" in
+    1)
+      collect_cloudflare
+      write_env_files "DUCKDNS_DOMAIN" ""
+      write_env_files "DUCKDNS_TOKEN" ""
+      ;;
+    2)
+      collect_duckdns
+      ;;
+    3)
+      write_env_files "DUCKDNS_DOMAIN" ""
+      write_env_files "DUCKDNS_TOKEN" ""
+      write_env_files "CLOUDFLARE_DNS_API_TOKEN" ""
+      write_env_files "CLOUDFLARE_ZONE_ID" ""
+      write_env_files "CLOUDFLARE_RECORD_ID" ""
+      write_env_files "CLOUDFLARE_MC_DOMAIN" ""
+      log_warning "Friends will need to use the IP address shown in the panel to connect."
+      ;;
+    *)
+      log_warning "Invalid choice, defaulting to DuckDNS."
+      collect_duckdns
+      ;;
+  esac
+}
+
 collect_production_url() {
   step_section 6 "Production URL"
 
@@ -937,7 +1037,7 @@ main() {
   collect_ec2_access
   collect_google_oauth
   collect_authorization
-  collect_cloudflare
+  collect_dns_mode
   collect_production_url
   collect_email_settings
   collect_github_settings
