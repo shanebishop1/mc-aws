@@ -6,7 +6,7 @@
 import { getAuthUser } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
-import { env } from "@/lib/env";
+import { resolveDnsMode } from "@/lib/dns-mode";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { emitRuntimeStateTelemetry, getRuntimeStateAdapter } from "@/lib/runtime-state";
 import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
@@ -24,6 +24,7 @@ type CachedStatusSnapshot = {
   generatedAt: string;
   instanceId: string;
   displayState: ServerState;
+  publicIp?: string;
   hasVolume: boolean;
 };
 
@@ -62,13 +63,16 @@ function buildStatusPayload(
   snapshot: CachedStatusSnapshot,
   user: import("@/lib/api-auth").AuthUser | null
 ): ApiResponse<ServerStatusResponse> {
-  const domain = snapshot.displayState === ServerState.Running ? env.CLOUDFLARE_MC_DOMAIN : undefined;
+  const dnsMode = resolveDnsMode();
+  const domain = snapshot.displayState === ServerState.Running ? dnsMode.hostname : undefined;
+  const publicIp = snapshot.displayState === ServerState.Running ? snapshot.publicIp : undefined;
   return {
     success: true,
     data: {
       state: snapshot.displayState,
       instanceId: user ? snapshot.instanceId : "redacted",
       domain,
+      publicIp,
       hasVolume: snapshot.hasVolume,
       lastUpdated: snapshot.generatedAt,
     },
@@ -170,7 +174,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
     const instanceId = await findInstanceId();
     console.log("[STATUS] Getting server status for instance:", instanceId);
 
-    const { blockDeviceMappings, state: ec2State } = await getInstanceDetails(instanceId);
+    const { blockDeviceMappings, publicIp, state: ec2State } = await getInstanceDetails(instanceId);
     const state = mapEc2StateToServerState(ec2State);
     const hasVolume = blockDeviceMappings.length > 0;
 
@@ -181,6 +185,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       generatedAt: new Date().toISOString(),
       instanceId,
       displayState,
+      publicIp,
       hasVolume,
     };
 

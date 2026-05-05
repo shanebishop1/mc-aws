@@ -7,7 +7,7 @@ import type { AuthUser } from "@/lib/api-auth";
 import { requireAdmin } from "@/lib/api-auth";
 import { formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
-import { env } from "@/lib/env";
+import { resolveDnsMode } from "@/lib/dns-mode";
 import { createMutatingActionFailure, createMutatingActionRequestContext } from "@/lib/mutating-action-contract";
 import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
 import {
@@ -90,10 +90,15 @@ async function invokeResumeLambda(
     named: `Restore requested: ${backupName ?? "(missing backup)"}`,
   };
 
+  const dnsMode = resolveDnsMode();
+
   return {
-    message: "Resume started asynchronously. You will receive an email upon completion.",
+    message:
+      dnsMode.mode === "none"
+        ? "Resume started asynchronously. The connection IP will appear once the server is running."
+        : "Resume started asynchronously. You will receive an email upon completion.",
     instanceId,
-    domain: env.CLOUDFLARE_MC_DOMAIN,
+    domain: dnsMode.hostname,
     restoreOutput: restoreOutputByMode[restoreMode],
   };
 }

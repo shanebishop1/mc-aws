@@ -65,6 +65,78 @@ describe("runtime-config-schema", () => {
       expect(getEnvVarNamesByRequirement("worker", "required")).toEqual(
         expect.arrayContaining(["RUNTIME_STATE_SNAPSHOT_KV_ID"])
       );
+      expect(getEnvVarNamesByRequirement("worker", "required")).not.toEqual(
+        expect.arrayContaining(["CLOUDFLARE_ZONE_ID", "CLOUDFLARE_MC_DOMAIN", "CLOUDFLARE_DNS_API_TOKEN"])
+      );
+    });
+
+    it("accepts no-domain mode when neither DNS provider is configured", () => {
+      const report = validateEnvForTarget(
+        {
+          AWS_REGION: "us-east-1",
+          RUNTIME_STATE_SNAPSHOT_KV_ID: "0123456789abcdef0123456789abcdef",
+          AUTH_SECRET: "very-secret-value",
+          ADMIN_EMAIL: "admin@real-domain.dev",
+          GOOGLE_CLIENT_ID: "google-client-id",
+          GOOGLE_CLIENT_SECRET: "google-client-secret",
+          NEXT_PUBLIC_APP_URL: "https://panel.real-domain.dev",
+        },
+        "worker"
+      );
+
+      expect(report.issues).toEqual([]);
+    });
+
+    it("accepts complete DuckDNS config", () => {
+      const report = validateEnvForTarget(
+        {
+          DUCKDNS_DOMAIN: "myserver",
+          DUCKDNS_TOKEN: "duck-token",
+        },
+        "local-dev"
+      );
+
+      expect(report.issues).toEqual([]);
+    });
+
+    it("rejects mixed Cloudflare and DuckDNS config", () => {
+      const report = validateEnvForTarget(
+        {
+          CLOUDFLARE_ZONE_ID: "zone-id",
+          CLOUDFLARE_RECORD_ID: "record-id",
+          CLOUDFLARE_MC_DOMAIN: "mc.example.com",
+          CLOUDFLARE_DNS_API_TOKEN: "cf-token",
+          DUCKDNS_DOMAIN: "myserver",
+          DUCKDNS_TOKEN: "duck-token",
+        },
+        "local-dev"
+      );
+
+      expect(report.issues).toEqual([
+        expect.objectContaining({
+          kind: "invalid",
+          message: expect.stringContaining("mutually exclusive"),
+        }),
+      ]);
+    });
+
+    it("rejects partial DNS provider config", () => {
+      const duckDnsReport = validateEnvForTarget({ DUCKDNS_DOMAIN: "myserver" }, "local-dev");
+      expect(duckDnsReport.issues).toEqual(
+        expect.arrayContaining([
+        expect.objectContaining({ kind: "missing", message: expect.stringContaining("DuckDNS configuration is incomplete") }),
+        ])
+      );
+
+      const cloudflareReport = validateEnvForTarget({ CLOUDFLARE_MC_DOMAIN: "mc.example.com" }, "local-dev");
+      expect(cloudflareReport.issues).toEqual(
+        expect.arrayContaining([
+        expect.objectContaining({
+          kind: "missing",
+          message: expect.stringContaining("Cloudflare DNS configuration is incomplete"),
+        }),
+        ])
+      );
     });
 
     it("reports missing and invalid values for target", () => {
