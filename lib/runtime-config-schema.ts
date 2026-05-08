@@ -212,7 +212,7 @@ export const envRuntimeSchema = {
     valueType: "string",
     placeholderValues: ["your-runtime-state-kv-id", "REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV_ID"],
     ownership: withOwnership({
-      worker: { level: "required" },
+      worker: { level: "optional", note: "Required at deploy time as a KV binding, not as a runtime secret." },
       lambda: { level: "forbidden" },
       ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },

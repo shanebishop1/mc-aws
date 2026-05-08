@@ -98,10 +98,8 @@ describe("runtime-state provider selector", () => {
       );
     });
 
-    it("fails fast in production when no bindings are present", () => {
-      expect(() => selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toThrow(
-        /Missing or invalid Cloudflare runtime-state binding in production/
-      );
+    it("falls back in production when no bindings are present", () => {
+      expect(selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toBe("in-memory");
 
       expect(console.error).toHaveBeenCalledWith(
         "[RUNTIME-STATE]",
@@ -118,8 +116,8 @@ describe("runtime-state provider selector", () => {
       );
     });
 
-    it("fails fast in production when durable object binding shape is invalid", () => {
-      expect(() =>
+    it("falls back in production when durable object binding shape is invalid", () => {
+      expect(
         selectRuntimeStateAdapterKind({
           nodeEnv: "production",
           bindings: {
@@ -128,7 +126,7 @@ describe("runtime-state provider selector", () => {
             },
           },
         })
-      ).toThrow(/Missing or invalid Cloudflare runtime-state binding in production/);
+      ).toBe("in-memory");
 
       expect(console.error).toHaveBeenCalledWith(
         "[RUNTIME-STATE]",
@@ -223,7 +221,7 @@ describe("runtime-state provider selector", () => {
       expect(adapter.kind).toBe("cloudflare");
     });
 
-    it("fails fast in production when only cloudflare kv binding is present", () => {
+    it("falls back in production when only cloudflare kv binding is present", () => {
       (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
         env: {
           RUNTIME_STATE_SNAPSHOT_KV: {
@@ -234,11 +232,11 @@ describe("runtime-state provider selector", () => {
         },
       };
 
-      expect(() =>
+      expect(
         getRuntimeStateAdapter({
           nodeEnv: "production",
-        })
-      ).toThrow(/Missing or invalid Cloudflare runtime-state binding in production/);
+        }).kind
+      ).toBe("in-memory");
     });
 
     it("returns in-memory adapter in development when only cloudflare kv binding is present", () => {

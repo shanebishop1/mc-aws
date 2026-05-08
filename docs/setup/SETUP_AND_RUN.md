@@ -59,6 +59,8 @@ Connection modes:
 - DuckDNS: uses `DUCKDNS_DOMAIN.duckdns.org` and updates it when EC2 gets a new IP.
 - No domain: shows the current EC2 public IP in the panel. The IP can change after restarts.
 
+Panel hosting is separate from the Minecraft connection mode. If you choose DuckDNS or no-domain mode, you can still use an existing Cloudflare custom panel URL, but automatic panel DNS checks are skipped unless Cloudflare DNS credentials are configured. New users who do not want any custom domain should use the generated `*.workers.dev` panel URL.
+
 ## 5. Local Run Against AWS
 
 After setup has written `.env.local`:

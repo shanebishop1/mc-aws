@@ -25,3 +25,14 @@ Do not include `.duckdns.org` in `DUCKDNS_DOMAIN`.
 The EC2 startup DNS service reads `/minecraft/duckdns-domain` and `/minecraft/duckdns-token` from SSM Parameter Store. When the server starts and receives a public IP, it calls DuckDNS and points `DUCKDNS_DOMAIN.duckdns.org` at that IP.
 
 If you skip both Cloudflare and DuckDNS, mc-aws runs in no-domain mode and the panel shows the raw public IP instead.
+
+## Panel URL
+
+DuckDNS is only for the Minecraft server address. The web panel still deploys to Cloudflare Workers.
+
+You can use either:
+
+- The free `*.workers.dev` URL from Cloudflare Workers.
+- An existing custom panel hostname, such as `panel.example.com`, if its DNS is already configured and proxied in Cloudflare.
+
+You do not need Cloudflare Minecraft DNS variables when using DuckDNS.

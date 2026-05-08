@@ -55,6 +55,7 @@ export type {
 } from "@/lib/runtime-state/telemetry";
 export {
   getRuntimeStateAdapter,
+  getRuntimeStateAdapterAsync,
   hasCloudflareRuntimeStateBindings,
   selectRuntimeStateAdapterKind,
 } from "@/lib/runtime-state/provider-selector";

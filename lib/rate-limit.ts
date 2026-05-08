@@ -1,4 +1,4 @@
-import { emitRuntimeStateTelemetry, getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { emitRuntimeStateTelemetry, getRuntimeStateAdapterAsync } from "@/lib/runtime-state";
 import type { RuntimeStateCounterKey } from "@/lib/runtime-state";
 
 interface RateLimitOptions {
@@ -81,7 +81,7 @@ export async function checkRateLimit({
   const failClosed = failureMode === "closed";
 
   try {
-    const adapter = getRuntimeStateAdapter();
+    const adapter = await getRuntimeStateAdapterAsync();
     const counterResult = await adapter.incrementCounter({
       key,
       limit,
