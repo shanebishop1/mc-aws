@@ -8,7 +8,7 @@ import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
 import { resolveDnsMode } from "@/lib/dns-mode";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { emitRuntimeStateTelemetry, getRuntimeStateAdapter } from "@/lib/runtime-state";
+import { emitRuntimeStateTelemetry, getRuntimeStateAdapterAsync } from "@/lib/runtime-state";
 import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse, ServerStatusResponse } from "@/lib/types";
 import { ServerState } from "@/lib/types";
@@ -138,7 +138,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   }
 
   try {
-    const runtimeStateAdapter = getRuntimeStateAdapter();
+    const runtimeStateAdapter = await getRuntimeStateAdapterAsync();
 
     if (!IS_TEST_ENV) {
       const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedStatusSnapshot>({

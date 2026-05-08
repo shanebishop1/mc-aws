@@ -19,6 +19,7 @@ WRANGLER_DEPLOY_CONFIG_FILE=""
 NEXT_BUILD_ENV_FILE=".env.production.local"
 NEXT_BUILD_ENV_BACKUP_FILE=""
 NEXT_BUILD_ENV_PREPARED="0"
+CLOUDFLARE_DEPLOY_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 
 resolve_env_file() {
   if [[ ! -f "$ENV_FILE" ]]; then
@@ -79,6 +80,10 @@ fi
 # Never allow the runtime DNS token to affect wrangler auth.
 # We still upload it as a Worker secret from $ENV_FILE.
 unset CLOUDFLARE_DNS_API_TOKEN
+# Treat CLOUDFLARE_API_TOKEN as a Wrangler deploy credential only. It is a
+# deprecated alias for Minecraft DNS config in app validation, so keep it out of
+# the app/build environment when DuckDNS or no-domain mode is selected.
+unset CLOUDFLARE_API_TOKEN
 
 WRANGLER_BIN="./node_modules/.bin/wrangler"
 if [[ ! -x "$WRANGLER_BIN" ]]; then
@@ -96,6 +101,8 @@ chmod 700 "$WRANGLER_HOME_DIR" || true
 wrangler() {
   # Run wrangler in a scrubbed environment so an exported CLOUDFLARE_DNS_API_TOKEN
   # (DNS token) cannot interfere with OAuth deployment auth.
+  # If a deploy-scoped CLOUDFLARE_API_TOKEN is present, pass it through for
+  # non-interactive deploy environments where OAuth cannot complete.
   #
   # Keep PATH/HOME so node, browser launcher, and wrangler config still work.
   env -i \
@@ -103,6 +110,7 @@ wrangler() {
     HOME="$WRANGLER_HOME_DIR" \
     TERM="${TERM:-}" \
     USER="${USER:-}" \
+    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-}" \
     "$WRANGLER_BIN" "$@"
 }
 
@@ -206,6 +214,18 @@ is_worker_secret_allowed() {
   return 1
 }
 
+is_worker_secret_ignored() {
+  local candidate="$1"
+
+  case "$candidate" in
+    CDK_DEFAULT_ACCOUNT|CDK_DEFAULT_REGION|VERIFIED_SENDER|NOTIFICATION_EMAIL|START_KEYWORD|GITHUB_USER|GITHUB_REPO|GITHUB_TOKEN|KEY_PAIR_NAME|RUNTIME_STATE_SNAPSHOT_KV_ID|RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID)
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 print_worker_secret_allowlist() {
   for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
     echo "  - $allowed"
@@ -229,12 +249,12 @@ create_cloudflare_kv_namespace() {
   local output
 
   if [[ "$preview_mode" == "preview" ]]; then
-    if ! output="$(wrangler kv namespace create "$binding_name" --preview 2>&1)"; then
+    if ! output="$(wrangler --config /dev/null kv namespace create "$binding_name" --preview 2>&1)"; then
       printf '%s\n' "$output"
       return 1
     fi
   else
-    if ! output="$(wrangler kv namespace create "$binding_name" 2>&1)"; then
+    if ! output="$(wrangler --config /dev/null kv namespace create "$binding_name" 2>&1)"; then
       printf '%s\n' "$output"
       return 1
     fi
@@ -322,7 +342,7 @@ prepare_wrangler_deploy_config() {
     exit 1
   fi
 
-  WRANGLER_DEPLOY_CONFIG_FILE="$(mktemp "${WRANGLER_CONFIG_FILE}.deploy.XXXXXX")"
+  WRANGLER_DEPLOY_CONFIG_FILE="$(mktemp "wrangler.deploy.XXXXXX.jsonc")"
 
   if ! node - "$WRANGLER_CONFIG_FILE" "$WRANGLER_DEPLOY_CONFIG_FILE" "$runtime_state_snapshot_kv_id" "$runtime_state_snapshot_kv_preview_id" <<'NODE'; then
 const fs = require("node:fs");
@@ -595,6 +615,14 @@ ensure_panel_dns() {
   echo "🧭 Ensuring DNS exists for https://${DOMAIN}"
   echo "   (Workers routes do not create DNS records; the hostname must exist + be proxied.)"
 
+  if [[ -z "$CF_ZONE_ID" || -z "$CF_DNS_API_TOKEN" ]]; then
+    echo "⚠️  Skipping automatic panel DNS check: CLOUDFLARE_ZONE_ID or CLOUDFLARE_DNS_API_TOKEN is not set."
+    echo "   This is expected for DuckDNS/no-domain Minecraft mode if your panel DNS already exists."
+    echo "   If https://${DOMAIN} is a custom hostname, make sure it is proxied in Cloudflare before using the panel."
+    echo ""
+    return 0
+  fi
+
   local resp
   if ! resp="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${DOMAIN}&per_page=100")"; then
     echo "❌ Error: Failed to query Cloudflare DNS records"
@@ -648,20 +676,20 @@ EOF
 ensure_panel_dns
 
 echo "🔐 Checking Cloudflare deployment authentication..."
-if ! wrangler whoami >/dev/null 2>&1; then
+if ! wrangler --config /dev/null whoami >/dev/null 2>&1; then
   echo ""
   echo "⚠️  Wrangler is not authenticated for Workers operations (secrets/deploy)."
   echo "We'll try to fix this by logging you in via OAuth."
   echo ""
 
   # Clear any existing wrangler session (token-mode sessions can block OAuth).
-  wrangler logout >/dev/null 2>&1 || true
+  wrangler --config /dev/null logout >/dev/null 2>&1 || true
 
   # OAuth login (opens browser). Note: some wrangler failures can return exit code 0,
   # so we always verify after attempting login.
-  wrangler login || true
+  wrangler --config /dev/null login || true
 
-  if ! wrangler whoami >/dev/null 2>&1; then
+  if ! wrangler --config /dev/null whoami >/dev/null 2>&1; then
     echo ""
     echo "❌ Error: Still not authenticated for Workers operations."
     echo "Try this manually, then re-run this script:"
@@ -692,7 +720,7 @@ fi
 
 echo "📦 Building Next.js app..."
 prepare_next_build_env_file
-if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm build; then
+if ! env MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN= pnpm build; then
   echo ""
   echo "❌ Error: Failed to build Next.js app"
   exit 1
@@ -700,8 +728,10 @@ fi
 echo "✅ Next.js build successful"
 echo ""
 
+prepare_wrangler_deploy_config
+
 echo "📦 Building for Cloudflare (OpenNext)..."
-if ! MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN=false pnpm exec opennextjs-cloudflare build --skipNextBuild; then
+if ! env MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN= pnpm exec opennextjs-cloudflare build --skipNextBuild --config "$WRANGLER_DEPLOY_CONFIG_FILE"; then
   echo ""
   echo "❌ Error: Failed to build for Cloudflare"
   exit 1
@@ -709,10 +739,8 @@ fi
 echo "✅ Build successful"
 echo ""
 
-prepare_wrangler_deploy_config
-
 echo "🌐 Deploying to Cloudflare..."
-if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --route "$DOMAIN/*" --compatibility-date=2024-09-23; then
+if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --route "$DOMAIN/*"; then
   echo ""
   echo "❌ Error: Failed to deploy to Cloudflare Workers"
   exit 1
@@ -721,9 +749,15 @@ echo "✅ Deploy successful"
 echo ""
 
 # Upload secrets from selected deployment env file
-# Note: MC_BACKEND_MODE and ENABLE_DEV_LOGIN are exported above for the build process
-# but are NOT uploaded as Cloudflare secrets - they default correctly at runtime.
+# Note: MC_BACKEND_MODE is exported above for the build process but is NOT uploaded
+# as a Cloudflare secret. ENABLE_DEV_LOGIN is explicitly unset for production.
 echo "🔑 Uploading secrets from $ENV_FILE..."
+
+put_secret() {
+  local put_key="$1"
+  local put_value="$2"
+  echo "$put_value" | wrangler secret put --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" "$put_key"
+}
 
 SECRET_COUNT=0
 LINE_NO=0
@@ -762,6 +796,10 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
 
   if ! is_worker_secret_allowed "$key"; then
+    if is_worker_secret_ignored "$key"; then
+      continue
+    fi
+
     echo ""
     echo "❌ Error: Refusing to upload unapproved Worker secret key '$key' from $ENV_FILE:$LINE_NO"
     echo "Allowed Worker secret keys:"
@@ -778,12 +816,6 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   echo ""
   echo "  Setting: $key"
 
-  put_secret() {
-    local put_key="$1"
-    local put_value="$2"
-    echo "$put_value" | wrangler secret put --name "$WORKER_NAME" "$put_key"
-  }
-
   if ! retry 3 put_secret "$key" "$value"; then
     echo ""
     echo "❌ Error: Failed to set secret: $key (see error above)"
@@ -793,7 +825,29 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   ((SECRET_COUNT+=1))
 done < "$ENV_FILE"
 
+if [[ -z "$(get_env_value "AWS_ACCOUNT_ID")" && -n "$(get_env_value "CDK_DEFAULT_ACCOUNT")" ]]; then
+  echo ""
+  echo "  Setting: AWS_ACCOUNT_ID (from CDK_DEFAULT_ACCOUNT)"
+
+  if ! retry 3 put_secret "AWS_ACCOUNT_ID" "$(get_env_value "CDK_DEFAULT_ACCOUNT")"; then
+    echo ""
+    echo "❌ Error: Failed to set derived secret: AWS_ACCOUNT_ID (see error above)"
+    exit 1
+  fi
+
+  ((SECRET_COUNT+=1))
+fi
+
 echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
+echo ""
+
+echo "🔁 Restoring non-secret Worker bindings after secret upload..."
+if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --route "$DOMAIN/*"; then
+  echo ""
+  echo "❌ Error: Failed to restore Worker bindings after secret upload"
+  exit 1
+fi
+echo "✅ Worker bindings restored"
 echo ""
 
 echo ""

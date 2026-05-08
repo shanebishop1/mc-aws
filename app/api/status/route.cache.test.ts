@@ -62,6 +62,7 @@ vi.mock("@/lib/api-auth", () => {
 vi.mock("@/lib/runtime-state", () => {
   return {
     getRuntimeStateAdapter: getRuntimeStateAdapterMock,
+    getRuntimeStateAdapterAsync: getRuntimeStateAdapterMock,
     emitRuntimeStateTelemetry: emitRuntimeStateTelemetryMock,
   };
 });
