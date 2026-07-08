@@ -56,7 +56,7 @@ async function checkCommandStatus(commandId: string, instanceId: string | undefi
 async function pollCommandCompletion(
   commandId: string,
   instanceId: string | undefined,
-  maxAttempts = 60
+  maxAttempts = 300
 ): Promise<string> {
   let attempts = 0;
 

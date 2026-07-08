@@ -12,9 +12,9 @@ export const INSTANCE_STATE_MAX_ATTEMPTS = 30; // 150s
 export const PUBLIC_IP_POLL_INTERVAL_MS = 1000;
 export const PUBLIC_IP_MAX_ATTEMPTS = 120; // 120s
 
-// Shared SSM polling ceilings
+// Shared SSM polling ceilings. Backups/restores can spend several minutes in rclone uploads/downloads.
 export const SSM_POLL_INTERVAL_MS = 2000;
-export const SSM_MAX_ATTEMPTS = 60; // 120s
+export const SSM_MAX_ATTEMPTS = 300; // 600s
 
 // Hibernate-specific ceilings
 export const VOLUME_DETACH_POLL_INTERVAL_MS = 2000;
