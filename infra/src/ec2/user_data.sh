@@ -3,9 +3,21 @@ set -euo pipefail
 
 log() { echo "[$(date -Is)] $*"; }
 
+bootstrap_failed() {
+  local exit_code=$?
+  if (( exit_code == 0 )); then
+    return
+  fi
+  trap - EXIT
+  set +e
+  log "ERROR: Bootstrap failed with exit code ${exit_code}; powering off to prevent an unattended EC2 charge"
+  systemctl poweroff || shutdown -h now
+  exit "$exit_code"
+}
+trap bootstrap_failed EXIT
+
 # Centralized version variables
 MC_VERSION="1.21.11"
-PAPER_BUILD_DEFAULT="69"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 
@@ -135,19 +147,20 @@ if [[ ! -d "/opt/setup" ]]; then
 fi
 
 # 8. Download Paper jar & accept EULA
-PAPER_BUILD="${PAPER_BUILD:-$PAPER_BUILD_DEFAULT}"
-log "Resolving Paper build for ${MC_VERSION} (default ${PAPER_BUILD})..."
-LATEST_PAPER_BUILD="$(curl -fsSL "https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}" \
-  | python3 -c 'import sys,json; j=json.load(sys.stdin); builds=j.get("builds",[]); print(builds[-1] if builds else "")' \
-  || true)"
-if [[ -n "$LATEST_PAPER_BUILD" ]]; then
-  PAPER_BUILD="$LATEST_PAPER_BUILD"
+PAPER_USER_AGENT="mc-aws/1.0 (https://github.com/${GITHUB_USERNAME}/${REPO_NAME})"
+PAPER_BUILDS_URL="https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds"
+log "Resolving latest stable Paper build for ${MC_VERSION}..."
+PAPER_BUILDS="$(curl -fsSL --retry 3 -H "User-Agent: ${PAPER_USER_AGENT}" "$PAPER_BUILDS_URL")"
+PAPER_URL="$(jq -r 'first(.[] | select(.channel == "STABLE") | .downloads."server:default".url) // empty' <<<"$PAPER_BUILDS")"
+if [[ -z "$PAPER_URL" ]]; then
+  log "ERROR: No stable Paper build is available for ${MC_VERSION}"
+  exit 1
 fi
-PAPER_URL="https://api.papermc.io/v2/projects/paper/versions/${MC_VERSION}/builds/${PAPER_BUILD}/downloads/paper-${MC_VERSION}-${PAPER_BUILD}.jar"
-log "Using Paper jar: ${MC_VERSION} build ${PAPER_BUILD}"
+log "Using Paper jar: ${PAPER_URL}"
 
 if [[ ! -f "/opt/minecraft/server/paper.jar" ]]; then
-  sudo -u minecraft bash -c "cd /opt/minecraft/server && wget \"${PAPER_URL}\" -O paper.jar"
+  curl -fL --retry 3 -H "User-Agent: ${PAPER_USER_AGENT}" "$PAPER_URL" -o /tmp/paper.jar
+  install -o minecraft -g minecraft /tmp/paper.jar /opt/minecraft/server/paper.jar
 fi
 if [[ ! -f "/opt/minecraft/server/eula.txt" ]]; then
   sudo -u minecraft bash -c 'echo "eula=true" > /opt/minecraft/server/eula.txt'
