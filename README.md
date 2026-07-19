@@ -1,6 +1,6 @@
 # On-Demand Minecraft Server on AWS
 
-<p align="center"><img width="320" height="320" alt="mc-aws-image" src="https://github.com/user-attachments/assets/2d77fd09-d9d9-4f23-9830-826b6cd68a57" /></p>
+<p align="center"><img width="320" height="320" alt="Minecraft server hosted on AWS" src="docs/assets/readme/hero.png" /></p>
 
 Run a Minecraft server on AWS without paying to leave it running all the time. Friends can sign in, check the server status, and start it when they want to play.
 
@@ -8,22 +8,22 @@ Run a Minecraft server on AWS without paying to leave it running all the time. F
 <table align="center">
 <tr>
   <td>
-    <img width="170" height="368" alt="mc-aws-mobile-screenshot" src="https://github.com/user-attachments/assets/3f0a61d9-2ad0-4dae-b260-43a6a6804b32" />
+    <img width="170" height="368" alt="Server status and controls" src="docs/assets/readme/server-stopped.png" />
     <br/>
     <p align="center">Monitor</p>
   </td>
     <td>
-    <img width="170" height="368" alt="mc-aws-emails" src="https://github.com/user-attachments/assets/2e2fa424-6ec4-473b-8049-ee7d9852b687" />
+    <img width="170" height="368" alt="Email access management" src="docs/assets/readme/email-management.png" />
     <br/>
     <p align="center">Manage</p>
   </td>
   <td>
-    <img width="170" height="368" alt="mc-aws-costs" src="https://github.com/user-attachments/assets/91cc9898-1cfc-4ba4-b447-576ddf463c41" />
+    <img width="170" height="368" alt="AWS cost dashboard" src="docs/assets/readme/cost-dashboard.png" />
     <br/>
     <p align="center">Budget</p>
   </td>
   <td>
-    <img width="170" height="368" alt="mc-aws-backups" src="https://github.com/user-attachments/assets/f0cb3ca2-0144-4f5d-81a7-51006b9ef4f6" />
+    <img width="170" height="368" alt="Google Drive backup restore" src="docs/assets/readme/restore-backup.png" />
     <br/>
     <p align="center">Backup</p>
   </td>
