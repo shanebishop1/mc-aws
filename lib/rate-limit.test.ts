@@ -1,10 +1,10 @@
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { emitRuntimeStateTelemetryMock, getRuntimeStateAdapterMock, incrementCounterMock } = vi.hoisted(() => {
+const { emitRuntimeStateTelemetryMock, getRuntimeStateAdapterAsyncMock, incrementCounterMock } = vi.hoisted(() => {
   return {
     emitRuntimeStateTelemetryMock: vi.fn(),
-    getRuntimeStateAdapterMock: vi.fn(),
+    getRuntimeStateAdapterAsyncMock: vi.fn(),
     incrementCounterMock: vi.fn(),
   };
 });
@@ -12,7 +12,7 @@ const { emitRuntimeStateTelemetryMock, getRuntimeStateAdapterMock, incrementCoun
 vi.mock("@/lib/runtime-state", () => {
   return {
     emitRuntimeStateTelemetry: emitRuntimeStateTelemetryMock,
-    getRuntimeStateAdapter: getRuntimeStateAdapterMock,
+    getRuntimeStateAdapterAsync: getRuntimeStateAdapterAsyncMock,
   };
 });
 
@@ -20,7 +20,7 @@ describe("rate-limit", () => {
   beforeEach(() => {
     vi.clearAllMocks();
 
-    getRuntimeStateAdapterMock.mockReturnValue({
+    getRuntimeStateAdapterAsyncMock.mockResolvedValue({
       incrementCounter: incrementCounterMock,
     });
   });

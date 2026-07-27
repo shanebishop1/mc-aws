@@ -2,11 +2,11 @@ import type { ApiResponse } from "@/lib/types";
 import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { checkRateLimitMock, getAuthUserMock, getRuntimeStateAdapterMock, getSnapshotMock } = vi.hoisted(() => {
+const { checkRateLimitMock, getAuthUserMock, getRuntimeStateAdapterAsyncMock, getSnapshotMock } = vi.hoisted(() => {
   return {
     checkRateLimitMock: vi.fn(),
     getAuthUserMock: vi.fn(),
-    getRuntimeStateAdapterMock: vi.fn(),
+    getRuntimeStateAdapterAsyncMock: vi.fn(),
     getSnapshotMock: vi.fn(),
   };
 });
@@ -28,7 +28,7 @@ vi.mock("@/lib/rate-limit", async () => {
 
 vi.mock("@/lib/runtime-state", () => {
   return {
-    getRuntimeStateAdapter: getRuntimeStateAdapterMock,
+    getRuntimeStateAdapterAsync: getRuntimeStateAdapterAsyncMock,
     emitRuntimeStateTelemetry: vi.fn(),
   };
 });
@@ -43,7 +43,7 @@ vi.mock("@/lib/aws", () => {
 describe("GET /api/status strict counter/throttle contract", () => {
   beforeEach(() => {
     getAuthUserMock.mockResolvedValue(null);
-    getRuntimeStateAdapterMock.mockReturnValue({
+    getRuntimeStateAdapterAsyncMock.mockResolvedValue({
       kind: "in-memory",
       incrementCounter: vi.fn(),
       checkCounter: vi.fn(),
