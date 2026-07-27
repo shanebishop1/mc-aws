@@ -1,9 +1,11 @@
 import {
   AttachVolumeCommand,
   CreateVolumeCommand,
+  DeleteVolumeCommand,
   DescribeImagesCommand,
   DescribeInstancesCommand,
   DescribeVolumesCommand,
+  DetachVolumeCommand,
   ec2,
 } from "../clients.js";
 import {
@@ -27,8 +29,14 @@ export async function handleResume(instanceId) {
   }
 
   const instance = Reservations[0].Instances[0];
-  if ((instance.BlockDeviceMappings || []).length > 0) {
-    console.log(`Instance ${instanceId} already has volumes. Skipping resume.`);
+  const rootDeviceName = instance.RootDeviceName;
+  if (!rootDeviceName) throw new Error(`Could not determine root device name for instance ${instanceId}`);
+
+  const attachedRootVolume = (instance.BlockDeviceMappings || []).find(
+    (mapping) => mapping.DeviceName === rootDeviceName && mapping.Ebs?.VolumeId
+  );
+  if (attachedRootVolume) {
+    console.log(`Instance ${instanceId} already has a root volume. Skipping resume.`);
     return;
   }
 
@@ -39,9 +47,6 @@ export async function handleResume(instanceId) {
 
   const imageId = instance.ImageId;
   if (!imageId) throw new Error(`Could not determine source AMI for instance ${instanceId}`);
-
-  const rootDeviceName = instance.RootDeviceName;
-  if (!rootDeviceName) throw new Error(`Could not determine root device name for instance ${instanceId}`);
 
   const snapshotId = await resolvePinnedRootSnapshot(instanceId, imageId, rootDeviceName);
   const volumeId = await createAndAttachVolume(instanceId, az, imageId, snapshotId);
@@ -94,6 +99,11 @@ async function createAndAttachVolume(instanceId, az, sourceImageId, snapshotId) 
           Tags: [
             { Key: "Name", Value: "MinecraftServerVolume" },
             { Key: "Backup", Value: "weekly" },
+            { Key: "McAwsProject", Value: requiredOwnershipTag("MC_PROJECT_TAG") },
+            { Key: "McAwsStack", Value: requiredOwnershipTag("MC_STACK_TAG") },
+            { Key: "McAwsInstanceId", Value: instanceId },
+            { Key: "McAwsManagedRoot", Value: "true" },
+            { Key: "McAwsReconstructed", Value: "true" },
             { Key: "ReconstructionSourceImageId", Value: sourceImageId },
             { Key: "ReconstructionSourceSnapshotId", Value: snapshotId },
           ],
@@ -105,10 +115,34 @@ async function createAndAttachVolume(instanceId, az, sourceImageId, snapshotId) 
   const volumeId = createResponse.VolumeId;
   if (!volumeId) throw new Error("Failed to create volume");
 
-  await waitForVolumeAvailable(volumeId);
-  await attachVolumeToInstance(volumeId, instanceId);
+  try {
+    await waitForVolumeAvailable(volumeId);
+    await attachVolumeToInstance(volumeId, instanceId);
+  } catch (originalError) {
+    try {
+      await cleanupCreatedVolume(volumeId, instanceId);
+    } catch (cleanupError) {
+      const original = toError(originalError);
+      const cleanup = toError(cleanupError);
+      console.error(`Cleanup failed; retaining reconstructed volume ${volumeId}: ${cleanup.message}`);
+      throw new Error(`${original.message}. Cleanup failed; retained volume ${volumeId}: ${cleanup.message}`, {
+        cause: original,
+      });
+    }
+    throw originalError;
+  }
 
   return volumeId;
+}
+
+function requiredOwnershipTag(name) {
+  const value = process.env[name];
+  if (!value) throw new Error(`Missing required lifecycle ownership setting ${name}`);
+  return value;
+}
+
+function toError(error) {
+  return error instanceof Error ? error : new Error(String(error));
 }
 
 async function waitForVolumeAvailable(volumeId) {
@@ -140,14 +174,64 @@ async function attachVolumeToInstance(volumeId, instanceId) {
   console.log("Waiting for volume attachment to complete...");
   for (let attempt = 1; attempt <= VOLUME_ATTACH_MAX_ATTEMPTS; attempt++) {
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
-    if (response.Volumes?.[0]?.Attachments?.[0]?.State === "attached") {
+    const attachment = response.Volumes?.[0]?.Attachments?.find((candidate) => candidate.InstanceId === instanceId);
+    if (attachment?.State === "attached") {
       console.log(`Volume ${volumeId} is now attached`);
       return;
     }
     console.log(
-      `Attachment state: ${response.Volumes?.[0]?.Attachments?.[0]?.State}. Waiting... (attempt ${attempt}/${VOLUME_ATTACH_MAX_ATTEMPTS})`
+      `Attachment state: ${attachment?.State}. Waiting... (attempt ${attempt}/${VOLUME_ATTACH_MAX_ATTEMPTS})`
     );
     await new Promise((resolve) => setTimeout(resolve, VOLUME_ATTACH_POLL_INTERVAL_MS));
   }
   throw new Error(`Volume ${volumeId} attachment did not complete within timeout`);
+}
+
+async function cleanupCreatedVolume(volumeId, instanceId) {
+  console.log(`Rolling back reconstructed volume ${volumeId}...`);
+
+  for (let attempt = 1; attempt <= VOLUME_AVAILABLE_MAX_ATTEMPTS; attempt++) {
+    const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
+    const volume = response.Volumes?.[0];
+    if (!volume) {
+      console.log(`Reconstructed volume ${volumeId} no longer exists`);
+      return;
+    }
+
+    const attachments = volume.Attachments || [];
+    const foreignAttachment = attachments.find(
+      (attachment) => attachment.InstanceId && attachment.InstanceId !== instanceId
+    );
+    if (foreignAttachment) {
+      throw new Error(`volume is attached to unexpected instance ${foreignAttachment.InstanceId}`);
+    }
+
+    if (attachments.length > 0) {
+      await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId, InstanceId: instanceId }));
+      await waitForVolumeDetached(volumeId);
+      await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
+      console.log(`Rolled back reconstructed volume ${volumeId}`);
+      return;
+    }
+
+    if (volume.State === "available") {
+      await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
+      console.log(`Rolled back reconstructed volume ${volumeId}`);
+      return;
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, VOLUME_AVAILABLE_POLL_INTERVAL_MS));
+  }
+
+  throw new Error("volume did not become safe to delete within cleanup timeout");
+}
+
+async function waitForVolumeDetached(volumeId) {
+  for (let attempt = 1; attempt <= VOLUME_ATTACH_MAX_ATTEMPTS; attempt++) {
+    const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
+    const volume = response.Volumes?.[0];
+    if (!volume || (volume.State === "available" && (volume.Attachments || []).length === 0)) return;
+    await new Promise((resolve) => setTimeout(resolve, VOLUME_ATTACH_POLL_INTERVAL_MS));
+  }
+  throw new Error("volume did not detach within cleanup timeout");
 }

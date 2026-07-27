@@ -24,6 +24,8 @@ export class MinecraftStack extends cdk.Stack {
     const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "").trim();
     const duckdnsDomain = process.env.DUCKDNS_DOMAIN?.trim() ?? "";
     const duckdnsToken = process.env.DUCKDNS_TOKEN?.trim() ?? "";
+    const lifecycleProjectTag = "mc-aws";
+    const lifecycleStackTag = this.stackName;
 
     // 0. SSM Parameters (GitHub Credentials)
     new ssm.StringParameter(this, "GithubUserParam", {
@@ -123,7 +125,11 @@ export class MinecraftStack extends cdk.Stack {
         description: "Cloudflare API Token for DNS updates",
         noEcho: true,
       });
-      createSecureStringParameter("CloudflareTokenSecureParam", "/minecraft/cloudflare-api-token", cloudflareTokenParam);
+      createSecureStringParameter(
+        "CloudflareTokenSecureParam",
+        "/minecraft/cloudflare-api-token",
+        cloudflareTokenParam
+      );
     }
 
     if (duckdnsDomain) {
@@ -237,8 +243,13 @@ export class MinecraftStack extends cdk.Stack {
       ],
     });
 
-    // Tag for backups (DLM)
+    // Propagate ownership tags to the initial root volume so lifecycle operations can prove ownership.
+    const cfnInstance = instance.node.defaultChild as ec2.CfnInstance;
+    cfnInstance.propagateTagsToVolumeOnCreation = true;
     cdk.Tags.of(instance).add("Backup", "weekly");
+    cdk.Tags.of(instance).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(instance).add("McAwsStack", lifecycleStackTag);
+    cdk.Tags.of(instance).add("McAwsManagedRoot", "true");
 
     // 5. SNS Topic for Start Trigger
     const startTopic = new sns.Topic(this, "MinecraftStartTopic", {
@@ -298,6 +309,8 @@ export class MinecraftStack extends cdk.Stack {
         ALLOWED_EMAILS: allowedEmails.join(","),
         GDRIVE_REMOTE: driveRemote,
         GDRIVE_ROOT: driveRoot,
+        MC_PROJECT_TAG: lifecycleProjectTag,
+        MC_STACK_TAG: lifecycleStackTag,
       },
       timeout: startMinecraftLambdaTimeout,
       maxEventAge: startMinecraftLambdaMaxEventAge,
@@ -334,14 +347,80 @@ export class MinecraftStack extends cdk.Stack {
     // Grant Lambda permissions (scoped to specific instance where possible)
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ec2:StartInstances"],
+        actions: ["ec2:StartInstances", "ec2:StopInstances", "ec2:AttachVolume", "ec2:DetachVolume"],
         resources: [`arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`],
       })
     );
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ec2:DescribeInstances"],
-        resources: ["*"], // DescribeInstances doesn't support resource-level permissions
+        actions: ["ec2:DescribeInstances", "ec2:DescribeImages", "ec2:DescribeVolumes"],
+        resources: ["*"], // These EC2 describe actions don't support resource-level permissions.
+      })
+    );
+
+    const lifecycleVolumeArn = `arn:aws:ec2:${this.region}:${this.account}:volume/*`;
+    const lifecycleVolumeConditions = {
+      StringEquals: {
+        "ec2:ResourceTag/McAwsProject": lifecycleProjectTag,
+        "ec2:ResourceTag/McAwsStack": lifecycleStackTag,
+        "ec2:ResourceTag/McAwsManagedRoot": "true",
+      },
+    };
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:AttachVolume", "ec2:DetachVolume", "ec2:DeleteVolume"],
+        resources: [lifecycleVolumeArn],
+        conditions: lifecycleVolumeConditions,
+      })
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:CreateVolume"],
+        resources: [lifecycleVolumeArn],
+        conditions: {
+          StringEquals: {
+            "aws:RequestTag/McAwsProject": lifecycleProjectTag,
+            "aws:RequestTag/McAwsStack": lifecycleStackTag,
+            "aws:RequestTag/McAwsInstanceId": instance.instanceId,
+            "aws:RequestTag/McAwsManagedRoot": "true",
+            "aws:RequestTag/McAwsReconstructed": "true",
+          },
+          "ForAllValues:StringEquals": {
+            "aws:TagKeys": [
+              "Name",
+              "Backup",
+              "McAwsProject",
+              "McAwsStack",
+              "McAwsInstanceId",
+              "McAwsManagedRoot",
+              "McAwsReconstructed",
+              "ReconstructionSourceImageId",
+              "ReconstructionSourceSnapshotId",
+            ],
+          },
+        },
+      })
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:CreateVolume"],
+        resources: [`arn:aws:ec2:${this.region}:*:snapshot/*`],
+      })
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ec2:CreateTags"],
+        resources: [lifecycleVolumeArn],
+        conditions: {
+          StringEquals: {
+            "ec2:CreateAction": "CreateVolume",
+            "aws:RequestTag/McAwsProject": lifecycleProjectTag,
+            "aws:RequestTag/McAwsStack": lifecycleStackTag,
+            "aws:RequestTag/McAwsInstanceId": instance.instanceId,
+            "aws:RequestTag/McAwsManagedRoot": "true",
+            "aws:RequestTag/McAwsReconstructed": "true",
+          },
+        },
       })
     );
 

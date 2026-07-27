@@ -32,8 +32,8 @@ async function handleHibernate(instanceId, _args, adminEmail) {
     console.log("Step 2: Stopping instance...");
     await stopInstanceAndWait(instanceId);
 
-    console.log("Step 3: Detaching and deleting volumes...");
-    await detachAndDeleteVolumes(instanceId);
+    console.log("Step 3: Detaching and deleting the managed root volume...");
+    await detachAndDeleteRootVolume(instanceId);
 
     const message = `Hibernation completed successfully.\n\nBackup output:\n${backupOutput}`;
     if (adminEmail) await sendNotification(adminEmail, "Minecraft Server Hibernated", message);
@@ -65,23 +65,51 @@ async function stopInstanceAndWait(instanceId) {
   throw new Error(`Instance ${instanceId} did not stop within timeout`);
 }
 
-async function detachAndDeleteVolumes(instanceId) {
+async function detachAndDeleteRootVolume(instanceId) {
   const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
-  const blockDeviceMappings = Reservations?.[0]?.Instances?.[0]?.BlockDeviceMappings || [];
+  const instance = Reservations?.[0]?.Instances?.[0];
+  if (!instance) throw new Error(`Instance ${instanceId} not found`);
 
-  for (const mapping of blockDeviceMappings) {
-    const volumeId = mapping.Ebs?.VolumeId;
-    if (!volumeId) continue;
+  const rootMapping = (instance.BlockDeviceMappings || []).find(
+    (mapping) => mapping.DeviceName === instance.RootDeviceName
+  );
+  const volumeId = rootMapping?.Ebs?.VolumeId;
+  if (!volumeId) {
+    console.log(`Instance ${instanceId} has no attached root volume. Skipping volume deletion.`);
+    return;
+  }
 
-    await detachVolume(volumeId);
-    await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
-    console.log(`Volume ${volumeId} deleted successfully`);
+  await assertManagedRootVolume(volumeId, instanceId);
+  await detachVolume(volumeId, instanceId);
+  await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
+  console.log(`Managed root volume ${volumeId} deleted successfully`);
+}
+
+async function assertManagedRootVolume(volumeId, instanceId) {
+  const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
+  const volume = response.Volumes?.[0];
+  if (!volume) throw new Error(`Root volume ${volumeId} was not found`);
+
+  const tags = new Map((volume.Tags || []).map(({ Key, Value }) => [Key, Value]));
+  const expectedProject = process.env.MC_PROJECT_TAG;
+  const expectedStack = process.env.MC_STACK_TAG;
+  const belongsToInstance = (volume.Attachments || []).some((attachment) => attachment.InstanceId === instanceId);
+
+  if (
+    !expectedProject ||
+    !expectedStack ||
+    tags.get("McAwsProject") !== expectedProject ||
+    tags.get("McAwsStack") !== expectedStack ||
+    tags.get("McAwsManagedRoot") !== "true" ||
+    !belongsToInstance
+  ) {
+    throw new Error(`Refusing to delete root volume ${volumeId}: project ownership could not be verified`);
   }
 }
 
-async function detachVolume(volumeId) {
+async function detachVolume(volumeId, instanceId) {
   console.log(`Detaching volume ${volumeId}...`);
-  await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId }));
+  await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId, InstanceId: instanceId }));
 
   for (let attempt = 1; attempt <= VOLUME_DETACH_MAX_ATTEMPTS; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, VOLUME_DETACH_POLL_INTERVAL_MS));
