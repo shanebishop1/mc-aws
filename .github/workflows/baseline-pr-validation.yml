@@ -159,7 +159,7 @@ jobs:
           node <<'NODE'
           const fs = require("node:fs");
           const account = "111111111111";
-          const region = "us-west-1";
+          const region = "us-east-1";
           const lookupKey = `vpc-provider:account=${account}:filter.isDefault=true:region=${region}:returnAsymmetricSubnets=true`;
           const context = {
             [lookupKey]: {
@@ -186,7 +186,7 @@ jobs:
       - name: Synthesize CDK application
         # --quiet prevents the synthesized template's infrastructure metadata
         # from being copied into the public Actions log.
-        run: pnpm cdk:synth --quiet
+        run: pnpm cdk:synth --quiet --no-lookups
 
       - name: Validate tracked shell syntax
         run: |
