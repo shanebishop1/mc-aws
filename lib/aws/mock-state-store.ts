@@ -9,7 +9,7 @@
  * - Concurrency-safe read/write operations using a simple mutex
  * - Optional JSON file persistence (load on startup, save on changes)
  * - Default/seed fixtures for initial state
- * - Debounced persistence to avoid excessive writes
+ * - Immediate persistence so separate development route runtimes stay coherent
  */
 
 import fs from "node:fs";
@@ -140,8 +140,6 @@ export interface MockStateStoreOptions {
   enablePersistence?: boolean;
   /** Path to the JSON persistence file */
   persistencePath?: string;
-  /** Debounce delay for persistence writes (ms) */
-  persistenceDebounceMs?: number;
 }
 
 // ============================================================================
@@ -314,13 +312,11 @@ export class MockStateStore {
   private state: MockState;
   private lock: Promise<void> = Promise.resolve();
   private options: Required<MockStateStoreOptions>;
-  private persistenceTimeout: NodeJS.Timeout | null = null;
 
   constructor(options: MockStateStoreOptions = {}) {
     this.options = {
       enablePersistence: options.enablePersistence ?? false,
       persistencePath: options.persistencePath ?? path.join(process.cwd(), ".mock-state.json"),
-      persistenceDebounceMs: options.persistenceDebounceMs ?? 1000,
     };
 
     // Load state from persistence or create default
@@ -362,6 +358,14 @@ export class MockStateStore {
   private async withLock<T>(fn: (state: MockState) => T): Promise<T> {
     const release = await this.acquireLock();
     try {
+      if (this.options.enablePersistence) {
+        const persistedState = this.loadState();
+        if (persistedState) {
+          persistedState.pendingTimeouts = this.state.pendingTimeouts;
+          this.state = persistedState;
+        }
+      }
+
       const result = fn(this.state);
       // Await the result if it's a Promise
       return await Promise.resolve(result);
@@ -374,9 +378,13 @@ export class MockStateStore {
    * Execute a function with exclusive access and persist changes
    */
   private async withLockAndPersist<T>(fn: (state: MockState) => T): Promise<T> {
-    const result = await this.withLock(fn);
-    this.schedulePersistence();
-    return result;
+    return this.withLock(async (state) => {
+      const result = await Promise.resolve(fn(state));
+      if (this.options.enablePersistence) {
+        this.saveState();
+      }
+      return result;
+    });
   }
 
   // ========================================================================
@@ -427,28 +435,12 @@ export class MockStateStore {
       };
 
       const data = JSON.stringify(serializableState, null, 2);
-      fs.writeFileSync(this.options.persistencePath, data, "utf-8");
+      const temporaryPath = `${this.options.persistencePath}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
+      fs.writeFileSync(temporaryPath, data, "utf-8");
+      fs.renameSync(temporaryPath, this.options.persistencePath);
     } catch (error) {
       console.error("[MOCK-STATE-STORE] Failed to save state:", error);
     }
-  }
-
-  /**
-   * Schedule persistence with debouncing
-   */
-  private schedulePersistence(): void {
-    if (!this.options.enablePersistence) {
-      return;
-    }
-
-    if (this.persistenceTimeout) {
-      clearTimeout(this.persistenceTimeout);
-    }
-
-    this.persistenceTimeout = setTimeout(() => {
-      this.saveState();
-      this.persistenceTimeout = null;
-    }, this.options.persistenceDebounceMs);
   }
 
   // ========================================================================
@@ -809,11 +801,6 @@ export class MockStateStore {
     console.log("[MOCK-STATE-STORE] Resetting state to defaults");
     // Clear any pending timeouts before resetting
     this.clearAllTimeouts();
-    // Clear any pending persistence timeout
-    if (this.persistenceTimeout) {
-      clearTimeout(this.persistenceTimeout);
-      this.persistenceTimeout = null;
-    }
     await this.withLockAndPersist((state) => {
       const defaultState = createDefaultMockState();
       console.log("[MOCK-STATE-STORE] Current faults before reset:", Array.from(state.faults.operationFailures.keys()));
@@ -932,15 +919,11 @@ export class MockStateStore {
   }
 
   /**
-   * Force immediate persistence (bypasses debouncing)
+   * Force immediate persistence
    */
   async persistNow(): Promise<void> {
     if (this.options.enablePersistence) {
-      if (this.persistenceTimeout) {
-        clearTimeout(this.persistenceTimeout);
-        this.persistenceTimeout = null;
-      }
-      this.saveState();
+      await this.withLock(() => this.saveState());
     }
   }
 }
@@ -992,5 +975,8 @@ export function getMockStateStore(options?: MockStateStoreOptions): MockStateSto
  */
 export function resetMockStateStore(): void {
   console.log("[MOCK-STATE-STORE] Force resetting singleton store");
-  delete (globalThis as Record<string, unknown>)[GLOBAL_KEY];
+  const globalState = globalThis as Record<string, unknown>;
+  const existingStore = globalState[GLOBAL_KEY] as { clearAllTimeouts?: () => void } | undefined;
+  existingStore?.clearAllTimeouts?.();
+  delete globalState[GLOBAL_KEY];
 }

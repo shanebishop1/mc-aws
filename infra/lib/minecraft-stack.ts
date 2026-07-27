@@ -73,6 +73,7 @@ export class MinecraftStack extends cdk.Stack {
 
     // Use Custom Resource to put the parameter into SSM securely
     new cr.AwsCustomResource(this, "GithubTokenSecureParam", {
+      installLatestAwsSdk: false,
       onUpdate: {
         service: "SSM",
         action: "putParameter",
@@ -101,6 +102,7 @@ export class MinecraftStack extends cdk.Stack {
 
     const createSecureStringParameter = (id: string, parameterName: string, valueParameter: cdk.CfnParameter) => {
       new cr.AwsCustomResource(this, id, {
+        installLatestAwsSdk: false,
         onUpdate: {
           service: "SSM",
           action: "putParameter",
@@ -319,7 +321,7 @@ export class MinecraftStack extends cdk.Stack {
     }
 
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: "index.handler",
       code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/StartMinecraftServer")),
       environment: {
@@ -391,7 +393,7 @@ export class MinecraftStack extends cdk.Stack {
 
     // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
     const seedEmailAllowlistLambda = new lambda.Function(this, "SeedEmailAllowlistLambda", {
-      runtime: lambda.Runtime.NODEJS_20_X,
+      runtime: lambda.Runtime.NODEJS_24_X,
       handler: "index.handler",
       code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/SeedEmailAllowlist")),
       environment: {

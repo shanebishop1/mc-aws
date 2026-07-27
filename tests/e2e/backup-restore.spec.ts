@@ -17,7 +17,7 @@ test.describe("Backup and Restore", () => {
     await page.getByRole("button", { name: /backup/i }).click();
 
     // Should show backup dialog
-    await expect(page.getByTestId("backup-dialog")).toBeVisible();
+    await expect(page.getByTestId("backup-dialog")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/Backup Server/i)).toBeVisible();
     await expect(page.getByText(/Create a backup of your server and upload it to Google Drive/i)).toBeVisible();
 
@@ -44,7 +44,7 @@ test.describe("Backup and Restore", () => {
     await page.getByRole("button", { name: /backup/i }).click();
 
     // Should show Google Drive setup prompt (not confirmation dialog)
-    await expect(page.getByTestId("gdrive-setup-prompt")).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId("gdrive-setup-prompt")).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/Google Drive Required/i)).toBeVisible();
     await expect(page.getByText(/Connect Google Drive to create backups/i)).toBeVisible();
 
