@@ -21,12 +21,13 @@ After sign-in, server-side role mapping controls permissions:
 
 ## Add authorized redirect URIs
 
-Add both:
+Add the exact callback for each origin you use:
 
 - `http://localhost:3000/api/auth/callback`
-- `https://mc.yourdomain.com/api/auth/callback`
+- `https://panel.yourdomain.com/api/auth/callback`, for a custom panel hostname
+- `https://mc-aws-panel.account-name.workers.dev/api/auth/callback`, for workers.dev hosting
 
-Replace `mc.yourdomain.com` with your production panel URL.
+Setup prints the exact production origin and callback after panel hosting is selected. Add the production origin under **Authorized JavaScript origins** too. Do not add `/google` to the callback.
 
 ## Add values to env files
 
@@ -41,7 +42,7 @@ NEXT_PUBLIC_APP_URL=http://localhost:3000
 # .env.production (deployment)
 GOOGLE_CLIENT_ID=...
 GOOGLE_CLIENT_SECRET=...
-NEXT_PUBLIC_APP_URL=https://mc.yourdomain.com
+NEXT_PUBLIC_APP_URL=https://panel.yourdomain.com
 ```
 
 Also set role emails:

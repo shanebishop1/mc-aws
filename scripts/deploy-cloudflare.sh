@@ -47,7 +47,7 @@ prepare_next_build_env_file() {
   printf '%s\n' "AWS_ACCESS_KEY_ID=" "AWS_SECRET_ACCESS_KEY=" "AWS_SESSION_TOKEN=" >> "$NEXT_BUILD_ENV_FILE"
   while IFS= read -r line || [[ -n "$line" ]]; do
     case "$line" in
-      AWS_ACCESS_KEY_ID=*|AWS_SECRET_ACCESS_KEY=*|AWS_SESSION_TOKEN=*|export\ AWS_ACCESS_KEY_ID=*|export\ AWS_SECRET_ACCESS_KEY=*|export\ AWS_SESSION_TOKEN=*)
+      AWS_ACCESS_KEY_ID=*|AWS_SECRET_ACCESS_KEY=*|AWS_SESSION_TOKEN=*|CLOUDFLARE_PANEL_DNS_API_TOKEN=*|export\ AWS_ACCESS_KEY_ID=*|export\ AWS_SECRET_ACCESS_KEY=*|export\ AWS_SESSION_TOKEN=*|export\ CLOUDFLARE_PANEL_DNS_API_TOKEN=*)
         continue
         ;;
     esac
@@ -238,7 +238,7 @@ is_worker_secret_ignored() {
   local candidate="$1"
 
   case "$candidate" in
-    AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CDK_DEFAULT_ACCOUNT|CDK_DEFAULT_REGION|SES_NOTIFICATIONS_ENABLED|SES_INBOUND_COMMANDS_ENABLED|VERIFIED_SENDER|NOTIFICATION_EMAIL|SES_INBOUND_RECIPIENT|SES_RECEIPT_RULE_SET_NAME|START_KEYWORD|GITHUB_USER|GITHUB_REPO|GITHUB_TOKEN|KEY_PAIR_NAME|RUNTIME_STATE_SNAPSHOT_KV_ID|RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID)
+    AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CDK_DEFAULT_ACCOUNT|CDK_DEFAULT_REGION|SES_NOTIFICATIONS_ENABLED|SES_INBOUND_COMMANDS_ENABLED|VERIFIED_SENDER|NOTIFICATION_EMAIL|SES_INBOUND_RECIPIENT|SES_RECEIPT_RULE_SET_NAME|START_KEYWORD|GITHUB_USER|GITHUB_REPO|GITHUB_TOKEN|KEY_PAIR_NAME|RUNTIME_STATE_SNAPSHOT_KV_ID|RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID|MC_CONNECTION_MODE|PANEL_HOSTING_MODE|PANEL_WORKERS_DEV_ENABLED|CLOUDFLARE_WORKERS_SUBDOMAIN|CLOUDFLARE_PANEL_ZONE_ID|CLOUDFLARE_PANEL_DNS_API_TOKEN)
       return 0
       ;;
   esac
@@ -364,37 +364,43 @@ prepare_wrangler_deploy_config() {
 
   WRANGLER_DEPLOY_CONFIG_FILE="$(mktemp "wrangler.deploy.XXXXXX.jsonc")"
 
-  if ! node - "$WRANGLER_CONFIG_FILE" "$WRANGLER_DEPLOY_CONFIG_FILE" "$runtime_state_snapshot_kv_id" "$runtime_state_snapshot_kv_preview_id" <<'NODE'; then
-const fs = require("node:fs");
-
-const [sourcePath, outputPath, kvId, kvPreviewId] = process.argv.slice(2);
-
-const raw = fs.readFileSync(sourcePath, "utf8");
-const start = raw.indexOf("{");
-if (start === -1) {
-  console.error("❌ Error: Invalid wrangler config (missing JSON object)");
-  process.exit(1);
-}
-
-const config = JSON.parse(raw.slice(start));
-const kvNamespaces = Array.isArray(config.kv_namespaces) ? config.kv_namespaces : [];
-const runtimeBinding = kvNamespaces.find((entry) => entry && entry.binding === "RUNTIME_STATE_SNAPSHOT_KV");
-
-if (!runtimeBinding) {
-  console.error("❌ Error: wrangler.jsonc is missing kv_namespaces entry for RUNTIME_STATE_SNAPSHOT_KV");
-  process.exit(1);
-}
-
-runtimeBinding.id = kvId;
-runtimeBinding.preview_id = kvPreviewId;
-
-fs.writeFileSync(outputPath, `${JSON.stringify(config, null, 2)}\n`);
-NODE
+  if ! pnpm exec tsx scripts/panel-hosting.ts prepare-config \
+    --source "$WRANGLER_CONFIG_FILE" \
+    --output "$WRANGLER_DEPLOY_CONFIG_FILE" \
+    --kv-id "$runtime_state_snapshot_kv_id" \
+    --kv-preview-id "$runtime_state_snapshot_kv_preview_id" \
+    --mode "$PANEL_HOSTING_MODE" \
+    --custom-workers-dev "$PANEL_WORKERS_DEV_ENABLED"; then
     echo "❌ Error: Failed to prepare runtime-state Wrangler deploy config"
     exit 1
   fi
 
-  echo "✅ Prepared runtime-state Wrangler config with validated KV namespace ids"
+  echo "✅ Prepared Wrangler config with validated runtime state and workers_dev=${PANEL_WORKERS_DEV_ENABLED}"
+}
+
+WRANGLER_DEPLOY_ARGS=()
+
+prepare_wrangler_deploy_args() {
+  local helper_args=(
+    deployment-args
+    --config "$WRANGLER_DEPLOY_CONFIG_FILE"
+    --worker-name "$WORKER_NAME"
+    --mode "$PANEL_HOSTING_MODE"
+  )
+  if [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
+    helper_args+=(--hostname "$DOMAIN")
+  fi
+
+  local args_output
+  if ! args_output="$(pnpm exec tsx scripts/panel-hosting.ts "${helper_args[@]}")"; then
+    echo "❌ Error: Failed to construct safe Wrangler deployment arguments"
+    exit 1
+  fi
+
+  WRANGLER_DEPLOY_ARGS=()
+  while IFS= read -r argument; do
+    [[ -n "$argument" ]] && WRANGLER_DEPLOY_ARGS+=("$argument")
+  done <<< "$args_output"
 }
 
 echo "🔍 Validating required secrets..."
@@ -433,6 +439,24 @@ if grep -q "AUTH_SECRET=your-secret-here" "$ENV_FILE" || grep -q "AUTH_SECRET=de
   echo ""
 fi
 
+WORKER_NAME="$(get_worker_name)"
+if [[ -z "$WORKER_NAME" ]]; then
+  echo "❌ Error: Could not determine Worker name from $WRANGLER_CONFIG_FILE"
+  exit 1
+fi
+
+echo "🔍 Validating panel hosting configuration..."
+PANEL_VALIDATION_OUTPUT="$(pnpm exec tsx scripts/panel-hosting.ts validate-env \
+  --env-file "$ENV_FILE" --worker-name "$WORKER_NAME")" || {
+  echo "❌ Error: panel hosting configuration is invalid"
+  exit 1
+}
+IFS=$'\t' read -r PANEL_HOSTING_MODE NEXT_PUBLIC_APP_URL PANEL_WORKERS_DEV_ENABLED <<< "$PANEL_VALIDATION_OUTPUT"
+echo "✅ Panel hosting mode: $PANEL_HOSTING_MODE (workers_dev=$PANEL_WORKERS_DEV_ENABLED)"
+echo "   Canonical URL: $NEXT_PUBLIC_APP_URL"
+echo "   Google OAuth callback: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
+echo ""
+
 echo "🔍 Running strict production schema validation..."
 if ! NODE_ENV=production pnpm exec tsx scripts/validate-env.ts --target worker --strict --env-file "$ENV_FILE"; then
   echo "❌ Error: strict production schema validation failed"
@@ -451,8 +475,6 @@ echo ""
 
 load_worker_secret_allowlist
 
-NEXT_PUBLIC_APP_URL="$(get_env_value "NEXT_PUBLIC_APP_URL")"
-
 # Extract domain from NEXT_PUBLIC_APP_URL
 # e.g., https://panel.example.com -> panel.example.com
 DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
@@ -461,8 +483,8 @@ DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
 # e.g., panel.shane-bishop.com -> shane-bishop.com
 ZONE_NAME=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
 
-CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_DNS_API_TOKEN")"
-CF_ZONE_ID="$(get_env_value "CLOUDFLARE_ZONE_ID")"
+CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
+CF_ZONE_ID="$(get_env_value "CLOUDFLARE_PANEL_ZONE_ID")"
 
 cf_api() {
   local method="$1"
@@ -636,11 +658,8 @@ ensure_panel_dns() {
   echo "   (Workers routes do not create DNS records; the hostname must exist + be proxied.)"
 
   if [[ -z "$CF_ZONE_ID" || -z "$CF_DNS_API_TOKEN" ]]; then
-    echo "⚠️  Skipping automatic panel DNS check: CLOUDFLARE_ZONE_ID or CLOUDFLARE_DNS_API_TOKEN is not set."
-    echo "   This is expected for DuckDNS/no-domain Minecraft mode if your panel DNS already exists."
-    echo "   If https://${DOMAIN} is a custom hostname, make sure it is proxied in Cloudflare before using the panel."
-    echo ""
-    return 0
+    echo "❌ Error: Custom panel hosting requires panel-specific Cloudflare zone and DNS credentials."
+    exit 1
   fi
 
   local resp
@@ -693,7 +712,12 @@ EOF
   echo ""
 }
 
-ensure_panel_dns
+if [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
+  ensure_panel_dns
+else
+  echo "🧭 Skipping panel DNS checks for workers.dev hosting"
+  echo ""
+fi
 
 echo "🔐 Checking Cloudflare deployment authentication..."
 if ! wrangler --config /dev/null whoami >/dev/null 2>&1; then
@@ -726,17 +750,14 @@ echo ""
 ensure_runtime_state_kv_namespace_ids
 
 echo "🚀 Deploying to Cloudflare Workers..."
-echo "   Domain: $DOMAIN"
-echo "   Zone: $ZONE_NAME"
+echo "   Panel mode: $PANEL_HOSTING_MODE"
+echo "   URL: $NEXT_PUBLIC_APP_URL"
+if [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
+  echo "   Zone: $ZONE_NAME"
+fi
 echo "   Backend: aws"
 echo "   Dev Login: disabled"
 echo ""
-
-WORKER_NAME="$(get_worker_name)"
-if [[ -z "$WORKER_NAME" ]]; then
-  echo "❌ Error: Could not determine Worker name from $WRANGLER_CONFIG_FILE"
-  exit 1
-fi
 
 echo "📦 Building Next.js app..."
 prepare_next_build_env_file
@@ -750,6 +771,7 @@ echo "✅ Next.js build successful"
 echo ""
 
 prepare_wrangler_deploy_config
+prepare_wrangler_deploy_args
 
 echo "📦 Building for Cloudflare (OpenNext)..."
 if ! env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
@@ -762,7 +784,7 @@ echo "✅ Build successful"
 echo ""
 
 echo "🌐 Deploying to Cloudflare..."
-if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --route "$DOMAIN/*"; then
+if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
   echo ""
   echo "❌ Error: Failed to deploy to Cloudflare Workers"
   exit 1
@@ -864,7 +886,7 @@ echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
 echo ""
 
 echo "🔁 Restoring non-secret Worker bindings after secret upload..."
-if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --route "$DOMAIN/*"; then
+if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
   echo ""
   echo "❌ Error: Failed to restore Worker bindings after secret upload"
   exit 1
@@ -886,14 +908,20 @@ if ! VERIFY_URL="$NEXT_PUBLIC_APP_URL" \
 fi
 echo ""
 
+if [[ "$PANEL_HOSTING_MODE" == "workers_dev" ]]; then
+  echo "✅ Verified actual Workers URL through runtime credential probe: $NEXT_PUBLIC_APP_URL"
+  echo "   Google OAuth redirect URI: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
+  echo ""
+fi
+
 echo ""
 echo "✅✅✅ Deployment complete! ✅✅✅"
 echo ""
-echo "   🌍 Your app is live at: https://$DOMAIN"
+echo "   🌍 Your app is live at: $NEXT_PUBLIC_APP_URL"
 echo "   📊 Dashboard: https://dash.cloudflare.com"
 echo ""
 echo "Next steps:"
-echo "   1. Test your deployment at https://$DOMAIN"
+echo "   1. Test your deployment at $NEXT_PUBLIC_APP_URL"
 echo "   2. Check the Cloudflare dashboard for logs and metrics"
 echo "   3. Verify all functionality is working as expected"
 echo ""

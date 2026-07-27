@@ -39,7 +39,7 @@ The wizard collects:
 - Google OAuth client ID and secret
 - admin and allowed-user emails
 - Minecraft connection mode: Cloudflare custom domain, DuckDNS free subdomain, or raw public IP
-- production panel URL
+- panel hosting mode, independently: generated `workers.dev` URL or custom Cloudflare hostname
 - optional SES email settings
 - GitHub repo and token values
 - optional Google Drive backup path values
@@ -61,7 +61,17 @@ Connection modes:
 - DuckDNS: uses `DUCKDNS_DOMAIN.duckdns.org` and updates it when EC2 gets a new IP.
 - No domain: shows the current EC2 public IP in the panel. The IP can change after restarts.
 
-Panel hosting is separate from the Minecraft connection mode. If you choose DuckDNS or no-domain mode, you can still use an existing Cloudflare custom panel URL, but automatic panel DNS checks are skipped unless Cloudflare DNS credentials are configured. New users who do not want any custom domain should use the generated `*.workers.dev` panel URL.
+Panel hosting is separate from the Minecraft connection mode. Every Minecraft mode works with either panel mode:
+
+- `workers.dev`: enter your account subdomain (`account-name`, `account-name.workers.dev`) or full expected Worker URL. Setup validates it against the Worker name, derives and saves `NEXT_PUBLIC_APP_URL`, enables `workers_dev`, deploys without `--route`, skips panel DNS checks, and verifies the resulting URL.
+- Custom Cloudflare hostname: enter an HTTPS origin plus the panel zone ID and a zone-scoped DNS-edit token. These deploy-only panel credentials are separate from Minecraft DNS credentials and are not uploaded as Worker runtime secrets. Setup safely ensures a proxied panel record, deploys with `--route`, and explicitly asks whether `workers.dev` should stay enabled.
+
+When setup prints the panel URL, add these exact values to the Google OAuth web client:
+
+- Authorized JavaScript origin: `<panel-origin>`
+- Authorized redirect URI: `<panel-origin>/api/auth/callback`
+
+For example, Workers hosting might use `https://mc-aws-panel.account-name.workers.dev` and `https://mc-aws-panel.account-name.workers.dev/api/auth/callback`.
 
 ## 5. Local Run Against AWS
 

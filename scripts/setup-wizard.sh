@@ -327,6 +327,30 @@ validate_cloudflare_token() {
   fi
 }
 
+validate_cloudflare_zone_access() {
+  local token="$1"
+  local zone_id="$2"
+
+  if [[ ! "$zone_id" =~ ^[A-Fa-f0-9]{32}$ ]]; then
+    log_error "Cloudflare Zone ID must be a 32-character hexadecimal ID"
+    return 1
+  fi
+
+  log "Validating access to Cloudflare zone..."
+  local response
+  response=$(curl -sS -q -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" 2>/dev/null || true)
+
+  if echo "$response" | grep -q '"success":true'; then
+    log_success "Cloudflare zone access is valid"
+    return 0
+  fi
+
+  log_error "The token cannot access that Cloudflare zone"
+  return 1
+}
+
 # Validate email format
 validate_email() {
   local email="$1"
@@ -537,12 +561,10 @@ collect_google_oauth() {
   echo "  5. Go to 'APIs & Services' → 'Credentials'"
   echo "  6. Click 'Create Credentials' → 'OAuth client ID'"
   echo "  7. Application type: Web application"
-  echo "  8. Add the exact origin for your control panel to 'Authorized JavaScript origins'"
-  echo "     - Use the same host as NEXT_PUBLIC_APP_URL (include https://)"
-  echo "     - If your panel is https://panel.yourdomain.com, add https://panel.yourdomain.com"
-  echo "     - Only add https://yourdomain.com if your panel actually runs on the apex domain"
-  echo "  9. Add your callback URL to 'Authorized redirect URIs'"
-  echo "     - Use: https://panel.yourdomain.com/api/auth/callback (no trailing /google)"
+  echo "  8. Setup will print the exact production origin after you choose panel hosting."
+  echo "     Add it to 'Authorized JavaScript origins'."
+  echo "  9. Setup will also print the exact callback for 'Authorized redirect URIs'."
+  echo "     The callback always ends in /api/auth/callback (no trailing /google)."
   echo "  10. If you want to use Google sign-in locally, also add:"
   echo "      - Origin:   http://localhost:3000"
   echo "      - Redirect: http://localhost:3000/api/auth/callback"
@@ -652,10 +674,8 @@ collect_cloudflare() {
   prompt CLOUDFLARE_ZONE_ID "Enter Cloudflare Zone ID" "${CLOUDFLARE_ZONE_ID:-}"
   echo ""
 
-  echo "Record ID is the DNS record for your Minecraft server."
-  echo "You can:"
-  echo "  1. Enter an existing record ID (find it in DNS → Records → click record)"
-  echo "  2. Leave empty - we'll create it during CDK deployment"
+  echo "Create an A record for the Minecraft hostname before deployment (a placeholder IP is fine)."
+  echo "The updater locates it by hostname, so the legacy record ID is optional."
   echo ""
 
   prompt_optional CLOUDFLARE_RECORD_ID "Enter Cloudflare Record ID (optional)" "${CLOUDFLARE_RECORD_ID:-}"
@@ -663,7 +683,7 @@ collect_cloudflare() {
   if [[ -n "$CLOUDFLARE_RECORD_ID" ]]; then
     log_success "Using existing record ID: $CLOUDFLARE_RECORD_ID"
   else
-    log_success "Will create DNS record during deployment"
+    log_success "The existing Minecraft DNS record will be located by hostname"
   fi
   echo ""
 
@@ -749,9 +769,11 @@ collect_dns_mode() {
       collect_cloudflare
       write_env_files "DUCKDNS_DOMAIN" ""
       write_env_files "DUCKDNS_TOKEN" ""
+      write_env_files "MC_CONNECTION_MODE" "cloudflare"
       ;;
     2)
       collect_duckdns
+      write_env_files "MC_CONNECTION_MODE" "duckdns"
       ;;
     3)
       write_env_files "DUCKDNS_DOMAIN" ""
@@ -760,42 +782,121 @@ collect_dns_mode() {
       write_env_files "CLOUDFLARE_ZONE_ID" ""
       write_env_files "CLOUDFLARE_RECORD_ID" ""
       write_env_files "CLOUDFLARE_MC_DOMAIN" ""
+      write_env_files "MC_CONNECTION_MODE" "raw_ip"
       log_warning "Friends will need to use the IP address shown in the panel to connect."
       ;;
     *)
       log_warning "Invalid choice, defaulting to DuckDNS."
       collect_duckdns
+      write_env_files "MC_CONNECTION_MODE" "duckdns"
       ;;
   esac
 }
 
-collect_production_url() {
-  step_section 6 "Production URL"
+get_worker_name() {
+  node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync("wrangler.jsonc", "utf8");
+const config = JSON.parse(raw.slice(raw.indexOf("{")));
+if (typeof config.name !== "string" || !config.name.trim()) process.exit(1);
+process.stdout.write(config.name.trim());
+'
+}
 
-  log "This is the URL where your control panel will be accessible."
+collect_panel_hosting() {
+  step_section 6 "Control Panel Hosting"
+
+  log "Panel hosting is independent of the Minecraft connection mode you just selected."
   echo ""
-
-  echo "Enter the full URL for your control panel."
-  echo "Example: https://panel.yourdomain.com"
+  echo "  1. Cloudflare workers.dev (no custom domain required)"
+  echo "  2. Custom hostname in a Cloudflare-managed DNS zone"
   echo ""
+  prompt panel_hosting_choice "Enter choice" "1"
 
-  while true; do
-    prompt NEXT_PUBLIC_APP_URL "Enter control panel URL" "${NEXT_PUBLIC_APP_URL:-}"
+  local worker_name
+  worker_name="$(get_worker_name)" || { log_error "Could not read Worker name from wrangler.jsonc"; exit 1; }
 
-    if validate_url "$NEXT_PUBLIC_APP_URL"; then
-      break
-    else
-      log_error "Invalid URL format. Please include https:// and try again."
-    fi
-  done
+  case "$panel_hosting_choice" in
+    1)
+      PANEL_HOSTING_MODE="workers_dev"
+      echo ""
+      log "Find your Workers subdomain in Cloudflare: Workers & Pages -> Account details."
+      log "Enter account-name, account-name.workers.dev, or the full expected Worker URL."
+
+      local workers_input
+      while true; do
+        prompt workers_input "Enter Workers account subdomain or full panel URL" "${CLOUDFLARE_WORKERS_SUBDOMAIN:-}"
+        local derived
+        if derived=$(pnpm exec tsx scripts/panel-hosting.ts derive-workers-url \
+          --worker-name "$worker_name" --input "$workers_input" 2>/dev/null); then
+          IFS=$'\t' read -r CLOUDFLARE_WORKERS_SUBDOMAIN NEXT_PUBLIC_APP_URL <<< "$derived"
+          break
+        fi
+        log_error "Invalid Workers subdomain or URL, or it does not match Worker '$worker_name'."
+      done
+
+      PANEL_WORKERS_DEV_ENABLED="true"
+      CLOUDFLARE_PANEL_ZONE_ID=""
+      CLOUDFLARE_PANEL_DNS_API_TOKEN=""
+      ;;
+    2)
+      PANEL_HOSTING_MODE="custom"
+      while true; do
+        prompt NEXT_PUBLIC_APP_URL "Enter full custom control panel URL" "${NEXT_PUBLIC_APP_URL:-}"
+        local validated_custom_url
+        if validated_custom_url=$(pnpm exec tsx scripts/panel-hosting.ts validate-custom-url \
+          --url "$NEXT_PUBLIC_APP_URL" 2>/dev/null); then
+          NEXT_PUBLIC_APP_URL="$validated_custom_url"
+          break
+        fi
+        log_error "Use an HTTPS custom hostname with no path, query, fragment, or port."
+      done
+
+      log "Custom panel routes require a proxied DNS record in the relevant Cloudflare zone."
+      while true; do
+        prompt CLOUDFLARE_PANEL_DNS_API_TOKEN "Enter DNS-edit token for the panel zone" \
+          "${CLOUDFLARE_PANEL_DNS_API_TOKEN:-${CLOUDFLARE_DNS_API_TOKEN:-}}" true
+        validate_cloudflare_token "$CLOUDFLARE_PANEL_DNS_API_TOKEN" && break
+        CLOUDFLARE_PANEL_DNS_API_TOKEN=""
+      done
+      while true; do
+        prompt CLOUDFLARE_PANEL_ZONE_ID "Enter Zone ID for the panel hostname" \
+          "${CLOUDFLARE_PANEL_ZONE_ID:-${CLOUDFLARE_ZONE_ID:-}}"
+        validate_cloudflare_zone_access "$CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && break
+      done
+
+      echo ""
+      echo "Keep the Worker reachable at its workers.dev address in addition to the custom hostname?"
+      echo "  1. No (recommended: custom hostname only)"
+      echo "  2. Yes"
+      prompt workers_dev_choice "Enter choice" "1"
+      if [[ "$workers_dev_choice" == "2" ]]; then
+        PANEL_WORKERS_DEV_ENABLED="true"
+      else
+        PANEL_WORKERS_DEV_ENABLED="false"
+      fi
+      CLOUDFLARE_WORKERS_SUBDOMAIN=""
+      ;;
+    *)
+      log_error "Invalid panel hosting choice. Select 1 or 2."
+      exit 1
+      ;;
+  esac
+
+  write_env_files "PANEL_HOSTING_MODE" "$PANEL_HOSTING_MODE"
+  write_env_files "CLOUDFLARE_WORKERS_SUBDOMAIN" "$CLOUDFLARE_WORKERS_SUBDOMAIN"
+  write_env_files "PANEL_WORKERS_DEV_ENABLED" "$PANEL_WORKERS_DEV_ENABLED"
+  write_env_files "CLOUDFLARE_PANEL_ZONE_ID" "$CLOUDFLARE_PANEL_ZONE_ID"
+  write_env_files "CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_DNS_API_TOKEN"
+  write_env_files "NEXT_PUBLIC_APP_URL" "$NEXT_PUBLIC_APP_URL"
 
   log_success "Control panel URL: $NEXT_PUBLIC_APP_URL"
   echo ""
-
-  # Write to env files
-  write_env_files "NEXT_PUBLIC_APP_URL" "$NEXT_PUBLIC_APP_URL"
-
-  log_success "Production URL saved"
+  echo "Google OAuth production settings:"
+  echo "  Authorized JavaScript origin: $NEXT_PUBLIC_APP_URL"
+  echo "  Authorized redirect URI:      ${NEXT_PUBLIC_APP_URL}/api/auth/callback"
+  echo "Update the Google OAuth client now; sign-in will fail until both exact values are registered."
+  echo ""
 }
 
 collect_email_settings() {
@@ -987,7 +1088,7 @@ main() {
   collect_google_oauth
   collect_authorization
   collect_dns_mode
-  collect_production_url
+  collect_panel_hosting
   collect_email_settings
   collect_github_settings
   collect_gdrive_settings
@@ -1021,4 +1122,6 @@ main() {
 }
 
 # Run main function
-main "$@"
+if [[ "${MC_AWS_SETUP_LIBRARY_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

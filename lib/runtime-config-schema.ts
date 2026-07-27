@@ -564,7 +564,6 @@ const validateMinecraftDnsConfig = (
 ): void => {
   const cloudflareNames: EnvVarName[] = [
     "CLOUDFLARE_ZONE_ID",
-    "CLOUDFLARE_RECORD_ID",
     "CLOUDFLARE_MC_DOMAIN",
     "CLOUDFLARE_DNS_API_TOKEN",
   ];

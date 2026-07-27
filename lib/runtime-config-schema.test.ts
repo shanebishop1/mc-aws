@@ -103,6 +103,19 @@ describe("runtime-config-schema", () => {
       expect(report.issues).toEqual([]);
     });
 
+    it("accepts Cloudflare Minecraft DNS without the legacy record id", () => {
+      const report = validateEnvForTarget(
+        {
+          CLOUDFLARE_ZONE_ID: "zone-id",
+          CLOUDFLARE_MC_DOMAIN: "mc.example.com",
+          CLOUDFLARE_DNS_API_TOKEN: "cf-token",
+        },
+        "local-dev"
+      );
+
+      expect(report.issues).toEqual([]);
+    });
+
     it("validates disabled, notifications-only, and inbound SES capability modes", () => {
       expect(
         validateEnvForTarget(

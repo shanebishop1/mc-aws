@@ -97,6 +97,13 @@ For the Minecraft connection address, setup supports three modes:
 - DuckDNS free subdomain: friends connect to `myserver.duckdns.org`.
 - No-domain mode: friends connect to the public IP shown in the panel.
 
+Choose panel hosting separately from the Minecraft address:
+
+- `workers.dev`: setup derives `https://mc-aws-panel.<account-subdomain>.workers.dev`, enables `workers_dev`, skips panel DNS, and deploys without a route. No custom domain is needed.
+- Custom Cloudflare hostname: setup validates panel-zone DNS access, creates or proxies the panel record safely, deploys with the hostname route, and asks whether the `workers.dev` endpoint should remain enabled.
+
+For either choice, register the exact panel origin and `<panel-origin>/api/auth/callback` in the Google OAuth client. Setup prints both values before deployment and again in completion output.
+
 For the full walkthrough, use [Setup and Run](docs/setup/SETUP_AND_RUN.md).
 
 ## Local Development

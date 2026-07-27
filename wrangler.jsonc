@@ -1,6 +1,7 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "mc-aws-panel",
+  "workers_dev": false,
   "compatibility_date": "2024-09-23",
   "compatibility_flags": ["nodejs_compat"],
   "main": "worker.mjs",

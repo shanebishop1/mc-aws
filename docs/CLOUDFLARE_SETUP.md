@@ -1,11 +1,21 @@
 # Cloudflare Setup
 
-This guide covers Cloudflare configuration for both:
+This guide covers Cloudflare configuration for separate concerns:
 
 - **Workers deployment auth** (Wrangler OAuth)
-- **Runtime DNS updates** (DNS API token used by app/Lambda)
+- **Panel hosting** (`workers.dev` or a custom Cloudflare hostname)
+- **Optional Minecraft runtime DNS updates** (DNS API token used by app/Lambda)
 
 These are intentionally separate.
+
+## 0) Choose panel hosting independently
+
+The Minecraft connection mode does not choose the panel hostname.
+
+- For `workers.dev`, enter the account Workers subdomain or full expected URL in setup. It derives `NEXT_PUBLIC_APP_URL`, enables `workers_dev`, skips panel DNS checks, and deploys without a route.
+- For a custom panel hostname, setup collects `CLOUDFLARE_PANEL_ZONE_ID` and `CLOUDFLARE_PANEL_DNS_API_TOKEN`, safely ensures a proxied record, deploys with a route, and asks whether `workers.dev` should remain enabled.
+
+With Workers hosting, register `https://mc-aws-panel.<account-subdomain>.workers.dev/api/auth/callback` in Google OAuth. Setup prints the exact URL rather than requiring you to construct it manually.
 
 ## 1) Prepare DNS record for Minecraft domain
 

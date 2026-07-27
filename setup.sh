@@ -148,24 +148,95 @@ get_missing_required_credentials() {
     "GOOGLE_CLIENT_ID"
     "GOOGLE_CLIENT_SECRET"
     "ADMIN_EMAIL"
-    "CLOUDFLARE_DNS_API_TOKEN"
-    "CLOUDFLARE_ZONE_ID"
-    "CLOUDFLARE_RECORD_ID"
-    "CLOUDFLARE_MC_DOMAIN"
+    "PANEL_HOSTING_MODE"
     "NEXT_PUBLIC_APP_URL"
     "GITHUB_USER"
     "GITHUB_REPO"
     "GITHUB_TOKEN"
   )
-
   local missing=()
+
+  if [[ -n "${MC_CONNECTION_MODE:-}" && ! "${MC_CONNECTION_MODE}" =~ ^(cloudflare|duckdns|raw_ip)$ ]]; then
+    missing+=("MC_CONNECTION_MODE")
+  fi
+
+  case "$(resolve_minecraft_connection_mode)" in
+    cloudflare)
+      required+=("CLOUDFLARE_DNS_API_TOKEN" "CLOUDFLARE_ZONE_ID" "CLOUDFLARE_MC_DOMAIN")
+      ;;
+    duckdns)
+      required+=("DUCKDNS_DOMAIN" "DUCKDNS_TOKEN")
+      ;;
+    raw_ip)
+      ;;
+    *)
+      ;;
+  esac
+
+  case "${PANEL_HOSTING_MODE:-}" in
+    workers_dev)
+      required+=("CLOUDFLARE_WORKERS_SUBDOMAIN")
+      ;;
+    custom)
+      required+=(
+        "CLOUDFLARE_PANEL_DNS_API_TOKEN"
+        "CLOUDFLARE_PANEL_ZONE_ID"
+        "PANEL_WORKERS_DEV_ENABLED"
+      )
+      if [[ -n "${PANEL_WORKERS_DEV_ENABLED:-}" && ! "${PANEL_WORKERS_DEV_ENABLED}" =~ ^(true|false)$ ]]; then
+        missing+=("PANEL_WORKERS_DEV_ENABLED")
+      fi
+      ;;
+    *)
+      if [[ -n "${PANEL_HOSTING_MODE:-}" ]]; then
+        missing+=("PANEL_HOSTING_MODE")
+      fi
+      ;;
+  esac
+
   for key in "${required[@]}"; do
     if [[ -z "${!key:-}" ]]; then
       missing+=("$key")
     fi
   done
 
-  printf '%s\n' "${missing[@]}"
+  if [[ ${#missing[@]} -gt 0 ]]; then
+    printf '%s\n' "${missing[@]}"
+  fi
+}
+
+resolve_minecraft_connection_mode() {
+  case "${MC_CONNECTION_MODE:-}" in
+    cloudflare|duckdns|raw_ip)
+      printf '%s\n' "$MC_CONNECTION_MODE"
+      return
+      ;;
+  esac
+
+  if [[ -n "${CLOUDFLARE_MC_DOMAIN:-}" || -n "${CLOUDFLARE_DNS_API_TOKEN:-}" || -n "${CLOUDFLARE_ZONE_ID:-}" ]]; then
+    printf '%s\n' "cloudflare"
+  elif [[ -n "${DUCKDNS_DOMAIN:-}" || -n "${DUCKDNS_TOKEN:-}" ]]; then
+    printf '%s\n' "duckdns"
+  else
+    printf '%s\n' "raw_ip"
+  fi
+}
+
+minecraft_connection_target() {
+  case "$(resolve_minecraft_connection_mode)" in
+    cloudflare)
+      printf '%s\n' "${CLOUDFLARE_MC_DOMAIN:-Cloudflare hostname not configured}"
+      ;;
+    duckdns)
+      printf '%s\n' "${DUCKDNS_DOMAIN:-not-configured}.duckdns.org"
+      ;;
+    raw_ip)
+      printf '%s\n' "the public IP shown in the control panel"
+      ;;
+    *)
+      printf '%s\n' "the connection address shown in the control panel"
+      ;;
+  esac
 }
 
 ensure_auth_secret() {
@@ -222,6 +293,11 @@ maybe_confirm_existing_credentials() {
 
   load_env_file "$PRODUCTION_ENV_FILE" || true
 
+  if [[ -z "${MC_CONNECTION_MODE:-}" ]]; then
+    MC_CONNECTION_MODE="$(resolve_minecraft_connection_mode)"
+    export MC_CONNECTION_MODE
+  fi
+
   # Only offer skipping the wizard when the repo already has .env.production.
   local missing
   missing="$(get_missing_required_credentials | tr '\n' ' ')"
@@ -240,10 +316,28 @@ maybe_confirm_existing_credentials() {
   log "  GOOGLE_CLIENT_ID=$(mask_value "$GOOGLE_CLIENT_ID")"
   log "  GOOGLE_CLIENT_SECRET=$(mask_value "$GOOGLE_CLIENT_SECRET")"
   log "  ADMIN_EMAIL=$ADMIN_EMAIL"
-  log "  CLOUDFLARE_DNS_API_TOKEN=$(mask_value "$CLOUDFLARE_DNS_API_TOKEN")"
-  log "  CLOUDFLARE_ZONE_ID=$(mask_value "$CLOUDFLARE_ZONE_ID")"
-  log "  CLOUDFLARE_RECORD_ID=$(mask_value "$CLOUDFLARE_RECORD_ID")"
-  log "  CLOUDFLARE_MC_DOMAIN=$CLOUDFLARE_MC_DOMAIN"
+  log "  MC_CONNECTION_MODE=$MC_CONNECTION_MODE"
+  case "$MC_CONNECTION_MODE" in
+    cloudflare)
+      log "  CLOUDFLARE_DNS_API_TOKEN=$(mask_value "$CLOUDFLARE_DNS_API_TOKEN")"
+      log "  CLOUDFLARE_ZONE_ID=$(mask_value "$CLOUDFLARE_ZONE_ID")"
+      log "  CLOUDFLARE_MC_DOMAIN=$CLOUDFLARE_MC_DOMAIN"
+      ;;
+    duckdns)
+      log "  DUCKDNS_DOMAIN=$DUCKDNS_DOMAIN"
+      log "  DUCKDNS_TOKEN=$(mask_value "$DUCKDNS_TOKEN")"
+      ;;
+    raw_ip)
+      log "  Minecraft connection uses the public IP shown in the panel"
+      ;;
+  esac
+  log "  PANEL_HOSTING_MODE=$PANEL_HOSTING_MODE"
+  if [[ "$PANEL_HOSTING_MODE" == "workers_dev" ]]; then
+    log "  CLOUDFLARE_WORKERS_SUBDOMAIN=$CLOUDFLARE_WORKERS_SUBDOMAIN"
+  else
+    log "  CLOUDFLARE_PANEL_ZONE_ID=$(mask_value "$CLOUDFLARE_PANEL_ZONE_ID")"
+    log "  PANEL_WORKERS_DEV_ENABLED=$PANEL_WORKERS_DEV_ENABLED"
+  fi
   log "  NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL"
   log "  GITHUB_USER=$GITHUB_USER"
   log "  GITHUB_REPO=$GITHUB_REPO"
@@ -477,15 +571,18 @@ main() {
   echo ""
   success "mc-aws is fully deployed and ready to use!"
   echo ""
-  log "📍 Your Minecraft control panel: https://${NEXT_PUBLIC_APP_URL#https://}"
-  log "📍 Minecraft server domain: ${CLOUDFLARE_MC_DOMAIN}"
+  log "📍 Your Minecraft control panel: ${NEXT_PUBLIC_APP_URL}"
+  log "📍 Minecraft connection: $(minecraft_connection_target)"
+  log "🔐 Google OAuth callback: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
   echo ""
   log "Next steps:"
   log "  1. Visit your control panel and sign in with: ${ADMIN_EMAIL}"
   log "  2. Start your Minecraft server from the panel"
-  log "  3. Connect to ${CLOUDFLARE_MC_DOMAIN} in Minecraft"
+  log "  3. Connect to $(minecraft_connection_target) in Minecraft"
   echo ""
 }
 
 # Run main function
-main "$@"
+if [[ "${MC_AWS_SETUP_LIBRARY_ONLY:-0}" != "1" ]]; then
+  main "$@"
+fi

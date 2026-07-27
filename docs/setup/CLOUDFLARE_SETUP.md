@@ -1,15 +1,25 @@
 # Cloudflare Setup
 
-Cloudflare is used for two separate things:
+Cloudflare is used for separate concerns:
 
 - Workers deployment for the web app
-- Optional DNS updates for the Minecraft server and panel domains
+- Optional DNS updates for the Minecraft server
+- Optional custom DNS for the panel (not needed with `workers.dev`)
 
 Do not mix these credentials up.
 
 You do not need a Cloudflare-managed custom domain to run mc-aws. The panel can run on Cloudflare Workers' `*.workers.dev` URL, and the Minecraft server can use either [DuckDNS](DUCKDNS_SETUP.md) or raw public IP mode.
 
-## 1. Add Your Domain To Cloudflare
+## 1. Choose Panel Hosting
+
+The setup wizard offers:
+
+- `workers.dev`: no custom domain or panel DNS token is required. Enter your account Workers subdomain (for example `account-name.workers.dev`) or the full expected URL. With Worker name `mc-aws-panel`, setup derives `https://mc-aws-panel.account-name.workers.dev`.
+- Custom Cloudflare hostname: provide an HTTPS origin such as `https://panel.example.com`, the panel zone ID, and a zone-scoped DNS-edit token. Setup ensures the hostname is proxied and asks explicitly whether to keep the `workers.dev` endpoint enabled.
+
+Panel hosting does not determine the Minecraft connection address. Cloudflare Minecraft DNS, DuckDNS, and raw-IP modes all work with either panel choice.
+
+## 2. Add Your Domain To Cloudflare (Custom Hostnames Only)
 
 1. Create or sign in to a Cloudflare account.
 2. Add your domain to Cloudflare.
@@ -20,7 +30,7 @@ Cloudflare docs:
 
 - https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/
 
-## 2. Choose Domains
+## 3. Choose Domains
 
 Use separate hostnames unless you have a specific reason not to:
 
@@ -31,9 +41,14 @@ The setup wizard asks for the Minecraft domain as `CLOUDFLARE_MC_DOMAIN`.
 
 The setup wizard asks for the panel URL as `NEXT_PUBLIC_APP_URL`.
 
-## 3. Create A DNS API Token
+## 4. Create DNS API Tokens
 
-This token is for runtime DNS updates. It is not the token used to deploy Workers.
+The wizard stores panel and Minecraft DNS credentials separately because they can use different zones and because workers.dev needs no DNS token:
+
+- `CLOUDFLARE_PANEL_DNS_API_TOKEN` / `CLOUDFLARE_PANEL_ZONE_ID`: deploy-time custom panel DNS only.
+- `CLOUDFLARE_DNS_API_TOKEN` / `CLOUDFLARE_ZONE_ID`: runtime Minecraft DNS updates only.
+
+Neither DNS token is the credential used to deploy Workers.
 
 1. Open Cloudflare dashboard.
 2. Go to **My Profile -> API Tokens**.
@@ -46,17 +61,17 @@ Cloudflare docs:
 
 - https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
 
-## 4. Get The Zone ID
+## 5. Get The Zone ID
 
 1. Open your domain in Cloudflare.
 2. Go to the domain overview page.
 3. Copy the **Zone ID**.
 
-## 5. DNS Record ID
+## 6. DNS Record ID
 
-The current deploy flow can create missing DNS records. If you already have a Minecraft DNS record, you can provide its record ID. Otherwise leave it empty during the wizard if prompted.
+Custom panel deployment can create its missing proxied panel record. For a Cloudflare Minecraft hostname, create an A record first (a placeholder IP is fine); the runtime updater locates it by hostname, so the legacy `CLOUDFLARE_RECORD_ID` value can be left empty.
 
-## 6. Wrangler Login
+## 7. Wrangler Login
 
 Workers deployment uses Wrangler OAuth:
 
@@ -70,11 +85,11 @@ The deploy script also attempts login if Wrangler is not authenticated.
 
 The setup wizard asks for:
 
-- `CLOUDFLARE_DNS_API_TOKEN`
-- `CLOUDFLARE_ZONE_ID`
-- `CLOUDFLARE_RECORD_ID` if you already have one
-- `CLOUDFLARE_MC_DOMAIN`
-- `NEXT_PUBLIC_APP_URL`
+- `PANEL_HOSTING_MODE` (`workers_dev` or `custom`)
+- `CLOUDFLARE_WORKERS_SUBDOMAIN` for workers.dev, or panel zone/token values for a custom hostname
+- Minecraft DNS values only when Cloudflare is the Minecraft connection mode
+
+Setup derives and persists `NEXT_PUBLIC_APP_URL` for workers.dev. For a custom hostname, it validates the URL you enter.
 
 ## Important
 

@@ -22,3 +22,24 @@ describe("setup-wizard email optional contract", () => {
     expect(source).toContain('write_env_files "START_KEYWORD" "$START_KEYWORD"');
   });
 });
+
+describe("setup-wizard panel hosting contract", () => {
+  it("collects panel hosting independently from Minecraft DNS", () => {
+    const source = readFileSync(setupWizardPath, "utf8");
+
+    expect(source).toContain("collect_dns_mode\n  collect_panel_hosting");
+    expect(source).toContain('PANEL_HOSTING_MODE="workers_dev"');
+    expect(source).toContain('PANEL_HOSTING_MODE="custom"');
+    expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "cloudflare"');
+    expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "duckdns"');
+    expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "raw_ip"');
+  });
+
+  it("prints the exact production Google OAuth origin and callback", () => {
+    const source = readFileSync(setupWizardPath, "utf8");
+
+    expect(source).toContain("Authorized JavaScript origin: $NEXT_PUBLIC_APP_URL");
+    expect(source).toContain("Authorized redirect URI:      ${NEXT_PUBLIC_APP_URL}/api/auth/callback");
+    expect(source).toContain("sign-in will fail until both exact values are registered");
+  });
+});

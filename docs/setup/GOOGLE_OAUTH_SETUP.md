@@ -33,6 +33,7 @@ Add authorized JavaScript origins:
 ```text
 http://localhost:3000
 https://panel.example.com
+https://mc-aws-panel.account-name.workers.dev
 ```
 
 Add authorized redirect URIs:
@@ -40,6 +41,7 @@ Add authorized redirect URIs:
 ```text
 http://localhost:3000/api/auth/callback
 https://panel.example.com/api/auth/callback
+https://mc-aws-panel.account-name.workers.dev/api/auth/callback
 ```
 
 If you plan to use Google Drive backups, also add:
@@ -49,7 +51,7 @@ http://localhost:3000/api/gdrive/callback
 https://panel.example.com/api/gdrive/callback
 ```
 
-Replace `https://panel.example.com` with your real panel URL.
+Use only the origin and callback for the panel hosting mode selected during setup. Setup prints both exact values. A workers.dev callback uses the same `/api/auth/callback` path and must match the derived Worker URL exactly; do not add `/google`.
 
 ## Values Needed Later
 
