@@ -193,6 +193,10 @@ async function executeApiCommand(command, instanceId, userEmail, notificationEma
  * Handle email invocation from SNS event
  */
 async function handleEmailInvocation(event) {
+  // Reject unexpected SNS/email invocations before parsing or mutating any state.
+  const envResult = validateEnvironment({ requireInboundCommands: true });
+  if (envResult.error) return envResult.error;
+
   // Parse email from SNS event
   const emailData = parseEmailFromEvent(event);
   if (emailData.error) return emailData.error;
@@ -213,10 +217,6 @@ async function handleEmailInvocation(event) {
     const allowlistResult = await handleAllowlistUpdate(senderEmail, body, notificationEmail, adminEmails);
     if (allowlistResult) return allowlistResult;
   }
-
-  // Validate environment (email path requires sender config)
-  const envResult = validateEnvironment({ requireVerifiedSender: true });
-  if (envResult.error) return envResult.error;
 
   // Parse and authorize command
   const commandResult = await parseAndAuthorizeCommand(subject, isAdmin, senderEmail);
@@ -269,7 +269,7 @@ async function handleAllowlistUpdate(senderEmail, body, notificationEmail, admin
 }
 
 function validateEnvironment(options = {}) {
-  const { requireVerifiedSender = false } = options;
+  const { requireInboundCommands = false } = options;
   const instanceId = process.env.INSTANCE_ID;
 
   if (!instanceId) {
@@ -277,12 +277,12 @@ function validateEnvironment(options = {}) {
     return { error: { statusCode: 500, body: "Configuration error." } };
   }
 
-  if (requireVerifiedSender && !process.env.VERIFIED_SENDER) {
-    console.error("Email command requested but VERIFIED_SENDER is not configured.");
+  if (requireInboundCommands && process.env.SES_INBOUND_COMMANDS_ENABLED !== "true") {
+    console.error("Email command requested but SES_INBOUND_COMMANDS_ENABLED is not true.");
     return {
       error: {
         statusCode: 503,
-        body: "Email commands are disabled. Configure VERIFIED_SENDER to enable SES email flows.",
+        body: "Email commands are disabled. Enable and configure inbound SES commands before using this endpoint.",
       },
     };
   }

@@ -25,7 +25,23 @@ describe("minecraft-stack SecureString/KMS policy contract", () => {
   });
 });
 
-const synthesizeStack = () => {
+const sesEnvironmentNames = [
+  "SES_NOTIFICATIONS_ENABLED",
+  "SES_INBOUND_COMMANDS_ENABLED",
+  "VERIFIED_SENDER",
+  "NOTIFICATION_EMAIL",
+  "SES_INBOUND_RECIPIENT",
+  "SES_RECEIPT_RULE_SET_NAME",
+  "START_KEYWORD",
+] as const;
+
+const synthesizeStack = (sesEnvironment: Partial<Record<(typeof sesEnvironmentNames)[number], string>> = {}) => {
+  const previousEnvironment = Object.fromEntries(sesEnvironmentNames.map((name) => [name, process.env[name]]));
+  for (const name of sesEnvironmentNames) {
+    delete process.env[name];
+  }
+  Object.assign(process.env, sesEnvironment);
+
   const app = new cdk.App();
   const account = "111111111111";
   const region = "us-west-1";
@@ -52,8 +68,92 @@ const synthesizeStack = () => {
       ],
     }
   );
-  return Template.fromStack(new MinecraftStack(app, "MinecraftStack", { env: { account, region } }));
+  try {
+    return Template.fromStack(new MinecraftStack(app, "MinecraftStack", { env: { account, region } }));
+  } finally {
+    for (const name of sesEnvironmentNames) {
+      const previousValue = previousEnvironment[name];
+      if (previousValue === undefined) {
+        delete process.env[name];
+      } else {
+        process.env[name] = previousValue;
+      }
+    }
+  }
 };
+
+describe("minecraft-stack optional SES contract", () => {
+  const allIamStatements = (template: Template) =>
+    Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+      (policy) => policy.Properties.PolicyDocument.Statement
+    );
+  const actionsFor = (statement: Record<string, unknown>) =>
+    Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+
+  it("creates no inbound SES resources or send permissions when both capabilities are disabled", () => {
+    const template = synthesizeStack({
+      SES_NOTIFICATIONS_ENABLED: "false",
+      SES_INBOUND_COMMANDS_ENABLED: "false",
+    });
+
+    expect(template.findResources("AWS::SES::ReceiptRule")).toEqual({});
+    expect(template.findResources("AWS::SES::ReceiptRuleSet")).toEqual({});
+    expect(template.findResources("AWS::SNS::Topic")).toEqual({});
+    expect(
+      allIamStatements(template).some((statement) =>
+        actionsFor(statement).some((action) => typeof action === "string" && action.startsWith("ses:"))
+      )
+    ).toBe(false);
+  });
+
+  it("grants identity-scoped send access without inbound resources in notifications-only mode", () => {
+    const template = synthesizeStack({
+      SES_NOTIFICATIONS_ENABLED: "true",
+      SES_INBOUND_COMMANDS_ENABLED: "false",
+      VERIFIED_SENDER: "sender@example.net",
+      NOTIFICATION_EMAIL: "operator@example.net",
+    });
+
+    expect(template.findResources("AWS::SES::ReceiptRule")).toEqual({});
+    expect(template.findResources("AWS::SES::ReceiptRuleSet")).toEqual({});
+    expect(template.findResources("AWS::SNS::Topic")).toEqual({});
+    const sendStatements = allIamStatements(template).filter((statement) =>
+      actionsFor(statement).includes("ses:SendEmail")
+    );
+    expect(sendStatements).toHaveLength(2);
+    for (const statement of sendStatements) {
+      expect(JSON.stringify(statement.Resource)).toContain(
+        "arn:aws:ses:us-west-1:111111111111:identity/sender@example.net"
+      );
+      expect(statement.Resource).not.toBe("*");
+    }
+  });
+
+  it("adds only the project rule to an explicitly named existing rule set in inbound mode", () => {
+    const template = synthesizeStack({
+      SES_NOTIFICATIONS_ENABLED: "false",
+      SES_INBOUND_COMMANDS_ENABLED: "true",
+      SES_INBOUND_RECIPIENT: "commands@example.net",
+      SES_RECEIPT_RULE_SET_NAME: "operator-managed-rules",
+      START_KEYWORD: "private-keyword",
+    });
+
+    expect(template.findResources("AWS::SES::ReceiptRuleSet")).toEqual({});
+    expect(Object.keys(template.findResources("AWS::SES::ReceiptRule"))).toHaveLength(1);
+    template.hasResourceProperties("AWS::SES::ReceiptRule", {
+      RuleSetName: "operator-managed-rules",
+      Rule: Match.objectLike({
+        Name: "mc-aws-MinecraftStack-inbound-commands",
+        Recipients: ["commands@example.net"],
+      }),
+    });
+    expect(Object.keys(template.findResources("AWS::SNS::Topic"))).toHaveLength(1);
+    expect(JSON.stringify(template.toJSON())).not.toContain("SetActiveReceiptRuleSet");
+    expect(
+      allIamStatements(template).some((statement) => actionsFor(statement).includes("ses:SendEmail"))
+    ).toBe(false);
+  });
+});
 
 describe("minecraft-stack lifecycle Lambda IAM contract", () => {
   it("synthesizes all lifecycle EC2 permissions with mutation scope and ownership conditions", () => {

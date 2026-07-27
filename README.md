@@ -76,7 +76,7 @@ Optional:
 - [Set up a Cloudflare-managed domain](docs/setup/CLOUDFLARE_SETUP.md), if you want a custom Minecraft hostname
 - [Set up DuckDNS](docs/setup/DUCKDNS_SETUP.md), if you want a free Minecraft hostname
 - [Create an EC2 key pair](docs/setup/EC2_KEY_PAIR_SETUP.md), if you want SSH key access
-- [Configure SES email features](docs/setup/SES_SETUP.md), if you want email-triggered actions and notifications
+- [Configure optional SES capabilities](docs/setup/SES_SETUP.md) for independent outbound notifications and inbound commands
 - [Configure Google Drive backups](docs/setup/GOOGLE_DRIVE_SETUP.md), if you want backup, restore, and hibernate workflows
 
 ## Setup

@@ -103,6 +103,58 @@ describe("runtime-config-schema", () => {
       expect(report.issues).toEqual([]);
     });
 
+    it("validates disabled, notifications-only, and inbound SES capability modes", () => {
+      expect(
+        validateEnvForTarget(
+          {
+            SES_NOTIFICATIONS_ENABLED: "false",
+            SES_INBOUND_COMMANDS_ENABLED: "false",
+          },
+          "local-dev"
+        ).issues
+      ).toEqual([]);
+
+      expect(
+        validateEnvForTarget(
+          {
+            SES_NOTIFICATIONS_ENABLED: "true",
+            VERIFIED_SENDER: "sender@real-domain.dev",
+            NOTIFICATION_EMAIL: "operator@real-domain.dev",
+          },
+          "local-dev"
+        ).issues
+      ).toEqual([]);
+
+      expect(
+        validateEnvForTarget(
+          {
+            SES_INBOUND_COMMANDS_ENABLED: "true",
+            SES_INBOUND_RECIPIENT: "commands@real-domain.dev",
+            SES_RECEIPT_RULE_SET_NAME: "operator-managed-rules",
+            START_KEYWORD: "private-start-keyword",
+          },
+          "local-dev"
+        ).issues
+      ).toEqual([]);
+    });
+
+    it("rejects incomplete enabled SES capabilities", () => {
+      const report = validateEnvForTarget(
+        {
+          SES_NOTIFICATIONS_ENABLED: "true",
+          SES_INBOUND_COMMANDS_ENABLED: "true",
+        },
+        "local-dev"
+      );
+
+      expect(report.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "VERIFIED_SENDER", kind: "missing" }),
+          expect.objectContaining({ name: "SES_INBOUND_RECIPIENT", kind: "missing" }),
+        ])
+      );
+    });
+
     it("rejects mixed Cloudflare and DuckDNS config", () => {
       const report = validateEnvForTarget(
         {

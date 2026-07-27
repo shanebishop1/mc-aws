@@ -27,6 +27,33 @@ export class MinecraftStack extends cdk.Stack {
     const duckdnsToken = process.env.DUCKDNS_TOKEN?.trim() ?? "";
     const lifecycleProjectTag = "mc-aws";
     const lifecycleStackTag = this.stackName;
+    const readOptionalBoolean = (name: string): boolean => {
+      const value = (process.env[name] ?? "false").trim().toLowerCase();
+      if (value !== "true" && value !== "false") {
+        throw new Error(`${name} must be either "true" or "false".`);
+      }
+      return value === "true";
+    };
+    const sesNotificationsEnabled = readOptionalBoolean("SES_NOTIFICATIONS_ENABLED");
+    const sesInboundCommandsEnabled = readOptionalBoolean("SES_INBOUND_COMMANDS_ENABLED");
+    const verifiedSender = (process.env.VERIFIED_SENDER ?? "").trim().toLowerCase();
+    const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "")
+      .trim()
+      .toLowerCase();
+    const sesInboundRecipient = (process.env.SES_INBOUND_RECIPIENT ?? "").trim().toLowerCase();
+    const sesReceiptRuleSetName = (process.env.SES_RECEIPT_RULE_SET_NAME ?? "").trim();
+    const startKeyword = (process.env.START_KEYWORD ?? "").trim();
+
+    if (sesNotificationsEnabled && (!verifiedSender || !notificationEmail)) {
+      throw new Error(
+        "SES notifications require VERIFIED_SENDER and NOTIFICATION_EMAIL (or ADMIN_EMAIL) to be configured."
+      );
+    }
+    if (sesInboundCommandsEnabled && (!sesInboundRecipient || !sesReceiptRuleSetName || !startKeyword)) {
+      throw new Error(
+        "Inbound SES commands require SES_INBOUND_RECIPIENT, SES_RECEIPT_RULE_SET_NAME, and START_KEYWORD."
+      );
+    }
 
     // 0. SSM Parameters (GitHub Credentials)
     new ssm.StringParameter(this, "GithubUserParam", {
@@ -252,12 +279,7 @@ export class MinecraftStack extends cdk.Stack {
     cdk.Tags.of(instance).add("McAwsStack", lifecycleStackTag);
     cdk.Tags.of(instance).add("McAwsManagedRoot", "true");
 
-    // 5. SNS Topic for Start Trigger
-    const startTopic = new sns.Topic(this, "MinecraftStartTopic", {
-      displayName: "Minecraft Start Trigger",
-    });
-
-    // 6. Lambda Function to Start Server
+    // 5. Lambda Function to Start Server
     // Story 1.1 runtime budget alignment:
     // - Mutating flows now budget up to ~12 minutes in worst-case chained paths (resume + restore).
     // - Keep timeout at Lambda maximum to avoid premature termination of legitimate long-running operations.
@@ -265,7 +287,6 @@ export class MinecraftStack extends cdk.Stack {
     const startMinecraftLambdaTimeout = cdk.Duration.minutes(15);
     const startMinecraftLambdaMaxEventAge = cdk.Duration.minutes(15);
 
-    const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const allowedEmails = (process.env.ALLOWED_EMAILS || "")
       .split(",")
@@ -275,27 +296,29 @@ export class MinecraftStack extends cdk.Stack {
       new Set([notificationEmail, adminEmail, ...allowedEmails].filter(Boolean))
     ).join(",");
 
-    // SSM Parameters for EC2 DNS notifications
-    new ssm.StringParameter(this, "VerifiedSender", {
-      parameterName: "/minecraft/verified-sender",
-      stringValue: process.env.VERIFIED_SENDER || "",
-      description: "Verified SES sender email for notifications",
-    });
+    if (sesNotificationsEnabled) {
+      // SSM parameters are created only when EC2 notifications are enabled.
+      new ssm.StringParameter(this, "VerifiedSender", {
+        parameterName: "/minecraft/verified-sender",
+        stringValue: verifiedSender,
+        description: "Verified SES sender email for notifications",
+      });
 
-    new ssm.StringParameter(this, "NotificationEmail", {
-      parameterName: "/minecraft/notification-email",
-      stringValue: notificationEmail || "",
-      description: "Email address for server notifications",
-    });
+      new ssm.StringParameter(this, "NotificationEmail", {
+        parameterName: "/minecraft/notification-email",
+        stringValue: notificationEmail,
+        description: "Email address for server notifications",
+      });
 
-    // Allow EC2 to send emails via SES
-    ec2Role.addToPolicy(
-      new iam.PolicyStatement({
-        effect: iam.Effect.ALLOW,
-        actions: ["ses:SendEmail", "ses:SendRawEmail"],
-        resources: ["*"],
-      })
-    );
+      const senderIdentityArn = `arn:aws:ses:${this.region}:${this.account}:identity/${verifiedSender}`;
+      ec2Role.addToPolicy(
+        new iam.PolicyStatement({
+          effect: iam.Effect.ALLOW,
+          actions: ["ses:SendEmail", "ses:SendRawEmail"],
+          resources: [senderIdentityArn],
+        })
+      );
+    }
 
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -303,9 +326,10 @@ export class MinecraftStack extends cdk.Stack {
       code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/StartMinecraftServer")),
       environment: {
         INSTANCE_ID: instance.instanceId,
-        VERIFIED_SENDER: process.env.VERIFIED_SENDER || "",
-        START_KEYWORD: process.env.START_KEYWORD || "start",
-        NOTIFICATION_EMAIL: notificationEmail,
+        VERIFIED_SENDER: sesNotificationsEnabled ? verifiedSender : "",
+        START_KEYWORD: sesInboundCommandsEnabled ? startKeyword : "",
+        SES_INBOUND_COMMANDS_ENABLED: String(sesInboundCommandsEnabled),
+        NOTIFICATION_EMAIL: sesNotificationsEnabled ? notificationEmail : "",
         ADMIN_EMAIL: (process.env.ADMIN_EMAIL || "").trim().toLowerCase(),
         ALLOWED_EMAILS: allowedEmails.join(","),
         GDRIVE_REMOTE: driveRemote,
@@ -474,13 +498,14 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Grant Lambda permission to send email (for notifications)
-    startLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["ses:SendEmail", "ses:SendRawEmail"],
-        resources: ["*"],
-      })
-    );
+    if (sesNotificationsEnabled) {
+      startLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["ses:SendEmail", "ses:SendRawEmail"],
+          resources: [`arn:aws:ses:${this.region}:${this.account}:identity/${verifiedSender}`],
+        })
+      );
+    }
 
     // Grant Lambda permission to read/write email allowlist in SSM
     startLambda.addToRolePolicy(
@@ -527,51 +552,27 @@ export class MinecraftStack extends cdk.Stack {
       })
     );
 
-    // Subscribe Lambda to SNS
-    startTopic.addSubscription(new subscriptions.LambdaSubscription(startLambda));
+    if (sesInboundCommandsEnabled) {
+      const startTopic = new sns.Topic(this, "MinecraftStartTopic", {
+        displayName: "Minecraft inbound email command trigger",
+      });
+      startTopic.addSubscription(new subscriptions.LambdaSubscription(startLambda));
 
-    // 7. SES Receipt Rule
-    // Note: You must manually verify the domain/email in SES Console first!
-    const _ruleSet = ses.ReceiptRuleSet.fromReceiptRuleSetName(this, "RuleSet", "default-rule-set");
-
-    // Create a new SES Receipt Rule Set
-    const mcRuleSet = new ses.ReceiptRuleSet(this, "MinecraftRuleSet", {
-      receiptRuleSetName: "MinecraftRuleSet",
-    });
-
-    // Automatically activate the Rule Set using a Custom Resource
-    new cr.AwsCustomResource(this, "ActivateRuleSet", {
-      onUpdate: {
-        service: "SES",
-        action: "setActiveReceiptRuleSet",
-        parameters: {
-          RuleSetName: mcRuleSet.receiptRuleSetName,
-        },
-        physicalResourceId: cr.PhysicalResourceId.of("ActivateRuleSet"),
-      },
-      onDelete: {
-        service: "SES",
-        action: "setActiveReceiptRuleSet",
-        parameters: {
-          RuleSetName: null, // Deactivate on destroy
-        },
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ["ses:SetActiveReceiptRuleSet"],
-          resources: ["*"], // SES API requires wildcard resource for this action
-        }),
-      ]),
-    });
-
-    mcRuleSet.addRule("StartServerRule", {
-      recipients: [process.env.VERIFIED_SENDER || "start@example.com"], // The email to listen for
-      actions: [
-        new sesActions.Sns({
-          topic: startTopic,
-        }),
-      ],
-    });
+      // The rule set is account-wide SES configuration owned by the operator. Importing
+      // it ensures this stack creates and deletes only its own receipt rule.
+      const existingRuleSet = ses.ReceiptRuleSet.fromReceiptRuleSetName(
+        this,
+        "ExistingReceiptRuleSet",
+        sesReceiptRuleSetName
+      );
+      existingRuleSet.addRule("InboundCommandRule", {
+        receiptRuleName: `mc-aws-${this.stackName}-inbound-commands`.slice(0, 64),
+        recipients: [sesInboundRecipient],
+        scanEnabled: true,
+        tlsPolicy: ses.TlsPolicy.REQUIRE,
+        actions: [new sesActions.Sns({ topic: startTopic })],
+      });
+    }
 
     // Outputs
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });

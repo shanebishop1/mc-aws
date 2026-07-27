@@ -801,75 +801,76 @@ collect_production_url() {
 collect_email_settings() {
   step_section 7 "Optional: Email Settings (SES)"
 
-  log "Configure optional SES email features for notifications and email-triggered commands."
+  local existing_verified_sender="${VERIFIED_SENDER:-}"
+  local existing_notification_email="${NOTIFICATION_EMAIL:-}"
+  local existing_inbound_recipient="${SES_INBOUND_RECIPIENT:-}"
+  local existing_rule_set_name="${SES_RECEIPT_RULE_SET_NAME:-}"
+  local existing_start_keyword="${START_KEYWORD:-}"
+
+  log "Outbound notifications and inbound email commands are independent capabilities."
   log "Core panel/server operations work even when this section is skipped."
   echo ""
+  echo "  1. Disabled (no SES receipt resources or send permissions)"
+  echo "  2. Outbound notifications only"
+  echo "  3. Inbound email commands only"
+  echo "  4. Both outbound notifications and inbound commands"
+  echo ""
+  prompt ses_mode "Enter choice" "1"
 
-  echo "What this email feature does:"
-  echo "  - You send an email to a special address (e.g., start@yourdomain.com)"
-  echo "  - SES receives it and triggers the start Lambda"
-  echo "  - SES also sends notification emails (startup success/failure, etc.)"
-  echo ""
-  echo "VERIFIED_SENDER is BOTH:"
-  echo "  1) The 'To:' address SES listens for (the start trigger address)"
-  echo "  2) The 'From:' address SES uses when sending notifications"
-  echo ""
-  echo "It is NOT an MX record for your Minecraft server."
-  echo "It's an email address on a domain you control (e.g., start@yourdomain.com)."
-  echo ""
-  echo "Prereqs (high level):"
-  echo "  - In AWS SES, verify the identity (email or domain)"
-  echo "  - In DNS, point the domain's MX record to Amazon SES to enable receiving"
-  echo "  - If your SES account is in sandbox, you may also need to verify recipients"
-  echo ""
-  echo "Leave these empty to skip email configuration."
-  echo "If skipped: web panel/server actions still work, but email-triggered commands"
-  echo "and SES notifications are disabled until VERIFIED_SENDER is configured."
-  echo ""
+  SES_NOTIFICATIONS_ENABLED="false"
+  SES_INBOUND_COMMANDS_ENABLED="false"
+  VERIFIED_SENDER=""
+  NOTIFICATION_EMAIL=""
+  SES_INBOUND_RECIPIENT=""
+  SES_RECEIPT_RULE_SET_NAME=""
+  START_KEYWORD=""
 
-  prompt_optional VERIFIED_SENDER "Enter start/notification address" "${VERIFIED_SENDER:-}"
+  case "$ses_mode" in
+    2) SES_NOTIFICATIONS_ENABLED="true" ;;
+    3) SES_INBOUND_COMMANDS_ENABLED="true" ;;
+    4)
+      SES_NOTIFICATIONS_ENABLED="true"
+      SES_INBOUND_COMMANDS_ENABLED="true"
+      ;;
+    1) log_warning "Skipping all SES capabilities" ;;
+    *) log_warning "Invalid choice; SES capabilities will remain disabled" ;;
+  esac
 
-  if [[ -n "$VERIFIED_SENDER" ]]; then
-    while ! validate_email "$VERIFIED_SENDER"; do
+  if [[ "$SES_NOTIFICATIONS_ENABLED" == "true" ]]; then
+    echo ""
+    log "Outbound notifications require an SES-verified sender identity."
+    while true; do
+      prompt VERIFIED_SENDER "Enter verified sender email" "$existing_verified_sender"
+      validate_email "$VERIFIED_SENDER" && break
       log_error "Invalid email format. Please try again."
-      prompt_optional VERIFIED_SENDER "Enter verified sender email" ""
-      [[ -z "$VERIFIED_SENDER" ]] && break
+    done
+    while true; do
+      prompt NOTIFICATION_EMAIL "Enter notification destination" "${existing_notification_email:-${ADMIN_EMAIL:-}}"
+      validate_email "$NOTIFICATION_EMAIL" && break
+      log_error "Invalid email format. Please try again."
     done
   fi
 
-  if [[ -n "$VERIFIED_SENDER" ]]; then
-    prompt_optional NOTIFICATION_EMAIL "Enter notification email" "${NOTIFICATION_EMAIL:-}"
-
-    if [[ -n "$NOTIFICATION_EMAIL" ]]; then
-      while ! validate_email "$NOTIFICATION_EMAIL"; do
-        log_error "Invalid email format. Please try again."
-        prompt_optional NOTIFICATION_EMAIL "Enter notification email" ""
-        [[ -z "$NOTIFICATION_EMAIL" ]] && break
-      done
-    fi
-
+  if [[ "$SES_INBOUND_COMMANDS_ENABLED" == "true" ]]; then
     echo ""
-    echo "The START_KEYWORD is a secret word that, when received in an email,"
-    echo "will trigger the server to start."
-    echo ""
-
-    prompt_optional START_KEYWORD "Enter start keyword" "${START_KEYWORD:-}"
-
-    if [[ -n "$START_KEYWORD" ]]; then
-      log_success "Email settings configured"
-    else
-      log_warning "Email settings incomplete - skipping"
-      VERIFIED_SENDER=""
-      NOTIFICATION_EMAIL=""
-    fi
-  else
-    log_warning "Skipping email configuration"
+    log "Inbound commands require an existing, active receipt rule set that you name explicitly."
+    log "The stack adds/removes only its own rule and never changes which account-wide rule set is active."
+    while true; do
+      prompt SES_INBOUND_RECIPIENT "Enter inbound command recipient" "$existing_inbound_recipient"
+      validate_email "$SES_INBOUND_RECIPIENT" && break
+      log_error "Invalid email format. Please try again."
+    done
+    prompt SES_RECEIPT_RULE_SET_NAME "Enter existing receipt rule set name" "$existing_rule_set_name"
+    prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword"
   fi
   echo ""
 
-  # Write to env files
+  write_env_files "SES_NOTIFICATIONS_ENABLED" "$SES_NOTIFICATIONS_ENABLED"
+  write_env_files "SES_INBOUND_COMMANDS_ENABLED" "$SES_INBOUND_COMMANDS_ENABLED"
   write_env_files "VERIFIED_SENDER" "$VERIFIED_SENDER"
   write_env_files "NOTIFICATION_EMAIL" "$NOTIFICATION_EMAIL"
+  write_env_files "SES_INBOUND_RECIPIENT" "$SES_INBOUND_RECIPIENT"
+  write_env_files "SES_RECEIPT_RULE_SET_NAME" "$SES_RECEIPT_RULE_SET_NAME"
   write_env_files "START_KEYWORD" "$START_KEYWORD"
 
   log_success "Email settings saved"

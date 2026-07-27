@@ -112,6 +112,7 @@ describe("StartMinecraftServer environment contract", () => {
     process.env.ADMIN_EMAIL = "admin@example.com";
     process.env.NOTIFICATION_EMAIL = "admin@example.com";
     process.env.VERIFIED_SENDER = "";
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "false";
 
     getPublicIpMock.mockResolvedValue("203.0.113.10");
     getAllowlistMock.mockResolvedValue([]);
@@ -135,7 +136,7 @@ describe("StartMinecraftServer environment contract", () => {
     expect(putParameterMock).toHaveBeenCalledWith("/minecraft/startup-triggered-by", "user@example.com", "String");
   });
 
-  it("returns clear error for email invocation when VERIFIED_SENDER is missing", async () => {
+  it("returns clear error for email invocation when inbound commands are disabled", async () => {
     parseEmailFromEventMock.mockReturnValue({
       senderEmail: "friend@example.com",
       subject: "start",
@@ -147,7 +148,7 @@ describe("StartMinecraftServer environment contract", () => {
 
     expect(response).toEqual({
       statusCode: 503,
-      body: "Email commands are disabled. Configure VERIFIED_SENDER to enable SES email flows.",
+      body: "Email commands are disabled. Enable and configure inbound SES commands before using this endpoint.",
     });
   });
 });

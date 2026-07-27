@@ -337,6 +337,45 @@ export const envRuntimeSchema = {
       ci: { level: "optional" },
     }),
   },
+  SES_NOTIFICATIONS_ENABLED: {
+    description: "Whether outbound SES event notifications are enabled",
+    valueType: "enum",
+    enumValues: ["true", "false"],
+    defaultValue: "false",
+    ownership: withOwnership({}),
+  },
+  SES_INBOUND_COMMANDS_ENABLED: {
+    description: "Whether an SES receipt rule accepts inbound email commands",
+    valueType: "enum",
+    enumValues: ["true", "false"],
+    defaultValue: "false",
+    ownership: withOwnership({}),
+  },
+  VERIFIED_SENDER: {
+    description: "Verified SES identity used only as the sender for outbound notifications",
+    valueType: "email",
+    ownership: withOwnership({}),
+  },
+  NOTIFICATION_EMAIL: {
+    description: "Destination for outbound SES notifications",
+    valueType: "email",
+    ownership: withOwnership({}),
+  },
+  SES_INBOUND_RECIPIENT: {
+    description: "Recipient address matched by the project-owned inbound SES receipt rule",
+    valueType: "email",
+    ownership: withOwnership({}),
+  },
+  SES_RECEIPT_RULE_SET_NAME: {
+    description: "Name of an existing operator-managed SES receipt rule set",
+    valueType: "string",
+    ownership: withOwnership({}),
+  },
+  START_KEYWORD: {
+    description: "Explicit keyword used to authorize inbound email start commands",
+    valueType: "string",
+    ownership: withOwnership({}),
+  },
   GOOGLE_CLIENT_ID: {
     description: "Google OAuth client id",
     valueType: "string",
@@ -561,6 +600,49 @@ const validateMinecraftDnsConfig = (
   }
 };
 
+const validateSesConfig = (
+  values: Record<string, string | undefined>,
+  issues: EnvSchemaValidationIssue[]
+): void => {
+  const notificationsEnabled = getResolvedString(values, "SES_NOTIFICATIONS_ENABLED").toLowerCase() === "true";
+  const inboundCommandsEnabled = getResolvedString(values, "SES_INBOUND_COMMANDS_ENABLED").toLowerCase() === "true";
+
+  if (notificationsEnabled) {
+    const requiredSenderValues: EnvVarName[] = ["VERIFIED_SENDER"];
+    const missing = requiredSenderValues.filter((name) => !getResolvedString(values, name));
+    if (!getResolvedString(values, "NOTIFICATION_EMAIL") && !getResolvedString(values, "ADMIN_EMAIL")) {
+      missing.push("NOTIFICATION_EMAIL");
+    }
+    if (missing.length > 0) {
+      issues.push(
+        createIssue(
+          missing[0],
+          "missing",
+          `Outbound SES notifications are enabled but configuration is incomplete. Missing: ${missing.join(", ")}.`
+        )
+      );
+    }
+  }
+
+  if (inboundCommandsEnabled) {
+    const requiredInboundValues: EnvVarName[] = [
+      "SES_INBOUND_RECIPIENT",
+      "SES_RECEIPT_RULE_SET_NAME",
+      "START_KEYWORD",
+    ];
+    const missing = requiredInboundValues.filter((name) => !getResolvedString(values, name));
+    if (missing.length > 0) {
+      issues.push(
+        createIssue(
+          missing[0],
+          "missing",
+          `Inbound SES commands are enabled but configuration is incomplete. Missing: ${missing.join(", ")}.`
+        )
+      );
+    }
+  }
+};
+
 const validateRuleAndPresence = ({
   name,
   target,
@@ -677,6 +759,7 @@ export const validateEnvForTarget = (
   }
 
   validateMinecraftDnsConfig(values, issues);
+  validateSesConfig(values, issues);
 
   return {
     target,
