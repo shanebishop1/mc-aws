@@ -40,7 +40,19 @@ prepare_next_build_env_file() {
     cp "$NEXT_BUILD_ENV_FILE" "$NEXT_BUILD_ENV_BACKUP_FILE"
   fi
 
-  cp "$ENV_FILE" "$NEXT_BUILD_ENV_FILE"
+  : > "$NEXT_BUILD_ENV_FILE"
+  chmod 600 "$NEXT_BUILD_ENV_FILE" || true
+  # Empty high-priority values also prevent Next.js from reloading human AWS
+  # credentials from .env.local after this sanitized deploy env is prepared.
+  printf '%s\n' "AWS_ACCESS_KEY_ID=" "AWS_SECRET_ACCESS_KEY=" "AWS_SESSION_TOKEN=" >> "$NEXT_BUILD_ENV_FILE"
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    case "$line" in
+      AWS_ACCESS_KEY_ID=*|AWS_SECRET_ACCESS_KEY=*|AWS_SESSION_TOKEN=*|export\ AWS_ACCESS_KEY_ID=*|export\ AWS_SECRET_ACCESS_KEY=*|export\ AWS_SESSION_TOKEN=*)
+        continue
+        ;;
+    esac
+    printf '%s\n' "$line" >> "$NEXT_BUILD_ENV_FILE"
+  done < "$ENV_FILE"
   NEXT_BUILD_ENV_PREPARED="1"
 }
 
@@ -191,10 +203,18 @@ update_env_value() {
 WORKER_SECRET_ALLOWLIST=()
 
 load_worker_secret_allowlist() {
-  if ! mapfile -t WORKER_SECRET_ALLOWLIST < <(pnpm exec tsx scripts/get-worker-secret-allowlist.ts); then
+  local allowlist_output
+  if ! allowlist_output="$(pnpm exec tsx scripts/get-worker-secret-allowlist.ts)"; then
     echo "❌ Error: Failed to load Worker secret allowlist from schema"
     echo "   Tip: run pnpm install --frozen-lockfile and ensure scripts/get-worker-secret-allowlist.ts succeeds"
     exit 1
+  fi
+
+  WORKER_SECRET_ALLOWLIST=()
+  if [[ -n "$allowlist_output" ]]; then
+    while IFS= read -r allowed_key; do
+      WORKER_SECRET_ALLOWLIST+=("$allowed_key")
+    done <<< "$allowlist_output"
   fi
 
   if [[ ${#WORKER_SECRET_ALLOWLIST[@]} -eq 0 ]]; then
@@ -218,7 +238,7 @@ is_worker_secret_ignored() {
   local candidate="$1"
 
   case "$candidate" in
-    CDK_DEFAULT_ACCOUNT|CDK_DEFAULT_REGION|VERIFIED_SENDER|NOTIFICATION_EMAIL|START_KEYWORD|GITHUB_USER|GITHUB_REPO|GITHUB_TOKEN|KEY_PAIR_NAME|RUNTIME_STATE_SNAPSHOT_KV_ID|RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID)
+    AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CDK_DEFAULT_ACCOUNT|CDK_DEFAULT_REGION|VERIFIED_SENDER|NOTIFICATION_EMAIL|START_KEYWORD|GITHUB_USER|GITHUB_REPO|GITHUB_TOKEN|KEY_PAIR_NAME|RUNTIME_STATE_SNAPSHOT_KV_ID|RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID)
       return 0
       ;;
   esac
@@ -720,7 +740,8 @@ fi
 
 echo "📦 Building Next.js app..."
 prepare_next_build_env_file
-if ! env MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN= pnpm build; then
+if ! env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+  MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN= pnpm build; then
   echo ""
   echo "❌ Error: Failed to build Next.js app"
   exit 1
@@ -731,7 +752,8 @@ echo ""
 prepare_wrangler_deploy_config
 
 echo "📦 Building for Cloudflare (OpenNext)..."
-if ! env MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN= pnpm exec opennextjs-cloudflare build --skipNextBuild --config "$WRANGLER_DEPLOY_CONFIG_FILE"; then
+if ! env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
+  MC_BACKEND_MODE=aws ENABLE_DEV_LOGIN= pnpm exec opennextjs-cloudflare build --skipNextBuild --config "$WRANGLER_DEPLOY_CONFIG_FILE"; then
   echo ""
   echo "❌ Error: Failed to build for Cloudflare"
   exit 1
@@ -848,6 +870,20 @@ if ! retry 3 wrangler deploy --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WO
   exit 1
 fi
 echo "✅ Worker bindings restored"
+echo ""
+
+echo "🔐 Provisioning dedicated least-privilege AWS runtime credentials..."
+if ! VERIFY_URL="$NEXT_PUBLIC_APP_URL" \
+  WORKER_NAME="$WORKER_NAME" \
+  WRANGLER_CONFIG_FILE="$WRANGLER_DEPLOY_CONFIG_FILE" \
+  WRANGLER_HOME_DIR="$WRANGLER_HOME_DIR" \
+  CLOUDFLARE_DEPLOY_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" \
+  bash scripts/rotate-worker-runtime-key.sh; then
+  echo ""
+  echo "❌ Error: Dedicated Worker runtime credential provisioning/rotation failed"
+  echo "   No previously valid runtime IAM key is revoked until its replacement verifies."
+  exit 1
+fi
 echo ""
 
 echo ""

@@ -1,0 +1,310 @@
+#!/usr/bin/env bash
+
+# Safely provision or rotate the dedicated Cloudflare Worker AWS runtime key.
+# Human/deployment credentials are used only by the local AWS CLI. The newly
+# created runtime secret is held in process memory and piped directly to Wrangler.
+
+set -euo pipefail
+
+AWS_CLI="${AWS_CLI:-aws}"
+WRANGLER_BIN="${WRANGLER_BIN:-./node_modules/.bin/wrangler}"
+CURL_BIN="${CURL_BIN:-curl}"
+STACK_NAME="${STACK_NAME:-MinecraftStack}"
+AWS_REGION_VALUE="${AWS_REGION:-${AWS_DEFAULT_REGION:-${CDK_DEFAULT_REGION:-}}}"
+WRANGLER_CONFIG_FILE="${WRANGLER_CONFIG_FILE:-/dev/null}"
+WRANGLER_SOURCE_CONFIG_FILE="${WRANGLER_SOURCE_CONFIG_FILE:-wrangler.jsonc}"
+WRANGLER_HOME_DIR="${WRANGLER_HOME_DIR:-$HOME}"
+CLOUDFLARE_DEPLOY_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
+
+NEW_ACCESS_KEY_ID=""
+NEW_SECRET_ACCESS_KEY=""
+PROBE_TOKEN=""
+PROMOTED="0"
+ROTATION_COMPLETE="0"
+PRIOR_KEYS_REVOKED="0"
+prior_key_ids=()
+
+log_error() {
+  echo "❌ Error: $*" >&2
+}
+
+require_command() {
+  local command_path="$1"
+  if [[ "$command_path" == */* ]]; then
+    [[ -x "$command_path" ]] || { log_error "Required executable not found: $command_path"; exit 1; }
+    return
+  fi
+
+  command -v "$command_path" >/dev/null 2>&1 || { log_error "Required command not found: $command_path"; exit 1; }
+}
+
+aws_cli() {
+  if [[ -n "$AWS_REGION_VALUE" ]]; then
+    AWS_PAGER="" "$AWS_CLI" --region "$AWS_REGION_VALUE" "$@"
+  else
+    AWS_PAGER="" "$AWS_CLI" "$@"
+  fi
+}
+
+wrangler() {
+  env -i \
+    PATH="$PATH" \
+    HOME="$WRANGLER_HOME_DIR" \
+    TERM="${TERM:-}" \
+    USER="${USER:-}" \
+    CLOUDFLARE_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" \
+    "$WRANGLER_BIN" "$@"
+}
+
+resolve_worker_name() {
+  if [[ -n "${WORKER_NAME:-}" ]]; then
+    printf '%s\n' "$WORKER_NAME"
+    return
+  fi
+
+  node - "$WRANGLER_SOURCE_CONFIG_FILE" <<'NODE'
+const fs = require("node:fs");
+const raw = fs.readFileSync(process.argv[2], "utf8");
+const config = JSON.parse(raw.slice(raw.indexOf("{")));
+if (typeof config.name !== "string" || !config.name.trim()) process.exit(1);
+process.stdout.write(config.name.trim());
+NODE
+}
+
+resolve_runtime_user_name() {
+  if [[ -n "${RUNTIME_IAM_USER_NAME:-}" ]]; then
+    printf '%s\n' "$RUNTIME_IAM_USER_NAME"
+    return
+  fi
+
+  aws_cli cloudformation describe-stacks \
+    --stack-name "$STACK_NAME" \
+    --query "Stacks[0].Outputs[?OutputKey=='WorkerRuntimeIamUserName'].OutputValue | [0]" \
+    --output text
+}
+
+assert_runtime_identity_tags() {
+  local user_name="$1"
+  if [[ "${SKIP_RUNTIME_IDENTITY_TAG_CHECK:-0}" == "1" ]]; then
+    return
+  fi
+
+  local tags_json
+  tags_json="$(aws_cli iam list-user-tags --user-name "$user_name" --output json)"
+  if ! printf '%s' "$tags_json" | node -e '
+const fs = require("node:fs");
+const tags = Object.fromEntries((JSON.parse(fs.readFileSync(0, "utf8")).Tags || []).map(({ Key, Value }) => [Key, Value]));
+if (tags.McAwsProject !== "mc-aws" || tags.McAwsPurpose !== "CloudflareWorkerRuntime") process.exit(1);
+'; then
+    log_error "IAM user '$user_name' is not tagged as the mc-aws Cloudflare Worker runtime identity"
+    log_error "Refusing to create or upload keys for an unverified identity."
+    exit 1
+  fi
+}
+
+list_access_keys() {
+  local user_name="$1"
+  aws_cli iam list-access-keys --user-name "$user_name" --output json
+}
+
+key_ids_with_status() {
+  local status="$1"
+  node -e '
+const fs = require("node:fs");
+const status = process.argv[1];
+const keys = JSON.parse(fs.readFileSync(0, "utf8")).AccessKeyMetadata || [];
+for (const key of keys) if (key.Status === status && key.AccessKeyId) console.log(key.AccessKeyId);
+' "$status"
+}
+
+delete_secret_if_present() {
+  local secret_name="$1"
+  wrangler secret delete --config "$WRANGLER_CONFIG_FILE" --name "$WORKER_NAME" "$secret_name" >/dev/null 2>&1 || true
+}
+
+delete_secret_required() {
+  local secret_name="$1"
+  local attempt=1
+  while [[ "$attempt" -le 3 ]]; do
+    if wrangler secret delete --config "$WRANGLER_CONFIG_FILE" --name "$WORKER_NAME" "$secret_name" >/dev/null; then
+      return 0
+    fi
+    sleep "$attempt"
+    attempt=$((attempt + 1))
+  done
+
+  log_error "Failed to remove temporary Worker secret: $secret_name"
+  return 1
+}
+
+cleanup_on_exit() {
+  local status="$?"
+  set +e
+
+  if [[ "$status" -ne 0 && -n "$NEW_ACCESS_KEY_ID" && "$PROMOTED" == "0" ]]; then
+    echo "⚠️  Candidate verification failed; retaining every prior runtime key." >&2
+    delete_secret_if_present "MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID"
+    delete_secret_if_present "MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY"
+    delete_secret_if_present "MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN"
+    aws_cli iam delete-access-key --user-name "$RUNTIME_IAM_USER_NAME" --access-key-id "$NEW_ACCESS_KEY_ID" >/dev/null 2>&1 || true
+  elif [[ "$status" -ne 0 && "$PROMOTED" == "1" ]]; then
+    if [[ "$PRIOR_KEYS_REVOKED" == "1" && ${#prior_key_ids[@]} -gt 0 ]]; then
+      for prior_key_id in "${prior_key_ids[@]}"; do
+        aws_cli iam update-access-key --user-name "$RUNTIME_IAM_USER_NAME" --access-key-id "$prior_key_id" --status Active >/dev/null 2>&1 || true
+      done
+    fi
+    echo "⚠️  The replacement was promoted, but final verification did not complete." >&2
+    echo "   Any remaining prior runtime keys were left active or reactivated. Re-run rotation after resolving the error." >&2
+  fi
+
+  NEW_SECRET_ACCESS_KEY=""
+  PROBE_TOKEN=""
+  unset NEW_SECRET_ACCESS_KEY PROBE_TOKEN
+  return "$status"
+}
+trap cleanup_on_exit EXIT
+
+build_candidate_secret_json() {
+  MC_ACCESS_KEY_ID="$NEW_ACCESS_KEY_ID" \
+    MC_SECRET_ACCESS_KEY="$NEW_SECRET_ACCESS_KEY" \
+    MC_PROBE_TOKEN="$PROBE_TOKEN" \
+    node -e 'process.stdout.write(JSON.stringify({
+      MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID: process.env.MC_ACCESS_KEY_ID,
+      MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY: process.env.MC_SECRET_ACCESS_KEY,
+      MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN: process.env.MC_PROBE_TOKEN,
+    }))'
+}
+
+build_primary_secret_json() {
+  MC_ACCESS_KEY_ID="$NEW_ACCESS_KEY_ID" \
+    MC_SECRET_ACCESS_KEY="$NEW_SECRET_ACCESS_KEY" \
+    node -e 'process.stdout.write(JSON.stringify({
+      AWS_ACCESS_KEY_ID: process.env.MC_ACCESS_KEY_ID,
+      AWS_SECRET_ACCESS_KEY: process.env.MC_SECRET_ACCESS_KEY,
+      AWS_SESSION_TOKEN: "",
+    }))'
+}
+
+verify_worker_identity() {
+  local mode="$1"
+  local response
+  response="$("$CURL_BIN" -fsS \
+    --retry 5 \
+    --retry-delay 2 \
+    --retry-all-errors \
+    -H "Authorization: Bearer $PROBE_TOKEN" \
+    "${VERIFY_URL%/}/api/internal/runtime-credentials/verify?mode=$mode")"
+
+  printf '%s' "$response" | node -e '
+const fs = require("node:fs");
+const response = JSON.parse(fs.readFileSync(0, "utf8"));
+if (response.success !== true || response.data?.managedInstanceVerified !== true) process.exit(1);
+'
+}
+
+require_command "$AWS_CLI"
+require_command "$WRANGLER_BIN"
+require_command "$CURL_BIN"
+require_command node
+
+if [[ -z "${VERIFY_URL:-}" ]]; then
+  log_error "VERIFY_URL is required (the deployed panel origin, for example https://panel.example.com)"
+  exit 1
+fi
+
+WORKER_NAME="$(resolve_worker_name)" || { log_error "Could not resolve Worker name"; exit 1; }
+RUNTIME_IAM_USER_NAME="$(resolve_runtime_user_name)"
+if [[ -z "$RUNTIME_IAM_USER_NAME" || "$RUNTIME_IAM_USER_NAME" == "None" ]]; then
+  log_error "Could not locate WorkerRuntimeIamUserName in stack '$STACK_NAME'"
+  exit 1
+fi
+
+assert_runtime_identity_tags "$RUNTIME_IAM_USER_NAME"
+
+echo "🔐 Rotating dedicated Worker runtime credentials"
+echo "   IAM identity: $RUNTIME_IAM_USER_NAME"
+echo "   Worker: $WORKER_NAME"
+
+access_keys_json="$(list_access_keys "$RUNTIME_IAM_USER_NAME")"
+inactive_key_ids=()
+inactive_key_output="$(printf '%s' "$access_keys_json" | key_ids_with_status Inactive)"
+if [[ -n "$inactive_key_output" ]]; then
+  while IFS= read -r key_id; do
+    inactive_key_ids+=("$key_id")
+  done <<< "$inactive_key_output"
+fi
+if [[ ${#inactive_key_ids[@]} -gt 0 ]]; then
+  for inactive_key_id in "${inactive_key_ids[@]}"; do
+    echo "   Removing inactive runtime key: $inactive_key_id"
+    aws_cli iam delete-access-key --user-name "$RUNTIME_IAM_USER_NAME" --access-key-id "$inactive_key_id"
+  done
+fi
+
+access_keys_json="$(list_access_keys "$RUNTIME_IAM_USER_NAME")"
+prior_key_ids=()
+prior_key_output="$(printf '%s' "$access_keys_json" | key_ids_with_status Active)"
+if [[ -n "$prior_key_output" ]]; then
+  while IFS= read -r key_id; do
+    prior_key_ids+=("$key_id")
+  done <<< "$prior_key_output"
+fi
+if [[ ${#prior_key_ids[@]} -ge 2 ]]; then
+  log_error "Runtime identity already has two active keys; AWS cannot create a replacement safely."
+  log_error "No key was revoked. Identify and deactivate a stale runtime key, then re-run."
+  exit 1
+fi
+
+created_key_json="$(aws_cli iam create-access-key --user-name "$RUNTIME_IAM_USER_NAME" --output json)"
+NEW_ACCESS_KEY_ID="$(printf '%s' "$created_key_json" | node -e 'const d=JSON.parse(require("node:fs").readFileSync(0,"utf8")); process.stdout.write(d.AccessKey.AccessKeyId)')"
+NEW_SECRET_ACCESS_KEY="$(printf '%s' "$created_key_json" | node -e 'const d=JSON.parse(require("node:fs").readFileSync(0,"utf8")); process.stdout.write(d.AccessKey.SecretAccessKey)')"
+created_key_json=""
+PROBE_TOKEN="$(node -e 'process.stdout.write(require("node:crypto").randomBytes(32).toString("hex"))')"
+
+echo "   Staging replacement as candidate Worker secrets..."
+build_candidate_secret_json | wrangler secret bulk --config "$WRANGLER_CONFIG_FILE" --name "$WORKER_NAME" >/dev/null
+
+echo "   Verifying candidate through the deployed Worker..."
+verify_worker_identity candidate
+
+echo "   Promoting verified replacement to primary Worker secrets..."
+build_primary_secret_json | wrangler secret bulk --config "$WRANGLER_CONFIG_FILE" --name "$WORKER_NAME" >/dev/null
+PROMOTED="1"
+
+echo "   Verifying promoted primary credentials..."
+verify_worker_identity primary
+
+if [[ ${#prior_key_ids[@]} -gt 0 ]]; then
+  PRIOR_KEYS_REVOKED="1"
+  for prior_key_id in "${prior_key_ids[@]}"; do
+    echo "   Revoking prior runtime key: $prior_key_id"
+    aws_cli iam update-access-key --user-name "$RUNTIME_IAM_USER_NAME" --access-key-id "$prior_key_id" --status Inactive
+  done
+fi
+
+if ! verify_worker_identity primary; then
+  log_error "Primary verification failed after prior-key revocation; reactivating prior runtime keys."
+  if [[ ${#prior_key_ids[@]} -gt 0 ]]; then
+    for prior_key_id in "${prior_key_ids[@]}"; do
+      aws_cli iam update-access-key --user-name "$RUNTIME_IAM_USER_NAME" --access-key-id "$prior_key_id" --status Active || true
+    done
+  fi
+  exit 1
+fi
+
+delete_secret_required "MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID"
+delete_secret_required "MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY"
+delete_secret_required "MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN"
+delete_secret_required "AWS_SESSION_TOKEN"
+
+if [[ ${#prior_key_ids[@]} -gt 0 ]]; then
+  for prior_key_id in "${prior_key_ids[@]}"; do
+    echo "   Deleting revoked runtime key: $prior_key_id"
+    aws_cli iam delete-access-key --user-name "$RUNTIME_IAM_USER_NAME" --access-key-id "$prior_key_id"
+  done
+fi
+PRIOR_KEYS_REVOKED="0"
+
+ROTATION_COMPLETE="1"
+NEW_SECRET_ACCESS_KEY=""
+PROBE_TOKEN=""
+echo "✅ Worker runtime key rotation verified and complete"

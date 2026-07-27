@@ -12,6 +12,7 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 
 import * as ssm from "aws-cdk-lib/aws-ssm";
+import { createWorkerRuntimePolicyStatements } from "./worker-runtime-policy";
 
 export class MinecraftStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -317,6 +318,55 @@ export class MinecraftStack extends cdk.Stack {
       retryAttempts: 0,
     });
 
+    // Dedicated Cloudflare Worker runtime identity. Access keys are deliberately
+    // not CloudFormation resources: setup creates them in memory and uploads
+    // them directly to Wrangler so no key value enters a template or output.
+    const workerRuntimeUser = new iam.User(this, "WorkerRuntimeUser");
+    cdk.Tags.of(workerRuntimeUser).add("McAwsProject", "mc-aws");
+    cdk.Tags.of(workerRuntimeUser).add("McAwsPurpose", "CloudflareWorkerRuntime");
+    cdk.Tags.of(workerRuntimeUser).add("McAwsStack", this.stackName);
+
+    const parameterArn = (name: string) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`;
+    const serverActionArn = parameterArn("/minecraft/server-action");
+    const serverActionClaimArn = parameterArn("/minecraft/server-action-delete-claim/*");
+    const operationPathArn = parameterArn("/minecraft/operations");
+    const operationChildrenArn = parameterArn("/minecraft/operations/*");
+    const readableParameterArns = [
+      parameterArn("/minecraft/email-allowlist"),
+      parameterArn("/minecraft/player-count"),
+      parameterArn("/minecraft/backups-cache"),
+      parameterArn("/minecraft/gdrive-token"),
+      serverActionArn,
+      serverActionClaimArn,
+      operationPathArn,
+      operationChildrenArn,
+    ];
+    const writableParameterArns = [
+      parameterArn("/minecraft/email-allowlist"),
+      parameterArn("/minecraft/gdrive-token"),
+      serverActionArn,
+      serverActionClaimArn,
+      operationChildrenArn,
+    ];
+    const deletableParameterArns = [serverActionArn, serverActionClaimArn, operationChildrenArn];
+    const includeCostExplorer = (process.env.AWS_COST_EXPLORER_ENABLED ?? "true").trim().toLowerCase() !== "false";
+
+    workerRuntimeUser.attachInlinePolicy(
+      new iam.Policy(this, "WorkerRuntimePolicy", {
+        statements: createWorkerRuntimePolicyStatements({
+          instanceArn: `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`,
+          lifecycleLambdaArn: startLambda.functionArn,
+          stackArn: `arn:aws:cloudformation:${this.region}:${this.account}:stack/${this.stackName}/*`,
+          runShellScriptDocumentArn: `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
+          readableParameterArns,
+          writableParameterArns,
+          deletableParameterArns,
+          operationParameterPathArns: [operationPathArn, operationChildrenArn],
+          includeCostExplorer,
+        }),
+      })
+    );
+
     // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
     const seedEmailAllowlistLambda = new lambda.Function(this, "SeedEmailAllowlistLambda", {
       runtime: lambda.Runtime.NODEJS_20_X,
@@ -527,6 +577,10 @@ export class MinecraftStack extends cdk.Stack {
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "LambdaFunctionName", {
       value: startLambda.functionName,
+    });
+    new cdk.CfnOutput(this, "WorkerRuntimeIamUserName", {
+      description: "Dedicated least-privilege IAM user for the Cloudflare Worker runtime (never a human deploy user)",
+      value: workerRuntimeUser.userName,
     });
   }
 }

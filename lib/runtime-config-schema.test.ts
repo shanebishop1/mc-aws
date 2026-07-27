@@ -4,6 +4,7 @@ import {
   resolveEnvValue,
   validateEnvForTarget,
   validateRuntimeStateWranglerConfig,
+  workerManagedAwsCredentialSecretNames,
   workerSecretAllowlist,
 } from "@/lib/runtime-config-schema";
 import { describe, expect, it } from "vitest";
@@ -61,9 +62,12 @@ describe("runtime-config-schema", () => {
       ]);
     });
 
-    it("marks runtime-state kv namespace ids as required for worker target", () => {
-      expect(getEnvVarNamesByRequirement("worker", "required")).toEqual(
-        expect.arrayContaining(["RUNTIME_STATE_SNAPSHOT_KV_ID"])
+    it("leaves runtime-state kv namespace ids to generated deploy bindings", () => {
+      expect(getEnvVarNamesByRequirement("worker", "required")).not.toEqual(
+        expect.arrayContaining(["RUNTIME_STATE_SNAPSHOT_KV_ID", "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"])
+      );
+      expect(getEnvVarNamesByRequirement("worker", "optional")).toEqual(
+        expect.arrayContaining(["RUNTIME_STATE_SNAPSHOT_KV_ID", "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"])
       );
       expect(getEnvVarNamesByRequirement("worker", "required")).not.toEqual(
         expect.arrayContaining(["CLOUDFLARE_ZONE_ID", "CLOUDFLARE_MC_DOMAIN", "CLOUDFLARE_DNS_API_TOKEN"])
@@ -202,7 +206,7 @@ describe("runtime-config-schema", () => {
   });
 
   describe("runtime-state wrangler schema validation", () => {
-    it("validates expected durable object/kv/migration config", () => {
+    it("validates generated deploy config durable object, kv, and migration bindings", () => {
       const report = validateRuntimeStateWranglerConfig({
         durable_objects: {
           bindings: [
@@ -295,6 +299,21 @@ describe("runtime-config-schema", () => {
 
     it("contains unique keys", () => {
       expect(new Set(workerSecretAllowlist).size).toBe(workerSecretAllowlist.length);
+    });
+
+    it("keeps directly managed AWS runtime credentials out of env-file uploads", () => {
+      expect(workerSecretAllowlist).not.toEqual(
+        expect.arrayContaining(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"])
+      );
+      expect(workerManagedAwsCredentialSecretNames).toEqual(
+        expect.arrayContaining([
+          "AWS_ACCESS_KEY_ID",
+          "AWS_SECRET_ACCESS_KEY",
+          "MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID",
+          "MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY",
+          "MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN",
+        ])
+      );
     });
   });
 });

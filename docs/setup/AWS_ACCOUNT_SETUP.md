@@ -103,14 +103,15 @@ AWS docs:
 
 ## Values Needed Later
 
-The setup wizard asks for:
+The setup wizard asks for the AWS region and validates the current local AWS CLI session. It does not ask for or persist a human AWS access key.
 
-- `AWS_REGION`
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
+Recommended invocation with a named SSO profile:
 
-If you use temporary credentials, also keep track of:
+```bash
+aws sso login --profile <profile>
+AWS_PROFILE=<profile> bash ./setup.sh
+```
 
-- `AWS_SESSION_TOKEN`
+CDK creates a separate least-privilege IAM identity for the deployed Worker. Setup creates that identity's access key only after deployment and pipes it directly to Wrangler; the key is not placed in CloudFormation outputs or project env files.
 
-The deployed Cloudflare Worker needs AWS credentials as runtime secrets. SSO is good for human CLI access, but the deployed app still needs credentials it can use at runtime.
+See [AWS Credential Boundary](../AWS_CREDENTIALS_SETUP.md) for policy scope, verified rotation, and existing-deployment migration.

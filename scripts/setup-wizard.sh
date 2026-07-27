@@ -303,46 +303,6 @@ load_existing() {
   fi
 }
 
-# Validate AWS credentials
-validate_aws_credentials() {
-  local access_key="$1"
-  local secret_key="$2"
-  local region="$3"
-  local session_token="${4:-}"
-
-  log "Validating AWS credentials..."
-
-  # Temporarily set AWS credentials
-  export AWS_ACCESS_KEY_ID="$access_key"
-  export AWS_SECRET_ACCESS_KEY="$secret_key"
-  export AWS_DEFAULT_REGION="$region"
-  export AWS_SESSION_TOKEN="$session_token"
-
-  # Try to get caller identity
-  if aws sts get-caller-identity &>/dev/null; then
-    log_success "AWS credentials are valid"
-    return 0
-  else
-    log_error "AWS credentials are invalid or lack necessary permissions"
-    return 1
-  fi
-}
-
-# Get AWS account ID
-get_aws_account_id() {
-  local access_key="$1"
-  local secret_key="$2"
-  local region="$3"
-  local session_token="${4:-}"
-
-  export AWS_ACCESS_KEY_ID="$access_key"
-  export AWS_SECRET_ACCESS_KEY="$secret_key"
-  export AWS_DEFAULT_REGION="$region"
-  export AWS_SESSION_TOKEN="$session_token"
-
-  aws sts get-caller-identity --query Account --output text 2>/dev/null || echo ""
-}
-
 # Validate Cloudflare API token
 validate_cloudflare_token() {
   local token="$1"
@@ -433,10 +393,11 @@ generate_auth_secret_value() {
 # ============================================================================
 
 collect_aws_core() {
-  step_section 1 "AWS Core Credentials"
+  step_section 1 "AWS Deployment Session"
 
-  log "These credentials are required to deploy and manage AWS resources."
-  log "You'll need an AWS account with appropriate IAM permissions."
+  log "AWS setup and CDK use only your local AWS CLI credential chain."
+  log "AWS IAM Identity Center / SSO is recommended; a local access-key profile is a fallback."
+  log "The wizard never copies this human deployment identity into Worker configuration."
   echo ""
 
   echo "New to AWS? Quick checklist (recommended):"
@@ -494,30 +455,20 @@ collect_aws_core() {
     echo ""
   fi
 
-  # AWS Access Key ID
-  echo "To get your AWS access keys:"
-  echo "  1. Go to AWS Console → IAM → Users → Your User"
-  echo "  2. Click 'Security credentials' tab"
-  echo "  3. Click 'Create access key'"
-  echo "  4. Choose 'Application running outside AWS' and create"
-  echo "  5. Copy the Access key ID and Secret access key"
-  echo "  6. If you are using temporary credentials (STS/SSO), also copy the session token"
+  echo "Before continuing, authenticate the AWS CLI in another terminal if needed:"
+  echo "  Recommended: aws sso login [--profile your-profile]"
+  echo "  Fallback:    aws configure [--profile your-profile]"
+  echo "If you use a named profile, export AWS_PROFILE before running setup."
   echo ""
 
-  prompt AWS_ACCESS_KEY_ID "Enter AWS Access Key ID" "${AWS_ACCESS_KEY_ID:-}"
-  prompt AWS_SECRET_ACCESS_KEY "Enter AWS Secret Access Key" "${AWS_SECRET_ACCESS_KEY:-}" true
-  prompt_optional AWS_SESSION_TOKEN "Enter AWS Session Token (optional for temporary credentials)" "${AWS_SESSION_TOKEN:-}" true
-  echo ""
-
-  # Validate AWS credentials
-  if ! validate_aws_credentials "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_REGION" "$AWS_SESSION_TOKEN"; then
-    log_error "Failed to validate AWS credentials. Please check your keys and try again."
+  export AWS_DEFAULT_REGION="$AWS_REGION"
+  if ! aws sts get-caller-identity >/dev/null 2>&1; then
+    log_error "AWS CLI authentication failed. Run aws sso login or configure a local deployment profile."
     exit 1
   fi
 
-  # Get account ID
   log "Retrieving AWS account ID..."
-  CDK_DEFAULT_ACCOUNT=$(get_aws_account_id "$AWS_ACCESS_KEY_ID" "$AWS_SECRET_ACCESS_KEY" "$AWS_REGION" "$AWS_SESSION_TOKEN")
+  CDK_DEFAULT_ACCOUNT="$(aws sts get-caller-identity --query Account --output text 2>/dev/null || true)"
 
   if [[ -z "$CDK_DEFAULT_ACCOUNT" ]]; then
     log_error "Failed to retrieve AWS account ID"
@@ -532,13 +483,10 @@ collect_aws_core() {
 
   # Write to env files
   write_env_files "AWS_REGION" "$AWS_REGION"
-  write_env_files "AWS_ACCESS_KEY_ID" "$AWS_ACCESS_KEY_ID"
-  write_env_files "AWS_SECRET_ACCESS_KEY" "$AWS_SECRET_ACCESS_KEY"
-  write_env_files "AWS_SESSION_TOKEN" "$AWS_SESSION_TOKEN"
   write_env_files "CDK_DEFAULT_ACCOUNT" "$CDK_DEFAULT_ACCOUNT"
   write_env_files "CDK_DEFAULT_REGION" "$CDK_DEFAULT_REGION"
 
-  log_success "AWS Core credentials saved"
+  log_success "Local AWS deployment session validated; no human AWS key was copied for Worker upload"
 }
 
 collect_ec2_access() {

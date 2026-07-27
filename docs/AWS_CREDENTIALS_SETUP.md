@@ -1,113 +1,87 @@
-# AWS Credentials Setup
+# AWS Credential Boundary
 
-This guide covers the AWS credentials needed by `mc-aws` for both local control-panel usage and production runtime.
+`mc-aws` deliberately uses separate AWS identities for local deployment and the deployed Cloudflare Worker.
 
-## What AWS credentials are used for
+## Human/deployment identity
 
-The app uses AWS credentials to:
-
-- Read server/stack status
-- Start/stop/resume/hibernate operations
-- Run backup/restore commands through SSM/Lambda
-- Read and update allowlist parameters in SSM
-- Read AWS costs
-- Deploy infrastructure with CDK (`pnpm cdk:deploy` or `pnpm setup`)
-
-## Recommended approach
-
-Use a dedicated IAM user (or role) instead of root credentials.
-
-## Create IAM access keys
-
-1. Open AWS Console -> IAM -> Users.
-2. Create a user (example: `minecraft-control-panel`).
-3. Create an access key for CLI/application usage.
-4. Save:
-- `AWS_ACCESS_KEY_ID`
-- `AWS_SECRET_ACCESS_KEY`
-- `AWS_SESSION_TOKEN` (only if you are using temporary credentials)
-
-## Permissions (pragmatic starter set)
-
-For fastest setup, attach policies that cover the current feature set:
-
-- `AmazonEC2FullAccess`
-- `AmazonSSMFullAccess`
-- `AWSLambda_FullAccess`
-- `AmazonSESFullAccess`
-- `AWSCloudFormationFullAccess`
-- `AWSBillingReadOnlyAccess` (or equivalent Cost Explorer read access)
-
-You can tighten this later with least-privilege policies after confirming your workflow.
-
-## Add credentials to env files
-
-Copy from template first:
+Use AWS IAM Identity Center / SSO locally when possible:
 
 ```bash
-cp .env.production.example .env.production
-cp .env.local.example .env.local
+aws configure sso
+aws sso login --profile <profile>
+AWS_PROFILE=<profile> aws sts get-caller-identity
+AWS_PROFILE=<profile> bash ./setup.sh
 ```
 
-Set values in your deployment env file:
+A local `aws configure` access-key profile is a pragmatic fallback. Root credentials are never appropriate. CDK, CloudFormation output lookup, and runtime-key rotation use this local AWS CLI credential chain. Setup does not ask for a human access key and never sends the local deployment identity to Cloudflare.
+
+Ignored local env files may still contain credentials from an older deployment. The general Worker secret uploader explicitly skips `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, and `AWS_SESSION_TOKEN` from those files.
+
+## Dedicated Worker runtime identity
+
+The CDK stack creates one tagged IAM user for the Cloudflare Worker and an inline least-privilege policy. It does **not** create an `AWS::IAM::AccessKey`, output a key, or write a key to a project file.
+
+The runtime policy is derived from the deployed API call graph:
+
+| Capability | AWS actions | Scope |
+| --- | --- | --- |
+| Instance status | `ec2:DescribeInstances` | `*` because this describe action has no resource-level IAM support |
+| Stop | `ec2:StopInstances` | Managed instance ARN only |
+| Start/backup/restore/hibernate/resume | `lambda:InvokeFunction` | Lifecycle Lambda ARN only |
+| Stack status and Lambda-name lookup | `cloudformation:DescribeStacks` | Managed stack ARN only |
+| Service checks | `ssm:SendCommand` | Managed instance and `AWS-RunShellScript` document only |
+| Command results | `ssm:GetCommandInvocation` | `*` because this action has no resource-level IAM support |
+| Runtime state/config | `ssm:GetParameter`, `ssm:GetParametersByPath`, `ssm:PutParameter`, `ssm:DeleteParameter` | Only the exact `/minecraft` parameters and operation/lock subpaths used by the app |
+| Optional cost view | `ce:GetCostAndUsage` | `*` because Cost Explorer does not support resource-level scope |
+
+Set `AWS_COST_EXPLORER_ENABLED=false` before CDK deployment to omit Cost Explorer permission. The runtime identity has no IAM administration, CloudFormation mutation, EC2 termination, deployment, or lifecycle-volume permissions.
+
+## Key creation and rotation
+
+`setup.sh` deploys the IAM identity, locates its non-secret user-name output, deploys the Worker, and runs `scripts/rotate-worker-runtime-key.sh`. The rotation flow:
+
+1. Confirms the IAM user has the project runtime-identity tags.
+2. Refuses to proceed if two active keys would require deleting a valid key first.
+3. Creates a replacement key in process memory only.
+4. Pipes it directly to Wrangler under temporary candidate secret names.
+5. Calls an ephemeral bearer-protected Worker probe that uses the candidate key to describe only the managed instance.
+6. Promotes the verified candidate to `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` and verifies the primary binding.
+7. Deactivates prior keys belonging to the dedicated runtime user, verifies again, and reactivates them if that check fails.
+8. Deletes revoked prior keys and removes candidate/probe/session-token Worker secrets.
+
+The secret access key is never a CloudFormation output, command-line argument, tracked file, or project env-file value.
+
+To rotate later, authenticate both local CLIs and run:
 
 ```bash
-AWS_REGION=us-west-1
-AWS_ACCESS_KEY_ID=AKIA...
-AWS_SECRET_ACCESS_KEY=...
-AWS_SESSION_TOKEN=... # optional for temporary credentials
-AWS_ACCOUNT_ID=123456789012
-CDK_DEFAULT_ACCOUNT=123456789012
-CDK_DEFAULT_REGION=us-west-1
+aws sso login --profile <profile>
+pnpm exec wrangler login
+AWS_PROFILE=<profile> \
+VERIFY_URL=https://panel.example.com \
+bash scripts/rotate-worker-runtime-key.sh
 ```
 
-`pnpm deploy:cf` uses `.env.production` by default (or `ENV_FILE` if explicitly set).
+Use the exact deployed panel origin for `VERIFY_URL`. If candidate verification fails, the new candidate is removed and every prior runtime key remains valid. If a later promotion check fails, prior keys are left active or reactivated and the script stops for investigation.
 
-Notes:
+## Existing deployment migration
 
-- `pnpm setup` can fill most of this for you through the wizard.
-- `INSTANCE_ID` is populated automatically during setup/deploy.
+Re-run `bash ./setup.sh`. The stack adds the dedicated identity, then the deployment stages and verifies its key before replacing Worker AWS secrets. Rotation only manages keys attached to the tagged dedicated runtime user; it never deactivates or deletes the human identity whose credentials an older Worker may have used.
 
-## Configure AWS CLI (recommended)
+After the replacement verifies:
 
-```bash
-aws configure
-aws sts get-caller-identity
-```
+- Remove obsolete human AWS values from ignored project env files if you no longer need them there.
+- Rotate or delete the old human key only if it is active, over-privileged, or exposed, and only after confirming no other local tooling uses it.
+- Do not delete a valid old credential merely because it exists in a mode-`0600`, ignored local file.
 
-Use the same key/secret/region as above.
+## Residual tradeoff
 
-## Where these creds are used
+Cloudflare Workers cannot directly assume an AWS IAM role through instance metadata or workload identity in this deployment model, so the Worker retains a long-lived IAM user key in Cloudflare encrypted secrets. The blast radius is reduced through a dedicated identity, narrow action/resource policy, direct secret upload, and verified rotation, but periodic rotation and Cloudflare account security remain operator responsibilities.
 
-- **Local development (`pnpm dev`)**: backend API routes call AWS services directly.
-- **Infrastructure deploy (`pnpm cdk:deploy`)**: CDK uses your AWS CLI/session credentials.
-- **Production deploy (`pnpm deploy:cf`)**: AWS credentials from the selected deployment env file are uploaded as Worker secrets.
+## Troubleshooting
 
-## Common issues
+- `Unable to locate credentials`: run `aws sts get-caller-identity` with the same `AWS_PROFILE` used for setup.
+- Two active runtime keys: identify a stale key on the tagged runtime user and deactivate it; the script intentionally will not guess or delete an active key.
+- Probe failure: inspect Worker logs and IAM policy drift. Do not manually delete the prior key until the replacement probe succeeds.
+- Missing runtime-user output: deploy the current CDK stack before running standalone rotation.
 
-### `Unable to locate credentials`
-
-- Check your deployment env file for `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY`.
-- Restart dev server after updating env files.
-- Run `aws sts get-caller-identity` to verify CLI credentials.
-
-### `security token included in the request is invalid`
-
-- Access key is wrong, disabled, or deleted.
-- Generate a new key and update env files.
-
-### `not authorized to perform ...`
-
-- IAM policy is missing required permission.
-- Add the required policy, then retry.
-
-### `No default region configured`
-
-- Set `AWS_REGION` in your deployment env file.
-- Optionally set CLI default region via `aws configure`.
-
-## Related docs
-
-- [Cloudflare Setup](CLOUDFLARE_SETUP.md)
-- [Google OAuth Setup](GOOGLE_OAUTH_SETUP.md)
-- [README](../README.md)
+Related: [AWS Account Setup](setup/AWS_ACCOUNT_SETUP.md), [Setup and Run](setup/SETUP_AND_RUN.md), and [Cloudflare Setup](CLOUDFLARE_SETUP.md).

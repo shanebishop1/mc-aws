@@ -89,7 +89,7 @@ cd mc-aws
 bash ./setup.sh
 ```
 
-The script installs the project toolchain, collects credentials, deploys AWS infrastructure, writes deployment outputs, and deploys the web app to Cloudflare.
+The script installs the project toolchain, uses your local AWS CLI/SSO session for deployment, creates a separate least-privilege Worker runtime identity, writes non-secret deployment outputs, and deploys the web app to Cloudflare.
 
 For the Minecraft connection address, setup supports three modes:
 

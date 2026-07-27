@@ -93,35 +93,87 @@ export const envRuntimeSchema = {
     }),
   },
   AWS_ACCESS_KEY_ID: {
-    description: "AWS access key id",
+    description: "Dedicated Worker runtime AWS access key id",
     valueType: "string",
     placeholderValues: ["AKIAIOSFODNN7EXAMPLE"],
     ownership: withOwnership({
-      worker: { level: "optional", note: "Prefer platform IAM/role where available." },
+      worker: {
+        level: "optional",
+        note: "Provisioned directly by the runtime-key rotation flow; never read from deploy env files.",
+      },
       lambda: { level: "forbidden" },
       ec2: { level: "forbidden" },
       ci: { level: "optional" },
     }),
   },
   AWS_SECRET_ACCESS_KEY: {
-    description: "AWS secret access key",
+    description: "Dedicated Worker runtime AWS secret access key",
     valueType: "string",
     placeholderValues: ["wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"],
     ownership: withOwnership({
-      worker: { level: "optional", note: "Prefer platform IAM/role where available." },
+      worker: {
+        level: "optional",
+        note: "Provisioned directly by the runtime-key rotation flow; never read from deploy env files.",
+      },
       lambda: { level: "forbidden" },
       ec2: { level: "forbidden" },
       ci: { level: "optional" },
     }),
   },
   AWS_SESSION_TOKEN: {
-    description: "Optional AWS session token for temporary credentials",
+    description: "Temporary AWS session token (local development only; dedicated Worker keys are long-lived)",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Removed from the Worker by successful dedicated runtime-key rotation." },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      ci: { level: "optional" },
+    }),
+  },
+  AWS_COST_EXPLORER_ENABLED: {
+    description: "Whether the runtime IAM policy includes optional Cost Explorer read access",
+    valueType: "enum",
+    enumValues: ["true", "false"],
+    defaultValue: "true",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID: {
+    description: "Ephemeral candidate runtime access key used only during verified rotation",
     valueType: "string",
     ownership: withOwnership({
       worker: { level: "optional" },
       lambda: { level: "forbidden" },
       ec2: { level: "forbidden" },
-      ci: { level: "optional" },
+      "local-dev": { level: "forbidden" },
+      ci: { level: "forbidden" },
+    }),
+  },
+  MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY: {
+    description: "Ephemeral candidate runtime secret key used only during verified rotation",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "forbidden" },
+      ci: { level: "forbidden" },
+    }),
+  },
+  MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN: {
+    description: "Ephemeral bearer token protecting the deployment-time runtime credential probe",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "forbidden" },
+      ci: { level: "forbidden" },
     }),
   },
   CLOUDFORMATION_STACK_NAME: {
@@ -353,9 +405,7 @@ export const workerSecretAllowlist = [
   "AWS_REGION",
   "AWS_ACCOUNT_ID",
   "INSTANCE_ID",
-  "AWS_ACCESS_KEY_ID",
-  "AWS_SECRET_ACCESS_KEY",
-  "AWS_SESSION_TOKEN",
+  "AWS_COST_EXPLORER_ENABLED",
   "CLOUDFORMATION_STACK_NAME",
   "STACK_NAME",
   "CLOUDFLARE_DNS_API_TOKEN",
@@ -374,6 +424,15 @@ export const workerSecretAllowlist = [
   "GOOGLE_CLIENT_SECRET",
   "NEXT_PUBLIC_APP_URL",
   "MC_OPERATION_STATE_RETENTION_DAYS",
+] as const;
+
+export const workerManagedAwsCredentialSecretNames = [
+  "AWS_ACCESS_KEY_ID",
+  "AWS_SECRET_ACCESS_KEY",
+  "AWS_SESSION_TOKEN",
+  "MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID",
+  "MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY",
+  "MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN",
 ] as const;
 
 export type WorkerSecretAllowlistKey = (typeof workerSecretAllowlist)[number];

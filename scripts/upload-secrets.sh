@@ -25,10 +25,18 @@ echo ""
 WORKER_SECRET_ALLOWLIST=()
 
 load_worker_secret_allowlist() {
-  if ! mapfile -t WORKER_SECRET_ALLOWLIST < <(pnpm exec tsx scripts/get-worker-secret-allowlist.ts); then
+  local allowlist_output
+  if ! allowlist_output="$(pnpm exec tsx scripts/get-worker-secret-allowlist.ts)"; then
     echo "❌ Error: Failed to load Worker secret allowlist from schema"
     echo "   Tip: run pnpm install --frozen-lockfile and ensure scripts/get-worker-secret-allowlist.ts succeeds"
     exit 1
+  fi
+
+  WORKER_SECRET_ALLOWLIST=()
+  if [[ -n "$allowlist_output" ]]; then
+    while IFS= read -r allowed_key; do
+      WORKER_SECRET_ALLOWLIST+=("$allowed_key")
+    done <<< "$allowlist_output"
   fi
 
   if [[ ${#WORKER_SECRET_ALLOWLIST[@]} -eq 0 ]]; then
@@ -54,6 +62,16 @@ print_worker_secret_allowlist() {
   for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
     echo "  - $allowed"
   done
+}
+
+is_local_aws_credential() {
+  case "$1" in
+    AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)
+      return 0
+      ;;
+  esac
+
+  return 1
 }
 
 # Read env file and upload each non-empty, non-comment line as a secret
@@ -93,6 +111,11 @@ while IFS= read -r line || [[ -n "$line" ]]; do
   fi
 
   if ! is_worker_secret_allowed "$key"; then
+    if is_local_aws_credential "$key"; then
+      echo "Skipping local AWS deployment credential: $key"
+      continue
+    fi
+
     echo "❌ Error: Refusing to upload unapproved Worker secret key '$key' from $ENV_FILE:$LINE_NO"
     echo "Allowed Worker secret keys:"
     print_worker_secret_allowlist

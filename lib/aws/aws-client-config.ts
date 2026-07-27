@@ -184,6 +184,15 @@ function getCloudflareContextEnvString(key: string): string | null {
   }
 }
 
+export function getRuntimeEnvString(key: string): string | null {
+  const processValue = getProcessEnv()?.[key];
+  if (typeof processValue === "string" && processValue.length > 0) {
+    return processValue;
+  }
+
+  return getCloudflareContextEnvString(key);
+}
+
 function getCloudflareContextAwsCredentials(): AwsCredentialIdentity | null {
   const accessKeyId = getCloudflareContextEnvString("AWS_ACCESS_KEY_ID");
   const secretAccessKey = getCloudflareContextEnvString("AWS_SECRET_ACCESS_KEY");
@@ -200,7 +209,7 @@ function getCloudflareContextAwsCredentials(): AwsCredentialIdentity | null {
   };
 }
 
-export function getAwsClientConfig(region: string): AwsClientConfig {
+export function getAwsClientConfig(region: string, credentialOverride?: AwsCredentialIdentity): AwsClientConfig {
   const isWorkers = isCloudflareWorkersRuntime();
 
   // Cloudflare Workers cannot read ~/.aws/config or ~/.aws/credentials.
@@ -237,7 +246,7 @@ export function getAwsClientConfig(region: string): AwsClientConfig {
     }
   }
 
-  const credentials = getEnvAwsCredentials() ?? getCloudflareContextAwsCredentials();
+  const credentials = credentialOverride ?? getEnvAwsCredentials() ?? getCloudflareContextAwsCredentials();
   if (credentials) {
     const defaultsMode = "standard";
     const retryMode = "standard";

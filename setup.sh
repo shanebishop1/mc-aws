@@ -145,8 +145,6 @@ write_env_files() {
 get_missing_required_credentials() {
   local required=(
     "AWS_REGION"
-    "AWS_ACCESS_KEY_ID"
-    "AWS_SECRET_ACCESS_KEY"
     "GOOGLE_CLIENT_ID"
     "GOOGLE_CLIENT_SECRET"
     "ADMIN_EMAIL"
@@ -239,8 +237,6 @@ maybe_confirm_existing_credentials() {
   echo ""
   log "Detected:"
   log "  AWS_REGION=$AWS_REGION"
-  log "  AWS_ACCESS_KEY_ID=$(mask_value "$AWS_ACCESS_KEY_ID")"
-  log "  AWS_SECRET_ACCESS_KEY=$(mask_value "$AWS_SECRET_ACCESS_KEY")"
   log "  GOOGLE_CLIENT_ID=$(mask_value "$GOOGLE_CLIENT_ID")"
   log "  GOOGLE_CLIENT_SECRET=$(mask_value "$GOOGLE_CLIENT_SECRET")"
   log "  ADMIN_EMAIL=$ADMIN_EMAIL"
@@ -426,6 +422,9 @@ main() {
 
   # Reload env for the deploy steps below
   load_env_file "$PRODUCTION_ENV_FILE" || true
+  if ! ensure_cdk_defaults; then
+    error_exit "AWS CLI credentials are unavailable. Run 'aws sso login' (recommended) or configure local deployment credentials, then re-run ./setup.sh"
+  fi
 
   # Step 6: Deploy AWS infrastructure (CDK)
   step "Deploying AWS infrastructure (CDK)"
@@ -455,6 +454,13 @@ main() {
     error_exit "Could not read InstanceId output from CloudFormation stack '$STACK_NAME'"
   fi
   success "INSTANCE_ID=$INSTANCE_ID"
+
+  RUNTIME_IAM_USER_NAME="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='WorkerRuntimeIamUserName'].OutputValue | [0]" --output text 2>/dev/null || true)"
+  if [[ -z "${RUNTIME_IAM_USER_NAME:-}" || "${RUNTIME_IAM_USER_NAME}" == "None" ]]; then
+    error_exit "Could not locate dedicated Worker runtime IAM identity in stack '$STACK_NAME'"
+  fi
+  export RUNTIME_IAM_USER_NAME
+  success "Dedicated Worker runtime identity located: $RUNTIME_IAM_USER_NAME"
 
   # Update env files with INSTANCE_ID for Cloudflare deploy
   write_env_files "INSTANCE_ID" "$INSTANCE_ID"

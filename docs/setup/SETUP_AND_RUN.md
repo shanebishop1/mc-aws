@@ -24,15 +24,17 @@ The script:
 3. Installs project dependencies.
 4. Runs `scripts/setup-wizard.sh`.
 5. Deploys AWS infrastructure with CDK.
-6. Reads `INSTANCE_ID` from the CloudFormation stack output.
-7. Writes deployment values to `.env.production` and `.env.local`.
-8. Deploys the web app to Cloudflare Workers.
+6. Locates the dedicated least-privilege Worker runtime IAM identity.
+7. Reads `INSTANCE_ID` from the CloudFormation stack output.
+8. Writes non-secret deployment values to `.env.production` and `.env.local`.
+9. Deploys the web app to Cloudflare Workers.
+10. Creates a runtime key in memory, uploads it directly to Wrangler, verifies it through the Worker, then revokes any prior key owned by that runtime identity.
 
 ## 3. Wizard Inputs
 
 The wizard collects:
 
-- AWS region and credentials
+- AWS region (the script uses your already-authenticated local AWS CLI/SSO session)
 - optional EC2 key pair name
 - Google OAuth client ID and secret
 - admin and allowed-user emails
@@ -100,6 +102,14 @@ Infrastructure update:
 pnpm cdk:diff
 pnpm cdk:deploy
 ```
+
+Rotate only the dedicated Worker runtime key:
+
+```bash
+VERIFY_URL=https://panel.example.com bash scripts/rotate-worker-runtime-key.sh
+```
+
+The rotation command requires authenticated local AWS CLI and Wrangler sessions. It never uploads the local human/deployment AWS identity.
 
 ## 8. Common Checks
 
