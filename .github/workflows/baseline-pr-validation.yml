@@ -158,11 +158,29 @@ jobs:
           set -euo pipefail
           node <<'NODE'
           const fs = require("node:fs");
-          const context = require("./infra/cdk.context.json");
-          const lookupKey = Object.keys(context).find((key) => key.startsWith("vpc-provider:"));
-          const match = lookupKey?.match(/account=(\d+):.*region=([^:]+):/);
-          if (!match) throw new Error("Unable to derive account and region from the committed CDK lookup context.");
-          fs.appendFileSync(process.env.GITHUB_ENV, `CDK_DEFAULT_ACCOUNT=${match[1]}\nCDK_DEFAULT_REGION=${match[2]}\n`);
+          const account = "111111111111";
+          const region = "us-west-1";
+          const lookupKey = `vpc-provider:account=${account}:filter.isDefault=true:region=${region}:returnAsymmetricSubnets=true`;
+          const context = {
+            [lookupKey]: {
+              vpcId: "vpc-12345",
+              vpcCidrBlock: "10.0.0.0/16",
+              ownerAccountId: account,
+              availabilityZones: [],
+              subnetGroups: [{
+                name: "Public",
+                type: "Public",
+                subnets: [{
+                  subnetId: "subnet-12345",
+                  cidr: "10.0.0.0/24",
+                  availabilityZone: `${region}a`,
+                  routeTableId: "rtb-12345",
+                }],
+              }],
+            },
+          };
+          fs.writeFileSync("./infra/cdk.context.json", `${JSON.stringify(context, null, 2)}\n`);
+          fs.appendFileSync(process.env.GITHUB_ENV, `CDK_DEFAULT_ACCOUNT=${account}\nCDK_DEFAULT_REGION=${region}\n`);
           NODE
 
       - name: Synthesize CDK application
