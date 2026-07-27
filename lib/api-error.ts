@@ -4,6 +4,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { RuntimeStateConfigurationError } from "./runtime-state/errors";
 import type { ApiResponse, OperationInfo } from "./types";
 
 /**
@@ -96,6 +97,19 @@ export function formatApiErrorResponse<T>(
   operation?: OperationInfo
 ): NextResponse<ApiResponse<T>> {
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
+
+  if (error instanceof RuntimeStateConfigurationError) {
+    console.error(`[${operationType.toUpperCase()}] Runtime-state configuration error:`, error);
+    return NextResponse.json(
+      {
+        success: false,
+        error: "Runtime state service is unavailable",
+        operation,
+        timestamp: new Date().toISOString(),
+      },
+      { status: 503 }
+    );
+  }
 
   // Check if this is a known validation error that should be exposed
   if (isValidationError(errorMessage)) {

@@ -4,9 +4,10 @@ import type {
   RuntimeStateCloudflareBindings,
   RuntimeStateSelectorInput,
 } from "@/lib/runtime-state/adapters";
-import { getCloudflareContext } from "@opennextjs/cloudflare";
 import { createCloudflareRuntimeStateAdapter } from "@/lib/runtime-state/cloudflare-adapter";
+import { RuntimeStateConfigurationError, productionRuntimeStateBindingErrorMessage } from "@/lib/runtime-state/errors";
 import { inMemoryRuntimeStateAdapter } from "@/lib/runtime-state/in-memory-adapter";
+import { getCloudflareContext } from "@opennextjs/cloudflare";
 
 const CLOUDFLARE_CONTEXT_SYMBOL = Symbol.for("__cloudflare-context__");
 
@@ -18,16 +19,13 @@ const normalizeNodeEnv = (nodeEnv: string | undefined): string => {
   return nodeEnv?.trim().toLowerCase() ?? "";
 };
 
-const productionBindingErrorMessage =
-  "[RUNTIME-STATE] Missing or invalid Cloudflare runtime-state binding in production. Ensure RUNTIME_STATE_DURABLE_OBJECT is configured; production cannot fall back to in-memory runtime-state.";
-
 const runtimeStateSelectionDiagnosticEventName = "runtime_state.adapter_selection";
 
 type RuntimeStateBindingSource = "explicit" | "cloudflare-context" | "none";
 
 interface RuntimeStateSelectionDiagnostic {
   event: typeof runtimeStateSelectionDiagnosticEventName;
-  adapterKind: RuntimeStateAdapterKind;
+  adapterKind: RuntimeStateAdapterKind | "unavailable";
   reason:
     | "node_env_prefers_in_memory"
     | "valid_cloudflare_binding_detected"
@@ -188,7 +186,7 @@ export const selectRuntimeStateAdapterKind = ({
   const bindingState = resolveBindingState(resolvedBindings);
 
   const createDiagnostic = (
-    adapterKind: RuntimeStateAdapterKind,
+    adapterKind: RuntimeStateSelectionDiagnostic["adapterKind"],
     reason: RuntimeStateSelectionDiagnostic["reason"]
   ): RuntimeStateSelectionDiagnostic => {
     return {
@@ -206,29 +204,23 @@ export const selectRuntimeStateAdapterKind = ({
 
   if (normalizedNodeEnv === "test" || normalizedNodeEnv === "development") {
     if (bindingState.hasDurableObjectBinding || bindingState.hasSnapshotKvBinding) {
-      emitRuntimeStateSelectionDiagnostic(
-        createDiagnostic("in-memory", "node_env_prefers_in_memory"),
-        "info"
-      );
+      emitRuntimeStateSelectionDiagnostic(createDiagnostic("in-memory", "node_env_prefers_in_memory"), "info");
     }
 
     return "in-memory";
   }
 
   if (hasCloudflareRuntimeStateBindings(resolvedBindings)) {
-    emitRuntimeStateSelectionDiagnostic(
-      createDiagnostic("cloudflare", "valid_cloudflare_binding_detected"),
-      "info"
-    );
+    emitRuntimeStateSelectionDiagnostic(createDiagnostic("cloudflare", "valid_cloudflare_binding_detected"), "info");
     return "cloudflare";
   }
 
   if (normalizedNodeEnv === "production") {
     emitRuntimeStateSelectionDiagnostic(
-      createDiagnostic("in-memory", "production_missing_or_invalid_durable_object_binding"),
+      createDiagnostic("unavailable", "production_missing_or_invalid_durable_object_binding"),
       "error"
     );
-    return "in-memory";
+    throw new RuntimeStateConfigurationError(productionRuntimeStateBindingErrorMessage);
   }
 
   emitRuntimeStateSelectionDiagnostic(
@@ -253,7 +245,9 @@ export const getRuntimeStateAdapter = (input: RuntimeStateSelectorInput = {}): R
   return inMemoryRuntimeStateAdapter;
 };
 
-export const getRuntimeStateAdapterAsync = async (input: RuntimeStateSelectorInput = {}): Promise<RuntimeStateAdapter> => {
+export const getRuntimeStateAdapterAsync = async (
+  input: RuntimeStateSelectorInput = {}
+): Promise<RuntimeStateAdapter> => {
   if (input.bindings) {
     return getRuntimeStateAdapter(input);
   }

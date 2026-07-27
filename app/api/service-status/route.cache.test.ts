@@ -1,3 +1,4 @@
+import { RuntimeStateConfigurationError } from "@/lib/runtime-state/errors";
 import type { ApiResponse } from "@/lib/types";
 import { freezeTime, restoreTime } from "@/tests/fixtures";
 import { createMockNextRequest, parseNextResponse } from "@/tests/utils";
@@ -193,6 +194,24 @@ describe("GET /api/service-status cache contract", () => {
     expect(observedStalenessMs).toBeGreaterThan(0);
     expect(observedStalenessMs).toBeLessThanOrEqual(toleratedSnapshotStalenessMs);
 
+    expect(findInstanceIdMock).not.toHaveBeenCalled();
+    expect(getInstanceStateMock).not.toHaveBeenCalled();
+    expect(executeSSMCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("returns service unavailable when production runtime state is misconfigured", async () => {
+    getRuntimeStateAdapterMock.mockImplementation(() => {
+      throw new RuntimeStateConfigurationError();
+    });
+
+    const { GET } = await import("./route");
+    const req = createMockNextRequest("http://localhost/api/service-status");
+    const response = await GET(req);
+    const body = await parseNextResponse<ApiResponse<unknown>>(response);
+
+    expect(response.status).toBe(503);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Runtime state service is unavailable");
     expect(findInstanceIdMock).not.toHaveBeenCalled();
     expect(getInstanceStateMock).not.toHaveBeenCalled();
     expect(executeSSMCommandMock).not.toHaveBeenCalled();

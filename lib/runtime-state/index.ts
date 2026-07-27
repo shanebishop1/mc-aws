@@ -40,6 +40,10 @@ export type {
 
 export { createCloudflareRuntimeStateAdapter } from "@/lib/runtime-state/cloudflare-adapter";
 export {
+  productionRuntimeStateBindingErrorMessage,
+  RuntimeStateConfigurationError,
+} from "@/lib/runtime-state/errors";
+export {
   inMemoryRuntimeStateAdapter,
   resetInMemoryRuntimeStateAdapterState,
 } from "@/lib/runtime-state/in-memory-adapter";

@@ -160,14 +160,13 @@ describe("GET /api/status cache contract", () => {
     expect(getInstanceDetailsMock).not.toHaveBeenCalled();
   });
 
-  it("propagates runtime-state misconfiguration as a route fallback error", async () => {
+  it("returns service unavailable when production runtime state is misconfigured", async () => {
     vi.resetModules();
     vi.stubEnv("NODE_ENV", "production");
+    const { RuntimeStateConfigurationError } = await import("@/lib/runtime-state/errors");
 
     getRuntimeStateAdapterMock.mockImplementation(() => {
-      throw new Error(
-        "[RUNTIME-STATE] Missing or invalid Cloudflare runtime-state binding in production. Ensure RUNTIME_STATE_DURABLE_OBJECT is configured; production cannot fall back to in-memory runtime-state."
-      );
+      throw new RuntimeStateConfigurationError();
     });
 
     const { GET } = await import("./route");
@@ -175,9 +174,9 @@ describe("GET /api/status cache contract", () => {
     const response = await GET(req);
     const body = await parseNextResponse<ApiResponse<ServerStatusResponse>>(response);
 
-    expect(response.status).toBe(500);
+    expect(response.status).toBe(503);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Failed to fetch server status");
+    expect(body.error).toBe("Runtime state service is unavailable");
     expect(response.headers.get("Cache-Control")).toBe("no-store");
 
     expect(findInstanceIdMock).not.toHaveBeenCalled();

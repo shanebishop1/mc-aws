@@ -1,5 +1,7 @@
 import {
+  RuntimeStateConfigurationError,
   getRuntimeStateAdapter,
+  getRuntimeStateAdapterAsync,
   hasCloudflareRuntimeStateBindings,
   selectRuntimeStateAdapterKind,
 } from "@/lib/runtime-state";
@@ -98,14 +100,27 @@ describe("runtime-state provider selector", () => {
       );
     });
 
-    it("falls back in production when no bindings are present", () => {
-      expect(selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} })).toBe("in-memory");
+    it("fails closed in production when no bindings are present", () => {
+      let thrownError: unknown;
+      try {
+        selectRuntimeStateAdapterKind({ nodeEnv: "production", bindings: {} });
+      } catch (error) {
+        thrownError = error;
+      }
+
+      expect(thrownError).toBeInstanceOf(RuntimeStateConfigurationError);
+      expect(thrownError).toMatchObject({
+        name: "RuntimeStateConfigurationError",
+        code: "RUNTIME_STATE_CONFIGURATION_ERROR",
+      });
+      expect((thrownError as Error).message).toContain("RUNTIME_STATE_DURABLE_OBJECT");
+      expect((thrownError as Error).message).toContain("cannot fall back to in-memory");
 
       expect(console.error).toHaveBeenCalledWith(
         "[RUNTIME-STATE]",
         expect.objectContaining({
           event: "runtime_state.adapter_selection",
-          adapterKind: "in-memory",
+          adapterKind: "unavailable",
           reason: "production_missing_or_invalid_durable_object_binding",
           nodeEnv: "production",
           bindingSource: "explicit",
@@ -116,8 +131,8 @@ describe("runtime-state provider selector", () => {
       );
     });
 
-    it("falls back in production when durable object binding shape is invalid", () => {
-      expect(
+    it("fails closed in production when durable object binding shape is invalid", () => {
+      expect(() =>
         selectRuntimeStateAdapterKind({
           nodeEnv: "production",
           bindings: {
@@ -126,13 +141,13 @@ describe("runtime-state provider selector", () => {
             },
           },
         })
-      ).toBe("in-memory");
+      ).toThrow(RuntimeStateConfigurationError);
 
       expect(console.error).toHaveBeenCalledWith(
         "[RUNTIME-STATE]",
         expect.objectContaining({
           event: "runtime_state.adapter_selection",
-          adapterKind: "in-memory",
+          adapterKind: "unavailable",
           reason: "production_missing_or_invalid_durable_object_binding",
           hasDurableObjectBinding: true,
           hasValidDurableObjectBinding: false,
@@ -221,7 +236,19 @@ describe("runtime-state provider selector", () => {
       expect(adapter.kind).toBe("cloudflare");
     });
 
-    it("falls back in production when only cloudflare kv binding is present", () => {
+    it("never returns the in-memory adapter when production bindings are missing", () => {
+      expect(() => getRuntimeStateAdapter({ nodeEnv: "production", bindings: {} })).toThrow(
+        RuntimeStateConfigurationError
+      );
+    });
+
+    it("fails closed through the asynchronous selector in production", async () => {
+      await expect(getRuntimeStateAdapterAsync({ nodeEnv: "production", bindings: {} })).rejects.toBeInstanceOf(
+        RuntimeStateConfigurationError
+      );
+    });
+
+    it("fails closed in production when only cloudflare kv binding is present", () => {
       (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
         env: {
           RUNTIME_STATE_SNAPSHOT_KV: {
@@ -232,11 +259,11 @@ describe("runtime-state provider selector", () => {
         },
       };
 
-      expect(
+      expect(() =>
         getRuntimeStateAdapter({
           nodeEnv: "production",
-        }).kind
-      ).toBe("in-memory");
+        })
+      ).toThrow(RuntimeStateConfigurationError);
     });
 
     it("returns in-memory adapter in development when only cloudflare kv binding is present", () => {
