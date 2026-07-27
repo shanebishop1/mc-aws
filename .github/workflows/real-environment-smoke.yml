@@ -27,8 +27,9 @@ jobs:
       group: real-environment-smoke
       cancel-in-progress: false
     env:
-      SMOKE_ENVIRONMENT_LABEL: ${{ vars.SMOKE_ENVIRONMENT_LABEL || 'real-smoke' }}
-      SMOKE_EXPECT_DOMAIN: ${{ vars.SMOKE_EXPECT_DOMAIN || '' }}
+      # Keep infrastructure/operator identifiers out of summaries and artifacts.
+      SMOKE_ENVIRONMENT_LABEL: redacted
+      SMOKE_EXPECT_DOMAIN: ""
       SMOKE_EXPECT_BACKEND_MODE: ${{ vars.SMOKE_EXPECT_BACKEND_MODE || 'aws' }}
       SMOKE_ENABLE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_s5_environment_probe || vars.SMOKE_ENABLE_S5_ENVIRONMENT_PROBE || 'false' }}
       SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_s5_environment_probe || vars.SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE || 'false' }}
@@ -36,7 +37,7 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -94,13 +95,13 @@ jobs:
           fi
 
       - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
         with:
           version: 10.30.3
           run_install: false
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22.15.1
           cache: pnpm
@@ -117,8 +118,9 @@ jobs:
 
       - name: Upload smoke summary artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: real-environment-smoke-summary
           path: artifacts/real-environment-smoke-summary.md
           if-no-files-found: warn
+          retention-days: 3
