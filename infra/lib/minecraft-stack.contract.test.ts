@@ -149,9 +149,7 @@ describe("minecraft-stack optional SES contract", () => {
     });
     expect(Object.keys(template.findResources("AWS::SNS::Topic"))).toHaveLength(1);
     expect(JSON.stringify(template.toJSON())).not.toContain("SetActiveReceiptRuleSet");
-    expect(
-      allIamStatements(template).some((statement) => actionsFor(statement).includes("ses:SendEmail"))
-    ).toBe(false);
+    expect(allIamStatements(template).some((statement) => actionsFor(statement).includes("ses:SendEmail"))).toBe(false);
   });
 });
 

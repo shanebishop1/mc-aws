@@ -32,10 +32,7 @@ import type { NextRequest, NextResponse } from "next/server";
 /**
  * Check if server is already hibernating
  */
-function checkAlreadyHibernating(
-  currentState: string,
-  resolvedId: string
-): HibernateResponse | null {
+function checkAlreadyHibernating(currentState: string, resolvedId: string): HibernateResponse | null {
   if (currentState === ServerState.Hibernating) {
     return {
       message: "Server is already hibernating (stopped with no volumes)",

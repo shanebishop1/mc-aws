@@ -193,17 +193,20 @@ describe("runtime-config-schema", () => {
       const duckDnsReport = validateEnvForTarget({ DUCKDNS_DOMAIN: "myserver" }, "local-dev");
       expect(duckDnsReport.issues).toEqual(
         expect.arrayContaining([
-        expect.objectContaining({ kind: "missing", message: expect.stringContaining("DuckDNS configuration is incomplete") }),
+          expect.objectContaining({
+            kind: "missing",
+            message: expect.stringContaining("DuckDNS configuration is incomplete"),
+          }),
         ])
       );
 
       const cloudflareReport = validateEnvForTarget({ CLOUDFLARE_MC_DOMAIN: "mc.example.com" }, "local-dev");
       expect(cloudflareReport.issues).toEqual(
         expect.arrayContaining([
-        expect.objectContaining({
-          kind: "missing",
-          message: expect.stringContaining("Cloudflare DNS configuration is incomplete"),
-        }),
+          expect.objectContaining({
+            kind: "missing",
+            message: expect.stringContaining("Cloudflare DNS configuration is incomplete"),
+          }),
         ])
       );
     });

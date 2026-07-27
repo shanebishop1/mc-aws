@@ -562,11 +562,7 @@ const validateMinecraftDnsConfig = (
   values: Record<string, string | undefined>,
   issues: EnvSchemaValidationIssue[]
 ): void => {
-  const cloudflareNames: EnvVarName[] = [
-    "CLOUDFLARE_ZONE_ID",
-    "CLOUDFLARE_MC_DOMAIN",
-    "CLOUDFLARE_DNS_API_TOKEN",
-  ];
+  const cloudflareNames: EnvVarName[] = ["CLOUDFLARE_ZONE_ID", "CLOUDFLARE_MC_DOMAIN", "CLOUDFLARE_DNS_API_TOKEN"];
   const duckdnsNames: EnvVarName[] = ["DUCKDNS_DOMAIN", "DUCKDNS_TOKEN"];
   const cloudflareSet = cloudflareNames.filter((name) => getResolvedString(values, name));
   const duckdnsSet = duckdnsNames.filter((name) => getResolvedString(values, name));
@@ -585,24 +581,19 @@ const validateMinecraftDnsConfig = (
   if (cloudflareSet.length > 0 && cloudflareSet.length !== cloudflareNames.length) {
     const missing = cloudflareNames.filter((name) => !getResolvedString(values, name));
     issues.push(
-      createIssue(
-        missing[0],
-        "missing",
-        `Cloudflare DNS configuration is incomplete. Missing: ${missing.join(", ")}.`
-      )
+      createIssue(missing[0], "missing", `Cloudflare DNS configuration is incomplete. Missing: ${missing.join(", ")}.`)
     );
   }
 
   if (duckdnsSet.length > 0 && duckdnsSet.length !== duckdnsNames.length) {
     const missing = duckdnsNames.filter((name) => !getResolvedString(values, name));
-    issues.push(createIssue(missing[0], "missing", `DuckDNS configuration is incomplete. Missing: ${missing.join(", ")}.`));
+    issues.push(
+      createIssue(missing[0], "missing", `DuckDNS configuration is incomplete. Missing: ${missing.join(", ")}.`)
+    );
   }
 };
 
-const validateSesConfig = (
-  values: Record<string, string | undefined>,
-  issues: EnvSchemaValidationIssue[]
-): void => {
+const validateSesConfig = (values: Record<string, string | undefined>, issues: EnvSchemaValidationIssue[]): void => {
   const notificationsEnabled = getResolvedString(values, "SES_NOTIFICATIONS_ENABLED").toLowerCase() === "true";
   const inboundCommandsEnabled = getResolvedString(values, "SES_INBOUND_COMMANDS_ENABLED").toLowerCase() === "true";
 
@@ -624,11 +615,7 @@ const validateSesConfig = (
   }
 
   if (inboundCommandsEnabled) {
-    const requiredInboundValues: EnvVarName[] = [
-      "SES_INBOUND_RECIPIENT",
-      "SES_RECEIPT_RULE_SET_NAME",
-      "START_KEYWORD",
-    ];
+    const requiredInboundValues: EnvVarName[] = ["SES_INBOUND_RECIPIENT", "SES_RECEIPT_RULE_SET_NAME", "START_KEYWORD"];
     const missing = requiredInboundValues.filter((name) => !getResolvedString(values, name));
     if (missing.length > 0) {
       issues.push(
@@ -795,6 +782,63 @@ export interface RuntimeStateWranglerValidationReport {
   isValid: boolean;
 }
 
+const hasExpectedDurableObjectBinding = (root: UnknownRecord): boolean => {
+  const durableObjects = asRecord(root.durable_objects);
+  const bindings = Array.isArray(durableObjects?.bindings) ? durableObjects.bindings : [];
+
+  return bindings.some((binding) => {
+    const record = asRecord(binding);
+    return (
+      record?.name === runtimeStateWranglerSchema.durableObjectBindingName &&
+      record?.class_name === runtimeStateWranglerSchema.durableObjectClassName
+    );
+  });
+};
+
+const validateKvNamespaceId = (value: unknown, field: "id" | "preview_id", errors: string[]): void => {
+  const id = typeof value === "string" ? value.trim() : "";
+  const label = `${runtimeStateWranglerSchema.snapshotKvBindingName} ${field}`;
+
+  if (!id) {
+    errors.push(`${label} is required.`);
+  } else if (runtimeStateWranglerSchema.placeholderKvIdPattern.test(id)) {
+    errors.push(`${label} cannot use placeholder values.`);
+  } else if (!cloudflareKvNamespaceIdPattern.test(id)) {
+    errors.push(`${label} must be a Cloudflare KV namespace id.`);
+  }
+};
+
+const validateKvNamespaces = (root: UnknownRecord, errors: string[]): void => {
+  const kvNamespaces = Array.isArray(root.kv_namespaces) ? root.kv_namespaces : [];
+  const expectedBindings = kvNamespaces
+    .map(asRecord)
+    .filter((binding) => binding?.binding === runtimeStateWranglerSchema.snapshotKvBindingName);
+
+  if (expectedBindings.length === 0) {
+    errors.push(`kv_namespaces must include binding ${runtimeStateWranglerSchema.snapshotKvBindingName}.`);
+    return;
+  }
+
+  for (const binding of expectedBindings) {
+    validateKvNamespaceId(binding?.id, "id", errors);
+    validateKvNamespaceId(binding?.preview_id, "preview_id", errors);
+  }
+};
+
+const hasExpectedDurableObjectMigration = (root: UnknownRecord): boolean => {
+  const migrations = Array.isArray(root.migrations) ? root.migrations : [];
+
+  return migrations.some((migration) => {
+    const record = asRecord(migration);
+    const tag = typeof record?.tag === "string" ? record.tag : "";
+    const classes = Array.isArray(record?.new_sqlite_classes) ? record.new_sqlite_classes : [];
+    return (
+      runtimeStateWranglerSchema.migrationTagPattern.test(tag) &&
+      classes.includes(runtimeStateWranglerSchema.durableObjectClassName)
+    );
+  });
+};
+
 export const validateRuntimeStateWranglerConfig = (config: unknown): RuntimeStateWranglerValidationReport => {
   const errors: string[] = [];
   const root = asRecord(config);
@@ -806,72 +850,15 @@ export const validateRuntimeStateWranglerConfig = (config: unknown): RuntimeStat
     };
   }
 
-  const durableObjects = asRecord(root.durable_objects);
-  const durableBindings = Array.isArray(durableObjects?.bindings) ? durableObjects?.bindings : [];
-  const hasExpectedDurableBinding = durableBindings.some((binding) => {
-    const record = asRecord(binding);
-    return (
-      record?.name === runtimeStateWranglerSchema.durableObjectBindingName &&
-      record?.class_name === runtimeStateWranglerSchema.durableObjectClassName
-    );
-  });
-
-  if (!hasExpectedDurableBinding) {
+  if (!hasExpectedDurableObjectBinding(root)) {
     errors.push(
       `durable_objects.bindings must include ${runtimeStateWranglerSchema.durableObjectBindingName} -> ${runtimeStateWranglerSchema.durableObjectClassName}.`
     );
   }
 
-  const kvNamespaces = Array.isArray(root.kv_namespaces) ? root.kv_namespaces : [];
-  const hasExpectedKvBinding = kvNamespaces.some((binding) => {
-    const record = asRecord(binding);
-    return record?.binding === runtimeStateWranglerSchema.snapshotKvBindingName;
-  });
+  validateKvNamespaces(root, errors);
 
-  if (!hasExpectedKvBinding) {
-    errors.push(`kv_namespaces must include binding ${runtimeStateWranglerSchema.snapshotKvBindingName}.`);
-  }
-
-  for (const binding of kvNamespaces) {
-    const record = asRecord(binding);
-    if (record?.binding !== runtimeStateWranglerSchema.snapshotKvBindingName) {
-      continue;
-    }
-
-    const kvId = typeof record.id === "string" ? record.id.trim() : "";
-    const previewId = typeof record.preview_id === "string" ? record.preview_id.trim() : "";
-
-    if (!kvId) {
-      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} id is required.`);
-    } else if (runtimeStateWranglerSchema.placeholderKvIdPattern.test(kvId)) {
-      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} id cannot use placeholder values.`);
-    } else if (!cloudflareKvNamespaceIdPattern.test(kvId)) {
-      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} id must be a Cloudflare KV namespace id.`);
-    }
-
-    if (!previewId) {
-      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} preview_id is required.`);
-    } else if (runtimeStateWranglerSchema.placeholderKvIdPattern.test(previewId)) {
-      errors.push(`${runtimeStateWranglerSchema.snapshotKvBindingName} preview_id cannot use placeholder values.`);
-    } else if (!cloudflareKvNamespaceIdPattern.test(previewId)) {
-      errors.push(
-        `${runtimeStateWranglerSchema.snapshotKvBindingName} preview_id must be a Cloudflare KV namespace id.`
-      );
-    }
-  }
-
-  const migrations = Array.isArray(root.migrations) ? root.migrations : [];
-  const hasExpectedMigration = migrations.some((migration) => {
-    const record = asRecord(migration);
-    const tag = typeof record?.tag === "string" ? record.tag : "";
-    const classes = Array.isArray(record?.new_sqlite_classes) ? record.new_sqlite_classes : [];
-    return (
-      runtimeStateWranglerSchema.migrationTagPattern.test(tag) &&
-      classes.includes(runtimeStateWranglerSchema.durableObjectClassName)
-    );
-  });
-
-  if (!hasExpectedMigration) {
+  if (!hasExpectedDurableObjectMigration(root)) {
     errors.push(
       `migrations must include ${runtimeStateWranglerSchema.durableObjectClassName} with tag matching ${String(runtimeStateWranglerSchema.migrationTagPattern)}.`
     );

@@ -9,7 +9,7 @@ import { type AuthUser, requireAllowed } from "@/lib/api-auth";
 import { formatAuthErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { resolveDnsMode } from "@/lib/dns-mode";
-import { createMutatingActionRequestContext, createMutatingActionFailure } from "@/lib/mutating-action-contract";
+import { createMutatingActionFailure, createMutatingActionRequestContext } from "@/lib/mutating-action-contract";
 import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
 import {
   createMutatingActionLockConflictFailure,

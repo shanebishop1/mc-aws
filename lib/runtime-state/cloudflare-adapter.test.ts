@@ -10,6 +10,41 @@ const createJsonResponse = (payload: unknown, status = 200): Response => {
   });
 };
 
+interface CounterRequestBody {
+  key: string;
+  limit: number;
+  windowMs: number;
+  incrementBy?: number;
+}
+
+const createCounterResponse = (
+  state: Map<string, { count: number; windowStartedAtMs: number }>,
+  id: string,
+  body: CounterRequestBody
+): Response => {
+  const nowMs = Date.now();
+  const current = state.get(id);
+  const inWindow = current && nowMs - current.windowStartedAtMs < body.windowMs;
+  const windowStartedAtMs = inWindow ? current.windowStartedAtMs : nowMs;
+  const currentCount = inWindow ? current.count : 0;
+  const nextCount = currentCount + (body.incrementBy ?? 1);
+  state.set(id, { count: nextCount, windowStartedAtMs });
+
+  const allowed = nextCount <= body.limit;
+  const retryAfterSeconds = allowed ? 0 : Math.max(1, Math.ceil((body.windowMs - (nowMs - windowStartedAtMs)) / 1000));
+
+  return createJsonResponse({
+    ok: true,
+    data: {
+      allowed,
+      count: nextCount,
+      remaining: allowed ? Math.max(0, body.limit - nextCount) : 0,
+      retryAfterSeconds,
+      windowStartedAtMs,
+    },
+  });
+};
+
 afterEach(() => {
   vi.useRealTimers();
 });
@@ -236,38 +271,8 @@ describe("cloudflare runtime-state adapter counter operations", () => {
         idFromName: vi.fn((name: string) => name),
         get: vi.fn((id: string) => ({
           fetch: vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-            const body = JSON.parse(init?.body as string) as {
-              key: string;
-              limit: number;
-              windowMs: number;
-              incrementBy?: number;
-            };
-            const nowMs = Date.now();
-            const current = state.get(id);
-            const inWindow = current && nowMs - current.windowStartedAtMs < body.windowMs;
-            const windowStartedAtMs = inWindow ? current.windowStartedAtMs : nowMs;
-            const currentCount = inWindow ? current.count : 0;
-            const nextCount = currentCount + (body.incrementBy ?? 1);
-            state.set(id, {
-              count: nextCount,
-              windowStartedAtMs,
-            });
-
-            const allowed = nextCount <= body.limit;
-            const retryAfterSeconds = allowed
-              ? 0
-              : Math.max(1, Math.ceil((body.windowMs - (nowMs - windowStartedAtMs)) / 1000));
-
-            return createJsonResponse({
-              ok: true,
-              data: {
-                allowed,
-                count: nextCount,
-                remaining: allowed ? Math.max(0, body.limit - nextCount) : 0,
-                retryAfterSeconds,
-                windowStartedAtMs,
-              },
-            });
+            const body = JSON.parse(init?.body as string) as CounterRequestBody;
+            return createCounterResponse(state, id, body);
           }),
         })),
       },

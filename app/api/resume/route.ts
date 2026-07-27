@@ -14,7 +14,7 @@ import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { parseMutatingActionRequestPayload, type ResumeRestoreMode } from "@/lib/mutating-action-validation";
+import { type ResumeRestoreMode, parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
@@ -29,9 +29,7 @@ import type { NextRequest, NextResponse } from "next/server";
 /**
  * Check if server is already running
  */
-function checkAlreadyRunning(
-  currentState: string
-): void {
+function checkAlreadyRunning(currentState: string): void {
   if (currentState === ServerState.Running) {
     throw new ResumeAlreadyRunningError();
   }

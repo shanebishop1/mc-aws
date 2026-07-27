@@ -13,7 +13,7 @@ describe("EC2 user data", () => {
 
   it("uses the supported Paper downloads service contract", () => {
     expect(script).toContain("https://fill.papermc.io/v3/");
-    expect(script).toContain('User-Agent: ${PAPER_USER_AGENT}');
+    expect(script).toContain("User-Agent: ${PAPER_USER_AGENT}");
     expect(script).not.toContain("api.papermc.io/v2");
   });
 

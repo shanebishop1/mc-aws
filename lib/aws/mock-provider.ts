@@ -392,6 +392,167 @@ async function persistMockOperationStateTransitionSafely(
   }
 }
 
+type MockStateStore = ReturnType<typeof getMockStateStore>;
+
+interface MockLambdaCommandContext {
+  lockId?: string;
+  command?: string;
+  operationId?: string;
+  userEmail?: string;
+  instanceId?: string;
+  operationType?: OperationType;
+}
+
+function includesCommand(commandString: string, ...terms: string[]): boolean {
+  return terms.some((term) => commandString.includes(term));
+}
+
+async function getMockCommandOutput(commandString: string, stateStore: MockStateStore): Promise<string> {
+  if (includesCommand(commandString, "ListBackups", "rclone lsf")) {
+    const backups = await stateStore.getBackups();
+    return backups.map((backup) => `${backup.name}|${backup.size}|${backup.date}`).join("\n");
+  }
+
+  if (commandString.includes("systemctl is-active minecraft")) {
+    const instance = await stateStore.getInstance();
+    return instance.state === ServerState.Running ? "active" : "inactive";
+  }
+
+  if (commandString.includes("GetPlayerCount")) {
+    return (await stateStore.getParameter("/minecraft/player-count")) || "0";
+  }
+
+  if (commandString.includes("UpdateEmailAllowlist")) {
+    return "Email allowlist updated successfully";
+  }
+
+  if (includesCommand(commandString, "backup", "Backup")) {
+    return "Backup completed successfully";
+  }
+
+  if (includesCommand(commandString, "restore", "Restore")) {
+    return "Restore completed successfully";
+  }
+
+  if (includesCommand(commandString, "start", "Start")) {
+    return "Server started successfully";
+  }
+
+  if (includesCommand(commandString, "stop", "Stop")) {
+    return "Server stopped successfully";
+  }
+
+  return `Command executed: ${commandString}`;
+}
+
+function parseMockLambdaCommand(payload: unknown): MockLambdaCommandContext {
+  const parsedPayload = (typeof payload === "string" ? JSON.parse(payload) : payload) as Record<string, unknown> | null;
+  const command = normalizeOptionalText(parsedPayload?.command);
+
+  return {
+    lockId: normalizeOptionalText(parsedPayload?.lockId),
+    command,
+    operationId: normalizeOptionalText(parsedPayload?.operationId),
+    userEmail: normalizeOptionalText(parsedPayload?.userEmail),
+    instanceId: normalizeOptionalText(parsedPayload?.instanceId),
+    operationType: operationTypes.has((command ?? "") as OperationType) ? (command as OperationType) : undefined,
+  };
+}
+
+async function persistMockLambdaTransition(
+  context: MockLambdaCommandContext,
+  status: OperationStatus,
+  error?: unknown
+): Promise<void> {
+  if (!context.operationType || !context.operationId) {
+    return;
+  }
+
+  const isFailure = status === "failed";
+  const errorMessage = isFailure
+    ? error instanceof Error
+      ? error.message
+      : "Mock lambda operation failed"
+    : undefined;
+  await persistMockOperationStateTransitionSafely({
+    operationId: context.operationId,
+    type: context.operationType,
+    status,
+    source: "lambda",
+    requestedBy: context.userEmail,
+    lockId: context.lockId,
+    instanceId: context.instanceId,
+    error: errorMessage,
+    code: isFailure ? "lambda_execution_failed" : undefined,
+  });
+}
+
+async function releaseMockLambdaLockIfOwned(lockId: string | undefined, stateStore: MockStateStore): Promise<void> {
+  if (!lockId) {
+    return;
+  }
+
+  const lockRaw = await stateStore.getParameter("/minecraft/server-action");
+  if (!lockRaw) {
+    return;
+  }
+
+  try {
+    const parsedLock = JSON.parse(lockRaw) as { lockId?: string };
+    if (parsedLock.lockId !== lockId) {
+      return;
+    }
+  } catch {
+    return;
+  }
+
+  await mockProvider.deleteParameter("/minecraft/server-action");
+}
+
+async function finalizeMockLambdaCommand(
+  context: MockLambdaCommandContext,
+  stateStore: MockStateStore,
+  commandName: string
+): Promise<void> {
+  try {
+    await releaseMockLambdaLockIfOwned(context.lockId, stateStore);
+    await persistMockLambdaTransition(context, "completed");
+    console.log(`[MOCK] Cleared server-action lock after ${commandName} completion`);
+  } catch (error) {
+    await persistMockLambdaTransition(context, "failed", error);
+    console.error(`[MOCK] Failed to finalize ${commandName} operation:`, error);
+  }
+}
+
+function scheduleMockLambdaCommandCompletion(
+  context: MockLambdaCommandContext,
+  stateStore: MockStateStore,
+  delayMs: number,
+  commandName: string
+): void {
+  const completeTimeout = setTimeout(() => finalizeMockLambdaCommand(context, stateStore, commandName), delayMs);
+  stateStore.registerTimeout(completeTimeout);
+}
+
+async function runMockLambdaCommand(context: MockLambdaCommandContext, stateStore: MockStateStore): Promise<void> {
+  try {
+    if (context.command === "start") {
+      console.log("[MOCK] Simulating async start by triggering startInstance");
+      await mockProvider.startInstance(context.instanceId);
+      scheduleMockLambdaCommandCompletion(context, stateStore, PENDING_DELAY_MS + 500, "start");
+      return;
+    }
+
+    if (context.operationType && typeof context.command === "string") {
+      scheduleMockLambdaCommandCompletion(context, stateStore, 500, context.command);
+    }
+  } catch (error) {
+    await persistMockLambdaTransition(context, "failed", error);
+    await releaseMockLambdaLockIfOwned(context.lockId, stateStore);
+    console.error("[MOCK] Async lambda command failed:", error);
+  }
+}
+
 /**
  * Mock AWS provider for testing and local development
  * Simulates realistic AWS behavior with state transitions and delays
@@ -710,42 +871,9 @@ export const mockProvider: AwsProvider = {
     await stateStore.updateCommand(commandId, { status: "InProgress" });
 
     // Simulate realistic execution based on command type
-    let output = "";
     const status: "Success" | "Failed" = "Success";
-
     const commandString = commands.join(" ");
-
-    if (commandString.includes("ListBackups") || commandString.includes("rclone lsf")) {
-      // Simulate listing backups
-      const backups = await stateStore.getBackups();
-      output = backups.map((b) => `${b.name}|${b.size}|${b.date}`).join("\n");
-    } else if (commandString.includes("systemctl is-active minecraft")) {
-      // Simulate service status checks used by /api/service-status
-      const instance = await stateStore.getInstance();
-      output = instance.state === ServerState.Running ? "active" : "inactive";
-    } else if (commandString.includes("GetPlayerCount")) {
-      // Simulate getting player count
-      const playerCount = await stateStore.getParameter("/minecraft/player-count");
-      output = playerCount || "0";
-    } else if (commandString.includes("UpdateEmailAllowlist")) {
-      // Simulate updating email allowlist
-      output = "Email allowlist updated successfully";
-    } else if (commandString.includes("backup") || commandString.includes("Backup")) {
-      // Simulate backup operation
-      output = "Backup completed successfully";
-    } else if (commandString.includes("restore") || commandString.includes("Restore")) {
-      // Simulate restore operation
-      output = "Restore completed successfully";
-    } else if (commandString.includes("start") || commandString.includes("Start")) {
-      // Simulate start operation
-      output = "Server started successfully";
-    } else if (commandString.includes("stop") || commandString.includes("Stop")) {
-      // Simulate stop operation
-      output = "Server stopped successfully";
-    } else {
-      // Generic command output
-      output = `Command executed: ${commandString}`;
-    }
+    const output = await getMockCommandOutput(commandString, stateStore);
 
     // Simulate additional processing time
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -982,121 +1110,9 @@ export const mockProvider: AwsProvider = {
 
     // Simulate StartMinecraftServer lambda
     if (functionName === "StartMinecraftServer" || functionName.includes("StartMinecraftServer")) {
-      const parsedPayload = typeof payload === "string" ? JSON.parse(payload) : payload;
-      const lockId = normalizeOptionalText(parsedPayload?.lockId);
-      const command = normalizeOptionalText(parsedPayload?.command);
-      const operationId = normalizeOptionalText(parsedPayload?.operationId);
-      const userEmail = normalizeOptionalText(parsedPayload?.userEmail);
-      const instanceId = normalizeOptionalText(parsedPayload?.instanceId);
-      const operationType = operationTypes.has((command ?? "") as OperationType) ? command : undefined;
-
-      if (operationType && operationId) {
-        await persistMockOperationStateTransitionSafely({
-          operationId,
-          type: operationType,
-          status: "running",
-          source: "lambda",
-          requestedBy: userEmail,
-          lockId,
-          instanceId,
-        });
-      }
-
-      const releaseLockIfOwned = async () => {
-        if (!lockId) {
-          return;
-        }
-
-        const lockRaw = await stateStore.getParameter("/minecraft/server-action");
-        if (!lockRaw) {
-          return;
-        }
-
-        try {
-          const parsedLock = JSON.parse(lockRaw) as { lockId?: string };
-          if (parsedLock.lockId !== lockId) {
-            return;
-          }
-        } catch {
-          return;
-        }
-
-        await mockProvider.deleteParameter("/minecraft/server-action");
-      };
-
-      const scheduleCommandCompletion = (delayMs: number, commandName: string): void => {
-        const completeTimeout = setTimeout(async () => {
-          try {
-            await releaseLockIfOwned();
-
-            if (operationType && operationId) {
-              await persistMockOperationStateTransitionSafely({
-                operationId,
-                type: operationType,
-                status: "completed",
-                source: "lambda",
-                requestedBy: userEmail,
-                lockId,
-                instanceId,
-              });
-            }
-
-            console.log(`[MOCK] Cleared server-action lock after ${commandName} completion`);
-          } catch (error) {
-            if (operationType && operationId) {
-              const errorMessage = error instanceof Error ? error.message : "Mock lambda operation failed";
-              await persistMockOperationStateTransitionSafely({
-                operationId,
-                type: operationType,
-                status: "failed",
-                source: "lambda",
-                requestedBy: userEmail,
-                lockId,
-                instanceId,
-                error: errorMessage,
-                code: "lambda_execution_failed",
-              });
-            }
-            console.error(`[MOCK] Failed to finalize ${commandName} operation:`, error);
-          }
-        }, delayMs);
-        stateStore.registerTimeout(completeTimeout);
-      };
-
-      try {
-        if (command === "start") {
-          console.log("[MOCK] Simulating async start by triggering startInstance");
-
-          // Start the instance (this transitions to pending, then running after delay)
-          await mockProvider.startInstance(instanceId);
-
-          // Simulate Lambda lock cleanup shortly after instance reaches running
-          scheduleCommandCompletion(PENDING_DELAY_MS + 500, "start");
-          return;
-        }
-
-        if (operationType && typeof command === "string" && command !== "start") {
-          scheduleCommandCompletion(500, command);
-        }
-      } catch (error) {
-        if (operationType && operationId) {
-          const errorMessage = error instanceof Error ? error.message : "Mock lambda operation failed";
-          await persistMockOperationStateTransitionSafely({
-            operationId,
-            type: operationType,
-            status: "failed",
-            source: "lambda",
-            requestedBy: userEmail,
-            lockId,
-            instanceId,
-            error: errorMessage,
-            code: "lambda_execution_failed",
-          });
-        }
-
-        await releaseLockIfOwned();
-        console.error("[MOCK] Async lambda command failed:", error);
-      }
+      const context = parseMockLambdaCommand(payload);
+      await persistMockLambdaTransition(context, "running");
+      await runMockLambdaCommand(context, stateStore);
     }
   },
 };

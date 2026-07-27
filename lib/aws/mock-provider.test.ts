@@ -552,7 +552,10 @@ describe("Mock Provider Core", () => {
       const operationId = "backup-op-123";
       const lockId = "lock-123";
 
-      await stateStore.setParameter(`/minecraft/operations/${operationId}`, buildAcceptedOperationState(operationId, "backup"));
+      await stateStore.setParameter(
+        `/minecraft/operations/${operationId}`,
+        buildAcceptedOperationState(operationId, "backup")
+      );
       await stateStore.setParameter(
         "/minecraft/server-action",
         JSON.stringify({ lockId, action: "backup", ownerEmail: "admin@example.com" })
@@ -586,7 +589,10 @@ describe("Mock Provider Core", () => {
       const operationId = "start-op-123";
       const lockId = "lock-123";
 
-      await stateStore.setParameter(`/minecraft/operations/${operationId}`, buildAcceptedOperationState(operationId, "start"));
+      await stateStore.setParameter(
+        `/minecraft/operations/${operationId}`,
+        buildAcceptedOperationState(operationId, "start")
+      );
       await stateStore.setParameter(
         "/minecraft/server-action",
         JSON.stringify({ lockId, action: "start", ownerEmail: "admin@example.com" })

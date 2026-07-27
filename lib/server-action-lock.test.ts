@@ -73,7 +73,9 @@ describe("server-action-lock", () => {
       .mockResolvedValueOnce(undefined)
       .mockResolvedValueOnce(undefined);
 
-    mocks.getParameter.mockResolvedValueOnce(JSON.stringify(staleLock)).mockResolvedValueOnce(JSON.stringify(staleLock));
+    mocks.getParameter
+      .mockResolvedValueOnce(JSON.stringify(staleLock))
+      .mockResolvedValueOnce(JSON.stringify(staleLock));
 
     mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
 
@@ -92,7 +94,9 @@ describe("server-action-lock", () => {
   });
 
   it("does not blindly delete unknown malformed lock payload", async () => {
-    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError()).mockRejectedValueOnce(parameterAlreadyExistsError());
+    mocks.putParameter
+      .mockRejectedValueOnce(parameterAlreadyExistsError())
+      .mockRejectedValueOnce(parameterAlreadyExistsError());
     mocks.getParameter.mockResolvedValueOnce("{not-json").mockResolvedValueOnce("{not-json");
 
     await expect(acquireServerActionLock("hibernate", "admin@example.com")).rejects.toEqual(

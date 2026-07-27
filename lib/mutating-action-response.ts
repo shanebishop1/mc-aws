@@ -1,7 +1,4 @@
-import {
-  createMutatingActionFailure,
-  type MutatingActionExecutionResult,
-} from "@/lib/mutating-action-contract";
+import { type MutatingActionExecutionResult, createMutatingActionFailure } from "@/lib/mutating-action-contract";
 import { withOperationStatus } from "@/lib/operation";
 import type { ApiResponse, OperationInfo, OperationStatus } from "@/lib/types";
 import { NextResponse } from "next/server";
@@ -26,7 +23,7 @@ export function mapMutatingActionExecutionToApiResponse<TData>(
 ): NextResponse<ApiResponse<TData>> {
   const statusCode = execution.ok
     ? mapMutatingActionHttpStatus(execution.status)
-    : execution.httpStatus ?? mapMutatingActionHttpStatus("failed");
+    : (execution.httpStatus ?? mapMutatingActionHttpStatus("failed"));
 
   if (execution.ok) {
     return NextResponse.json(

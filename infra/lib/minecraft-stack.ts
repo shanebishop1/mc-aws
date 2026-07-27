@@ -37,9 +37,7 @@ export class MinecraftStack extends cdk.Stack {
     const sesNotificationsEnabled = readOptionalBoolean("SES_NOTIFICATIONS_ENABLED");
     const sesInboundCommandsEnabled = readOptionalBoolean("SES_INBOUND_COMMANDS_ENABLED");
     const verifiedSender = (process.env.VERIFIED_SENDER ?? "").trim().toLowerCase();
-    const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "")
-      .trim()
-      .toLowerCase();
+    const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const sesInboundRecipient = (process.env.SES_INBOUND_RECIPIENT ?? "").trim().toLowerCase();
     const sesReceiptRuleSetName = (process.env.SES_RECEIPT_RULE_SET_NAME ?? "").trim();
     const startKeyword = (process.env.START_KEYWORD ?? "").trim();
