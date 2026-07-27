@@ -106,7 +106,16 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf .next .open-next
-          pnpm exec opennextjs-cloudflare build
+          ci_wrangler_config=".wrangler.ci.jsonc"
+          trap 'rm -f "$ci_wrangler_config"' EXIT
+          pnpm exec tsx scripts/panel-hosting.ts prepare-config \
+            --source wrangler.jsonc \
+            --output "$ci_wrangler_config" \
+            --kv-id 00000000000000000000000000000000 \
+            --kv-preview-id 11111111111111111111111111111111 \
+            --mode workers_dev \
+            --custom-workers-dev true
+          pnpm exec opennextjs-cloudflare build --config "$ci_wrangler_config"
 
       - name: Verify builds did not modify the checkout
         if: always()
