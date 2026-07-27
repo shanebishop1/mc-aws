@@ -42,6 +42,9 @@ yarn-error.log*
 # local mock state
 .mock-state.json
 
+# non-secret local deployment ownership state
+.mc-aws-deployment.json
+
 # local configuration
 mise.local.toml
 

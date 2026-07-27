@@ -29,6 +29,7 @@ The script:
 8. Writes non-secret deployment values to `.env.production` and `.env.local`.
 9. Deploys the web app to Cloudflare Workers.
 10. Creates a runtime key in memory, uploads it directly to Wrangler, verifies it through the Worker, then revokes any prior key owned by that runtime identity.
+11. Writes strict resource IDs, immutable StackId/Worker deployment evidence, and created-versus-pre-existing ownership facts to the ignored, non-secret mode-`0600` `.mc-aws-deployment.json` manifest used by safe teardown. Setup refuses to overwrite unproven same-name stacks or Workers.
 
 ## 3. Wizard Inputs
 
@@ -64,7 +65,7 @@ Connection modes:
 Panel hosting is separate from the Minecraft connection mode. Every Minecraft mode works with either panel mode:
 
 - `workers.dev`: enter your account subdomain (`account-name`, `account-name.workers.dev`) or full expected Worker URL. Setup validates it against the Worker name, derives and saves `NEXT_PUBLIC_APP_URL`, enables `workers_dev`, deploys without `--route`, skips panel DNS checks, and verifies the resulting URL.
-- Custom Cloudflare hostname: enter an HTTPS origin plus the panel zone ID and a zone-scoped DNS-edit token. These deploy-only panel credentials are separate from Minecraft DNS credentials and are not uploaded as Worker runtime secrets. Setup safely ensures a proxied panel record, deploys with `--route`, and explicitly asks whether `workers.dev` should stay enabled.
+- Custom Cloudflare hostname: enter an HTTPS origin plus the panel zone ID and a zone-scoped token with DNS Read/Edit and Workers Routes Read/Edit. These deploy/teardown panel credentials are separate from Minecraft DNS credentials and are not uploaded as Worker runtime secrets. Setup safely ensures a proxied panel record, records pre-existing route/DNS state, deploys with `--route`, and explicitly asks whether `workers.dev` should stay enabled.
 
 When setup prints the panel URL, add these exact values to the Google OAuth web client:
 
@@ -140,3 +141,19 @@ Tests:
 ```bash
 pnpm test
 ```
+
+## 9. Teardown
+
+Inventory and preview removal without mutation:
+
+```bash
+pnpm destroy
+```
+
+After reviewing the live inventory, execute with an account-specific typed confirmation:
+
+```bash
+pnpm destroy:execute
+```
+
+Do not remove `.mc-aws-deployment.json` before teardown. See [Ownership-Aware Teardown](../TEARDOWN.md) for retained backups, failure recovery, manual removal, OAuth/credential cleanup, and billing verification.

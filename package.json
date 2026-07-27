@@ -50,10 +50,12 @@
     "cdk:synth": "cd infra && cdk synth",
     "cdk:diff": "cd infra && cdk diff",
     "cdk:deploy": "cd infra && cdk deploy",
-    "cdk:destroy": "cd infra && cdk destroy --all",
-    "cdk:destroy:force": "cd infra && cdk destroy --all --force",
-    "destroy": "cd infra && cdk destroy --all",
-    "destroy:force": "cd infra && cdk destroy --all --force"
+    "cdk:destroy": "./scripts/destroy.sh",
+    "cdk:destroy:force": "./scripts/destroy.sh --execute",
+    "destroy": "./scripts/destroy.sh",
+    "destroy:force": "./scripts/destroy.sh --execute",
+    "destroy:execute": "./scripts/destroy.sh --execute",
+    "destroy:cleanup-local": "./scripts/destroy.sh --execute --cleanup-local-env"
   },
   "dependencies": {
     "@aws-sdk/client-cloudformation": "^3.1095.0",

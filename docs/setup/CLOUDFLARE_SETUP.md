@@ -15,7 +15,7 @@ You do not need a Cloudflare-managed custom domain to run mc-aws. The panel can 
 The setup wizard offers:
 
 - `workers.dev`: no custom domain or panel DNS token is required. Enter your account Workers subdomain (for example `account-name.workers.dev`) or the full expected URL. With Worker name `mc-aws-panel`, setup derives `https://mc-aws-panel.account-name.workers.dev`.
-- Custom Cloudflare hostname: provide an HTTPS origin such as `https://panel.example.com`, the panel zone ID, and a zone-scoped DNS-edit token. Setup ensures the hostname is proxied and asks explicitly whether to keep the `workers.dev` endpoint enabled.
+- Custom Cloudflare hostname: provide an HTTPS origin such as `https://panel.example.com`, the panel zone ID, and a zone-scoped token with DNS Read/Edit plus Workers Routes Read/Edit. Setup ensures the hostname is proxied, records route/DNS ownership for safe teardown, and asks explicitly whether to keep the `workers.dev` endpoint enabled.
 
 Panel hosting does not determine the Minecraft connection address. Cloudflare Minecraft DNS, DuckDNS, and raw-IP modes all work with either panel choice.
 
@@ -52,9 +52,9 @@ Neither DNS token is the credential used to deploy Workers.
 
 1. Open Cloudflare dashboard.
 2. Go to **My Profile -> API Tokens**.
-3. Create a token using **Edit zone DNS** or a custom token.
+3. Create a custom token for the panel zone.
 4. Scope it to the specific zone.
-5. Give it `Zone -> DNS -> Edit` permission.
+5. For a custom panel hostname, give it `Zone -> DNS -> Read/Edit` and `Zone -> Workers Routes -> Read/Edit`. The route permissions are required to distinguish a project-created route from a pre-existing route during deployment and teardown. A Minecraft-only runtime token needs only `Zone -> DNS -> Edit`.
 6. Copy the token.
 
 Cloudflare docs:

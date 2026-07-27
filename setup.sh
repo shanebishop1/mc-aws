@@ -7,6 +7,7 @@ set -euo pipefail
 PRODUCTION_ENV_FILE=".env.production"
 LOCAL_ENV_FILE=".env.local"
 TOOL_VERSIONS_FILE=".tool-versions"
+DEPLOYMENT_MANIFEST_FILE="${MC_AWS_DEPLOYMENT_MANIFEST:-.mc-aws-deployment.json}"
 
 read_tool_version() {
   local tool_name="$1"
@@ -524,6 +525,27 @@ main() {
   step "Deploying AWS infrastructure (CDK)"
   export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-$AWS_REGION}"
   export CDK_DEFAULT_REGION="${CDK_DEFAULT_REGION:-$AWS_REGION}"
+  STACK_NAME="${STACK_NAME:-MinecraftStack}"
+
+  local stack_state="unknown"
+  local existing_stack_id=""
+  local stack_probe
+  if stack_probe="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].StackId" --output text 2>&1)"; then
+    stack_state="existing"
+    existing_stack_id="$stack_probe"
+  elif [[ "$stack_probe" == *"does not exist"* ]]; then
+    stack_state="absent"
+  else
+    error_exit "Could not determine whether CloudFormation stack '$STACK_NAME' already exists: $stack_probe"
+  fi
+
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs aws-init \
+    --account "$CDK_DEFAULT_ACCOUNT" \
+    --region "$CDK_DEFAULT_REGION" \
+    --stack "$STACK_NAME" \
+    --stack-state "$stack_state" \
+    --stack-id "${existing_stack_id:-unknown}"
+  success "Deployment ownership manifest initialized: $DEPLOYMENT_MANIFEST_FILE"
 
   if [[ -z "${GITHUB_TOKEN:-}" ]]; then
     error_exit "GITHUB_TOKEN is required for CDK deploy (used to seed SSM). Run the wizard and set it, then re-run ./setup.sh"
@@ -542,7 +564,6 @@ main() {
 
   # Step 7: Capture INSTANCE_ID from stack outputs
   step "Capturing deployment outputs"
-  STACK_NAME="${STACK_NAME:-MinecraftStack}"
   INSTANCE_ID="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='InstanceId'].OutputValue | [0]" --output text 2>/dev/null || true)"
   if [[ -z "${INSTANCE_ID:-}" || "${INSTANCE_ID}" == "None" ]]; then
     error_exit "Could not read InstanceId output from CloudFormation stack '$STACK_NAME'"
@@ -555,6 +576,16 @@ main() {
   fi
   export RUNTIME_IAM_USER_NAME
   success "Dedicated Worker runtime identity located: $RUNTIME_IAM_USER_NAME"
+
+  STACK_ID="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].StackId" --output text 2>/dev/null || true)"
+  if [[ -z "${STACK_ID:-}" || "${STACK_ID}" == "None" ]]; then
+    error_exit "Could not read StackId for CloudFormation stack '$STACK_NAME'"
+  fi
+
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs aws-deployed \
+    --stack-id "$STACK_ID" \
+    --instance-id "$INSTANCE_ID" \
+    --runtime-user "$RUNTIME_IAM_USER_NAME"
 
   # Update env files with INSTANCE_ID for Cloudflare deploy
   write_env_files "INSTANCE_ID" "$INSTANCE_ID"

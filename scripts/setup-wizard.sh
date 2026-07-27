@@ -852,7 +852,8 @@ collect_panel_hosting() {
         log_error "Use an HTTPS custom hostname with no path, query, fragment, or port."
       done
 
-      log "Custom panel routes require a proxied DNS record in the relevant Cloudflare zone."
+      log "Custom panel teardown needs one zone-scoped token with DNS Read/Edit and Workers Routes Read/Edit."
+      log "Those permissions let setup record whether the route/DNS pre-existed and let teardown preserve them safely."
       while true; do
         prompt CLOUDFLARE_PANEL_DNS_API_TOKEN "Enter DNS-edit token for the panel zone" \
           "${CLOUDFLARE_PANEL_DNS_API_TOKEN:-${CLOUDFLARE_DNS_API_TOKEN:-}}" true

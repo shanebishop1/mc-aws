@@ -125,6 +125,12 @@ Override the default with:
 MC_OPERATION_STATE_RETENTION_DAYS=14 pnpm operations:cleanup
 ```
 
+## Removing The Deployment
+
+`pnpm destroy` is always a live inventory/dry run. `pnpm destroy:execute` requires an exact typed confirmation and deletes only resources proved project-owned by `.mc-aws-deployment.json` plus live identity/tags.
+
+Immediately before stack deletion, teardown gracefully stops Minecraft and EC2 when running, revalidates exact ownership, and snapshots only the stopped root volume. It then deletes CloudFormation by the recorded StackId/ARN. If already hibernated, teardown requires the real non-empty `{backups,cachedAt}` cache shape as evidence—not live Google Drive verification. Snapshots and other retained EBS volumes are reported and never silently deleted. See [Ownership-Aware Teardown](TEARDOWN.md) before removing cloud resources or local env files.
+
 ## Troubleshooting
 
 ### Server will not start

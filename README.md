@@ -200,6 +200,16 @@ pnpm cdk:diff
 pnpm cdk:deploy
 ```
 
+## Removing A Deployment
+
+Start with the non-mutating live inventory:
+
+```bash
+pnpm destroy
+```
+
+The ownership-aware teardown uses the ignored `.mc-aws-deployment.json` written by setup, refuses stale/same-name ownership, preserves pre-existing resources, gracefully stops a running Minecraft/EC2 instance, and only then creates a final root-volume snapshot before deleting the exact recorded CloudFormation StackId. It never automatically deletes snapshots. Read [Ownership-Aware Teardown](docs/TEARDOWN.md) before running `pnpm destroy:execute`.
+
 ## Cost Notes
 
 This can reduce idle cost compared with leaving a server running all the time, but it does not make AWS free.
@@ -223,6 +233,7 @@ Setup:
 Operations:
 
 - [Operations Guide](docs/OPERATIONS_GUIDE.md)
+- [Ownership-Aware Teardown](docs/TEARDOWN.md)
 - [API Reference](docs/docs/API.md)
 
 Development:

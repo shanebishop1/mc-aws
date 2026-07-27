@@ -137,6 +137,19 @@ delete_secret_required() {
   return 1
 }
 
+update_manifest_worker_identity_best_effort() {
+  local manifest_file="${MC_AWS_DEPLOYMENT_MANIFEST:-.mc-aws-deployment.json}"
+  [[ -f "$manifest_file" && -n "${WORKER_NAME:-}" ]] || return 0
+  local deployments_json deployment_id
+  deployments_json="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json 2>/dev/null)" || return 0
+  deployment_id="$(printf '%s' "$deployments_json" | node -e '
+const fs=require("node:fs"); const raw=fs.readFileSync(0,"utf8"); const start=raw.indexOf("{"); if(start<0) process.exit(2);
+const deployment=JSON.parse(raw.slice(start)); if(typeof deployment.id!=="string") process.exit(2); process.stdout.write(deployment.id);
+' 2>/dev/null)" || return 0
+  MC_AWS_DEPLOYMENT_MANIFEST="$manifest_file" node scripts/deployment-manifest.mjs \
+    cloudflare-deployed --deployment-id "$deployment_id" >/dev/null 2>&1 || true
+}
+
 cleanup_on_exit() {
   local status="$?"
   set +e
@@ -160,6 +173,7 @@ cleanup_on_exit() {
   NEW_SECRET_ACCESS_KEY=""
   PROBE_TOKEN=""
   unset NEW_SECRET_ACCESS_KEY PROBE_TOKEN
+  update_manifest_worker_identity_best_effort
   return "$status"
 }
 trap cleanup_on_exit EXIT
@@ -307,4 +321,17 @@ PRIOR_KEYS_REVOKED="0"
 ROTATION_COMPLETE="1"
 NEW_SECRET_ACCESS_KEY=""
 PROBE_TOKEN=""
+
+DEPLOYMENT_MANIFEST_FILE="${MC_AWS_DEPLOYMENT_MANIFEST:-.mc-aws-deployment.json}"
+if [[ -f "$DEPLOYMENT_MANIFEST_FILE" ]]; then
+  deployments_json="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json)"
+  deployment_id="$(printf '%s' "$deployments_json" | node -e '
+const fs=require("node:fs"); const raw=fs.readFileSync(0,"utf8"); const start=raw.indexOf("{");
+if(start<0) process.exit(2); const deployment=JSON.parse(raw.slice(start));
+if(typeof deployment.id!=="string") process.exit(2); process.stdout.write(deployment.id);
+')"
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs \
+    cloudflare-deployed --deployment-id "$deployment_id" >/dev/null
+  echo "   Updated Worker deployment identity in $DEPLOYMENT_MANIFEST_FILE"
+fi
 echo "✅ Worker runtime key rotation verified and complete"
