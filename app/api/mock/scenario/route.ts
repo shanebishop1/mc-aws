@@ -8,6 +8,7 @@
 import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { applyScenario, getAvailableScenarios, getCurrentScenario } from "@/lib/aws/mock-scenarios";
+import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
@@ -83,6 +84,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
     console.log("[MOCK-CONTROL] Applying scenario:", scenario);
     await applyScenario(scenario);
+    await getMockStateStore().persistNow();
     await invalidateMockControlSnapshots();
 
     return NextResponse.json({

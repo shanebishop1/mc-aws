@@ -100,6 +100,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       errorCode,
       errorMessage,
     });
+    await getMockStateStore().persistNow();
     await invalidateMockControlSnapshots();
 
     return NextResponse.json({
@@ -148,6 +149,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
       // Clear specific operation fault
       console.log("[MOCK-CONTROL] Clearing fault for operation:", operation);
       await clearFault(operation);
+      await getMockStateStore().persistNow();
       await invalidateMockControlSnapshots();
 
       return NextResponse.json({
@@ -163,6 +165,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
     // Clear all faults
     console.log("[MOCK-CONTROL] Clearing all faults");
     await clearAllFaults();
+    await getMockStateStore().persistNow();
     await invalidateMockControlSnapshots();
 
     return NextResponse.json({

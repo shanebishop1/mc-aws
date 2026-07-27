@@ -60,6 +60,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     }
 
     await stateStore.patchState(updates);
+    await stateStore.persistNow();
     await invalidateMockControlSnapshots();
 
     return NextResponse.json({
