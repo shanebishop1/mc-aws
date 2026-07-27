@@ -1,0 +1,73 @@
+name: Bug report
+description: Report a reproducible problem in mc-aws
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Never include credentials, tokens, `.env` contents, account/resource IDs, or private hostnames.
+  - type: input
+    id: version
+    attributes:
+      label: Commit or version
+      description: The commit SHA or release you deployed.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Setup
+        - Web panel
+        - AWS infrastructure
+        - Cloudflare deployment
+        - Lifecycle or backup operations
+        - Mock mode or tests
+        - Documentation
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Run ...
+        2. Select ...
+        3. Observe ...
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized output
+      description: Remove all secrets and identifying cloud metadata before pasting logs.
+      render: shell
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system, architecture, Node.js version, and relevant deployment mode.
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I searched existing issues.
+          required: true
+        - label: I removed credentials and identifying cloud metadata.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

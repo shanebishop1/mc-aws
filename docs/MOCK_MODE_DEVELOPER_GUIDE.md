@@ -987,8 +987,7 @@ MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3002
 ## Additional Resources
 
 - [README.md](../README.md) - Main project documentation
-- [Mock Scenarios Implementation](./mock-scenarios-implementation.md) - Technical details
-- [Mock Provider](./mock-provider-implementation.md) - AWS client mocking
+- [Provider Implementation](./provider-implementation.md) - AWS client abstraction and mocking
 
 ## Support
 

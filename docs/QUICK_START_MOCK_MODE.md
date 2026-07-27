@@ -18,7 +18,7 @@ cd mc-aws
 pnpm install --frozen-lockfile
 ```
 
-If you do not already have the pinned Node.js / pnpm versions, run `bash ./setup.sh` once or install them with `mise`.
+If you do not already have the pinned Node.js and pnpm versions, run `mise install`, or install the versions listed in `.tool-versions` yourself. Do **not** run `setup.sh` to install developer tools: it is the production setup entry point and can deploy chargeable cloud resources.
 
 ## Step 2: Configure Environment
 
@@ -64,7 +64,7 @@ Now you can:
 
 - **View the UI:** Open `http://localhost:3000` in your browser
 - **Test scenarios:** Use `pnpm mock:scenario <name>` to switch between states
-- **Run tests:** Use `pnpm test:e2e:mock` to run E2E tests
+- **Run tests:** Install Chromium once with `pnpm exec playwright install chromium`, then use `pnpm test:e2e:mock`
 - **Validate setup:** Use `pnpm validate:dev-login` to verify everything works
 
 ## Common Commands
@@ -80,10 +80,10 @@ Now you can:
 
 ## What's Next?
 
-- **Read the full guide:** See [docs/MOCK_MODE_DEVELOPER_GUIDE.md](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
+- **Read the full guide:** See the [Mock Mode Developer Guide](MOCK_MODE_DEVELOPER_GUIDE.md)
 - **Learn about scenarios:** See the "Scenarios" section in the guide
 - **Understand authentication:** See "Authentication in Mock Mode" in the guide
-- **Explore the codebase:** Check out [README.md](README.md) for project overview
+- **Explore the codebase:** Check out the [README](../README.md) for the project overview
 
 ## Troubleshooting
 
@@ -106,30 +106,10 @@ Now you can:
 
 ## Need Help?
 
-- Check the [troubleshooting section](docs/MOCK_MODE_DEVELOPER_GUIDE.md#troubleshooting)
-- Review the [full mock mode guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
+- Check the [troubleshooting section](MOCK_MODE_DEVELOPER_GUIDE.md#troubleshooting)
+- Review the [full mock mode guide](MOCK_MODE_DEVELOPER_GUIDE.md)
 - Open an issue on GitHub with details about your problem
 
 ## Switching to Real AWS
 
-When you're ready to use real AWS infrastructure:
-
-1. Update `.env`:
-   ```bash
-   MC_BACKEND_MODE=aws
-   ENABLE_DEV_LOGIN=false
-   # Add your AWS credentials
-   AWS_ACCESS_KEY_ID=your-key
-   AWS_SECRET_ACCESS_KEY=your-secret
-   AWS_REGION=us-west-1
-   INSTANCE_ID=i-xxxxxxxx
-   ```
-
-2. Restart the dev server:
-   ```bash
-   pnpm dev
-   ```
-
-3. Set up Google OAuth (see [README.md](README.md#authentication))
-
-That's it! You're now ready to develop with mock mode. 🚀
+Real deployment is a separate, chargeable workflow. Read the canonical [Setup and Run](setup/SETUP_AND_RUN.md) guide, use an authenticated local AWS CLI/SSO session, and run `bash ./setup.sh` only when you intend to review the preflight and deploy. Never place a human AWS access key in project env files for Worker upload.

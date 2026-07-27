@@ -18,7 +18,7 @@ Use the web panel for routine operations:
 ## Roles
 
 - `ADMIN_EMAIL`: full access
-- `ALLOWED_EMAILS`: can check status and start
+- `ALLOWED_EMAILS`: seeds the server-side allowlist on deployment; allowlisted users can check authenticated status and start, while admin-only operations remain restricted
 - other signed-in users: status-only
 
 ## Start And Stop
@@ -35,7 +35,7 @@ Hibernate:
 
 1. creates a backup
 2. stops the instance
-3. detaches and deletes attached instance volumes
+3. detaches and deletes only the project-managed root volume
 
 Resume recreates storage using the instance's pinned source AMI metadata, then brings the server back online.
 

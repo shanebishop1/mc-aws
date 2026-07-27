@@ -1,5 +1,7 @@
 # Google OAuth Setup
 
+> **Advanced reference:** For first-time deployment, use the canonical [Google OAuth prerequisite guide](setup/GOOGLE_OAUTH_SETUP.md) followed by [Setup and Run](setup/SETUP_AND_RUN.md). This page documents manual configuration details and is not a second end-to-end setup path.
+
 This guide configures Google sign-in for the control panel.
 
 ## What OAuth controls

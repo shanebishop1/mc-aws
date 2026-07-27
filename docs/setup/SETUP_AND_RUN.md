@@ -31,6 +31,8 @@ The script:
 10. Creates a runtime key in memory, uploads it directly to Wrangler, verifies it through the Worker, then revokes any prior key owned by that runtime identity.
 11. Writes strict resource IDs, immutable StackId/Worker deployment evidence, and created-versus-pre-existing ownership facts to the ignored, non-secret mode-`0600` `.mc-aws-deployment.json` manifest used by safe teardown. Setup refuses to overwrite unproven same-name stacks or Workers.
 
+Immediately before the first chargeable CDK deployment, setup shows the authenticated AWS account, region, fixed `t4g.medium` instance with 8 GB GP3 root volume, resource categories, cost caveats, and teardown commands. It proceeds only after you type `DEPLOY`. Review the identity and region carefully; cancellation creates no stack resources.
+
 ## 3. Wizard Inputs
 
 The wizard collects:
@@ -140,6 +142,13 @@ Tests:
 
 ```bash
 pnpm test
+```
+
+Browser/E2E tests require Playwright Chromium once per development environment:
+
+```bash
+pnpm exec playwright install chromium
+pnpm test:e2e:mock
 ```
 
 ## 9. Teardown

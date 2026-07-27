@@ -1,0 +1,27 @@
+name: Feature request
+description: Suggest a focused improvement
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: What user problem should this solve?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed change
+      description: Describe the desired behavior and any alternatives considered.
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Cost, security, and teardown impact
+      description: Note any new cloud resources, permissions, recurring costs, credentials, or removal requirements.
+    validations:
+      required: true

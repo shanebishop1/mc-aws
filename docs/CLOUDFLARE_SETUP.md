@@ -1,5 +1,7 @@
 # Cloudflare Setup
 
+> **Advanced reference:** For first-time deployment, use the canonical [Cloudflare prerequisite guide](setup/CLOUDFLARE_SETUP.md) followed by [Setup and Run](setup/SETUP_AND_RUN.md). This page documents manual configuration details and is not a second end-to-end setup path.
+
 This guide covers Cloudflare configuration for separate concerns:
 
 - **Workers deployment auth** (Wrangler OAuth)

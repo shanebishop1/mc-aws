@@ -104,7 +104,7 @@ Choose panel hosting separately from the Minecraft address:
 
 For either choice, register the exact panel origin and `<panel-origin>/api/auth/callback` in the Google OAuth client. Setup prints both values before deployment and again in completion output.
 
-For the full walkthrough, use [Setup and Run](docs/setup/SETUP_AND_RUN.md).
+For the full walkthrough, use the canonical [Setup and Run](docs/setup/SETUP_AND_RUN.md) guide. `setup.sh` presents a cost/resource preflight and requires `DEPLOY` immediately before it creates chargeable resources.
 
 ## Local Development
 
@@ -134,15 +134,15 @@ The web app is the primary interface. It handles:
 
 Roles:
 
-- `ADMIN_EMAIL`: full access
-- `ALLOWED_EMAILS`: can check status and start
-- Other signed-in users: status-only
+- `admin`: the address in `ADMIN_EMAIL`; full lifecycle, backup, restore, cost, and access-management controls
+- `allowed`: addresses in the server-side `/minecraft/email-allowlist` (initially seeded from `ADMIN_EMAIL` and `ALLOWED_EMAILS`); authenticated status and start access
+- `public`: other authenticated users; read-only status access
 
 ## Start, Stop, Resume, Hibernate
 
 - `start`: starts the server in the normal path
 - `stop`: stops the instance but keeps storage attached
-- `hibernate`: backs up the server, stops the instance, and deletes attached instance volumes
+- `hibernate`: backs up the server, stops the instance, and deletes only the project-managed root volume
 - `resume`: recreates storage and brings a hibernated server back online
 
 Use `stop` for shorter pauses. Use `hibernate` when the server will be idle long enough that you want to avoid EBS storage cost too.
@@ -220,6 +220,8 @@ This can reduce idle cost compared with leaving a server running all the time, b
 - Check AWS Billing and Cost Explorer after deployment, especially while testing
 
 ## Docs
+
+See the reader-oriented [documentation index](docs/README.md) for current user guides, contributor references, and clearly separated historical plans.
 
 Setup:
 

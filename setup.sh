@@ -285,6 +285,38 @@ ensure_cdk_defaults() {
   return 0
 }
 
+print_deployment_preflight() {
+  step "Deployment preflight — chargeable resources"
+  log "Review the target and expected resources before deployment:"
+  log "  AWS account: ${CDK_DEFAULT_ACCOUNT}"
+  log "  AWS region:  ${CDK_DEFAULT_REGION}"
+  log "  Stack:       ${STACK_NAME}"
+  log "  EC2:         t4g.medium (ARM), 8 GB encrypted GP3 root volume"
+  log "  AWS:         VPC/networking, EC2/EBS, Lambda, IAM, SSM, and optional SES/SNS resources"
+  log "  Cloudflare:  Worker, runtime-state bindings/KV, secrets, and optional DNS/route resources"
+  echo ""
+  log "Estimated recurring cost (not a quote):"
+  log "  Running EC2 is roughly \$0.03–0.04/hour and a stopped 8 GB GP3 volume roughly \$0.75/month."
+  log "  Region, usage, snapshots, data transfer, requests, optional services, and pricing changes add cost."
+  echo ""
+  log "Teardown: run 'pnpm destroy' to preview, then 'pnpm destroy:execute' after reviewing the inventory."
+  log "AWS backups/snapshots may be retained and billed until you remove them deliberately."
+  echo ""
+
+  local confirmation=""
+  if is_tty; then
+    read -r -p "Type DEPLOY to create or update these resources: " confirmation
+  else
+    read -r confirmation || true
+  fi
+
+  if [[ "$confirmation" != "DEPLOY" ]]; then
+    error_exit "Deployment cancelled. Re-run setup and type DEPLOY at the chargeable-resource preflight."
+  fi
+
+  success "Deployment explicitly confirmed"
+}
+
 maybe_confirm_existing_credentials() {
   SKIP_WIZARD="0"
 
@@ -559,6 +591,7 @@ main() {
     cdk_parameters+=(--parameters "DuckDnsTokenParam=$DUCKDNS_TOKEN")
   fi
 
+  print_deployment_preflight
   (cd infra && run_with_mise pnpm exec cdk deploy "${cdk_parameters[@]}" --require-approval never)
   success "CDK deployment complete"
 
@@ -600,16 +633,18 @@ main() {
 
   step "Setup complete! 🎉"
   echo ""
-  success "mc-aws is fully deployed and ready to use!"
+  success "AWS infrastructure and the Cloudflare control panel were deployed."
   echo ""
   log "📍 Your Minecraft control panel: ${NEXT_PUBLIC_APP_URL}"
   log "📍 Minecraft connection: $(minecraft_connection_target)"
   log "🔐 Google OAuth callback: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
   echo ""
   log "Next steps:"
-  log "  1. Visit your control panel and sign in with: ${ADMIN_EMAIL}"
-  log "  2. Start your Minecraft server from the panel"
-  log "  3. Connect to $(minecraft_connection_target) in Minecraft"
+  log "  1. Confirm the Google OAuth client contains the exact origin and callback printed above"
+  log "  2. Visit your control panel and sign in with the admin address: ${ADMIN_EMAIL}"
+  log "  3. Configure and verify Google Drive before using backup, restore, or hibernate"
+  log "  4. Start the server (which begins EC2 compute charges), then connect to $(minecraft_connection_target)"
+  log "  5. Check AWS Billing/Cost Explorer; preview removal at any time with: pnpm destroy"
   echo ""
 }
 
