@@ -200,6 +200,8 @@ pnpm cdk:diff
 pnpm cdk:deploy
 ```
 
+Legacy live stacks must not take a normal CDK update first. Run the read-only `pnpm migrate:existing` inventory and follow [Existing Deployment Safety Migration](docs/EXISTING_DEPLOYMENT_MIGRATION.md). Normal setup/deploy entry points block legacy SES ownership or an unresolved live-instance definition diff.
+
 ## Removing A Deployment
 
 Start with the non-mutating live inventory:

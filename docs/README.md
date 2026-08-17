@@ -11,6 +11,7 @@ Start here to distinguish current operating guidance from design history. Comman
 - [Operations Guide](OPERATIONS_GUIDE.md)
 - [Ownership-Aware Teardown](TEARDOWN.md)
 - [AWS Credential Boundary](AWS_CREDENTIALS_SETUP.md)
+- [Existing Deployment Safety Migration](EXISTING_DEPLOYMENT_MIGRATION.md)
 
 The guides under `docs/setup/` are canonical for first-time setup. The top-level [Cloudflare](CLOUDFLARE_SETUP.md) and [Google OAuth](GOOGLE_OAUTH_SETUP.md) documents are advanced configuration references, not alternate end-to-end setup paths.
 

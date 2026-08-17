@@ -55,12 +55,8 @@ Set both capability flags to `true` and provide all outbound and inbound values.
 
 Older mc-aws stacks created `MinecraftRuleSet`, activated it account-wide, and configured a fallback recipient. Do **not** update such a stack directly to this version: deleting the old activation custom resource can run its historical delete handler and deactivate the account-wide rule set.
 
-Use a staged CloudFormation migration:
+Use the tested operator and staged CloudFormation procedure in [Existing Deployment Safety Migration](../EXISTING_DEPLOYMENT_MIGRATION.md). It first applies both Retain policies to exact legacy logical IDs without changing their properties, then proves and tags the live instance/root volume, and finally creates a reviewable current-template bridge with the complete deployed EC2 resource pinned.
 
-1. From the old revision, deploy a bridge template that applies `DeletionPolicy: Retain` to both `MinecraftRuleSet` and `ActivateRuleSet` without changing the active rule set.
-2. Confirm the retention policies are present in the deployed stack template.
-3. Configure the desired capability flags. For inbound commands, explicitly name the receipt rule set that is already active (the retained set may be reused).
-4. Deploy this revision. CloudFormation removes only the old project receipt rule; the retained rule set and activation resource are not deleted or invoked.
-5. Manage the retained account-wide rule set manually thereafter. Remove any obsolete legacy rule only after confirming it belongs to this project.
+Do not hand-build this bridge or run `setup.sh`/a normal CDK deployment before the migration. Repository deployment entry points intentionally block this legacy state.
 
 This staged step is necessary because CloudFormation uses the previously deployed custom-resource delete behavior during a direct removal. Never work around it by automatically setting or clearing the active rule set.

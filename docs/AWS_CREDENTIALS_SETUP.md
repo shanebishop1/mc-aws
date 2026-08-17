@@ -65,7 +65,7 @@ Use the exact deployed panel origin for `VERIFY_URL`. If candidate verification 
 
 ## Existing deployment migration
 
-Re-run `bash ./setup.sh`. The stack adds the dedicated identity, then the deployment stages and verifies its key before replacing Worker AWS secrets. Rotation only manages keys attached to the tagged dedicated runtime user; it never deactivates or deletes the human identity whose credentials an older Worker may have used.
+Do **not** begin by re-running `setup.sh` on a legacy stack. Follow [Existing Deployment Safety Migration](EXISTING_DEPLOYMENT_MIGRATION.md) so the old SES activation is retained and the live EC2 instance is pinned while the stack adds the dedicated identity. Because routine setup remains guarded while the EC2 definition is intentionally pinned, continue with `pnpm deploy:cf` after the bridge; that deployment locates the new stack output and runs the verified runtime-key rotation. Rotation only manages keys attached to the tagged dedicated runtime user; it never deactivates or deletes the human identity whose credentials an older Worker may have used.
 
 After the replacement verifies:
 
