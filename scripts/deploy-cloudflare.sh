@@ -133,6 +133,10 @@ manifest() {
   MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs "$@" >/dev/null
 }
 
+manifest_route_state() {
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs route-state "$@"
+}
+
 is_worker_not_found_output() {
   [[ "$1" =~ (^|[^0-9])10090([^0-9]|$) ]]
 }
@@ -781,7 +785,7 @@ process.stdout.write([route.id || "", route.pattern, route.script || ""].join("\
 capture_panel_route_before_deploy() {
   [[ "$PANEL_HOSTING_MODE" == "custom" ]] || return 0
   local pattern="${DOMAIN}/*"
-  local response route_line
+  local response route_line route_pattern route_script route_state
   if ! response="$(cf_api GET "/zones/${CF_ZONE_ID}/workers/routes")"; then
     echo "❌ Error: Could not inventory Worker routes with the panel token."
     echo "   Refusing deployment because an existing route cannot be safely distinguished or restored."
@@ -789,18 +793,51 @@ capture_panel_route_before_deploy() {
     exit 1
   fi
   if route_line="$(printf '%s' "$response" | cf_parse_worker_route "$pattern")"; then
-    IFS=$'\t' read -r PANEL_ROUTE_ID _ PANEL_ROUTE_ORIGINAL_SCRIPT <<< "$route_line"
-    PANEL_ROUTE_OWNERSHIP="preexisting"
-    manifest route --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" --script "$WORKER_NAME" \
-      --ownership preexisting --original-script "$PANEL_ROUTE_ORIGINAL_SCRIPT"
+    IFS=$'\t' read -r PANEL_ROUTE_ID route_pattern route_script <<< "$route_line"
+    if [[ "$route_pattern" != "$pattern" ]]; then
+      echo "❌ Error: Worker route inventory returned an unexpected pattern"
+      exit 1
+    fi
+    if ! route_state="$(manifest_route_state --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" \
+      --script "$route_script")"; then
+      echo "❌ Error: Existing Worker route does not match the validated deployment manifest"
+      exit 1
+    fi
+    if [[ "$route_state" == "created" ]]; then
+      PANEL_ROUTE_OWNERSHIP="created"
+    elif [[ "$route_state" == "preexisting" ]]; then
+      PANEL_ROUTE_OWNERSHIP="preexisting"
+    elif [[ "$route_state" == "untracked" ]]; then
+      PANEL_ROUTE_OWNERSHIP="preexisting"
+      PANEL_ROUTE_ORIGINAL_SCRIPT="$route_script"
+      manifest route --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" --script "$route_script" \
+        --ownership preexisting --original-script "$route_script"
+    else
+      echo "❌ Error: Deployment manifest returned an invalid Worker route ownership state"
+      exit 1
+    fi
   else
     local status="$?"
     if [[ "$status" -ne 1 ]]; then
       echo "❌ Error: Cloudflare returned an invalid Worker route inventory"
       exit 1
     fi
+    if ! route_state="$(manifest_route_state --zone "$CF_ZONE_ID" --id absent --pattern "$pattern" --script absent)"; then
+      echo "❌ Error: Missing Worker route does not match the validated deployment manifest"
+      exit 1
+    fi
+    if [[ "$route_state" == "preexisting" ]]; then
+      echo "❌ Error: A pre-existing manifest route is unexpectedly absent"
+      exit 1
+    fi
+    if [[ "$route_state" != "created" && "$route_state" != "untracked" ]]; then
+      echo "❌ Error: Deployment manifest returned an invalid Worker route ownership state"
+      exit 1
+    fi
     PANEL_ROUTE_OWNERSHIP="created"
-    manifest route --zone "$CF_ZONE_ID" --pattern "$pattern" --script "$WORKER_NAME" --ownership created
+    if [[ "$route_state" == "untracked" ]]; then
+      manifest route --zone "$CF_ZONE_ID" --pattern "$pattern" --script "$WORKER_NAME" --ownership created
+    fi
   fi
 }
 
@@ -818,21 +855,26 @@ capture_panel_route_after_deploy() {
     exit 1
   }
   IFS=$'\t' read -r live_route_id route_pattern route_script <<< "$route_line"
+  if [[ "$route_pattern" != "$pattern" ]]; then
+    echo "❌ Error: Verified Worker route pattern does not exactly match '$pattern'"
+    exit 1
+  fi
   if [[ "$route_script" != "$WORKER_NAME" ]]; then
     echo "❌ Error: Route '$pattern' does not target the deployed Worker '$WORKER_NAME'"
     exit 1
   fi
-  if [[ "$PANEL_ROUTE_OWNERSHIP" == "preexisting" && "$live_route_id" != "$PANEL_ROUTE_ID" ]]; then
-    echo "❌ Error: Route '$pattern' was replaced during deployment; refusing to inherit ownership"
-    exit 1
-  fi
-  PANEL_ROUTE_ID="$live_route_id"
-  if [[ "$PANEL_ROUTE_OWNERSHIP" == "preexisting" ]]; then
+  if [[ "$live_route_id" != "$PANEL_ROUTE_ID" && -n "$PANEL_ROUTE_ID" ]]; then
+    echo "🔁 Worker route ID replaced during deployment: $PANEL_ROUTE_ID -> $live_route_id"
+    manifest route --zone "$CF_ZONE_ID" --id "$live_route_id" --pattern "$pattern" --script "$WORKER_NAME" \
+      --ownership created --replaces-id "$PANEL_ROUTE_ID"
+    PANEL_ROUTE_OWNERSHIP="created"
+  elif [[ "$PANEL_ROUTE_OWNERSHIP" == "preexisting" ]]; then
     manifest route --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" --script "$WORKER_NAME" \
       --ownership preexisting --original-script "$PANEL_ROUTE_ORIGINAL_SCRIPT"
   else
-    manifest route --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" --script "$WORKER_NAME" --ownership created
+    manifest route --zone "$CF_ZONE_ID" --id "$live_route_id" --pattern "$pattern" --script "$WORKER_NAME" --ownership created
   fi
+  PANEL_ROUTE_ID="$live_route_id"
 }
 
 echo "🔐 Checking Cloudflare deployment authentication..."

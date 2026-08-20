@@ -370,6 +370,32 @@ if (command === "validate") {
   process.exit(0);
 }
 
+if (command === "route-state") {
+  const zoneId = required(args, "zone");
+  const pattern = required(args, "pattern");
+  const liveId = required(args, "id");
+  const liveScript = required(args, "script");
+  const prior = manifest.cloudflare.routes.find((entry) => entry.zoneId === zoneId && entry.pattern === pattern);
+  if (!prior) {
+    console.log("untracked");
+    process.exit(0);
+  }
+  const routeIsAbsent = liveId === "absent" && liveScript === "absent";
+  if ((liveId === "absent") !== (liveScript === "absent")) fail("live route identity is incomplete");
+  if (routeIsAbsent) {
+    if (prior.id || prior.ownership !== "created" || !prior.createdByProject || !prior.ownershipProven) {
+      fail("manifest/live route mismatch; refusing deployment");
+    }
+  } else if (prior.id !== liveId || prior.script !== liveScript) {
+    fail("manifest/live route mismatch; refusing deployment");
+  }
+  if (!prior.ownershipProven) fail("manifest route ownership is unproven; refusing deployment");
+  if (prior.createdByProject && prior.ownership === "created") console.log("created");
+  else if (!prior.createdByProject && prior.ownership === "preexisting") console.log("preexisting");
+  else fail("manifest route ownership is inconsistent; refusing deployment");
+  process.exit(0);
+}
+
 switch (command) {
   case "aws-init": {
     const accountId = required(args, "account");
@@ -511,17 +537,35 @@ switch (command) {
     const pattern = required(args, "pattern");
     const routeId = args.id || "";
     const ownership = required(args, "ownership");
+    const script = required(args, "script");
+    const replacesId = args["replaces-id"];
     const prior = manifest.cloudflare.routes.find((entry) => entry.zoneId === zoneId && entry.pattern === pattern);
-    if (prior?.ownershipProven && prior.id && prior.id !== routeId) {
-      fail("same-pattern route identity changed; refusing to inherit prior ownership");
+    if (replacesId !== undefined) {
+      if (!prior) fail("--replaces-id requires an existing same-zone, same-pattern manifest route");
+      if (prior.id !== replacesId) fail("--replaces-id does not match the manifest route ID");
+      if (!routeId || routeId === replacesId) fail("replacement route ID must be new and non-empty");
+      if (ownership !== "created") fail("route ID replacement must request created ownership");
+      if (!prior.ownershipProven) fail("cannot replace a route with unproven ownership");
+      if (prior.script !== script) fail("replacement route target does not match the proven prior target");
+      const provenPreexisting = prior.ownership === "preexisting" && prior.createdByProject === false;
+      const provenCreated = prior.ownership === "created" && prior.createdByProject === true;
+      if (!provenPreexisting && !provenCreated) fail("prior route ownership is inconsistent");
+    } else {
+      if (prior?.ownershipProven && prior.id && prior.id !== routeId) {
+        fail("same-pattern route identity changed; an exact --replaces-id transition is required");
+      }
+      if (prior?.ownership === "preexisting" && !prior.createdByProject && ownership === "created") {
+        fail("preexisting route ownership can transition only with an exact --replaces-id replacement");
+      }
     }
-    const createdByProject = ownership === "created" || prior?.createdByProject === true;
-    const ownershipProven = prior?.ownershipProven === false ? false : ownership !== "unproven";
+    const createdByProject = replacesId !== undefined || ownership === "created" || prior?.createdByProject === true;
+    const ownershipProven =
+      replacesId !== undefined || (prior?.ownershipProven === false ? false : ownership !== "unproven");
     upsert(manifest.cloudflare.routes, (entry) => entry.zoneId === zoneId && entry.pattern === pattern, {
       zoneId,
       id: routeId,
       pattern,
-      script: required(args, "script"),
+      script,
       createdByProject,
       ownershipProven,
       ownership: createdByProject ? "created" : ownership,

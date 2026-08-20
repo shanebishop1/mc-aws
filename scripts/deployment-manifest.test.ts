@@ -171,7 +171,53 @@ describe("deployment ownership manifest transitions", () => {
     ).toBe(0);
   });
 
-  it("rejects same-pattern route ID replacement instead of inheriting ownership", () => {
+  it("allows an exact proven preexisting-to-created route ID replacement", () => {
+    const test = harness();
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        "a".repeat(32),
+        "--id",
+        "b".repeat(32),
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "preexisting",
+        "--original-script",
+        "mc-aws-panel",
+      ]).status
+    ).toBe(0);
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        "a".repeat(32),
+        "--id",
+        "c".repeat(32),
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "created",
+        "--replaces-id",
+        "b".repeat(32),
+      ]).status
+    ).toBe(0);
+    expect((test.read().cloudflare as { routes: Array<Record<string, unknown>> }).routes[0]).toMatchObject({
+      id: "c".repeat(32),
+      script: "mc-aws-panel",
+      ownership: "created",
+      ownershipProven: true,
+      createdByProject: true,
+      originalScript: "",
+    });
+  });
+
+  it("allows an exact proven created-to-created route ID replacement", () => {
     const test = harness();
     expect(
       test.run([
@@ -188,44 +234,8 @@ describe("deployment ownership manifest transitions", () => {
         "created",
       ]).status
     ).toBe(0);
-    const replaced = test.run([
-      "route",
-      "--zone",
-      "a".repeat(32),
-      "--id",
-      "c".repeat(32),
-      "--pattern",
-      "panel.example.com/*",
-      "--script",
-      "mc-aws-panel",
-      "--ownership",
-      "preexisting",
-      "--original-script",
-      "old-worker",
-    ]);
-    expect(replaced.status).not.toBe(0);
-    expect(replaced.stderr).toContain("route identity changed");
-
-    const preexisting = harness();
     expect(
-      preexisting.run([
-        "route",
-        "--zone",
-        "a".repeat(32),
-        "--id",
-        "b".repeat(32),
-        "--pattern",
-        "panel.example.com/*",
-        "--script",
-        "mc-aws-panel",
-        "--ownership",
-        "preexisting",
-        "--original-script",
-        "old-worker",
-      ]).status
-    ).toBe(0);
-    expect(
-      preexisting.run([
+      test.run([
         "route",
         "--zone",
         "a".repeat(32),
@@ -236,11 +246,197 @@ describe("deployment ownership manifest transitions", () => {
         "--script",
         "mc-aws-panel",
         "--ownership",
+        "created",
+        "--replaces-id",
+        "b".repeat(32),
+      ]).status
+    ).toBe(0);
+  });
+
+  it("rejects a replacement when --replaces-id does not match the manifest", () => {
+    const test = harness();
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        "a".repeat(32),
+        "--id",
+        "b".repeat(32),
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "created",
+      ]).status
+    ).toBe(0);
+    const result = test.run([
+      "route",
+      "--zone",
+      "a".repeat(32),
+      "--id",
+      "c".repeat(32),
+      "--pattern",
+      "panel.example.com/*",
+      "--script",
+      "mc-aws-panel",
+      "--ownership",
+      "created",
+      "--replaces-id",
+      "d".repeat(32),
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("does not match the manifest route ID");
+  });
+
+  it("rejects replacement when the route target differs", () => {
+    const test = harness();
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        "a".repeat(32),
+        "--id",
+        "b".repeat(32),
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "other-worker",
+        "--ownership",
         "preexisting",
         "--original-script",
-        "old-worker",
+        "other-worker",
       ]).status
-    ).not.toBe(0);
+    ).toBe(0);
+    const result = test.run([
+      "route",
+      "--zone",
+      "a".repeat(32),
+      "--id",
+      "c".repeat(32),
+      "--pattern",
+      "panel.example.com/*",
+      "--script",
+      "mc-aws-panel",
+      "--ownership",
+      "created",
+      "--replaces-id",
+      "b".repeat(32),
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("target does not match");
+  });
+
+  it("rejects replacement of an unproven route", () => {
+    const test = harness();
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        "a".repeat(32),
+        "--id",
+        "b".repeat(32),
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "unproven",
+      ]).status
+    ).toBe(0);
+    const result = test.run([
+      "route",
+      "--zone",
+      "a".repeat(32),
+      "--id",
+      "c".repeat(32),
+      "--pattern",
+      "panel.example.com/*",
+      "--script",
+      "mc-aws-panel",
+      "--ownership",
+      "created",
+      "--replaces-id",
+      "b".repeat(32),
+    ]);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("unproven ownership");
+  });
+
+  it("preserves preexisting ownership when the exact route ID is stable", () => {
+    const test = harness();
+    const routeArgs = [
+      "route",
+      "--zone",
+      "a".repeat(32),
+      "--id",
+      "b".repeat(32),
+      "--pattern",
+      "panel.example.com/*",
+      "--script",
+      "mc-aws-panel",
+      "--ownership",
+      "preexisting",
+      "--original-script",
+      "mc-aws-panel",
+    ];
+    expect(test.run(routeArgs).status).toBe(0);
+    expect(test.run(routeArgs).status).toBe(0);
+    expect((test.read().cloudflare as { routes: Array<Record<string, unknown>> }).routes[0]).toMatchObject({
+      id: "b".repeat(32),
+      ownership: "preexisting",
+      ownershipProven: true,
+      createdByProject: false,
+    });
+  });
+
+  it("reports only an exact validated project-created live route as created", () => {
+    const test = harness();
+    const zone = "a".repeat(32);
+    const id = "b".repeat(32);
+    const pattern = "panel.example.com/*";
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        zone,
+        "--id",
+        id,
+        "--pattern",
+        pattern,
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "created",
+      ]).status
+    ).toBe(0);
+    const exact = test.run([
+      "route-state",
+      "--zone",
+      zone,
+      "--id",
+      id,
+      "--pattern",
+      pattern,
+      "--script",
+      "mc-aws-panel",
+    ]);
+    expect(exact.status).toBe(0);
+    expect(exact.stdout.trim()).toBe("created");
+
+    const mismatched = test.run([
+      "route-state",
+      "--zone",
+      zone,
+      "--id",
+      "c".repeat(32),
+      "--pattern",
+      pattern,
+      "--script",
+      "mc-aws-panel",
+    ]);
+    expect(mismatched.status).not.toBe(0);
+    expect(mismatched.stderr).toContain("manifest/live route mismatch");
   });
 
   it("writes mode 0600 and rejects subsequent wrong-mode tampering", () => {
