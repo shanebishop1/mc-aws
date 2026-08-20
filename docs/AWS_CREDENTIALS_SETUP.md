@@ -44,7 +44,7 @@ Set `AWS_COST_EXPLORER_ENABLED=false` before CDK deployment to omit Cost Explore
 2. Refuses to proceed if two active keys would require deleting a valid key first.
 3. Creates a replacement key in process memory only.
 4. Pipes it directly to Wrangler under temporary candidate secret names.
-5. Calls an ephemeral bearer-protected Worker probe that uses the candidate key to describe only the managed instance.
+5. Calls an ephemeral bearer-protected Worker probe that uses the candidate key to describe only the managed instance. Candidate and primary probes use bounded retries (about two minutes by default) for Worker deployment and IAM new-key propagation delays.
 6. Promotes the verified candidate to `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` and verifies the primary binding.
 7. Deactivates prior keys belonging to the dedicated runtime user, verifies again, and reactivates them if that check fails.
 8. Deletes revoked prior keys and removes candidate/probe/session-token Worker secrets.

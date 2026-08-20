@@ -11,13 +11,16 @@ function writeExecutable(filePath: string, source: string): void {
   chmodSync(filePath, 0o700);
 }
 
-function runRotation(options: { failProbe?: boolean; noPriorKey?: boolean } = {}) {
+type ProbeResponse = "success" | "404" | "502" | "503" | "transport" | "authFailure";
+
+function runRotation(options: { probeResponses?: ProbeResponse[]; noPriorKey?: boolean; maxAttempts?: number } = {}) {
   const tempDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-runtime-rotation-"));
   const eventLog = path.join(tempDirectory, "events.log");
   const stateFile = path.join(tempDirectory, "state");
   const awsPath = path.join(tempDirectory, "aws-mock");
   const wranglerPath = path.join(tempDirectory, "wrangler-mock");
   const curlPath = path.join(tempDirectory, "curl-mock");
+  const curlStateFile = path.join(tempDirectory, "curl-state");
 
   writeExecutable(
     awsPath,
@@ -60,9 +63,24 @@ process.stdout.write("{}")
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-fs.appendFileSync(process.env.EVENT_LOG, "curl " + args.at(-1) + "\\n");
-if (process.env.FAIL_PROBE === "1") process.exit(22);
-process.stdout.write(JSON.stringify({ success: true, data: { managedInstanceVerified: true } }));
+const responses = process.env.PROBE_RESPONSES.split(",");
+const attempt = fs.existsSync(process.env.CURL_STATE_FILE) ? Number(fs.readFileSync(process.env.CURL_STATE_FILE, "utf8")) : 0;
+const response = responses[Math.min(attempt, responses.length - 1)];
+fs.writeFileSync(process.env.CURL_STATE_FILE, String(attempt + 1));
+const outputIndex = args.indexOf("--output");
+const outputFile = args[outputIndex + 1];
+const url = args.at(-1);
+fs.appendFileSync(process.env.EVENT_LOG, "curl " + url + " response=" + response + " http1=" + args.includes("--http1.1") + "\\n");
+if (response === "transport") {
+  process.stdout.write("000");
+  process.exit(7);
+}
+const status = response === "success" ? "200" : response === "authFailure" ? "502" : response;
+const body = response === "success"
+  ? { success: true, data: { managedInstanceVerified: true } }
+  : { success: false, error: response === "authFailure" ? "AuthFailure" : "temporarily unavailable" };
+fs.writeFileSync(outputFile, JSON.stringify(body));
+process.stdout.write(status);
 `
   );
 
@@ -76,14 +94,19 @@ process.stdout.write(JSON.stringify({ success: true, data: { managedInstanceVeri
       CURL_BIN: curlPath,
       EVENT_LOG: eventLog,
       STATE_FILE: stateFile,
-      FAIL_PROBE: options.failProbe ? "1" : "0",
+      CURL_STATE_FILE: curlStateFile,
+      PROBE_RESPONSES: (options.probeResponses ?? ["success"]).join(","),
       NO_PRIOR_KEY: options.noPriorKey ? "1" : "0",
+      VERIFY_MAX_ATTEMPTS: String(options.maxAttempts ?? 4),
+      VERIFY_RETRY_DELAY_SECONDS: "0",
+      VERIFY_REQUEST_TIMEOUT_SECONDS: "1",
       RUNTIME_IAM_USER_NAME: "mc-aws-runtime-user",
       SKIP_RUNTIME_IDENTITY_TAG_CHECK: "1",
       WORKER_NAME: "mc-aws-panel",
       VERIFY_URL: "https://panel.example.com",
       WRANGLER_CONFIG_FILE: "/dev/null",
       WRANGLER_HOME_DIR: tempDirectory,
+      MC_AWS_DEPLOYMENT_MANIFEST: path.join(tempDirectory, "deployment-manifest.json"),
       CLOUDFLARE_API_TOKEN: "",
       CLOUDFLARE_DEPLOY_API_TOKEN: "",
     },
@@ -109,17 +132,33 @@ describe("Worker runtime key rotation", () => {
     const priorDeletion = events.indexOf("delete-access-key --user-name mc-aws-runtime-user --access-key-id AKIAOLD");
     expect(candidateVerification).toBeGreaterThan(-1);
     expect(primaryVerification).toBeGreaterThan(candidateVerification);
+    expect(events).toContain("http1=true");
     expect(priorRevocation).toBeGreaterThan(primaryVerification);
     expect(priorDeletion).toBeGreaterThan(priorRevocation);
   });
 
-  it("retains the prior valid key when candidate verification fails", () => {
-    const { result, events } = runRotation({ failProbe: true });
+  it("retries transient deployment and AWS propagation failures before promotion", () => {
+    const { result, events } = runRotation({
+      probeResponses: ["404", "502", "authFailure", "success", "transport", "success", "success"],
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}\n${events}`).toBe(0);
+    expect(events.match(/mode=candidate/g)).toHaveLength(4);
+    expect(events.match(/mode=primary/g)).toHaveLength(3);
+    expect(result.stdout).toContain("candidate verification succeeded on attempt 4/4");
+    expect(result.stdout).toContain("primary verification succeeded on attempt 2/4");
+    expect(`${result.stdout}\n${result.stderr}`).not.toContain("AuthFailure");
+  });
+
+  it("retains the prior valid key and deletes the candidate after persistent verification failure", () => {
+    const { result, events } = runRotation({ probeResponses: ["502"], maxAttempts: 3 });
 
     expect(result.status).not.toBe(0);
+    expect(events.match(/mode=candidate/g)).toHaveLength(3);
     expect(events).not.toContain("--access-key-id AKIAOLD --status Inactive");
     expect(events).not.toContain("delete-access-key --user-name mc-aws-runtime-user --access-key-id AKIAOLD");
     expect(events).toContain("delete-access-key --user-name mc-aws-runtime-user --access-key-id AKIANEW");
+    expect(result.stderr).toContain("did not succeed within 3 attempts");
   });
 
   it("supports first deployment when the runtime identity has no prior key", () => {

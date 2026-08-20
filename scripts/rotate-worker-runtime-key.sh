@@ -9,6 +9,9 @@ set -euo pipefail
 AWS_CLI="${AWS_CLI:-aws}"
 WRANGLER_BIN="${WRANGLER_BIN:-./node_modules/.bin/wrangler}"
 CURL_BIN="${CURL_BIN:-curl}"
+VERIFY_MAX_ATTEMPTS="${VERIFY_MAX_ATTEMPTS:-8}"
+VERIFY_RETRY_DELAY_SECONDS="${VERIFY_RETRY_DELAY_SECONDS:-12}"
+VERIFY_REQUEST_TIMEOUT_SECONDS="${VERIFY_REQUEST_TIMEOUT_SECONDS:-5}"
 STACK_NAME="${STACK_NAME:-MinecraftStack}"
 AWS_REGION_VALUE="${AWS_REGION:-${AWS_DEFAULT_REGION:-${CDK_DEFAULT_REGION:-}}}"
 WRANGLER_CONFIG_FILE="${WRANGLER_CONFIG_FILE:-/dev/null}"
@@ -22,6 +25,7 @@ PROBE_TOKEN=""
 PROMOTED="0"
 ROTATION_COMPLETE="0"
 PRIOR_KEYS_REVOKED="0"
+VERIFY_RESPONSE_FILE=""
 prior_key_ids=()
 
 log_error() {
@@ -173,6 +177,9 @@ cleanup_on_exit() {
   NEW_SECRET_ACCESS_KEY=""
   PROBE_TOKEN=""
   unset NEW_SECRET_ACCESS_KEY PROBE_TOKEN
+  if [[ -n "$VERIFY_RESPONSE_FILE" ]]; then
+    rm -f "$VERIFY_RESPONSE_FILE"
+  fi
   update_manifest_worker_identity_best_effort
   return "$status"
 }
@@ -201,25 +208,83 @@ build_primary_secret_json() {
 
 verify_worker_identity() {
   local mode="$1"
-  local response
-  response="$("$CURL_BIN" -fsS \
-    --retry 5 \
-    --retry-delay 2 \
-    --retry-all-errors \
-    -H "Authorization: Bearer $PROBE_TOKEN" \
-    "${VERIFY_URL%/}/api/internal/runtime-credentials/verify?mode=$mode")"
+  local attempt=1
+  local curl_status http_status retry_reason
 
-  printf '%s' "$response" | node -e '
+  if [[ -z "$VERIFY_RESPONSE_FILE" ]]; then
+    VERIFY_RESPONSE_FILE="$(mktemp "${TMPDIR:-/tmp}/mc-aws-runtime-verify.XXXXXX")"
+  fi
+
+  while [[ "$attempt" -le "$VERIFY_MAX_ATTEMPTS" ]]; do
+    curl_status=0
+    http_status="$("$CURL_BIN" --http1.1 --silent \
+      --connect-timeout "$VERIFY_REQUEST_TIMEOUT_SECONDS" \
+      --max-time "$VERIFY_REQUEST_TIMEOUT_SECONDS" \
+      --output "$VERIFY_RESPONSE_FILE" \
+      --write-out '%{response_code}' \
+      -H "Authorization: Bearer $PROBE_TOKEN" \
+      "${VERIFY_URL%/}/api/internal/runtime-credentials/verify?mode=$mode")" || curl_status=$?
+
+    if [[ "$curl_status" -eq 0 && "$http_status" =~ ^2[0-9][0-9]$ ]]; then
+      if node - "$VERIFY_RESPONSE_FILE" 2>/dev/null <<'NODE'
 const fs = require("node:fs");
-const response = JSON.parse(fs.readFileSync(0, "utf8"));
+const response = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
 if (response.success !== true || response.data?.managedInstanceVerified !== true) process.exit(1);
-'
+NODE
+      then
+        echo "   $mode verification succeeded on attempt $attempt/$VERIFY_MAX_ATTEMPTS."
+        return 0
+      fi
+
+      log_error "$mode verification returned an invalid success response (HTTP $http_status); refusing to continue."
+      return 1
+    fi
+
+    if [[ "$curl_status" -ne 0 ]]; then
+      retry_reason="transport error (curl exit $curl_status)"
+    elif [[ "$http_status" == "404" || "$http_status" == "502" || "$http_status" == "503" ]]; then
+      retry_reason="HTTP $http_status"
+    else
+      log_error "$mode verification failed with non-retryable HTTP status ${http_status:-unknown}; refusing to continue."
+      return 1
+    fi
+
+    if [[ "$attempt" -ge "$VERIFY_MAX_ATTEMPTS" ]]; then
+      log_error "$mode verification did not succeed within $VERIFY_MAX_ATTEMPTS attempts (last result: $retry_reason)."
+      return 1
+    fi
+
+    echo "   $mode verification attempt $attempt/$VERIFY_MAX_ATTEMPTS returned $retry_reason; retrying in ${VERIFY_RETRY_DELAY_SECONDS}s..."
+    if [[ "$VERIFY_RETRY_DELAY_SECONDS" != "0" ]]; then
+      sleep "$VERIFY_RETRY_DELAY_SECONDS"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  return 1
+}
+
+validate_retry_configuration() {
+  if [[ ! "$VERIFY_MAX_ATTEMPTS" =~ ^[1-9][0-9]*$ ]]; then
+    log_error "VERIFY_MAX_ATTEMPTS must be a positive integer"
+    exit 1
+  fi
+  if [[ ! "$VERIFY_RETRY_DELAY_SECONDS" =~ ^[0-9]+$ ]]; then
+    log_error "VERIFY_RETRY_DELAY_SECONDS must be a non-negative integer"
+    exit 1
+  fi
+  if [[ ! "$VERIFY_REQUEST_TIMEOUT_SECONDS" =~ ^[1-9][0-9]*$ ]]; then
+    log_error "VERIFY_REQUEST_TIMEOUT_SECONDS must be a positive integer"
+    exit 1
+  fi
 }
 
 require_command "$AWS_CLI"
 require_command "$WRANGLER_BIN"
 require_command "$CURL_BIN"
 require_command node
+require_command mktemp
+validate_retry_configuration
 
 if [[ -z "${VERIFY_URL:-}" ]]; then
   log_error "VERIFY_URL is required (the deployed panel origin, for example https://panel.example.com)"
