@@ -57,15 +57,7 @@ const emitRuntimeStateSelectionDiagnostic = (
 };
 
 const isPresentBinding = (binding: unknown): boolean => {
-  if (binding === null || binding === undefined) {
-    return false;
-  }
-
-  if (typeof binding === "object") {
-    return Object.keys(binding as Record<string, unknown>).length > 0;
-  }
-
-  return true;
+  return binding !== null && binding !== undefined;
 };
 
 const hasValidDurableObjectNamespaceBinding = (binding: unknown): boolean => {

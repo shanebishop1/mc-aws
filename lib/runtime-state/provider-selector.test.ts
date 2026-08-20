@@ -9,6 +9,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const cloudflareContextSymbol = Symbol.for("__cloudflare-context__");
 
+class PrototypeBackedDurableObjectNamespace {
+  idFromName(name: string): string {
+    return name;
+  }
+
+  get(): { fetch: () => Promise<Response> } {
+    return {
+      fetch: async () => new Response(),
+    };
+  }
+}
+
+class PrototypeBackedKvNamespace {
+  async get(): Promise<null> {
+    return null;
+  }
+
+  async put(): Promise<void> {}
+
+  async delete(): Promise<void> {}
+}
+
 afterEach(() => {
   delete (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol];
   vi.restoreAllMocks();
@@ -41,7 +63,20 @@ describe("runtime-state provider selector", () => {
       ).toBe(true);
     });
 
+    it("returns true for a prototype-backed durable object namespace with no enumerable own keys", () => {
+      const durableObjectNamespace = new PrototypeBackedDurableObjectNamespace();
+
+      expect(Object.keys(durableObjectNamespace)).toEqual([]);
+      expect(hasCloudflareRuntimeStateBindings({ durableObjectNamespace })).toBe(true);
+    });
+
     it("returns false when durable object binding shape is invalid", () => {
+      expect(
+        hasCloudflareRuntimeStateBindings({
+          durableObjectNamespace: {},
+        })
+      ).toBe(false);
+
       expect(
         hasCloudflareRuntimeStateBindings({
           durableObjectNamespace: {
@@ -94,6 +129,27 @@ describe("runtime-state provider selector", () => {
           reason: "valid_cloudflare_binding_detected",
           nodeEnv: "production",
           bindingSource: "explicit",
+          hasDurableObjectBinding: true,
+          hasValidDurableObjectBinding: true,
+        })
+      );
+    });
+
+    it("selects cloudflare for a prototype-backed durable object namespace", () => {
+      const durableObjectNamespace = new PrototypeBackedDurableObjectNamespace();
+
+      expect(Object.keys(durableObjectNamespace)).toEqual([]);
+      expect(
+        selectRuntimeStateAdapterKind({
+          nodeEnv: "production",
+          bindings: { durableObjectNamespace },
+        })
+      ).toBe("cloudflare");
+
+      expect(console.info).toHaveBeenCalledWith(
+        "[RUNTIME-STATE]",
+        expect.objectContaining({
+          adapterKind: "cloudflare",
           hasDurableObjectBinding: true,
           hasValidDurableObjectBinding: true,
         })
@@ -155,15 +211,32 @@ describe("runtime-state provider selector", () => {
       );
     });
 
+    it("treats an empty durable object namespace as present but invalid", () => {
+      expect(() =>
+        selectRuntimeStateAdapterKind({
+          nodeEnv: "production",
+          bindings: {
+            durableObjectNamespace: {},
+          },
+        })
+      ).toThrow(RuntimeStateConfigurationError);
+
+      expect(console.error).toHaveBeenCalledWith(
+        "[RUNTIME-STATE]",
+        expect.objectContaining({
+          hasDurableObjectBinding: true,
+          hasValidDurableObjectBinding: false,
+        })
+      );
+    });
+
     it("selects cloudflare in production when durable object binding is present in cloudflare context", () => {
+      const durableObjectNamespace = new PrototypeBackedDurableObjectNamespace();
+
+      expect(Object.keys(durableObjectNamespace)).toEqual([]);
       (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
         env: {
-          RUNTIME_STATE_DURABLE_OBJECT: {
-            idFromName: () => "id",
-            get: () => ({
-              fetch: async () => new Response(),
-            }),
-          },
+          RUNTIME_STATE_DURABLE_OBJECT: durableObjectNamespace,
         },
       };
 
@@ -190,13 +263,14 @@ describe("runtime-state provider selector", () => {
 
       expect(console.info).not.toHaveBeenCalled();
 
+      const snapshotKvNamespace = new PrototypeBackedKvNamespace();
+      expect(Object.keys(snapshotKvNamespace)).toEqual([]);
+
       expect(
         selectRuntimeStateAdapterKind({
           nodeEnv: "development",
           bindings: {
-            snapshotKvNamespace: {
-              get: async () => null,
-            },
+            snapshotKvNamespace,
           },
         })
       ).toBe("in-memory");
@@ -233,6 +307,20 @@ describe("runtime-state provider selector", () => {
         },
       });
 
+      expect(adapter.kind).toBe("cloudflare");
+    });
+
+    it("returns cloudflare adapter through the asynchronous context path for a prototype-backed namespace", async () => {
+      const durableObjectNamespace = new PrototypeBackedDurableObjectNamespace();
+      (globalThis as unknown as Record<symbol, unknown>)[cloudflareContextSymbol] = {
+        env: {
+          RUNTIME_STATE_DURABLE_OBJECT: durableObjectNamespace,
+        },
+      };
+
+      const adapter = await getRuntimeStateAdapterAsync({ nodeEnv: "production" });
+
+      expect(Object.keys(durableObjectNamespace)).toEqual([]);
       expect(adapter.kind).toBe("cloudflare");
     });
 
