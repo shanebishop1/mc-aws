@@ -16,6 +16,12 @@ export interface CloudFormationTemplate extends JsonRecord {
   Parameters?: Record<string, JsonRecord>;
 }
 
+export interface PinnedInstanceTemplate {
+  template: CloudFormationTemplate;
+  parameterOverrides: Record<string, string>;
+  imageParameterName?: string;
+}
+
 export interface StackIdentity {
   accountId: string;
   region: string;
@@ -44,6 +50,9 @@ export interface CloudAssemblyIdentityDocuments {
 }
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
+const AMI_ID_PATTERN = /^ami-[a-f0-9]{8,17}$/;
+const SSM_AMI_PARAMETER_TYPE = "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>";
+const PINNED_AMI_PARAMETER_TYPE = "AWS::EC2::Image::Id";
 
 function exactRecord(value: unknown, context: string): JsonRecord {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`${context} is malformed.`);
@@ -185,13 +194,206 @@ export function legacyResourcesPresentAndRetained(template: CloudFormationTempla
   return ruleSetPresent;
 }
 
+function deployedParameter(
+  deployedParameters: JsonRecord[],
+  parameterName: string
+): { ParameterKey: string; ParameterValue: string; ResolvedValue?: string; UsePreviousValue?: boolean } {
+  const matches = deployedParameters.filter((parameter) => parameter?.ParameterKey === parameterName);
+  if (matches.length !== 1) {
+    throw new Error(`Expected exactly one deployed value for ImageId parameter ${parameterName}.`);
+  }
+  const match = matches[0];
+  if (typeof match.ParameterValue !== "string" || !match.ParameterValue) {
+    throw new Error(`Deployed ImageId parameter ${parameterName} has a malformed ParameterValue.`);
+  }
+  if (match.ResolvedValue !== undefined && typeof match.ResolvedValue !== "string") {
+    throw new Error(`Deployed ImageId parameter ${parameterName} has a malformed ResolvedValue.`);
+  }
+  if (match.UsePreviousValue !== undefined && typeof match.UsePreviousValue !== "boolean") {
+    throw new Error(`Deployed ImageId parameter ${parameterName} has malformed UsePreviousValue semantics.`);
+  }
+  return match as {
+    ParameterKey: string;
+    ParameterValue: string;
+    ResolvedValue?: string;
+    UsePreviousValue?: boolean;
+  };
+}
+
+interface ParameterUsage {
+  directRefs: number;
+  subInterpolations: number;
+}
+
+function countSubInterpolations(value: unknown, parameterName: string): number {
+  const template = typeof value === "string" ? value : Array.isArray(value) ? value[0] : undefined;
+  if (typeof template !== "string") return 0;
+  let count = 0;
+  for (const match of template.matchAll(/\$\{(!?)([^}]+)\}/g)) {
+    if (match[1] !== "!" && match[2] === parameterName) count += 1;
+  }
+  return count;
+}
+
+function countParameterUsage(value: unknown, parameterName: string): ParameterUsage {
+  if (!value || typeof value !== "object") return { directRefs: 0, subInterpolations: 0 };
+  if (Array.isArray(value)) {
+    return value.reduce<ParameterUsage>(
+      (usage, item) => {
+        const nested = countParameterUsage(item, parameterName);
+        return {
+          directRefs: usage.directRefs + nested.directRefs,
+          subInterpolations: usage.subInterpolations + nested.subInterpolations,
+        };
+      },
+      { directRefs: 0, subInterpolations: 0 }
+    );
+  }
+  const record = value as JsonRecord;
+  const nested = countParameterUsage(Object.values(record), parameterName);
+  return {
+    directRefs: (record.Ref === parameterName ? 1 : 0) + nested.directRefs,
+    subInterpolations:
+      (Object.hasOwn(record, "Fn::Sub") ? countSubInterpolations(record["Fn::Sub"], parameterName) : 0) +
+      nested.subInterpolations,
+  };
+}
+
+function assertExclusiveImageParameterRef(template: CloudFormationTemplate, parameterName: string): void {
+  const scannedTemplate = clone(template);
+  if (scannedTemplate.Parameters) delete scannedTemplate.Parameters[parameterName];
+  const usage = countParameterUsage(scannedTemplate, parameterName);
+  if (usage.directRefs !== 1 || usage.subInterpolations !== 0) {
+    throw new Error(
+      `ImageId parameter ${parameterName} must be used only by the deployed instance ImageId; found ${usage.directRefs} direct Ref(s) and ${usage.subInterpolations} Fn::Sub interpolation(s) across the template.`
+    );
+  }
+}
+
+function exactImageParameterName(imageId: unknown): string {
+  const imageReference = exactRecord(imageId, `${INSTANCE_LOGICAL_ID} ImageId`);
+  const parameterName = imageReference.Ref;
+  if (
+    Object.keys(imageReference).length !== 1 ||
+    typeof parameterName !== "string" ||
+    !/^[A-Za-z][A-Za-z0-9]*$/.test(parameterName)
+  ) {
+    throw new Error(`${INSTANCE_LOGICAL_ID} ImageId must be a literal AMI or one exact parameter Ref.`);
+  }
+  return parameterName;
+}
+
+function pinImageParameterDefinition(
+  liveTemplate: CloudFormationTemplate,
+  pinnedTemplate: CloudFormationTemplate,
+  parameterName: string,
+  deployed: { ParameterValue: string; ResolvedValue?: string },
+  physicalImageId: string
+): void {
+  const definition = exactRecord(liveTemplate.Parameters?.[parameterName], `ImageId parameter ${parameterName}`);
+  const pinnedDefinition = pinnedTemplate.Parameters?.[parameterName];
+  if (!pinnedDefinition) throw new Error(`ImageId parameter ${parameterName} disappeared while pinning.`);
+  assertExclusiveImageParameterRef(liveTemplate, parameterName);
+
+  if (definition.Type === SSM_AMI_PARAMETER_TYPE) {
+    if (!AMI_ID_PATTERN.test(deployed.ResolvedValue ?? "") || deployed.ResolvedValue !== physicalImageId) {
+      throw new Error(
+        `ResolvedValue for dynamic ImageId parameter ${parameterName} does not exactly match the physical instance AMI.`
+      );
+    }
+    pinnedDefinition.Type = PINNED_AMI_PARAMETER_TYPE;
+    if (Object.hasOwn(pinnedDefinition, "Default")) pinnedDefinition.Default = physicalImageId;
+    return;
+  }
+
+  if (definition.Type !== PINNED_AMI_PARAMETER_TYPE) {
+    throw new Error(
+      `ImageId parameter ${parameterName} has unsupported type ${JSON.stringify(definition.Type)}; refusing to reinterpret it.`
+    );
+  }
+  if (!AMI_ID_PATTERN.test(deployed.ParameterValue) || deployed.ParameterValue !== physicalImageId) {
+    throw new Error(
+      `ParameterValue for pinned ImageId parameter ${parameterName} does not exactly match the physical instance AMI.`
+    );
+  }
+  if (deployed.ResolvedValue !== undefined && deployed.ResolvedValue !== physicalImageId) {
+    throw new Error(
+      `ResolvedValue for pinned ImageId parameter ${parameterName} does not exactly match the physical instance AMI.`
+    );
+  }
+  if (Object.hasOwn(pinnedDefinition, "Default")) pinnedDefinition.Default = physicalImageId;
+}
+
+export function pinDeployedInstanceImage(
+  liveTemplate: CloudFormationTemplate,
+  deployedParameters: JsonRecord[],
+  physicalImageId: string
+): PinnedInstanceTemplate {
+  if (!AMI_ID_PATTERN.test(physicalImageId)) throw new Error("Physical instance ImageId is malformed.");
+  const liveInstance = resource(liveTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  const properties = exactRecord(liveInstance.Properties, `${INSTANCE_LOGICAL_ID} properties`);
+  const imageId = properties.ImageId;
+
+  if (typeof imageId === "string") {
+    if (!AMI_ID_PATTERN.test(imageId) || imageId !== physicalImageId) {
+      throw new Error("Literal deployed instance ImageId does not exactly match the physical instance AMI.");
+    }
+    return { template: clone(liveTemplate), parameterOverrides: {} };
+  }
+
+  const parameterName = exactImageParameterName(imageId);
+  if (!liveTemplate.Parameters?.[parameterName]) {
+    throw new Error(`ImageId Ref ${parameterName} does not resolve to one template parameter definition.`);
+  }
+  const deployed = deployedParameter(deployedParameters, parameterName);
+  const pinned = clone(liveTemplate);
+  pinImageParameterDefinition(liveTemplate, pinned, parameterName, deployed, physicalImageId);
+
+  const pinnedInstance = resource(pinned, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  if (!templatesEqual(liveInstance, pinnedInstance) || !templatesEqual(imageId, pinnedInstance.Properties.ImageId)) {
+    throw new Error("Pinning the ImageId parameter unexpectedly changed the deployed EC2 resource expression.");
+  }
+  return {
+    template: pinned,
+    parameterOverrides: { [parameterName]: physicalImageId },
+    imageParameterName: parameterName,
+  };
+}
+
+export function assertPinnedInstanceImageTransition(
+  liveTemplate: CloudFormationTemplate,
+  candidateTemplate: CloudFormationTemplate,
+  candidateParameters: JsonRecord[],
+  physicalImageId: string,
+  requireExplicitParameterValue = false
+): PinnedInstanceTemplate {
+  const pinned = pinDeployedInstanceImage(candidateTemplate, candidateParameters, physicalImageId);
+  if (!templatesEqual(pinned.template, candidateTemplate)) {
+    throw new Error("Candidate template does not already contain the exact pinned ImageId parameter definition.");
+  }
+  const liveInstance = resource(liveTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  const candidateInstance = resource(candidateTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  if (!templatesEqual(liveInstance.Properties.ImageId, candidateInstance.Properties.ImageId)) {
+    throw new Error("Candidate template changed the deployed EC2 ImageId expression.");
+  }
+  if (requireExplicitParameterValue && pinned.imageParameterName) {
+    const parameter = deployedParameter(candidateParameters, pinned.imageParameterName);
+    if (parameter.UsePreviousValue === true || parameter.ParameterValue !== physicalImageId) {
+      throw new Error("Candidate ImageId parameter does not explicitly supply the exact physical AMI.");
+    }
+  }
+  return pinned;
+}
+
 export function buildPinnedInstanceBridgeTemplate(
   liveTemplate: CloudFormationTemplate,
   currentTemplate: CloudFormationTemplate,
-  physicalImageId?: string
-): CloudFormationTemplate {
+  deployedParameters: JsonRecord[],
+  physicalImageId: string
+): PinnedInstanceTemplate {
   legacyResourcesPresentAndRetained(liveTemplate);
-  const liveInstance = resource(liveTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  const pinnedLive = pinDeployedInstanceImage(liveTemplate, deployedParameters, physicalImageId);
+  const liveInstance = resource(pinnedLive.template, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
   resource(currentTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
 
   for (const legacyId of [LEGACY_RULE_SET_LOGICAL_ID, LEGACY_ACTIVATION_LOGICAL_ID]) {
@@ -202,15 +404,57 @@ export function buildPinnedInstanceBridgeTemplate(
 
   const bridge = clone(currentTemplate);
   bridge.Resources[INSTANCE_LOGICAL_ID] = clone(liveInstance);
-  if (physicalImageId) {
-    if (!/^ami-[a-f0-9]{8,17}$/.test(physicalImageId)) throw new Error("Physical instance ImageId is malformed.");
-    bridge.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = physicalImageId;
+  for (const parameterName of Object.keys(pinnedLive.parameterOverrides)) {
+    const definition = pinnedLive.template.Parameters?.[parameterName];
+    if (!definition) throw new Error(`Pinned ImageId parameter ${parameterName} has no template definition.`);
+    bridge.Parameters ??= {};
+    bridge.Parameters[parameterName] = clone(definition);
+    assertExclusiveImageParameterRef(bridge, parameterName);
   }
-  return bridge;
+  if (!templatesEqual(liveInstance, bridge.Resources[INSTANCE_LOGICAL_ID])) {
+    throw new Error("Bridge creation unexpectedly changed the deployed EC2 resource expression.");
+  }
+  return { template: bridge, parameterOverrides: pinnedLive.parameterOverrides };
 }
 
 export function templateParameterNames(template: CloudFormationTemplate): string[] {
   return Object.keys(template.Parameters ?? {}).sort();
+}
+
+export function buildChangeSetParameters(
+  template: CloudFormationTemplate,
+  liveTemplate: CloudFormationTemplate,
+  parameterOverrides: Record<string, string> = {},
+  environment: Record<string, string | undefined> = process.env
+): JsonRecord[] {
+  const templateNames = templateParameterNames(template);
+  const templateNameSet = new Set(templateNames);
+  for (const [name, value] of Object.entries(parameterOverrides)) {
+    if (!templateNameSet.has(name) || typeof value !== "string" || !value) {
+      throw new Error(`Change-set parameter override ${name} is unknown or malformed.`);
+    }
+  }
+
+  const liveNames = new Set(templateParameterNames(liveTemplate));
+  const parameters: JsonRecord[] = [];
+  for (const name of templateNames) {
+    const override = parameterOverrides[name];
+    if (override !== undefined) {
+      parameters.push({ ParameterKey: name, ParameterValue: override });
+      continue;
+    }
+    if (liveNames.has(name)) {
+      parameters.push({ ParameterKey: name, UsePreviousValue: true });
+      continue;
+    }
+    const definition = template.Parameters?.[name];
+    if (definition && Object.hasOwn(definition, "Default")) continue;
+    const envName = `MC_AWS_MIGRATION_PARAMETER_${name}`;
+    const value = environment[envName];
+    if (value === undefined) throw new Error(`New required parameter ${name} needs environment variable ${envName}.`);
+    parameters.push({ ParameterKey: name, ParameterValue: value });
+  }
+  return parameters;
 }
 
 function tagsByKey(tags: Array<{ Key?: string; Value?: string }> | undefined, context: string): Map<string, string> {

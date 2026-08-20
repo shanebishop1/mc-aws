@@ -43,14 +43,18 @@ pnpm migrate:existing -- \
   --confirm-stack-id "$STACK_ID"
 ```
 
-This starts from the **deployed** template and changes only these template attributes:
+This starts from the **deployed** template, installs these lifecycle policies, and—when needed—also converts only the instance's referenced AMI parameter definition as described below:
 
 | Logical ID | Expected type | Required policies |
 | --- | --- | --- |
 | `MinecraftRuleSet298765D1` | `AWS::SES::ReceiptRuleSet` | `DeletionPolicy: Retain`, `UpdateReplacePolicy: Retain` |
 | `ActivateRuleSet3E62562C` | `Custom::AWS` | `DeletionPolicy: Retain`, `UpdateReplacePolicy: Retain` |
 
-All legacy SES properties, including the old activation handler properties, remain byte-for-byte equivalent. To prevent an `AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>` refresh from selecting a newer AMI during this otherwise policy-only update, the instance's template `ImageId` is pinned to the exact AMI reported by the identity-checked physical instance. No other instance property changes. The operator creates a change set and refuses/deletes it if CloudFormation reports **any** instance action or any action outside non-replacing modifications to those two legacy logical IDs. Only a safe change set is executed; the command then waits for the update and re-reads the deployed template. Stop if this stage fails; do not continue with a direct current-template deployment.
+All legacy SES properties, including the old activation handler properties, remain byte-for-byte equivalent. The complete deployed EC2 resource, including its `ImageId` expression, also remains byte-for-byte equivalent. When `ImageId` is an exact `Ref` to an `AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>`, the operator verifies that the stack parameter's old `ResolvedValue` exactly equals the identity-checked physical instance AMI, changes only that parameter definition to the non-refreshing `AWS::EC2::Image::Id` type (and pins an existing default), and explicitly supplies that same physical AMI as the change-set `ParameterValue`. This prevents both latest-SSM refresh and an EC2 property-expression diff. The parameter must have exactly one direct `Ref` across the entire template—the instance `ImageId`—and no `Fn::Sub` interpolation; the referenced parameter's own definition is excluded from that usage scan. A literal AMI or already-pinned parameter is accepted only when its effective value exactly matches the physical instance; malformed, missing, reused dynamic, unsupported, or mismatched references fail closed.
+
+The operator creates a change set and refuses/deletes it if CloudFormation reports **any** instance action or any action outside non-replacing modifications to those two legacy logical IDs. Only a safe change set is executed; the command then waits for the update, re-reads the deployed template and stack parameters, and verifies the original EC2 `ImageId` expression is unchanged. Stop if this stage fails; do not continue with a direct current-template deployment.
+
+Stage 1 does not no-op merely because both Retain policies are already present. It first constructs and validates the pinned parameter state against the physical AMI and skips the update only when the deployed template and stack parameters are already fully pinned. Therefore an older partial attempt that deployed Retain policies but left the SSM AMI parameter dynamic still requires Stage 1.
 
 ## Stage 2: establish lifecycle ownership
 
@@ -83,9 +87,9 @@ pnpm migrate:existing -- \
   --confirm-stack-id "$STACK_ID"
 ```
 
-This stage synthesizes current CDK, copies the complete deployed `MinecraftServerACE914F3` resource definition (with its `ImageId` kept pinned to the identity-checked physical AMI) into that template, publishes the current Lambda assets, and creates—but does **not** execute—an update change set. Before returning a synthesized template or publishing anything, the operator verifies the cloud assembly stack environment and every asset destination account, region, publishing role, and file-asset bucket against the exact confirmed stack identity. Thus current non-instance remediation such as `WorkerRuntimeUser` can deploy while the EC2 resource remains exactly as CloudFormation already manages it.
+This stage synthesizes current CDK and copies the complete deployed `MinecraftServerACE914F3` resource definition into that template without rewriting its `ImageId` expression. For an SSM-backed live `Ref`, it carries forward the converted `AWS::EC2::Image::Id` parameter definition and explicitly supplies the identity-checked physical AMI; an already-pinned live parameter is likewise preserved and explicitly supplied. It then publishes the current Lambda assets and creates—but does **not** execute—an update change set. Before returning a synthesized template or publishing anything, the operator verifies the cloud assembly stack environment and every asset destination account, region, publishing role, and file-asset bucket against the exact confirmed stack identity. Thus current non-instance remediation such as `WorkerRuntimeUser` can deploy while the EC2 property remains exactly as CloudFormation already manages it.
 
-Existing CloudFormation parameters use their previous values. If current configuration introduces a required parameter that the deployed template did not have, the command refuses until its named `MC_AWS_MIGRATION_PARAMETER_<ParameterLogicalId>` environment variable is present; do not place the value on the command line. The temporary mode-`0600` request file is removed after the API call.
+Existing CloudFormation parameters use their previous values except the live instance's pinned AMI parameter, which always receives the verified physical AMI as an explicit `ParameterValue`. If current configuration introduces a required parameter that the deployed template did not have, the command refuses until its named `MC_AWS_MIGRATION_PARAMETER_<ParameterLogicalId>` environment variable is present; do not place the value on the command line. The temporary mode-`0600` request file is removed after the API call.
 
 The operator deletes and rejects its change set unless CloudFormation reports:
 
@@ -114,7 +118,9 @@ pnpm migrate:existing -- \
   --change-set-name <reviewed-change-set-arn>
 ```
 
-Immediately before execution, the operator revalidates the Retain policies, ownership and attachment, exact StackId, change-set status/description, both legacy removals, and absence of any instance action. After CloudFormation completes, it verifies that the same instance and root volume remain attached and tagged, and that the old SES resources are no longer managed by the stack. Because both were retained first, removal does not invoke the historical activation resource's delete handler or delete the account-wide rule set.
+Immediately before execution, the operator revalidates the Retain policies, ownership and attachment, exact StackId, change-set status/description, both legacy removals, and absence of any instance action. It then retrieves the template associated with the exact immutable change-set ID through CloudFormation `GetTemplate`, verifies its EC2 `ImageId` expression is byte-equivalent to the live expression, proves its AMI parameter definition is already non-refreshing, and requires the described change-set parameter payload to explicitly supply the exact physical AMI rather than `UsePreviousValue`.
+
+After CloudFormation completes, the operator re-reads the stack, original template, stack parameters, EC2 instance, and root volume. Success requires the pinned parameter type/value and EC2 `ImageId` expression to remain exact, the physical AMI to be unchanged, the same instance and root volume to remain attached and tagged, and the old SES resources to no longer be managed by the stack. Because both legacy resources were retained first, removal does not invoke the historical activation resource's delete handler or delete the account-wide rule set.
 
 The retained rule set and activation physical resource are now operator-managed. Confirm SES remains active and remove only obsolete project receipt rules after independent ownership review.
 
@@ -124,7 +130,7 @@ The bridge creates the dedicated Worker IAM user but does not deploy Cloudflare.
 
 The bridge intentionally does not alter `infra/lib/minecraft-stack.ts` or pretend the legacy EC2 definition is current. `setup.sh` and `pnpm cdk:deploy` run a read-only guard and refuse an existing stack while either legacy SES resource remains managed, the deployed EC2 resource differs from current CDK, **or the synthesized instance AMI is a dynamic/unpinned value such as CDK's latest-AMI SSM parameter**. Template equality cannot prove safety for a dynamic AMI because CloudFormation may re-resolve it during an update and replace the instance. Routine deployment remains blocked until the desired CDK uses an explicit AMI ID matching the deployed instance, or updates continue through reviewed pinned-instance bridges.
 
-- To ship additional non-instance infrastructure while the instance remains legacy, repeat the `prepare-bridge` and `execute-bridge` stages; the full live instance resource is pinned each time.
+- To ship additional non-instance infrastructure while the instance remains legacy, repeat the `prepare-bridge` and `execute-bridge` stages; the full live instance resource and its pinned parameter definition/value are preserved each time.
 - Before converging the EC2 definition, make and verify an application-consistent backup plus a completed snapshot of the exact root volume, test the restore path, and review a dedicated final change set that explicitly states whether replacement occurs. Alternatively, change the desired CDK instance properties so CloudFormation reports no replacement. A raw `cdk deploy` bypasses the repository guard and is therefore an explicit operator exception, not a migration step.
 - Do not delete the retained SES rule set merely to make a diff disappear. Account-wide activation remains operator-owned.
 

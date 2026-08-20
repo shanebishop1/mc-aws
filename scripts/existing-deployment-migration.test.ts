@@ -9,20 +9,25 @@ import {
   assertExclusiveTaggingAcknowledged,
   assertLegacyResourcesRetained,
   assertOwnershipTagsComplete,
+  assertPinnedInstanceImageTransition,
   assertSafeBridgeChangeSet,
   assertSafeRetentionChangeSet,
   assertStandardDeploymentInstanceSafe,
   assertSynthesizedAssemblyIdentity,
+  buildChangeSetParameters,
   buildLegacyRetentionTemplate,
   buildPinnedInstanceBridgeTemplate,
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
   normalizePnpmArguments,
+  pinDeployedInstanceImage,
 } from "./existing-deployment-migration";
 
 const stackId = "arn:aws:cloudformation:us-west-1:123456789012:stack/MinecraftStack/stack-id";
 const instanceId = `i-${"1".repeat(17)}`;
 const volumeId = `vol-${"2".repeat(17)}`;
+const physicalImageId = `ami-${"3".repeat(17)}`;
+const imageParameterName = "SsmParameterValueLatestAmi";
 
 const liveTemplate = (): CloudFormationTemplate => ({
   Resources: {
@@ -40,16 +45,40 @@ const liveTemplate = (): CloudFormationTemplate => ({
     },
     [INSTANCE_LOGICAL_ID]: {
       Type: "AWS::EC2::Instance",
-      Properties: { ImageId: "ami-legacy", UserData: "legacy", BlockDeviceMappings: [{ DeviceName: "/dev/xvda" }] },
+      Properties: {
+        ImageId: physicalImageId,
+        UserData: "legacy",
+        BlockDeviceMappings: [{ DeviceName: "/dev/xvda" }],
+      },
     },
   },
 });
+
+const dynamicLiveTemplate = (): CloudFormationTemplate => {
+  const template = liveTemplate();
+  template.Parameters = {
+    [imageParameterName]: {
+      Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      Default: "/aws/service/ami-amazon-linux-latest/example",
+    },
+  };
+  template.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = { Ref: imageParameterName };
+  return template;
+};
+
+const dynamicStackParameters = () => [
+  {
+    ParameterKey: imageParameterName,
+    ParameterValue: "/aws/service/ami-amazon-linux-latest/example",
+    ResolvedValue: physicalImageId,
+  },
+];
 
 const currentTemplate = (): CloudFormationTemplate => ({
   Resources: {
     [INSTANCE_LOGICAL_ID]: {
       Type: "AWS::EC2::Instance",
-      Properties: { ImageId: "ami-current", UserData: "remediated", PropagateTagsToVolumeOnCreation: true },
+      Properties: { ImageId: `ami-${"4".repeat(17)}`, UserData: "remediated", PropagateTagsToVolumeOnCreation: true },
     },
     WorkerRuntimeUser: { Type: "AWS::IAM::User" },
   },
@@ -67,7 +96,7 @@ const instanceResponse = (includeOwnership = true) => ({
       Instances: [
         {
           InstanceId: instanceId,
-          ImageId: `ami-${"3".repeat(17)}`,
+          ImageId: physicalImageId,
           RootDeviceName: "/dev/xvda",
           BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: volumeId, DeleteOnTermination: true } }],
           Tags: [
@@ -108,10 +137,21 @@ describe("existing deployment migration template contracts", () => {
     expect(live.Resources[LEGACY_RULE_SET_LOGICAL_ID].DeletionPolicy).toBe("Delete");
   });
 
+  it("does not treat already-retained policies with a dynamic AMI parameter as fully pinned", () => {
+    const retainedDynamic = buildLegacyRetentionTemplate(dynamicLiveTemplate());
+    const retainedAgain = buildLegacyRetentionTemplate(retainedDynamic);
+    expect(retainedAgain).toEqual(retainedDynamic);
+
+    const pinned = pinDeployedInstanceImage(retainedAgain, dynamicStackParameters(), physicalImageId);
+    expect(pinned.template).not.toEqual(retainedDynamic);
+    expect(pinned.template.Parameters?.[imageParameterName].Type).toBe("AWS::EC2::Image::Id");
+    expect(pinned.parameterOverrides).toEqual({ [imageParameterName]: physicalImageId });
+  });
+
   it("pins the complete deployed instance resource while taking all other resources from current CDK", () => {
     const retained = buildLegacyRetentionTemplate(liveTemplate());
     const current = currentTemplate();
-    const bridge = buildPinnedInstanceBridgeTemplate(retained, current);
+    const bridge = buildPinnedInstanceBridgeTemplate(retained, current, [], physicalImageId).template;
 
     expect(bridge.Resources[INSTANCE_LOGICAL_ID]).toEqual(retained.Resources[INSTANCE_LOGICAL_ID]);
     expect(bridge.Resources.WorkerRuntimeUser).toEqual(current.Resources.WorkerRuntimeUser);
@@ -119,15 +159,155 @@ describe("existing deployment migration template contracts", () => {
     expect(bridge.Resources[LEGACY_ACTIVATION_LOGICAL_ID]).toBeUndefined();
   });
 
-  it("pins the bridge ImageId to the exact physical AMI instead of refreshing an SSM AMI parameter", () => {
-    const retained = buildLegacyRetentionTemplate(liveTemplate());
-    retained.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = { Ref: "LatestAmiParameter" };
-    const bridge = buildPinnedInstanceBridgeTemplate(retained, currentTemplate(), `ami-${"4".repeat(17)}`);
+  it("converts only the dynamic ImageId parameter while preserving the EC2 property bytes", () => {
+    const live = dynamicLiveTemplate();
+    const originalImageExpression = JSON.stringify(live.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId);
+    const originalInstance = JSON.stringify(live.Resources[INSTANCE_LOGICAL_ID]);
+    const pinned = pinDeployedInstanceImage(live, dynamicStackParameters(), physicalImageId);
 
-    expect(bridge.Resources[INSTANCE_LOGICAL_ID].Properties).toMatchObject({
-      ImageId: `ami-${"4".repeat(17)}`,
-      UserData: "legacy",
+    expect(pinned.template.Parameters?.[imageParameterName]).toEqual({
+      Type: "AWS::EC2::Image::Id",
+      Default: physicalImageId,
     });
+    expect(pinned.parameterOverrides).toEqual({ [imageParameterName]: physicalImageId });
+    expect(JSON.stringify(pinned.template.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId)).toBe(
+      originalImageExpression
+    );
+    expect(JSON.stringify(pinned.template.Resources[INSTANCE_LOGICAL_ID])).toBe(originalInstance);
+    expect(live.Parameters?.[imageParameterName].Type).toBe("AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>");
+  });
+
+  it("refuses mismatched effective values and malformed or unsupported ImageId refs", () => {
+    const mismatched = dynamicStackParameters();
+    mismatched[0].ResolvedValue = `ami-${"9".repeat(17)}`;
+    expect(() => pinDeployedInstanceImage(dynamicLiveTemplate(), mismatched, physicalImageId)).toThrow(
+      /ResolvedValue.*does not exactly match/
+    );
+
+    const malformed = dynamicLiveTemplate();
+    malformed.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = { Ref: imageParameterName, Extra: true };
+    expect(() => pinDeployedInstanceImage(malformed, dynamicStackParameters(), physicalImageId)).toThrow(
+      /one exact parameter Ref/
+    );
+
+    const unsupported = dynamicLiveTemplate();
+    if (unsupported.Parameters) unsupported.Parameters[imageParameterName].Type = "String";
+    expect(() => pinDeployedInstanceImage(unsupported, dynamicStackParameters(), physicalImageId)).toThrow(
+      /unsupported type/
+    );
+  });
+
+  it("rejects dynamic ImageId parameter reuse in non-resource sections and Fn::Sub", () => {
+    const outputReuse = dynamicLiveTemplate();
+    outputReuse.Outputs = { ReusedAmi: { Value: { Ref: imageParameterName } } };
+    expect(() => pinDeployedInstanceImage(outputReuse, dynamicStackParameters(), physicalImageId)).toThrow(
+      /2 direct Ref\(s\).*[0] Fn::Sub/
+    );
+
+    const subReuse = dynamicLiveTemplate();
+    subReuse.Metadata = { ReusedAmi: { "Fn::Sub": `ami=${"${SsmParameterValueLatestAmi}"}` } };
+    expect(() => pinDeployedInstanceImage(subReuse, dynamicStackParameters(), physicalImageId)).toThrow(
+      /1 direct Ref\(s\).*1 Fn::Sub/
+    );
+  });
+
+  it("handles already-literal and already-pinned ImageIds only when their effective AMI is exact", () => {
+    expect(pinDeployedInstanceImage(liveTemplate(), [], physicalImageId).parameterOverrides).toEqual({});
+    expect(() => pinDeployedInstanceImage(liveTemplate(), [], `ami-${"9".repeat(17)}`)).toThrow(
+      /Literal.*does not exactly match/
+    );
+
+    const pinnedLive = dynamicLiveTemplate();
+    if (pinnedLive.Parameters) {
+      pinnedLive.Parameters[imageParameterName] = { Type: "AWS::EC2::Image::Id", Default: physicalImageId };
+    }
+    const deployed = [{ ParameterKey: imageParameterName, ParameterValue: physicalImageId }];
+    expect(pinDeployedInstanceImage(pinnedLive, deployed, physicalImageId).parameterOverrides).toEqual({
+      [imageParameterName]: physicalImageId,
+    });
+    deployed[0].ParameterValue = `ami-${"8".repeat(17)}`;
+    expect(() => pinDeployedInstanceImage(pinnedLive, deployed, physicalImageId)).toThrow(
+      /ParameterValue.*does not exactly match/
+    );
+  });
+
+  it("uses an explicit pinned parameter override instead of UsePreviousValue", () => {
+    const live = dynamicLiveTemplate();
+    const target = dynamicLiveTemplate();
+    target.Parameters = {
+      ...target.Parameters,
+      ExistingParameter: { Type: "String" },
+      NewRequiredParameter: { Type: "String" },
+    };
+    live.Parameters = { ...live.Parameters, ExistingParameter: { Type: "String" } };
+
+    expect(
+      buildChangeSetParameters(
+        target,
+        live,
+        { [imageParameterName]: physicalImageId },
+        { MC_AWS_MIGRATION_PARAMETER_NewRequiredParameter: "new-value" }
+      )
+    ).toEqual([
+      { ParameterKey: "ExistingParameter", UsePreviousValue: true },
+      { ParameterKey: "NewRequiredParameter", ParameterValue: "new-value" },
+      { ParameterKey: imageParameterName, ParameterValue: physicalImageId },
+    ]);
+    expect(() => buildChangeSetParameters(target, live, { UnknownParameter: physicalImageId }, {})).toThrow(
+      /unknown or malformed/
+    );
+  });
+
+  it("preserves the live instance Ref and pinned parameter definition/value in the stage-3 bridge", () => {
+    const retained = buildLegacyRetentionTemplate(dynamicLiveTemplate());
+    const current = currentTemplate();
+    current.Parameters = {
+      [imageParameterName]: {
+        Type: "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+        Default: "/aws/service/ami-amazon-linux-latest/newer",
+      },
+    };
+    const bridge = buildPinnedInstanceBridgeTemplate(retained, current, dynamicStackParameters(), physicalImageId);
+
+    expect(bridge.template.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId).toEqual({ Ref: imageParameterName });
+    expect(bridge.template.Parameters?.[imageParameterName]).toEqual({
+      Type: "AWS::EC2::Image::Id",
+      Default: physicalImageId,
+    });
+    expect(bridge.parameterOverrides).toEqual({ [imageParameterName]: physicalImageId });
+  });
+
+  it("validates the exact pending and deployed pinned-image template/parameter state", () => {
+    const live = buildLegacyRetentionTemplate(dynamicLiveTemplate());
+    const bridge = buildPinnedInstanceBridgeTemplate(
+      live,
+      currentTemplate(),
+      dynamicStackParameters(),
+      physicalImageId
+    );
+    const explicitParameters = [{ ParameterKey: imageParameterName, ParameterValue: physicalImageId }];
+
+    expect(() =>
+      assertPinnedInstanceImageTransition(live, bridge.template, explicitParameters, physicalImageId, true)
+    ).not.toThrow();
+    expect(() =>
+      assertPinnedInstanceImageTransition(
+        live,
+        bridge.template,
+        [{ ...explicitParameters[0], UsePreviousValue: true }],
+        physicalImageId,
+        true
+      )
+    ).toThrow(/does not explicitly supply/);
+    expect(() =>
+      assertPinnedInstanceImageTransition(live, dynamicLiveTemplate(), dynamicStackParameters(), physicalImageId, true)
+    ).toThrow(/does not already contain the exact pinned/);
+
+    const changedExpression = structuredClone(bridge.template);
+    changedExpression.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = physicalImageId;
+    expect(() =>
+      assertPinnedInstanceImageTransition(live, changedExpression, explicitParameters, physicalImageId, true)
+    ).toThrow(/changed the deployed EC2 ImageId expression/);
   });
 
   it("rejects a bridge change set that touches the EC2 instance", () => {
@@ -231,7 +411,9 @@ describe("existing deployment migration template contracts", () => {
     const postBridgeLive = currentTemplate();
     postBridgeLive.Resources[INSTANCE_LOGICAL_ID] = liveTemplate().Resources[INSTANCE_LOGICAL_ID];
 
-    expect(() => buildPinnedInstanceBridgeTemplate(postBridgeLive, currentTemplate())).not.toThrow();
+    expect(() =>
+      buildPinnedInstanceBridgeTemplate(postBridgeLive, currentTemplate(), [], physicalImageId)
+    ).not.toThrow();
     expect(() =>
       assertSafeBridgeChangeSet(
         [{ ResourceChange: { LogicalResourceId: "WorkerRuntimePolicy", Action: "Modify" } }],

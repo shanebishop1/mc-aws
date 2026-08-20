@@ -15,17 +15,19 @@ import {
   assertExclusiveTaggingAcknowledged,
   assertLegacyResourcesRetained,
   assertOwnershipTagsComplete,
+  assertPinnedInstanceImageTransition,
   assertSafeBridgeChangeSet,
   assertSafeRetentionChangeSet,
   assertStandardDeploymentInstanceSafe,
   assertSynthesizedAssemblyIdentity,
+  buildChangeSetParameters,
   buildLegacyRetentionTemplate,
   buildPinnedInstanceBridgeTemplate,
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
   legacyResourcesPresentAndRetained,
   normalizePnpmArguments,
-  templateParameterNames,
+  pinDeployedInstanceImage,
   templatesEqual,
 } from "./existing-deployment-migration";
 
@@ -174,29 +176,26 @@ function getLiveTemplate(identity: StackIdentity): CloudFormationTemplate {
   return (typeof body === "string" ? JSON.parse(body) : body) as CloudFormationTemplate;
 }
 
+function getChangeSetTemplate(identity: StackIdentity, changeSetName: string): CloudFormationTemplate {
+  const response = aws(identity.region, [
+    "cloudformation",
+    "get-template",
+    "--stack-name",
+    identity.stackId,
+    "--change-set-name",
+    changeSetName,
+    "--template-stage",
+    "Original",
+  ]);
+  const body = response.TemplateBody;
+  return (typeof body === "string" ? JSON.parse(body) : body) as CloudFormationTemplate;
+}
+
 function requestFile<T>(directory: string, name: string, request: T): string {
   const file = path.join(directory, name);
   writeFileSync(file, JSON.stringify(request), { mode: 0o600 });
   chmodSync(file, 0o600);
   return file;
-}
-
-function parameterValues(template: CloudFormationTemplate, liveTemplate: CloudFormationTemplate): JsonRecord[] {
-  const liveNames = new Set(templateParameterNames(liveTemplate));
-  const parameters: JsonRecord[] = [];
-  for (const name of templateParameterNames(template)) {
-    if (liveNames.has(name)) {
-      parameters.push({ ParameterKey: name, UsePreviousValue: true });
-      continue;
-    }
-    const definition = template.Parameters?.[name];
-    if (definition && Object.hasOwn(definition, "Default")) continue;
-    const envName = `MC_AWS_MIGRATION_PARAMETER_${name}`;
-    const value = process.env[envName];
-    if (value === undefined) throw new Error(`New required parameter ${name} needs environment variable ${envName}.`);
-    parameters.push({ ParameterKey: name, ParameterValue: value });
-  }
-  return parameters;
 }
 
 function physicalInstanceId(identity: StackIdentity): string {
@@ -255,15 +254,21 @@ function printInspection(identity: StackIdentity, inspection: OwnershipInspectio
   );
 }
 
-function applyRetention(options: Options, identity: StackIdentity, live: CloudFormationTemplate): void {
+function applyRetention(
+  options: Options,
+  identity: StackIdentity,
+  stack: JsonRecord,
+  live: CloudFormationTemplate
+): void {
   requireMutationConfirmation(options, identity);
-  const retained = buildLegacyRetentionTemplate(live);
+  let retained = buildLegacyRetentionTemplate(live);
+  const before = inspectOwnership(identity);
+  const pinned = pinDeployedInstanceImage(retained, stack.Parameters ?? [], before.imageId);
+  retained = pinned.template;
   if (templatesEqual(retained, live)) {
-    console.log("Legacy SES resources already have both Retain policies; no update sent.");
+    console.log("Legacy SES Retain policies and the deployed AMI parameter are already pinned; no update sent.");
     return;
   }
-  const before = inspectOwnership(identity);
-  retained.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = before.imageId;
   const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-retain-"));
   const changeSetName = `mc-aws-existing-retain-${new Date()
     .toISOString()
@@ -282,7 +287,7 @@ function applyRetention(options: Options, identity: StackIdentity, live: CloudFo
       ChangeSetType: "UPDATE",
       Description: RETENTION_DESCRIPTION,
       TemplateBody: templateBody,
-      Parameters: parameterValues(retained, live),
+      Parameters: buildChangeSetParameters(retained, live, pinned.parameterOverrides),
       Capabilities: ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"],
       ClientToken: `mc-aws-retain-${Date.now()}`,
       IncludeNestedStacks: false,
@@ -318,11 +323,19 @@ function applyRetention(options: Options, identity: StackIdentity, live: CloudFo
   } finally {
     rmSync(temporaryDirectory, { recursive: true, force: true });
   }
-  assertLegacyResourcesRetained(getLiveTemplate(identity));
-  const after = inspectOwnership(identity);
-  if (after.instanceId !== before.instanceId || after.rootVolumeId !== before.rootVolumeId) {
-    throw new Error("CRITICAL: retention stage completed but instance or root volume identity changed.");
+  const afterStack = stackIdentity(options);
+  if (afterStack.identity.stackId !== identity.stackId) throw new Error("Stack identity changed after retention.");
+  const deployed = getLiveTemplate(afterStack.identity);
+  assertLegacyResourcesRetained(deployed);
+  const after = inspectOwnership(afterStack.identity);
+  if (
+    after.instanceId !== before.instanceId ||
+    after.rootVolumeId !== before.rootVolumeId ||
+    after.imageId !== before.imageId
+  ) {
+    throw new Error("CRITICAL: retention stage completed but instance, root volume, or physical AMI identity changed.");
   }
+  assertPinnedInstanceImageTransition(live, deployed, afterStack.stack.Parameters ?? [], before.imageId);
   console.log("Retention stage complete and verified in the deployed template.");
 }
 
@@ -428,6 +441,7 @@ function waitForStackUpdate(identity: StackIdentity): void {
 function prepareBridge(
   options: Options,
   identity: StackIdentity,
+  stack: JsonRecord,
   live: CloudFormationTemplate,
   inspection: OwnershipInspection
 ): void {
@@ -438,8 +452,8 @@ function prepareBridge(
   let changeSetName: string | undefined;
   try {
     const current = synthesizeCurrentTemplate(identity, assemblyDirectory);
-    const bridge = buildPinnedInstanceBridgeTemplate(live, current, inspection.imageId);
-    const templateBody = JSON.stringify(bridge);
+    const pinnedBridge = buildPinnedInstanceBridgeTemplate(live, current, stack.Parameters ?? [], inspection.imageId);
+    const templateBody = JSON.stringify(pinnedBridge.template);
     if (Buffer.byteLength(templateBody, "utf8") > 51_200) {
       throw new Error(
         "Bridge template exceeds CloudFormation TemplateBody's 51,200-byte limit; no assets were published."
@@ -463,7 +477,7 @@ function prepareBridge(
       ChangeSetType: "UPDATE",
       Description: BRIDGE_DESCRIPTION,
       TemplateBody: templateBody,
-      Parameters: parameterValues(bridge, live),
+      Parameters: buildChangeSetParameters(pinnedBridge.template, live, pinnedBridge.parameterOverrides),
       Capabilities: ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"],
       ClientToken: `mc-aws-bridge-${Date.now()}`,
       IncludeNestedStacks: false,
@@ -512,27 +526,40 @@ function executeBridge(
     options.changeSetName,
   ]);
   validateChangeSet(identity, changeSet, legacyResourcesManaged);
+  if (typeof changeSet.ChangeSetId !== "string" || !changeSet.ChangeSetId) {
+    throw new Error("Reviewed bridge change set has no immutable ChangeSetId.");
+  }
+  const pendingTemplate = getChangeSetTemplate(identity, changeSet.ChangeSetId);
+  assertPinnedInstanceImageTransition(live, pendingTemplate, changeSet.Parameters ?? [], inspection.imageId, true);
   const originalInstanceId = inspection.instanceId;
   const originalVolumeId = inspection.rootVolumeId;
+  const originalImageId = inspection.imageId;
   aws(identity.region, [
     "cloudformation",
     "execute-change-set",
     "--stack-name",
     identity.stackId,
     "--change-set-name",
-    options.changeSetName,
+    changeSet.ChangeSetId,
     "--client-request-token",
     `mc-aws-execute-${Date.now()}`,
   ]);
   waitForStackUpdate(identity);
-  const afterIdentity = stackIdentity(options).identity;
-  if (afterIdentity.stackId !== identity.stackId) throw new Error("Stack identity changed after bridge execution.");
-  const after = inspectOwnership(afterIdentity);
-  assertOwnershipTagsComplete(after);
-  if (after.instanceId !== originalInstanceId || after.rootVolumeId !== originalVolumeId) {
-    throw new Error("CRITICAL: bridge completed but instance or root volume identity changed.");
+  const afterStack = stackIdentity(options);
+  if (afterStack.identity.stackId !== identity.stackId) {
+    throw new Error("Stack identity changed after bridge execution.");
   }
-  const deployed = getLiveTemplate(afterIdentity);
+  const after = inspectOwnership(afterStack.identity);
+  assertOwnershipTagsComplete(after);
+  if (
+    after.instanceId !== originalInstanceId ||
+    after.rootVolumeId !== originalVolumeId ||
+    after.imageId !== originalImageId
+  ) {
+    throw new Error("CRITICAL: bridge completed but instance, root volume, or physical AMI identity changed.");
+  }
+  const deployed = getLiveTemplate(afterStack.identity);
+  assertPinnedInstanceImageTransition(live, deployed, afterStack.stack.Parameters ?? [], originalImageId);
   if (deployed.Resources[LEGACY_RULE_SET_LOGICAL_ID] || deployed.Resources[LEGACY_ACTIVATION_LOGICAL_ID]) {
     throw new Error("Bridge completed but legacy SES resources remain in the managed template.");
   }
@@ -571,11 +598,11 @@ function main(): void {
     assertStandardDeploySafe(options);
     return;
   }
-  const { identity } = stackIdentity(options);
+  const { identity, stack } = stackIdentity(options);
   const live = getLiveTemplate(identity);
 
   if (options.stage === "retain") {
-    applyRetention(options, identity, live);
+    applyRetention(options, identity, stack, live);
     return;
   }
   const inspection = inspectOwnership(identity);
@@ -584,7 +611,7 @@ function main(): void {
     return;
   }
   if (options.stage === "prepare-bridge") {
-    prepareBridge(options, identity, live, inspection);
+    prepareBridge(options, identity, stack, live, inspection);
     return;
   }
   if (options.stage === "execute-bridge") {
@@ -597,11 +624,12 @@ function main(): void {
     live.Resources[LEGACY_RULE_SET_LOGICAL_ID] || live.Resources[LEGACY_ACTIVATION_LOGICAL_ID]
   );
   const retained = legacyResourcesManaged ? buildLegacyRetentionTemplate(live) : live;
+  const pinnedRetention = pinDeployedInstanceImage(retained, stack.Parameters ?? [], inspection.imageId).template;
   console.log(
     legacyResourcesManaged
-      ? templatesEqual(retained, live)
-        ? "Stage 1: legacy SES Retain policies are already deployed."
-        : "Stage 1 required: deploy Retain policies without changing resource properties."
+      ? templatesEqual(pinnedRetention, live)
+        ? "Stage 1: legacy SES Retain policies and the AMI parameter pin are already deployed."
+        : "Stage 1 required: deploy Retain policies and/or the AMI parameter pin without changing EC2 properties."
       : "Stage 1: legacy SES resources are no longer managed by this stack."
   );
   console.log(
@@ -612,7 +640,7 @@ function main(): void {
   const assemblyDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-plan-"));
   try {
     const current = synthesizeCurrentTemplate(identity, assemblyDirectory);
-    buildPinnedInstanceBridgeTemplate(retained, current, inspection.imageId);
+    buildPinnedInstanceBridgeTemplate(retained, current, stack.Parameters ?? [], inspection.imageId);
     console.log(
       "Stage 3: a current non-instance bridge can be synthesized while pinning the complete live EC2 resource."
     );
