@@ -15,7 +15,7 @@ You do not need a Cloudflare-managed custom domain to run mc-aws. The panel can 
 The setup wizard offers:
 
 - `workers.dev`: no custom domain or panel DNS token is required. Enter your account Workers subdomain (for example `account-name.workers.dev`) or the full expected URL. With Worker name `mc-aws-panel`, setup derives `https://mc-aws-panel.account-name.workers.dev`.
-- Custom Cloudflare hostname: provide an HTTPS origin such as `https://panel.example.com`, the panel zone ID, and a zone-scoped token with DNS Read/Edit plus Workers Routes Read/Edit. Setup ensures the hostname is proxied, records route/DNS ownership for safe teardown, and asks explicitly whether to keep the `workers.dev` endpoint enabled.
+- Custom Cloudflare hostname: provide an HTTPS origin such as `https://panel.example.com`, then choose managed or external DNS. `PANEL_DNS_MANAGEMENT=managed` (the default) also requires a zone-scoped token with DNS Read/Edit plus Workers Routes Read/Edit so deploy can ensure and record DNS. Choose `PANEL_DNS_MANAGEMENT=external` for an already-proxied, externally managed record; setup validates the zone ID locally and uses the shell deploy token for a read-only zone check when available. Deploy leaves DNS and the DNS manifest untouched while still requiring route API access and checking exact route ownership before and after deployment.
 
 Panel hosting does not determine the Minecraft connection address. Cloudflare Minecraft DNS, DuckDNS, and raw-IP modes all work with either panel choice.
 
@@ -45,10 +45,12 @@ The setup wizard asks for the panel URL as `NEXT_PUBLIC_APP_URL`.
 
 The wizard stores panel and Minecraft DNS credentials separately because they can use different zones and because workers.dev needs no DNS token:
 
-- `CLOUDFLARE_PANEL_DNS_API_TOKEN` / `CLOUDFLARE_PANEL_ZONE_ID`: deploy-time custom panel DNS only.
+- `CLOUDFLARE_PANEL_DNS_API_TOKEN` / `CLOUDFLARE_PANEL_ZONE_ID`: deploy-time custom panel DNS and route ownership. External DNS mode does not require the panel DNS token, but still requires the zone ID.
 - `CLOUDFLARE_DNS_API_TOKEN` / `CLOUDFLARE_ZONE_ID`: runtime Minecraft DNS updates only.
 
 Neither DNS token is the credential used to deploy Workers.
+
+For external DNS mode, one shell-only `CLOUDFLARE_API_TOKEN` may transiently serve both Wrangler deployment and Workers Routes API checks. It is never copied into an env file, build input, or Worker secret. This fallback is not used in managed DNS mode.
 
 1. Open Cloudflare dashboard.
 2. Go to **My Profile -> API Tokens**.
@@ -86,6 +88,7 @@ The deploy script also attempts login if Wrangler is not authenticated.
 The setup wizard asks for:
 
 - `PANEL_HOSTING_MODE` (`workers_dev` or `custom`)
+- `PANEL_DNS_MANAGEMENT` (`managed` or `external`) for custom hosting; leave it empty for `workers_dev`
 - `CLOUDFLARE_WORKERS_SUBDOMAIN` for workers.dev, or panel zone/token values for a custom hostname
 - Minecraft DNS values only when Cloudflare is the Minecraft connection mode
 

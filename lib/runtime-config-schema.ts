@@ -413,6 +413,18 @@ export const envRuntimeSchema = {
       ci: { level: "required" },
     }),
   },
+  PANEL_DNS_MANAGEMENT: {
+    description: "Deploy-only ownership mode for custom panel DNS",
+    valueType: "enum",
+    enumValues: ["managed", "external"],
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Validated during deploy and never uploaded to the Worker." },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
   MC_OPERATION_STATE_RETENTION_DAYS: {
     description: "Retention window (in days) for durable operation-state records stored in SSM",
     valueType: "string",
@@ -448,7 +460,6 @@ export const workerSecretAllowlist = [
   "CLOUDFORMATION_STACK_NAME",
   "STACK_NAME",
   "CLOUDFLARE_DNS_API_TOKEN",
-  "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ZONE_ID",
   "CLOUDFLARE_RECORD_ID",
   "CLOUDFLARE_MC_DOMAIN",

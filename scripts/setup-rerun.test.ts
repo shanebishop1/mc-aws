@@ -25,6 +25,7 @@ const baseEnv: NodeJS.ProcessEnv = {
   CLOUDFLARE_WORKERS_SUBDOMAIN: "",
   CLOUDFLARE_PANEL_DNS_API_TOKEN: "",
   CLOUDFLARE_PANEL_ZONE_ID: "",
+  PANEL_DNS_MANAGEMENT: "",
   PANEL_WORKERS_DEV_ENABLED: "",
 };
 
@@ -107,6 +108,14 @@ describe("setup rerun mode detection", () => {
     const customPanelEnv = modeEnv("raw_ip", "custom");
     customPanelEnv.CLOUDFLARE_PANEL_ZONE_ID = "";
     expect(runSetupFunction("get_missing_required_credentials", customPanelEnv)).toBe("CLOUDFLARE_PANEL_ZONE_ID");
+  });
+
+  it("allows external custom panel DNS without a persisted panel token", () => {
+    const env = modeEnv("raw_ip", "custom");
+    env.PANEL_DNS_MANAGEMENT = "external";
+    env.CLOUDFLARE_PANEL_DNS_API_TOKEN = "";
+
+    expect(runSetupFunction("get_missing_required_credentials", env)).toBe("");
   });
 
   it("rejects invalid explicit mode names", () => {

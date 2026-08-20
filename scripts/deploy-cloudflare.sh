@@ -47,19 +47,15 @@ prepare_next_build_env_file() {
     cp "$NEXT_BUILD_ENV_FILE" "$NEXT_BUILD_ENV_BACKUP_FILE"
   fi
 
-  : > "$NEXT_BUILD_ENV_FILE"
+  # Parse effective dotenv keys so whitespace and export forms cannot bypass
+  # deployment-only credential filtering. Empty AWS values also block Next.js
+  # from reloading human credentials from .env.local.
+  if ! pnpm exec tsx scripts/deploy-env.ts sanitize-build-env \
+    --env-file "$ENV_FILE" --output "$NEXT_BUILD_ENV_FILE"; then
+    echo "❌ Error: Failed to prepare sanitized Next.js build environment"
+    exit 1
+  fi
   chmod 600 "$NEXT_BUILD_ENV_FILE" || true
-  # Empty high-priority values also prevent Next.js from reloading human AWS
-  # credentials from .env.local after this sanitized deploy env is prepared.
-  printf '%s\n' "AWS_ACCESS_KEY_ID=" "AWS_SECRET_ACCESS_KEY=" "AWS_SESSION_TOKEN=" >> "$NEXT_BUILD_ENV_FILE"
-  while IFS= read -r line || [[ -n "$line" ]]; do
-    case "$line" in
-      AWS_ACCESS_KEY_ID=*|AWS_SECRET_ACCESS_KEY=*|AWS_SESSION_TOKEN=*|CLOUDFLARE_PANEL_DNS_API_TOKEN=*|export\ AWS_ACCESS_KEY_ID=*|export\ AWS_SECRET_ACCESS_KEY=*|export\ AWS_SESSION_TOKEN=*|export\ CLOUDFLARE_PANEL_DNS_API_TOKEN=*)
-        continue
-        ;;
-    esac
-    printf '%s\n' "$line" >> "$NEXT_BUILD_ENV_FILE"
-  done < "$ENV_FILE"
   NEXT_BUILD_ENV_PREPARED="1"
 }
 
@@ -240,58 +236,6 @@ update_env_value() {
   fi
 
   mv "$tmp_file" "$ENV_FILE"
-}
-
-WORKER_SECRET_ALLOWLIST=()
-
-load_worker_secret_allowlist() {
-  local allowlist_output
-  if ! allowlist_output="$(pnpm exec tsx scripts/get-worker-secret-allowlist.ts)"; then
-    echo "❌ Error: Failed to load Worker secret allowlist from schema"
-    echo "   Tip: run pnpm install --frozen-lockfile and ensure scripts/get-worker-secret-allowlist.ts succeeds"
-    exit 1
-  fi
-
-  WORKER_SECRET_ALLOWLIST=()
-  if [[ -n "$allowlist_output" ]]; then
-    while IFS= read -r allowed_key; do
-      WORKER_SECRET_ALLOWLIST+=("$allowed_key")
-    done <<< "$allowlist_output"
-  fi
-
-  if [[ ${#WORKER_SECRET_ALLOWLIST[@]} -eq 0 ]]; then
-    echo "❌ Error: Worker secret allowlist is empty"
-    exit 1
-  fi
-}
-
-is_worker_secret_allowed() {
-  local candidate="$1"
-  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
-    if [[ "$allowed" == "$candidate" ]]; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-is_worker_secret_ignored() {
-  local candidate="$1"
-
-  case "$candidate" in
-    AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN|CDK_DEFAULT_ACCOUNT|CDK_DEFAULT_REGION|SES_NOTIFICATIONS_ENABLED|SES_INBOUND_COMMANDS_ENABLED|VERIFIED_SENDER|NOTIFICATION_EMAIL|SES_INBOUND_RECIPIENT|SES_RECEIPT_RULE_SET_NAME|START_KEYWORD|GITHUB_USER|GITHUB_REPO|GITHUB_TOKEN|KEY_PAIR_NAME|RUNTIME_STATE_SNAPSHOT_KV_ID|RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID|MC_CONNECTION_MODE|PANEL_HOSTING_MODE|PANEL_WORKERS_DEV_ENABLED|CLOUDFLARE_WORKERS_SUBDOMAIN|CLOUDFLARE_PANEL_ZONE_ID|CLOUDFLARE_PANEL_DNS_API_TOKEN)
-      return 0
-      ;;
-  esac
-
-  return 1
-}
-
-print_worker_secret_allowlist() {
-  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
-    echo "  - $allowed"
-  done
 }
 
 is_cloudflare_kv_namespace_id() {
@@ -533,8 +477,11 @@ PANEL_VALIDATION_OUTPUT="$(pnpm exec tsx scripts/panel-hosting.ts validate-env \
   echo "❌ Error: panel hosting configuration is invalid"
   exit 1
 }
-IFS=$'\t' read -r PANEL_HOSTING_MODE NEXT_PUBLIC_APP_URL PANEL_WORKERS_DEV_ENABLED <<< "$PANEL_VALIDATION_OUTPUT"
+IFS=$'\t' read -r PANEL_HOSTING_MODE NEXT_PUBLIC_APP_URL PANEL_WORKERS_DEV_ENABLED PANEL_DNS_MANAGEMENT <<< "$PANEL_VALIDATION_OUTPUT"
 echo "✅ Panel hosting mode: $PANEL_HOSTING_MODE (workers_dev=$PANEL_WORKERS_DEV_ENABLED)"
+if [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
+  echo "   Panel DNS management: $PANEL_DNS_MANAGEMENT"
+fi
 echo "   Canonical URL: $NEXT_PUBLIC_APP_URL"
 echo "   Google OAuth callback: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
 echo ""
@@ -555,8 +502,6 @@ fi
 echo "✅ Runtime-state setup validation passed"
 echo ""
 
-load_worker_secret_allowlist
-
 # Extract domain from NEXT_PUBLIC_APP_URL
 # e.g., https://panel.example.com -> panel.example.com
 DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
@@ -566,7 +511,17 @@ DOMAIN=$(echo "$NEXT_PUBLIC_APP_URL" | sed -E 's#https?://([^/]+).*#\1#')
 ZONE_NAME=$(echo "$DOMAIN" | awk -F. '{print $(NF-1)"."$NF}')
 
 CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
+if [[ "$PANEL_HOSTING_MODE" == "custom" && "$PANEL_DNS_MANAGEMENT" == "external" && -z "$CF_DNS_API_TOKEN" ]]; then
+  # External mode never calls DNS APIs. Reuse the shell-only Wrangler credential
+  # transiently for the zone-scoped route ownership checks only.
+  CF_DNS_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN"
+fi
 CF_ZONE_ID="$(get_env_value "CLOUDFLARE_PANEL_ZONE_ID")"
+if [[ "$PANEL_HOSTING_MODE" == "custom" && -z "$CF_DNS_API_TOKEN" ]]; then
+  echo "❌ Error: Custom panel route ownership checks require a Cloudflare API token."
+  echo "   Set CLOUDFLARE_PANEL_DNS_API_TOKEN for managed DNS, or export CLOUDFLARE_API_TOKEN for external DNS."
+  exit 1
+fi
 
 cf_api() {
   local method="$1"
@@ -937,8 +892,11 @@ echo ""
 
 capture_panel_route_before_deploy
 
-if [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
+if [[ "$PANEL_HOSTING_MODE" == "custom" && "$PANEL_DNS_MANAGEMENT" == "managed" ]]; then
   ensure_panel_dns
+elif [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
+  echo "🧭 Preserving externally managed panel DNS for ${DOMAIN}; no DNS records will be read, created, modified, or recorded"
+  echo ""
 else
   echo "🧭 Skipping panel DNS checks for workers.dev hosting"
   echo ""
@@ -1003,71 +961,32 @@ put_secret() {
   record_worker_deployment_identity
 }
 
+put_secret_base64() {
+  local put_key="$1"
+  local encoded_value="$2"
+  node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64"))' "$encoded_value" | \
+    wrangler secret put --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" "$put_key"
+  record_worker_deployment_identity
+}
+
 SECRET_COUNT=0
-LINE_NO=0
-while IFS= read -r line || [[ -n "$line" ]]; do
-  LINE_NO=$((LINE_NO + 1))
-  # Skip empty lines and comments
-  [[ -z "$line" ]] && continue
-  [[ "$line" =~ ^#.* ]] && continue
-
-  # Only KEY=VALUE lines
-  if [[ "$line" != *=* ]]; then
-    continue
-  fi
-
-  key="${line%%=*}"
-  value="${line#*=}"
-
-  # Allow (and ignore) optional 'export ' prefix.
-  if [[ "$key" == export\ * ]]; then
-    key="${key#export }"
-  fi
-
-  # Trim whitespace around key.
-  key="${key#${key%%[![:space:]]*}}"
-  key="${key%${key##*[![:space:]]}}"
-
-  # Skip empty keys
+if ! SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
+  echo "❌ Error: Failed to parse approved Worker secrets from $ENV_FILE"
+  exit 1
+fi
+while IFS=$'\t' read -r key encoded_value; do
   [[ -z "$key" ]] && continue
-
-  # Wrangler secret names must be env-var style.
-  if [[ ! "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
-    echo ""
-    echo "❌ Error: Invalid env var name in $ENV_FILE:$LINE_NO: '$key'"
-    echo "Secrets must be uppercase letters/numbers/underscores (e.g. FOO_BAR)."
-    exit 1
-  fi
-
-  if ! is_worker_secret_allowed "$key"; then
-    if is_worker_secret_ignored "$key"; then
-      continue
-    fi
-
-    echo ""
-    echo "❌ Error: Refusing to upload unapproved Worker secret key '$key' from $ENV_FILE:$LINE_NO"
-    echo "Allowed Worker secret keys:"
-    print_worker_secret_allowlist
-    exit 1
-  fi
-
-  # Strip surrounding quotes
-  value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-
-  # Skip if value is empty
-  [[ -z "$value" ]] && continue
-
   echo ""
   echo "  Setting: $key"
-
-  if ! retry 3 put_secret "$key" "$value"; then
+  if ! retry 3 put_secret_base64 "$key" "$encoded_value"; then
     echo ""
     echo "❌ Error: Failed to set secret: $key (see error above)"
     exit 1
   fi
   # Avoid `set -e` exiting on a post-increment from 0.
   ((SECRET_COUNT+=1))
-done < "$ENV_FILE"
+done <<< "$SECRET_ENTRIES_OUTPUT"
+unset SECRET_ENTRIES_OUTPUT encoded_value
 
 if [[ -z "$(get_env_value "AWS_ACCOUNT_ID")" && -n "$(get_env_value "CDK_DEFAULT_ACCOUNT")" ]]; then
   echo ""

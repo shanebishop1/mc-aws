@@ -142,10 +142,11 @@ describe("panel hosting environment validation", () => {
       mode: "workers_dev",
       appUrl: "https://mc-aws-panel.account.workers.dev",
       workersDevEnabled: true,
+      dnsManagement: null,
     });
   });
 
-  it("requires custom panel DNS credentials and an explicit workers.dev decision", () => {
+  it("defaults custom panel DNS to managed and requires its dedicated token", () => {
     expect(() =>
       validatePanelHostingEnvironment(
         {
@@ -162,10 +163,80 @@ describe("panel hosting environment validation", () => {
           PANEL_HOSTING_MODE: "custom",
           NEXT_PUBLIC_APP_URL: "https://panel.example.com",
           CLOUDFLARE_PANEL_ZONE_ID: "0123456789abcdef0123456789abcdef",
+          PANEL_WORKERS_DEV_ENABLED: "false",
+        },
+        workerName
+      )
+    ).toThrow("Managed custom panel DNS requires CLOUDFLARE_PANEL_DNS_API_TOKEN");
+
+    expect(() =>
+      validatePanelHostingEnvironment(
+        {
+          PANEL_HOSTING_MODE: "custom",
+          NEXT_PUBLIC_APP_URL: "https://panel.example.com",
+          CLOUDFLARE_PANEL_ZONE_ID: "0123456789abcdef0123456789abcdef",
           CLOUDFLARE_PANEL_DNS_API_TOKEN: "token",
         },
         workerName
       )
     ).toThrow("PANEL_WORKERS_DEV_ENABLED");
+  });
+
+  it("accepts external custom DNS without a DNS token but still requires a valid zone ID", () => {
+    expect(
+      validatePanelHostingEnvironment(
+        {
+          PANEL_HOSTING_MODE: "custom",
+          PANEL_DNS_MANAGEMENT: "external",
+          NEXT_PUBLIC_APP_URL: "https://panel.example.com",
+          CLOUDFLARE_PANEL_ZONE_ID: "0123456789abcdef0123456789abcdef",
+          PANEL_WORKERS_DEV_ENABLED: "false",
+        },
+        workerName
+      )
+    ).toEqual({
+      mode: "custom",
+      appUrl: "https://panel.example.com",
+      workersDevEnabled: false,
+      dnsManagement: "external",
+    });
+
+    expect(() =>
+      validatePanelHostingEnvironment(
+        {
+          PANEL_HOSTING_MODE: "custom",
+          PANEL_DNS_MANAGEMENT: "external",
+          NEXT_PUBLIC_APP_URL: "https://panel.example.com",
+          CLOUDFLARE_PANEL_ZONE_ID: "invalid",
+          PANEL_WORKERS_DEV_ENABLED: "false",
+        },
+        workerName
+      )
+    ).toThrow("32-character hexadecimal Cloudflare zone ID");
+  });
+
+  it("rejects invalid custom DNS modes and any non-empty workers.dev DNS mode", () => {
+    expect(() =>
+      validatePanelHostingEnvironment(
+        {
+          PANEL_HOSTING_MODE: "custom",
+          PANEL_DNS_MANAGEMENT: "automatic",
+          NEXT_PUBLIC_APP_URL: "https://panel.example.com",
+        },
+        workerName
+      )
+    ).toThrow("must be either managed or external");
+
+    expect(() =>
+      validatePanelHostingEnvironment(
+        {
+          PANEL_HOSTING_MODE: "workers_dev",
+          PANEL_DNS_MANAGEMENT: "managed",
+          CLOUDFLARE_WORKERS_SUBDOMAIN: "account.workers.dev",
+          NEXT_PUBLIC_APP_URL: "https://mc-aws-panel.account.workers.dev",
+        },
+        workerName
+      )
+    ).toThrow("must be empty for workers_dev");
   });
 });

@@ -42,6 +42,9 @@ wizard_header() {
 readonly WIZARD_TOTAL=10
 readonly LOCAL_ENV_FILE=".env.local"
 readonly PRODUCTION_ENV_FILE=".env.production"
+# Capture a shell deployment token before resume files are loaded. This value is
+# used only for optional read-only external-zone validation and is never written.
+CLOUDFLARE_SETUP_DEPLOY_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
 
 template_for_env_file() {
   local env_file="$1"
@@ -331,7 +334,7 @@ validate_cloudflare_zone_access() {
   local token="$1"
   local zone_id="$2"
 
-  if [[ ! "$zone_id" =~ ^[A-Fa-f0-9]{32}$ ]]; then
+  if ! validate_cloudflare_zone_id_format "$zone_id"; then
     log_error "Cloudflare Zone ID must be a 32-character hexadecimal ID"
     return 1
   fi
@@ -349,6 +352,11 @@ validate_cloudflare_zone_access() {
 
   log_error "The token cannot access that Cloudflare zone"
   return 1
+}
+
+validate_cloudflare_zone_id_format() {
+  local zone_id="$1"
+  [[ "$zone_id" =~ ^[A-Fa-f0-9]{32}$ ]]
 }
 
 # Validate email format
@@ -836,6 +844,7 @@ collect_panel_hosting() {
       done
 
       PANEL_WORKERS_DEV_ENABLED="true"
+      PANEL_DNS_MANAGEMENT=""
       CLOUDFLARE_PANEL_ZONE_ID=""
       CLOUDFLARE_PANEL_DNS_API_TOKEN=""
       ;;
@@ -852,19 +861,56 @@ collect_panel_hosting() {
         log_error "Use an HTTPS custom hostname with no path, query, fragment, or port."
       done
 
-      log "Custom panel teardown needs one zone-scoped token with DNS Read/Edit and Workers Routes Read/Edit."
-      log "Those permissions let setup record whether the route/DNS pre-existed and let teardown preserve them safely."
-      while true; do
-        prompt CLOUDFLARE_PANEL_DNS_API_TOKEN "Enter DNS-edit token for the panel zone" \
-          "${CLOUDFLARE_PANEL_DNS_API_TOKEN:-${CLOUDFLARE_DNS_API_TOKEN:-}}" true
-        validate_cloudflare_token "$CLOUDFLARE_PANEL_DNS_API_TOKEN" && break
-        CLOUDFLARE_PANEL_DNS_API_TOKEN=""
-      done
-      while true; do
-        prompt CLOUDFLARE_PANEL_ZONE_ID "Enter Zone ID for the panel hostname" \
-          "${CLOUDFLARE_PANEL_ZONE_ID:-${CLOUDFLARE_ZONE_ID:-}}"
-        validate_cloudflare_zone_access "$CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && break
-      done
+      echo ""
+      echo "How should deployment manage panel DNS?"
+      echo "  1. Managed: verify/create/proxy the DNS record (default)"
+      echo "  2. External: preserve an existing proxied DNS record"
+      local panel_dns_default="1"
+      [[ "${PANEL_DNS_MANAGEMENT:-managed}" == "external" ]] && panel_dns_default="2"
+      prompt panel_dns_choice "Enter choice" "$panel_dns_default"
+
+      case "$panel_dns_choice" in
+        1)
+          PANEL_DNS_MANAGEMENT="managed"
+          log "Managed panel DNS needs one zone-scoped token with DNS Read/Edit and Workers Routes Read/Edit."
+          log "Those permissions let setup record whether the route/DNS pre-existed and preserve them safely."
+          while true; do
+            prompt CLOUDFLARE_PANEL_DNS_API_TOKEN "Enter DNS-edit token for the panel zone" \
+              "${CLOUDFLARE_PANEL_DNS_API_TOKEN:-${CLOUDFLARE_DNS_API_TOKEN:-}}" true
+            validate_cloudflare_token "$CLOUDFLARE_PANEL_DNS_API_TOKEN" && break
+            CLOUDFLARE_PANEL_DNS_API_TOKEN=""
+          done
+          while true; do
+            prompt CLOUDFLARE_PANEL_ZONE_ID "Enter Zone ID for the panel hostname" \
+              "${CLOUDFLARE_PANEL_ZONE_ID:-${CLOUDFLARE_ZONE_ID:-}}"
+            validate_cloudflare_zone_access "$CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && break
+          done
+          ;;
+        2)
+          PANEL_DNS_MANAGEMENT="external"
+          CLOUDFLARE_PANEL_DNS_API_TOKEN=""
+          log "External mode will not read, create, modify, or record panel DNS."
+          while true; do
+            prompt CLOUDFLARE_PANEL_ZONE_ID "Enter Zone ID for the panel hostname" \
+              "${CLOUDFLARE_PANEL_ZONE_ID:-${CLOUDFLARE_ZONE_ID:-}}"
+            if ! validate_cloudflare_zone_id_format "$CLOUDFLARE_PANEL_ZONE_ID"; then
+              log_error "Cloudflare Zone ID must be a 32-character hexadecimal ID"
+              continue
+            fi
+            if [[ -n "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" ]]; then
+              validate_cloudflare_zone_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" \
+                "$CLOUDFLARE_PANEL_ZONE_ID" && break
+              continue
+            fi
+            log "No shell deploy token is available; accepting the validated Zone ID format without an API read."
+            break
+          done
+          ;;
+        *)
+          log_error "Invalid panel DNS choice. Select 1 or 2."
+          exit 1
+          ;;
+      esac
 
       echo ""
       echo "Keep the Worker reachable at its workers.dev address in addition to the custom hostname?"
@@ -885,6 +931,7 @@ collect_panel_hosting() {
   esac
 
   write_env_files "PANEL_HOSTING_MODE" "$PANEL_HOSTING_MODE"
+  write_env_files "PANEL_DNS_MANAGEMENT" "$PANEL_DNS_MANAGEMENT"
   write_env_files "CLOUDFLARE_WORKERS_SUBDOMAIN" "$CLOUDFLARE_WORKERS_SUBDOMAIN"
   write_env_files "PANEL_WORKERS_DEV_ENABLED" "$PANEL_WORKERS_DEV_ENABLED"
   write_env_files "CLOUDFLARE_PANEL_ZONE_ID" "$CLOUDFLARE_PANEL_ZONE_ID"

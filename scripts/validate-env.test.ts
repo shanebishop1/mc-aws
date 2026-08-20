@@ -108,6 +108,20 @@ describe("scripts/validate-env", () => {
     ).not.toThrow();
   });
 
+  it("accepts external panel DNS management as deploy-only worker configuration", () => {
+    expect(() =>
+      validateEnv({
+        strict: true,
+        target: "worker",
+        nodeEnv: "production",
+        values: {
+          ...baseWorkerValues,
+          PANEL_DNS_MANAGEMENT: "external",
+        },
+      })
+    ).not.toThrow();
+  });
+
   it("fails strict production when DNS providers are mixed", () => {
     expect(() =>
       validateEnv({

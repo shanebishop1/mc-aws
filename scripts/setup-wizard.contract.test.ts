@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -30,9 +31,39 @@ describe("setup-wizard panel hosting contract", () => {
     expect(source).toContain("collect_dns_mode\n  collect_panel_hosting");
     expect(source).toContain('PANEL_HOSTING_MODE="workers_dev"');
     expect(source).toContain('PANEL_HOSTING_MODE="custom"');
+    expect(source).toContain('PANEL_DNS_MANAGEMENT="managed"');
+    expect(source).toContain('PANEL_DNS_MANAGEMENT="external"');
+    expect(source).toContain("How should deployment manage panel DNS?");
+    expect(source).toContain('CLOUDFLARE_PANEL_DNS_API_TOKEN=""');
+    expect(source).toContain('validate_cloudflare_zone_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN"');
+    expect(source).toContain('write_env_files "PANEL_DNS_MANAGEMENT" "$PANEL_DNS_MANAGEMENT"');
     expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "cloudflare"');
     expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "duckdns"');
     expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "raw_ip"');
+  });
+
+  it("validates external panel zone IDs locally without requiring a DNS token", () => {
+    const run = (zoneId: string): string =>
+      execFileSync(
+        "bash",
+        [
+          "-c",
+          `source scripts/setup-wizard.sh; if validate_cloudflare_zone_id_format "${zoneId}"; then printf valid; else printf invalid; fi`,
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MC_AWS_SETUP_LIBRARY_ONLY: "1",
+            CLOUDFLARE_API_TOKEN: "",
+            CLOUDFLARE_DEPLOY_API_TOKEN: "",
+          },
+        }
+      );
+
+    expect(run("0123456789abcdef0123456789abcdef")).toBe("valid");
+    expect(run("not-a-zone-id")).toBe("invalid");
   });
 
   it("prints the exact production Google OAuth origin and callback", () => {

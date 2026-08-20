@@ -4,6 +4,8 @@ import dotenv from "dotenv";
 
 export const panelHostingModes = ["workers_dev", "custom"] as const;
 export type PanelHostingMode = (typeof panelHostingModes)[number];
+export const panelDnsManagementModes = ["managed", "external"] as const;
+export type PanelDnsManagementMode = (typeof panelDnsManagementModes)[number];
 
 export interface WorkersDevPanel {
   accountSubdomain: string;
@@ -104,6 +106,25 @@ export const googleOAuthCallbackUrl = (appUrl: string): string => {
   return `${url.origin}/api/auth/callback`;
 };
 
+const resolvePanelDnsManagement = (
+  rawValue: string | undefined,
+  panelHostingMode: PanelHostingMode
+): PanelDnsManagementMode | null => {
+  const configuredValue = rawValue?.trim();
+  if (panelHostingMode === "workers_dev") {
+    if (configuredValue) {
+      throw new Error("PANEL_DNS_MANAGEMENT must be empty for workers_dev panel hosting.");
+    }
+    return null;
+  }
+
+  const dnsManagement = configuredValue || "managed";
+  if (!panelDnsManagementModes.includes(dnsManagement as PanelDnsManagementMode)) {
+    throw new Error("PANEL_DNS_MANAGEMENT must be either managed or external for custom panel hosting.");
+  }
+  return dnsManagement as PanelDnsManagementMode;
+};
+
 export const buildWranglerDeployArgs = ({
   configPath,
   workerName,
@@ -173,35 +194,49 @@ export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOption
 export const validatePanelHostingEnvironment = (
   values: Record<string, string | undefined>,
   workerName: string
-): { mode: PanelHostingMode; appUrl: string; workersDevEnabled: boolean } => {
+): {
+  mode: PanelHostingMode;
+  appUrl: string;
+  workersDevEnabled: boolean;
+  dnsManagement: PanelDnsManagementMode | null;
+} => {
   const mode = values.PANEL_HOSTING_MODE?.trim();
   if (mode !== "workers_dev" && mode !== "custom") {
     throw new Error("PANEL_HOSTING_MODE must be either workers_dev or custom.");
   }
 
   const configuredAppUrl = values.NEXT_PUBLIC_APP_URL?.trim() ?? "";
+  const dnsManagement = resolvePanelDnsManagement(values.PANEL_DNS_MANAGEMENT, mode);
   if (mode === "workers_dev") {
     const panel = deriveWorkersDevPanel(workerName, values.CLOUDFLARE_WORKERS_SUBDOMAIN ?? "");
     if (configuredAppUrl !== panel.appUrl) {
       throw new Error(`NEXT_PUBLIC_APP_URL must exactly match the derived Workers URL: ${panel.appUrl}`);
     }
-    return { mode, appUrl: panel.appUrl, workersDevEnabled: true };
+    return { mode, appUrl: panel.appUrl, workersDevEnabled: true, dnsManagement: null };
   }
 
   const appUrl = validateCustomPanelUrl(configuredAppUrl);
   const panelZoneId = values.CLOUDFLARE_PANEL_ZONE_ID?.trim() ?? "";
-  if (!panelZoneId || !values.CLOUDFLARE_PANEL_DNS_API_TOKEN?.trim()) {
-    throw new Error("Custom panel hosting requires CLOUDFLARE_PANEL_ZONE_ID and CLOUDFLARE_PANEL_DNS_API_TOKEN.");
+  if (!panelZoneId) {
+    throw new Error("Custom panel hosting requires CLOUDFLARE_PANEL_ZONE_ID for zone-scoped route ownership.");
   }
   if (!kvNamespaceIdPattern.test(panelZoneId)) {
     throw new Error("CLOUDFLARE_PANEL_ZONE_ID must be a 32-character hexadecimal Cloudflare zone ID.");
+  }
+  if (dnsManagement === "managed" && !values.CLOUDFLARE_PANEL_DNS_API_TOKEN?.trim()) {
+    throw new Error("Managed custom panel DNS requires CLOUDFLARE_PANEL_DNS_API_TOKEN.");
   }
   const workersDevValue = values.PANEL_WORKERS_DEV_ENABLED?.trim().toLowerCase();
   if (workersDevValue !== "true" && workersDevValue !== "false") {
     throw new Error("PANEL_WORKERS_DEV_ENABLED must deliberately be set to true or false for custom panel hosting.");
   }
 
-  return { mode, appUrl, workersDevEnabled: workersDevValue === "true" };
+  return {
+    mode,
+    appUrl,
+    workersDevEnabled: workersDevValue === "true",
+    dnsManagement,
+  };
 };
 
 const readEnvFile = (envFile: string): Record<string, string> => dotenv.parse(fs.readFileSync(envFile, "utf8"));
@@ -234,7 +269,9 @@ const runCli = (): void => {
       readEnvFile(getArg(args, "--env-file")),
       getArg(args, "--worker-name")
     );
-    process.stdout.write(`${result.mode}\t${result.appUrl}\t${result.workersDevEnabled ? "true" : "false"}\n`);
+    process.stdout.write(
+      `${result.mode}\t${result.appUrl}\t${result.workersDevEnabled ? "true" : "false"}\t${result.dnsManagement ?? "none"}\n`
+    );
     return;
   }
 

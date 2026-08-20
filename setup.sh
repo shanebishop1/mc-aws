@@ -180,10 +180,19 @@ get_missing_required_credentials() {
       ;;
     custom)
       required+=(
-        "CLOUDFLARE_PANEL_DNS_API_TOKEN"
         "CLOUDFLARE_PANEL_ZONE_ID"
         "PANEL_WORKERS_DEV_ENABLED"
       )
+      case "${PANEL_DNS_MANAGEMENT:-managed}" in
+        managed)
+          required+=("CLOUDFLARE_PANEL_DNS_API_TOKEN")
+          ;;
+        external)
+          ;;
+        *)
+          missing+=("PANEL_DNS_MANAGEMENT")
+          ;;
+      esac
       if [[ -n "${PANEL_WORKERS_DEV_ENABLED:-}" && ! "${PANEL_WORKERS_DEV_ENABLED}" =~ ^(true|false)$ ]]; then
         missing+=("PANEL_WORKERS_DEV_ENABLED")
       fi
@@ -191,6 +200,9 @@ get_missing_required_credentials() {
     *)
       if [[ -n "${PANEL_HOSTING_MODE:-}" ]]; then
         missing+=("PANEL_HOSTING_MODE")
+      fi
+      if [[ -n "${PANEL_DNS_MANAGEMENT:-}" ]]; then
+        missing+=("PANEL_DNS_MANAGEMENT")
       fi
       ;;
   esac

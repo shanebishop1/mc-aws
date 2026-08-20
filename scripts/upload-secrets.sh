@@ -22,115 +22,17 @@ fi
 echo "✅ Worker env preflight passed"
 echo ""
 
-WORKER_SECRET_ALLOWLIST=()
-
-load_worker_secret_allowlist() {
-  local allowlist_output
-  if ! allowlist_output="$(pnpm exec tsx scripts/get-worker-secret-allowlist.ts)"; then
-    echo "❌ Error: Failed to load Worker secret allowlist from schema"
-    echo "   Tip: run pnpm install --frozen-lockfile and ensure scripts/get-worker-secret-allowlist.ts succeeds"
-    exit 1
-  fi
-
-  WORKER_SECRET_ALLOWLIST=()
-  if [[ -n "$allowlist_output" ]]; then
-    while IFS= read -r allowed_key; do
-      WORKER_SECRET_ALLOWLIST+=("$allowed_key")
-    done <<< "$allowlist_output"
-  fi
-
-  if [[ ${#WORKER_SECRET_ALLOWLIST[@]} -eq 0 ]]; then
-    echo "❌ Error: Worker secret allowlist is empty"
-    exit 1
-  fi
-}
-
-load_worker_secret_allowlist
-
-is_worker_secret_allowed() {
-  local candidate="$1"
-  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
-    if [[ "$allowed" == "$candidate" ]]; then
-      return 0
-    fi
-  done
-
-  return 1
-}
-
-print_worker_secret_allowlist() {
-  for allowed in "${WORKER_SECRET_ALLOWLIST[@]}"; do
-    echo "  - $allowed"
-  done
-}
-
-is_local_aws_credential() {
-  case "$1" in
-    AWS_ACCESS_KEY_ID|AWS_SECRET_ACCESS_KEY|AWS_SESSION_TOKEN)
-      return 0
-      ;;
-  esac
-
-  return 1
-}
-
-# Read env file and upload each non-empty, non-comment line as a secret
-LINE_NO=0
-while IFS= read -r line || [[ -n "$line" ]]; do
-  LINE_NO=$((LINE_NO + 1))
-
-  # Skip empty lines and comments
-  [[ -z "$line" ]] && continue
-  [[ "$line" =~ ^#.* ]] && continue
-
-  # Only KEY=VALUE lines
-  if [[ "$line" != *=* ]]; then
-    continue
-  fi
-
-  key="${line%%=*}"
-  value="${line#*=}"
-
-  # Allow (and ignore) optional 'export ' prefix.
-  if [[ "$key" == export\ * ]]; then
-    key="${key#export }"
-  fi
-
-  # Trim whitespace around key.
-  key="${key#${key%%[![:space:]]*}}"
-  key="${key%${key##*[![:space:]]}}"
-
-  # Skip empty keys
+if ! SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
+  echo "❌ Error: Failed to parse approved Worker secrets from $ENV_FILE"
+  exit 1
+fi
+while IFS=$'\t' read -r key encoded_value; do
   [[ -z "$key" ]] && continue
-
-  # Wrangler secret names must be env-var style.
-  if [[ ! "$key" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
-    echo "❌ Error: Invalid env var name in $ENV_FILE:$LINE_NO: '$key'"
-    echo "Secrets must be uppercase letters/numbers/underscores (e.g. FOO_BAR)."
-    exit 1
-  fi
-
-  if ! is_worker_secret_allowed "$key"; then
-    if is_local_aws_credential "$key"; then
-      echo "Skipping local AWS deployment credential: $key"
-      continue
-    fi
-
-    echo "❌ Error: Refusing to upload unapproved Worker secret key '$key' from $ENV_FILE:$LINE_NO"
-    echo "Allowed Worker secret keys:"
-    print_worker_secret_allowlist
-    exit 1
-  fi
-
-  # Remove quotes from value if present
-  value=$(echo "$value" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
-
-  # Skip if value is empty
-  [[ -z "$value" ]] && continue
-
   echo "Setting: $key"
-  echo "$value" | wrangler secret put "$key" --env production
-done < "$ENV_FILE"
+  node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64"))' "$encoded_value" | \
+    wrangler secret put "$key" --env production
+done <<< "$SECRET_ENTRIES_OUTPUT"
+unset SECRET_ENTRIES_OUTPUT encoded_value
 
 echo ""
 echo "✅ All secrets uploaded successfully!"
