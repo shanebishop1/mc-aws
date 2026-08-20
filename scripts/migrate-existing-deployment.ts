@@ -498,15 +498,19 @@ function prepareBridge(
       );
     }
 
-    run("pnpm", ["exec", "cdk", "--app", assemblyDirectory, "publish-assets", "MinecraftStack"], {
-      cwd: INFRA_DIR,
-      env: {
-        ...process.env,
-        CDK_DEFAULT_ACCOUNT: identity.accountId,
-        CDK_DEFAULT_REGION: identity.region,
-        AWS_DEFAULT_REGION: identity.region,
-      },
-    });
+    run(
+      "pnpm",
+      ["exec", "cdk", "--app", assemblyDirectory, "publish-assets", "--unstable=publish-assets", "MinecraftStack"],
+      {
+        cwd: INFRA_DIR,
+        env: {
+          ...process.env,
+          CDK_DEFAULT_ACCOUNT: identity.accountId,
+          CDK_DEFAULT_REGION: identity.region,
+          AWS_DEFAULT_REGION: identity.region,
+        },
+      }
+    );
 
     changeSetName = bridgeChangeSetName();
     const request = {

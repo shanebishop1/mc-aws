@@ -697,6 +697,7 @@ describe("existing deployment migration entry-point contract", () => {
     expect(migrationCli).toContain('stage: "plan"');
     expect(migrationCli).toContain("DRY RUN ONLY");
     expect(migrationCli.match(/--include-property-values/g)).toHaveLength(2);
+    expect(migrationCli).toContain('"--unstable=publish-assets"');
     expect(migrationCli).toContain('"describe-instance-attribute"');
     expect(migrationContracts).not.toContain("beforePreview");
     expect(migrationContracts).not.toContain("afterPreview");
