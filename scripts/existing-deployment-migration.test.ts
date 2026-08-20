@@ -242,11 +242,38 @@ describe("existing deployment migration template contracts", () => {
     const changed = structuredClone(adopted);
     changed.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = actualUserData.trimEnd();
     expect(() => assertInstanceUserDataTransition(adopted, changed, actualUserDataBytes)).toThrow(
-      /does not exactly match/
+      /neither the exact physical UTF-8 text/
     );
     expect(() =>
       assertInstanceUserDataTransition(adopted, adopted, Buffer.from(`${actualUserData}extra`, "utf8"))
-    ).toThrow(/does not exactly match/);
+    ).toThrow(/neither the exact physical UTF-8 text/);
+  });
+
+  it("accepts only exact or complete CloudFormation question-mark normalization of physical Unicode", () => {
+    const physical = "prefix\u202Fmiddle-é-💾\n";
+    const physicalBytes = Buffer.from(physical, "utf8");
+    const exact = adoptActualInstanceUserData(liveTemplate(), physicalBytes);
+    const normalized = structuredClone(exact);
+    normalized.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = "prefix?middle-?-?\n";
+
+    expect(() => assertInstanceUserDataTransition(exact, normalized, physicalBytes)).not.toThrow();
+    expect(() => assertInstanceUserDataTransition(normalized, exact, physicalBytes)).not.toThrow();
+
+    const rejectedRepresentations = [
+      "Prefix?middle-?-?\n",
+      "prefix?middle-?-?",
+      "prefix?middle-?-?\nextra",
+      "prefix?middle-é-?\n",
+      "prefix!middle-?-?\n",
+      "prefix\u00A0middle-?-?\n",
+    ];
+    for (const rejected of rejectedRepresentations) {
+      const candidate = structuredClone(exact);
+      candidate.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = rejected;
+      expect(() => assertInstanceUserDataTransition(exact, candidate, physicalBytes)).toThrow(
+        /neither the exact physical UTF-8 text/
+      );
+    }
   });
 
   it("refuses mismatched effective values and malformed or unsupported ImageId refs", () => {

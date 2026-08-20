@@ -261,6 +261,26 @@ export function adoptActualInstanceUserData(
   return adopted;
 }
 
+function isCloudFormationUserDataRepresentation(candidate: string, physical: string): boolean {
+  if (candidate === physical) return true;
+  const candidateCodePoints = [...candidate];
+  const physicalCodePoints = [...physical];
+  if (candidateCodePoints.length !== physicalCodePoints.length) return false;
+
+  let replacedNonAscii = 0;
+  for (let index = 0; index < physicalCodePoints.length; index += 1) {
+    const physicalCodePoint = physicalCodePoints[index];
+    const candidateCodePoint = candidateCodePoints[index];
+    if ((physicalCodePoint.codePointAt(0) ?? 0) <= 0x7f) {
+      if (candidateCodePoint !== physicalCodePoint) return false;
+      continue;
+    }
+    if (candidateCodePoint !== "?") return false;
+    replacedNonAscii += 1;
+  }
+  return replacedNonAscii > 0;
+}
+
 export function assertInstanceUserDataTransition(
   expectedTemplate: CloudFormationTemplate,
   candidateTemplate: CloudFormationTemplate,
@@ -269,8 +289,13 @@ export function assertInstanceUserDataTransition(
   const actual = exactUtf8UserData(actualUserData);
   const expected = exactInstanceUserDataString(expectedTemplate);
   const candidate = exactInstanceUserDataString(candidateTemplate);
-  if (expected !== actual || candidate !== actual || !templatesEqual(expected, candidate)) {
-    throw new Error("Candidate template UserData does not exactly match the adopted physical instance bytes.");
+  if (
+    !isCloudFormationUserDataRepresentation(expected, actual) ||
+    !isCloudFormationUserDataRepresentation(candidate, actual)
+  ) {
+    throw new Error(
+      `Template UserData is neither the exact physical UTF-8 text nor its complete CloudFormation non-ASCII question-mark representation (physicalCodePoints=${[...actual].length}, expectedCodePoints=${[...expected].length}, candidateCodePoints=${[...candidate].length}).`
+    );
   }
 }
 
