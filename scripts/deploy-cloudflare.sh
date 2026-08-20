@@ -1054,6 +1054,7 @@ if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
 fi
 echo "✅ Worker bindings restored"
 echo ""
+capture_panel_route_after_deploy
 record_worker_deployment_identity
 
 echo "🔐 Provisioning dedicated least-privilege AWS runtime credentials..."

@@ -26,4 +26,12 @@ describe("Cloudflare route replacement deployment contract", () => {
     expect(replacement).toBeGreaterThan(targetCheck);
     expect(source).toContain("Worker route ID replaced during deployment");
   });
+
+  it("records route identity after both Worker deployments", () => {
+    const calls = [...source.matchAll(/^capture_panel_route_after_deploy$/gm)].map((match) => match.index);
+    const bindingRestore = source.indexOf('echo "✅ Worker bindings restored"');
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]).toBeGreaterThan(bindingRestore);
+  });
 });

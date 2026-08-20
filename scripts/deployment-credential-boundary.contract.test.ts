@@ -56,8 +56,9 @@ describe("deployment credential boundary", () => {
     expect(deploySource.indexOf("capture_panel_route_before_deploy")).toBeLessThan(
       deploySource.indexOf('"$PANEL_DNS_MANAGEMENT" == "managed"')
     );
-    expect(deploySource.lastIndexOf("capture_panel_route_after_deploy")).toBeGreaterThan(
-      deploySource.indexOf('wrangler "${WRANGLER_DEPLOY_ARGS[@]}"')
+    expect(deploySource.match(/^capture_panel_route_after_deploy$/gm)).toHaveLength(2);
+    expect(deploySource.lastIndexOf("\ncapture_panel_route_after_deploy\n")).toBeGreaterThan(
+      deploySource.indexOf('echo "✅ Worker bindings restored"')
     );
   });
 });
