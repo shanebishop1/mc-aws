@@ -194,6 +194,86 @@ export function legacyResourcesPresentAndRetained(template: CloudFormationTempla
   return ruleSetPresent;
 }
 
+function exactInstanceUserDataString(template: CloudFormationTemplate): string {
+  const instance = resource(template, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  const properties = exactRecord(instance.Properties, `${INSTANCE_LOGICAL_ID} properties`);
+  const userData = properties.UserData;
+  if (
+    !userData ||
+    typeof userData !== "object" ||
+    Array.isArray(userData) ||
+    Object.keys(userData).length !== 1 ||
+    typeof userData["Fn::Base64"] !== "string"
+  ) {
+    throw new Error(`${INSTANCE_LOGICAL_ID} UserData must be exactly one literal Fn::Base64 string.`);
+  }
+  return userData["Fn::Base64"];
+}
+
+function exactUtf8UserData(actualUserData: Uint8Array): string {
+  if (!(actualUserData instanceof Uint8Array) || actualUserData.byteLength === 0) {
+    throw new Error("Actual EC2 UserData must be nonempty decoded bytes.");
+  }
+  const bytes = Buffer.from(actualUserData.buffer, actualUserData.byteOffset, actualUserData.byteLength);
+  let decoded: string;
+  try {
+    decoded = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new Error("Actual EC2 UserData is not valid UTF-8.");
+  }
+  if (!Buffer.from(decoded, "utf8").equals(bytes)) {
+    throw new Error("Actual EC2 UserData does not round-trip through a literal UTF-8 Fn::Base64 string.");
+  }
+  return decoded;
+}
+
+export function decodeInstanceUserDataAttribute(expectedInstanceId: string, response: unknown): Buffer {
+  if (!/^i-[a-f0-9]{8,17}$/.test(expectedInstanceId)) throw new Error("Expected EC2 instance ID is malformed.");
+  const attribute = exactRecord(response, "EC2 UserData attribute response");
+  if (attribute.InstanceId !== expectedInstanceId) {
+    throw new Error("EC2 UserData attribute response does not match the ownership-proven instance.");
+  }
+  const userData = exactRecord(attribute.UserData, "EC2 UserData attribute");
+  const encoded = userData.Value;
+  if (
+    typeof encoded !== "string" ||
+    encoded.length === 0 ||
+    encoded.length % 4 !== 0 ||
+    !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(encoded)
+  ) {
+    throw new Error("EC2 UserData attribute is not nonempty canonical base64.");
+  }
+  const decoded = Buffer.from(encoded, "base64");
+  if (decoded.length === 0 || decoded.toString("base64") !== encoded) {
+    throw new Error("EC2 UserData attribute does not round-trip as canonical base64.");
+  }
+  return decoded;
+}
+
+export function adoptActualInstanceUserData(
+  liveTemplate: CloudFormationTemplate,
+  actualUserData: Uint8Array
+): CloudFormationTemplate {
+  exactInstanceUserDataString(liveTemplate);
+  const actual = exactUtf8UserData(actualUserData);
+  const adopted = clone(liveTemplate);
+  adopted.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = actual;
+  return adopted;
+}
+
+export function assertInstanceUserDataTransition(
+  expectedTemplate: CloudFormationTemplate,
+  candidateTemplate: CloudFormationTemplate,
+  actualUserData: Uint8Array
+): void {
+  const actual = exactUtf8UserData(actualUserData);
+  const expected = exactInstanceUserDataString(expectedTemplate);
+  const candidate = exactInstanceUserDataString(candidateTemplate);
+  if (expected !== actual || candidate !== actual || !templatesEqual(expected, candidate)) {
+    throw new Error("Candidate template UserData does not exactly match the adopted physical instance bytes.");
+  }
+}
+
 function deployedParameter(
   deployedParameters: JsonRecord[],
   parameterName: string
@@ -389,10 +469,12 @@ export function buildPinnedInstanceBridgeTemplate(
   liveTemplate: CloudFormationTemplate,
   currentTemplate: CloudFormationTemplate,
   deployedParameters: JsonRecord[],
-  physicalImageId: string
+  physicalImageId: string,
+  actualUserData: Uint8Array
 ): PinnedInstanceTemplate {
-  legacyResourcesPresentAndRetained(liveTemplate);
-  const pinnedLive = pinDeployedInstanceImage(liveTemplate, deployedParameters, physicalImageId);
+  const adoptedLive = adoptActualInstanceUserData(liveTemplate, actualUserData);
+  legacyResourcesPresentAndRetained(adoptedLive);
+  const pinnedLive = pinDeployedInstanceImage(adoptedLive, deployedParameters, physicalImageId);
   const liveInstance = resource(pinnedLive.template, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
   resource(currentTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
 
@@ -659,8 +741,21 @@ export function assertSafeRetentionChangeSet(changes: JsonRecord[]): void {
   for (const change of changes) {
     const details = change.ResourceChange;
     if (!details || !allowedLogicalIds.has(details.LogicalResourceId)) {
+      const changeDetails = (details?.Details ?? []).map((detail: JsonRecord) => ({
+        attribute: detail.Target?.Attribute,
+        name: detail.Target?.Name,
+        requiresRecreation: detail.Target?.RequiresRecreation,
+        evaluation: detail.Evaluation,
+        changeSource: detail.ChangeSource,
+        beforeAfterEqual:
+          detail.Target?.BeforeValue !== undefined && detail.Target.BeforeValue === detail.Target.AfterValue,
+        beforeLength: typeof detail.Target?.BeforeValue === "string" ? detail.Target.BeforeValue.length : undefined,
+        afterLength: typeof detail.Target?.AfterValue === "string" ? detail.Target.AfterValue.length : undefined,
+      }));
       throw new Error(
-        `Retention change set unexpectedly touches ${details?.LogicalResourceId ?? "an unknown resource"}.`
+        `Retention change set unexpectedly touches ${details?.LogicalResourceId ?? "an unknown resource"} ` +
+          `(action=${details?.Action ?? "unknown"}, replacement=${details?.Replacement ?? "unknown"}, ` +
+          `scope=${JSON.stringify(details?.Scope ?? [])}, details=${JSON.stringify(changeDetails)}).`
       );
     }
     if (details.Action !== "Modify" || (details.Replacement && details.Replacement !== "False")) {

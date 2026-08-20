@@ -6,7 +6,9 @@ import {
   INSTANCE_LOGICAL_ID,
   LEGACY_ACTIVATION_LOGICAL_ID,
   LEGACY_RULE_SET_LOGICAL_ID,
+  adoptActualInstanceUserData,
   assertExclusiveTaggingAcknowledged,
+  assertInstanceUserDataTransition,
   assertLegacyResourcesRetained,
   assertOwnershipTagsComplete,
   assertPinnedInstanceImageTransition,
@@ -17,6 +19,7 @@ import {
   buildChangeSetParameters,
   buildLegacyRetentionTemplate,
   buildPinnedInstanceBridgeTemplate,
+  decodeInstanceUserDataAttribute,
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
   normalizePnpmArguments,
@@ -28,6 +31,10 @@ const instanceId = `i-${"1".repeat(17)}`;
 const volumeId = `vol-${"2".repeat(17)}`;
 const physicalImageId = `ami-${"3".repeat(17)}`;
 const imageParameterName = "SsmParameterValueLatestAmi";
+const storedUserData = "#!/bin/bash\nprintf 'legacy'";
+const storedUserDataBytes = Buffer.from(storedUserData, "utf8");
+const actualUserData = "#!/bin/bash\nprintf 'Grüße ☃'\n";
+const actualUserDataBytes = Buffer.from(actualUserData, "utf8");
 
 const liveTemplate = (): CloudFormationTemplate => ({
   Resources: {
@@ -47,7 +54,7 @@ const liveTemplate = (): CloudFormationTemplate => ({
       Type: "AWS::EC2::Instance",
       Properties: {
         ImageId: physicalImageId,
-        UserData: "legacy",
+        UserData: { "Fn::Base64": storedUserData },
         BlockDeviceMappings: [{ DeviceName: "/dev/xvda" }],
       },
     },
@@ -151,7 +158,13 @@ describe("existing deployment migration template contracts", () => {
   it("pins the complete deployed instance resource while taking all other resources from current CDK", () => {
     const retained = buildLegacyRetentionTemplate(liveTemplate());
     const current = currentTemplate();
-    const bridge = buildPinnedInstanceBridgeTemplate(retained, current, [], physicalImageId).template;
+    const bridge = buildPinnedInstanceBridgeTemplate(
+      retained,
+      current,
+      [],
+      physicalImageId,
+      storedUserDataBytes
+    ).template;
 
     expect(bridge.Resources[INSTANCE_LOGICAL_ID]).toEqual(retained.Resources[INSTANCE_LOGICAL_ID]);
     expect(bridge.Resources.WorkerRuntimeUser).toEqual(current.Resources.WorkerRuntimeUser);
@@ -175,6 +188,65 @@ describe("existing deployment migration template contracts", () => {
     );
     expect(JSON.stringify(pinned.template.Resources[INSTANCE_LOGICAL_ID])).toBe(originalInstance);
     expect(live.Parameters?.[imageParameterName].Type).toBe("AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>");
+  });
+
+  it("adopts exact decoded physical UserData bytes into only a literal Fn::Base64 string", () => {
+    const live = liveTemplate();
+    const expected = structuredClone(live);
+    expected.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = actualUserData;
+
+    const adopted = adoptActualInstanceUserData(live, actualUserDataBytes);
+
+    expect(adopted).toEqual(expected);
+    expect(live.Resources[INSTANCE_LOGICAL_ID].Properties.UserData).toEqual({ "Fn::Base64": storedUserData });
+    expect(Buffer.from(adopted.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"], "utf8")).toEqual(
+      actualUserDataBytes
+    );
+  });
+
+  it("rejects malformed UserData shapes and empty or invalid decoded bytes", () => {
+    for (const malformedUserData of [
+      storedUserData,
+      { "Fn::Base64": { Ref: "UserDataParameter" } },
+      { "Fn::Base64": storedUserData, Extra: true },
+      { Other: storedUserData },
+    ]) {
+      const malformed = liveTemplate();
+      malformed.Resources[INSTANCE_LOGICAL_ID].Properties.UserData = malformedUserData;
+      expect(() => adoptActualInstanceUserData(malformed, actualUserDataBytes)).toThrow(
+        /exactly one literal Fn::Base64 string/
+      );
+    }
+    expect(() => adoptActualInstanceUserData(liveTemplate(), Buffer.alloc(0))).toThrow(/nonempty decoded bytes/);
+    expect(() => adoptActualInstanceUserData(liveTemplate(), Buffer.from([0xc3, 0x28]))).toThrow(/not valid UTF-8/);
+  });
+
+  it("decodes only identity-bound canonical base64 UserData attribute responses", () => {
+    const response = { InstanceId: instanceId, UserData: { Value: actualUserDataBytes.toString("base64") } };
+    expect(decodeInstanceUserDataAttribute(instanceId, response)).toEqual(actualUserDataBytes);
+    expect(() => decodeInstanceUserDataAttribute(`i-${"9".repeat(17)}`, response)).toThrow(/ownership-proven/);
+    expect(() =>
+      decodeInstanceUserDataAttribute(instanceId, { InstanceId: instanceId, UserData: { Value: "" } })
+    ).toThrow(/nonempty canonical base64/);
+    expect(() =>
+      decodeInstanceUserDataAttribute(instanceId, { InstanceId: instanceId, UserData: { Value: "YR==" } })
+    ).toThrow(/does not round-trip as canonical base64/);
+  });
+
+  it("proves adopted template UserData and physical bytes remain byte-exact", () => {
+    const adopted = adoptActualInstanceUserData(liveTemplate(), actualUserDataBytes);
+    expect(() =>
+      assertInstanceUserDataTransition(adopted, structuredClone(adopted), actualUserDataBytes)
+    ).not.toThrow();
+
+    const changed = structuredClone(adopted);
+    changed.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = actualUserData.trimEnd();
+    expect(() => assertInstanceUserDataTransition(adopted, changed, actualUserDataBytes)).toThrow(
+      /does not exactly match/
+    );
+    expect(() =>
+      assertInstanceUserDataTransition(adopted, adopted, Buffer.from(`${actualUserData}extra`, "utf8"))
+    ).toThrow(/does not exactly match/);
   });
 
   it("refuses mismatched effective values and malformed or unsupported ImageId refs", () => {
@@ -267,7 +339,13 @@ describe("existing deployment migration template contracts", () => {
         Default: "/aws/service/ami-amazon-linux-latest/newer",
       },
     };
-    const bridge = buildPinnedInstanceBridgeTemplate(retained, current, dynamicStackParameters(), physicalImageId);
+    const bridge = buildPinnedInstanceBridgeTemplate(
+      retained,
+      current,
+      dynamicStackParameters(),
+      physicalImageId,
+      actualUserDataBytes
+    );
 
     expect(bridge.template.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId).toEqual({ Ref: imageParameterName });
     expect(bridge.template.Parameters?.[imageParameterName]).toEqual({
@@ -275,6 +353,9 @@ describe("existing deployment migration template contracts", () => {
       Default: physicalImageId,
     });
     expect(bridge.parameterOverrides).toEqual({ [imageParameterName]: physicalImageId });
+    expect(bridge.template.Resources[INSTANCE_LOGICAL_ID].Properties.UserData).toEqual({
+      "Fn::Base64": actualUserData,
+    });
   });
 
   it("validates the exact pending and deployed pinned-image template/parameter state", () => {
@@ -283,7 +364,8 @@ describe("existing deployment migration template contracts", () => {
       live,
       currentTemplate(),
       dynamicStackParameters(),
-      physicalImageId
+      physicalImageId,
+      storedUserDataBytes
     );
     const explicitParameters = [{ ParameterKey: imageParameterName, ParameterValue: physicalImageId }];
 
@@ -326,6 +408,48 @@ describe("existing deployment migration template contracts", () => {
         { ResourceChange: { LogicalResourceId: INSTANCE_LOGICAL_ID, Action: "Modify", Replacement: "True" } },
       ])
     ).toThrow(/unexpectedly touches MinecraftServerACE914F3/);
+  });
+
+  it("does not include property value previews when rejecting an EC2 change", () => {
+    expect(() =>
+      assertSafeRetentionChangeSet([
+        {
+          ResourceChange: {
+            LogicalResourceId: INSTANCE_LOGICAL_ID,
+            Action: "Modify",
+            Replacement: "Conditional",
+            Scope: ["Properties"],
+            Details: [
+              {
+                ChangeSource: "DirectModification",
+                Evaluation: "Static",
+                Target: {
+                  Attribute: "Properties",
+                  Name: "UserData",
+                  RequiresRecreation: "Always",
+                  BeforeValue: "sensitive-before",
+                  AfterValue: "sensitive-after",
+                },
+              },
+            ],
+          },
+        },
+      ])
+    ).toThrow(/beforeAfterEqual.*beforeLength.*afterLength/);
+    try {
+      assertSafeRetentionChangeSet([
+        {
+          ResourceChange: {
+            LogicalResourceId: INSTANCE_LOGICAL_ID,
+            Action: "Modify",
+            Details: [{ Target: { BeforeValue: "sensitive-before", AfterValue: "sensitive-after" } }],
+          },
+        },
+      ]);
+    } catch (error) {
+      expect((error as Error).message).not.toContain("sensitive-before");
+      expect((error as Error).message).not.toContain("sensitive-after");
+    }
   });
 
   it("allows only non-replacing legacy lifecycle-policy modifications in retention", () => {
@@ -412,7 +536,7 @@ describe("existing deployment migration template contracts", () => {
     postBridgeLive.Resources[INSTANCE_LOGICAL_ID] = liveTemplate().Resources[INSTANCE_LOGICAL_ID];
 
     expect(() =>
-      buildPinnedInstanceBridgeTemplate(postBridgeLive, currentTemplate(), [], physicalImageId)
+      buildPinnedInstanceBridgeTemplate(postBridgeLive, currentTemplate(), [], physicalImageId, storedUserDataBytes)
     ).not.toThrow();
     expect(() =>
       assertSafeBridgeChangeSet(
@@ -539,11 +663,16 @@ describe("existing deployment migration entry-point contract", () => {
   it("keeps migration dry-run by default and guards routine setup/CDK deployment", () => {
     const root = path.resolve(process.cwd());
     const migrationCli = readFileSync(path.join(root, "scripts/migrate-existing-deployment.ts"), "utf8");
+    const migrationContracts = readFileSync(path.join(root, "scripts/existing-deployment-migration.ts"), "utf8");
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
     const setup = readFileSync(path.join(root, "setup.sh"), "utf8");
 
     expect(migrationCli).toContain('stage: "plan"');
     expect(migrationCli).toContain("DRY RUN ONLY");
+    expect(migrationCli.match(/--include-property-values/g)).toHaveLength(2);
+    expect(migrationCli).toContain('"describe-instance-attribute"');
+    expect(migrationContracts).not.toContain("beforePreview");
+    expect(migrationContracts).not.toContain("afterPreview");
     expect(packageJson.scripts["cdk:deploy"]).toContain("--assert-standard-deploy-safe");
     expect(setup).toContain("migrate-existing-deployment.ts");
     expect(setup).toContain("--assert-standard-deploy-safe");
