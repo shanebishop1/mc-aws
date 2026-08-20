@@ -25,9 +25,12 @@ import {
   buildChangeSetParameters,
   buildLegacyRetentionTemplate,
   buildPinnedInstanceBridgeTemplate,
+  buildRetentionStageTemplate,
   decodeInstanceUserDataAttribute,
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
+  isRetentionStageComplete,
+  isStableMigrationStackStatus,
   legacyResourcesPresentAndRetained,
   normalizePnpmArguments,
   pinDeployedInstanceImage,
@@ -51,7 +54,6 @@ interface Options {
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const INFRA_DIR = path.join(ROOT, "infra");
-const SAFE_STACK_STATUSES = new Set(["CREATE_COMPLETE", "UPDATE_COMPLETE"]);
 const BRIDGE_DESCRIPTION = "mc-aws existing-deployment bridge: retain legacy SES removals and pin live EC2 instance";
 const RETENTION_DESCRIPTION = "mc-aws existing-deployment stage 1: retain legacy SES resources";
 const STACK_ID_PATTERN =
@@ -154,7 +156,7 @@ function stackIdentity(options: Options): { identity: StackIdentity; stack: Json
   if (caller.Account !== accountId || region !== options.region || stackName !== options.stackName) {
     throw new Error("AWS caller, requested region, and exact CloudFormation StackId identity do not agree.");
   }
-  if (!SAFE_STACK_STATUSES.has(stack.StackStatus)) {
+  if (!isStableMigrationStackStatus(stack.StackStatus)) {
     throw new Error(`Stack must be stable before migration; found ${stack.StackStatus}.`);
   }
   return { identity: { accountId, region, stackId: stack.StackId, stackName }, stack };
@@ -276,17 +278,16 @@ function applyRetention(
   live: CloudFormationTemplate
 ): void {
   requireMutationConfirmation(options, identity);
-  let retained = buildLegacyRetentionTemplate(live);
   const before = inspectOwnership(identity);
   const beforeUserData = actualInstanceUserData(identity, before);
-  const pinned = pinDeployedInstanceImage(retained, stack.Parameters ?? [], before.imageId);
-  retained = adoptActualInstanceUserData(pinned.template, beforeUserData);
-  if (templatesEqual(retained, live)) {
+  if (isRetentionStageComplete(live, stack.Parameters ?? [], before.imageId, beforeUserData)) {
     console.log(
       "Legacy SES Retain policies, deployed AMI parameter, and physical UserData bytes are already adopted; no update sent."
     );
     return;
   }
+  const pinned = buildRetentionStageTemplate(live, stack.Parameters ?? [], before.imageId, beforeUserData);
+  const retained = pinned.template;
   const temporaryDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-retain-"));
   const changeSetName = `mc-aws-existing-retain-${new Date()
     .toISOString()
@@ -655,6 +656,48 @@ function assertStandardDeploySafe(options: Options): void {
   }
 }
 
+function printMigrationPlan(
+  identity: StackIdentity,
+  stack: JsonRecord,
+  live: CloudFormationTemplate,
+  inspection: OwnershipInspection
+): void {
+  printInspection(identity, inspection);
+  const legacyResourcesManaged = Boolean(
+    live.Resources[LEGACY_RULE_SET_LOGICAL_ID] || live.Resources[LEGACY_ACTIVATION_LOGICAL_ID]
+  );
+  const retained = legacyResourcesManaged ? buildLegacyRetentionTemplate(live) : live;
+  const userData = actualInstanceUserData(identity, inspection);
+  const retentionStageComplete =
+    !legacyResourcesManaged || isRetentionStageComplete(live, stack.Parameters ?? [], inspection.imageId, userData);
+  if (legacyResourcesManaged && !retentionStageComplete) {
+    buildRetentionStageTemplate(live, stack.Parameters ?? [], inspection.imageId, userData);
+  }
+  console.log(
+    legacyResourcesManaged
+      ? retentionStageComplete
+        ? "Stage 1: legacy SES Retain policies, AMI pin, and physical UserData adoption are already deployed."
+        : "Stage 1 required: deploy Retain policies, the AMI pin, and/or physical UserData adoption without an EC2 action."
+      : "Stage 1: legacy SES resources are no longer managed by this stack."
+  );
+  console.log(
+    inspection.missingInstanceTags.length || inspection.missingVolumeTags.length
+      ? "Stage 2 required: establish exact ownership tags after identity checks."
+      : "Stage 2: ownership tags are already exact."
+  );
+  const assemblyDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-plan-"));
+  try {
+    const current = synthesizeCurrentTemplate(identity, assemblyDirectory);
+    buildPinnedInstanceBridgeTemplate(retained, current, stack.Parameters ?? [], inspection.imageId, userData);
+    console.log(
+      "Stage 3: a current non-instance bridge can be synthesized while pinning the complete live EC2 resource."
+    );
+  } finally {
+    rmSync(assemblyDirectory, { recursive: true, force: true });
+  }
+  console.log("DRY RUN ONLY: no AWS resource, tag, asset, or change set was created or changed.");
+}
+
 function main(): void {
   const options = parseOptions(process.argv.slice(2));
   if (options.assertStandardDeploySafe) {
@@ -682,39 +725,7 @@ function main(): void {
     return;
   }
 
-  printInspection(identity, inspection);
-  const legacyResourcesManaged = Boolean(
-    live.Resources[LEGACY_RULE_SET_LOGICAL_ID] || live.Resources[LEGACY_ACTIVATION_LOGICAL_ID]
-  );
-  const retained = legacyResourcesManaged ? buildLegacyRetentionTemplate(live) : live;
-  const userData = actualInstanceUserData(identity, inspection);
-  const pinnedRetention = adoptActualInstanceUserData(
-    pinDeployedInstanceImage(retained, stack.Parameters ?? [], inspection.imageId).template,
-    userData
-  );
-  console.log(
-    legacyResourcesManaged
-      ? templatesEqual(pinnedRetention, live)
-        ? "Stage 1: legacy SES Retain policies, AMI pin, and physical UserData adoption are already deployed."
-        : "Stage 1 required: deploy Retain policies, the AMI pin, and/or physical UserData adoption without an EC2 action."
-      : "Stage 1: legacy SES resources are no longer managed by this stack."
-  );
-  console.log(
-    inspection.missingInstanceTags.length || inspection.missingVolumeTags.length
-      ? "Stage 2 required: establish exact ownership tags after identity checks."
-      : "Stage 2: ownership tags are already exact."
-  );
-  const assemblyDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-plan-"));
-  try {
-    const current = synthesizeCurrentTemplate(identity, assemblyDirectory);
-    buildPinnedInstanceBridgeTemplate(retained, current, stack.Parameters ?? [], inspection.imageId, userData);
-    console.log(
-      "Stage 3: a current non-instance bridge can be synthesized while pinning the complete live EC2 resource."
-    );
-  } finally {
-    rmSync(assemblyDirectory, { recursive: true, force: true });
-  }
-  console.log("DRY RUN ONLY: no AWS resource, tag, asset, or change set was created or changed.");
+  printMigrationPlan(identity, stack, live, inspection);
 }
 
 try {

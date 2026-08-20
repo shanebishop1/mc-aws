@@ -243,11 +243,26 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
         (tag: { Key?: string; Value?: string }) => tag.Key === "McAwsPurpose" && tag.Value === "CloudflareWorkerRuntime"
       )
     )!;
-    const policies = Object.values(template.findResources("AWS::IAM::Policy")).filter((resource) =>
+    const inlinePolicies = Object.values(template.findResources("AWS::IAM::Policy")).filter((resource) =>
       resource.Properties.Users?.some((candidate: { Ref?: string }) => candidate.Ref === userLogicalId)
     );
-    const statements = policies.flatMap((policy) => policy.Properties.PolicyDocument.Statement);
-    return { userLogicalId, user, statements };
+    const managedPolicies = Object.entries(template.findResources("AWS::IAM::ManagedPolicy")).filter(
+      ([policyLogicalId, resource]) =>
+        resource.Properties.Users?.some((candidate: { Ref?: string }) => candidate.Ref === userLogicalId) ||
+        user.Properties.ManagedPolicyArns?.some((arn: unknown) => JSON.stringify(arn).includes(policyLogicalId))
+    );
+    expect(managedPolicies).toHaveLength(1);
+    const [managedPolicyLogicalId, managedPolicy] = managedPolicies[0];
+    const policyDocument = managedPolicy.Properties.PolicyDocument;
+    return {
+      userLogicalId,
+      user,
+      inlinePolicies,
+      managedPolicy,
+      managedPolicyLogicalId,
+      policyDocument,
+      statements: policyDocument.Statement,
+    };
   };
 
   it("creates a tagged dedicated runtime user without provisioning or outputting an access key", () => {
@@ -266,6 +281,20 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
     const outputs = template.toJSON().Outputs as Record<string, { Value?: unknown }>;
     expect(outputs.WorkerRuntimeIamUserName).toBeDefined();
     expect(Object.keys(outputs).some((key) => /accesskey|secret/i.test(key))).toBe(false);
+  });
+
+  it("attaches the runtime permissions as one customer-managed policy within its document quota", () => {
+    const template = synthesizeStack();
+    const { inlinePolicies, managedPolicy, managedPolicyLogicalId, policyDocument } = getRuntimeIdentity(template);
+    const nonWhitespacePolicySize = JSON.stringify(policyDocument).replace(/\s/g, "").length;
+
+    expect(inlinePolicies).toEqual([]);
+    expect(managedPolicy.Type).toBe("AWS::IAM::ManagedPolicy");
+    expect(managedPolicyLogicalId).toMatch(/^WorkerRuntimeManagedPolicy/);
+    expect(managedPolicyLogicalId).not.toBe("WorkerRuntimePolicyD3BC636A");
+    expect(template.toJSON().Resources.WorkerRuntimePolicyD3BC636A).toBeUndefined();
+    expect(nonWhitespacePolicySize).toBeGreaterThan(2_048);
+    expect(nonWhitespacePolicySize).toBeLessThanOrEqual(6_144);
   });
 
   it("scopes runtime mutations to the managed instance, lifecycle Lambda, stack, and runtime SSM paths", () => {

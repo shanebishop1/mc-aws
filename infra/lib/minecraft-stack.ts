@@ -375,21 +375,20 @@ export class MinecraftStack extends cdk.Stack {
     const deletableParameterArns = [serverActionArn, serverActionClaimArn, operationChildrenArn];
     const includeCostExplorer = (process.env.AWS_COST_EXPLORER_ENABLED ?? "true").trim().toLowerCase() !== "false";
 
-    workerRuntimeUser.attachInlinePolicy(
-      new iam.Policy(this, "WorkerRuntimePolicy", {
-        statements: createWorkerRuntimePolicyStatements({
-          instanceArn: `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`,
-          lifecycleLambdaArn: startLambda.functionArn,
-          stackArn: `arn:aws:cloudformation:${this.region}:${this.account}:stack/${this.stackName}/*`,
-          runShellScriptDocumentArn: `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
-          readableParameterArns,
-          writableParameterArns,
-          deletableParameterArns,
-          operationParameterPathArns: [operationPathArn, operationChildrenArn],
-          includeCostExplorer,
-        }),
-      })
-    );
+    const workerRuntimePolicy = new iam.ManagedPolicy(this, "WorkerRuntimeManagedPolicy", {
+      statements: createWorkerRuntimePolicyStatements({
+        instanceArn: `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`,
+        lifecycleLambdaArn: startLambda.functionArn,
+        stackArn: `arn:aws:cloudformation:${this.region}:${this.account}:stack/${this.stackName}/*`,
+        runShellScriptDocumentArn: `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
+        readableParameterArns,
+        writableParameterArns,
+        deletableParameterArns,
+        operationParameterPathArns: [operationPathArn, operationChildrenArn],
+        includeCostExplorer,
+      }),
+    });
+    workerRuntimePolicy.attachToUser(workerRuntimeUser);
 
     // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
     const seedEmailAllowlistLambda = new lambda.Function(this, "SeedEmailAllowlistLambda", {

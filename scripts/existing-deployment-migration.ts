@@ -2,6 +2,10 @@ export const LEGACY_RULE_SET_LOGICAL_ID = "MinecraftRuleSet298765D1";
 export const LEGACY_ACTIVATION_LOGICAL_ID = "ActivateRuleSet3E62562C";
 export const INSTANCE_LOGICAL_ID = "MinecraftServerACE914F3";
 
+export function isStableMigrationStackStatus(status: unknown): boolean {
+  return status === "CREATE_COMPLETE" || status === "UPDATE_COMPLETE" || status === "UPDATE_ROLLBACK_COMPLETE";
+}
+
 export const ownershipTagsForStack = (stackName: string) => ({
   McAwsProject: "mc-aws",
   McAwsStack: stackName,
@@ -462,6 +466,40 @@ export function pinDeployedInstanceImage(
     template: pinned,
     parameterOverrides: { [parameterName]: physicalImageId },
     imageParameterName: parameterName,
+  };
+}
+
+export function isRetentionStageComplete(
+  liveTemplate: CloudFormationTemplate,
+  deployedParameters: JsonRecord[],
+  physicalImageId: string,
+  actualUserData: Uint8Array
+): boolean {
+  const retained = buildLegacyRetentionTemplate(liveTemplate);
+  if (!templatesEqual(retained, liveTemplate)) return false;
+
+  const pinned = pinDeployedInstanceImage(liveTemplate, deployedParameters, physicalImageId);
+  if (!templatesEqual(pinned.template, liveTemplate)) return false;
+
+  try {
+    assertInstanceUserDataTransition(liveTemplate, liveTemplate, actualUserData);
+  } catch {
+    return false;
+  }
+  return true;
+}
+
+export function buildRetentionStageTemplate(
+  liveTemplate: CloudFormationTemplate,
+  deployedParameters: JsonRecord[],
+  physicalImageId: string,
+  actualUserData: Uint8Array
+): PinnedInstanceTemplate {
+  const retained = buildLegacyRetentionTemplate(liveTemplate);
+  const pinned = pinDeployedInstanceImage(retained, deployedParameters, physicalImageId);
+  return {
+    ...pinned,
+    template: adoptActualInstanceUserData(pinned.template, actualUserData),
   };
 }
 

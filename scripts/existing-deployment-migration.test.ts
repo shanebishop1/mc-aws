@@ -22,6 +22,8 @@ import {
   decodeInstanceUserDataAttribute,
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
+  isRetentionStageComplete,
+  isStableMigrationStackStatus,
   normalizePnpmArguments,
   pinDeployedInstanceImage,
 } from "./existing-deployment-migration";
@@ -153,6 +155,55 @@ describe("existing deployment migration template contracts", () => {
     expect(pinned.template).not.toEqual(retainedDynamic);
     expect(pinned.template.Parameters?.[imageParameterName].Type).toBe("AWS::EC2::Image::Id");
     expect(pinned.parameterOverrides).toEqual({ [imageParameterName]: physicalImageId });
+  });
+
+  const completedRetentionTemplate = (): CloudFormationTemplate => {
+    const completed = buildLegacyRetentionTemplate(dynamicLiveTemplate());
+    completed.Parameters![imageParameterName] = {
+      Type: "AWS::EC2::Image::Id",
+      Default: physicalImageId,
+    };
+    completed.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = "#!/bin/bash\nprintf 'Gr??e ?'\n";
+    return completed;
+  };
+  const pinnedStackParameters = () => [{ ParameterKey: imageParameterName, ParameterValue: physicalImageId }];
+
+  it("treats retained, pinned, API-normalized UserData as a completed Stage 1", () => {
+    expect(
+      isRetentionStageComplete(
+        completedRetentionTemplate(),
+        pinnedStackParameters(),
+        physicalImageId,
+        actualUserDataBytes
+      )
+    ).toBe(true);
+  });
+
+  it("requires Stage 1 when the deployed AMI parameter remains dynamic", () => {
+    const dynamic = buildLegacyRetentionTemplate(dynamicLiveTemplate());
+    dynamic.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = "#!/bin/bash\nprintf 'Gr??e ?'\n";
+
+    expect(isRetentionStageComplete(dynamic, dynamicStackParameters(), physicalImageId, actualUserDataBytes)).toBe(
+      false
+    );
+  });
+
+  it("requires Stage 1 when either legacy Retain policy is missing", () => {
+    const missingRetain = completedRetentionTemplate();
+    missingRetain.Resources[LEGACY_RULE_SET_LOGICAL_ID].DeletionPolicy = "Delete";
+
+    expect(isRetentionStageComplete(missingRetain, pinnedStackParameters(), physicalImageId, actualUserDataBytes)).toBe(
+      false
+    );
+  });
+
+  it("requires Stage 1 when stored UserData changes physical ASCII bytes", () => {
+    const wrongAscii = completedRetentionTemplate();
+    wrongAscii.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] = "#!/bin/bash\nprintf 'Wrong ASCII'\n";
+
+    expect(isRetentionStageComplete(wrongAscii, pinnedStackParameters(), physicalImageId, actualUserDataBytes)).toBe(
+      false
+    );
   });
 
   it("pins the complete deployed instance resource while taking all other resources from current CDK", () => {
@@ -687,6 +738,24 @@ describe("existing deployment migration ownership contracts", () => {
 });
 
 describe("existing deployment migration entry-point contract", () => {
+  it("accepts only completed stable stack statuses, including a completed update rollback", () => {
+    for (const status of ["CREATE_COMPLETE", "UPDATE_COMPLETE", "UPDATE_ROLLBACK_COMPLETE"]) {
+      expect(isStableMigrationStackStatus(status)).toBe(true);
+    }
+    for (const status of [
+      "CREATE_IN_PROGRESS",
+      "UPDATE_IN_PROGRESS",
+      "UPDATE_FAILED",
+      "UPDATE_ROLLBACK_IN_PROGRESS",
+      "UPDATE_ROLLBACK_COMPLETE_CLEANUP_IN_PROGRESS",
+      "UPDATE_ROLLBACK_FAILED",
+      "ROLLBACK_COMPLETE",
+      undefined,
+    ]) {
+      expect(isStableMigrationStackStatus(status)).toBe(false);
+    }
+  });
+
   it("keeps migration dry-run by default and guards routine setup/CDK deployment", () => {
     const root = path.resolve(process.cwd());
     const migrationCli = readFileSync(path.join(root, "scripts/migrate-existing-deployment.ts"), "utf8");

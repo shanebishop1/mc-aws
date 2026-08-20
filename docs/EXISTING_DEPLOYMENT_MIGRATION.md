@@ -9,7 +9,7 @@ The migration operator is deliberately fail-closed and read-only by default. It 
 - Start from the reviewed repository revision and a clean working tree.
 - Authenticate the intended human/deployment AWS profile. Never use the Worker runtime identity.
 - Use the live stack's region (currently `us-west-1`).
-- Ensure no CloudFormation update is in progress.
+- Ensure no CloudFormation update is in progress. A fully completed update rollback (`UPDATE_ROLLBACK_COMPLETE`) is accepted for a fresh read-only plan and a guarded retry; in-progress or failed rollback states remain blocked.
 - Preserve a separate, current application backup before any infrastructure maintenance.
 
 Set the profile and obtain the immutable StackId:
@@ -60,7 +60,7 @@ CloudFormation `GetTemplate` can return a lossy API representation of an otherwi
 
 Only a safe change set is executed; the command then waits for the update, re-reads the deployed template, stack parameters, instance, volume, and UserData attribute, and proves the instance ID, root volume, physical AMI, and actual UserData bytes did not change while the returned template UserData is one of those two narrowly accepted representations. Stop if this stage fails; do not continue with a direct current-template deployment.
 
-Stage 1 does not no-op merely because both Retain policies are already present. It first constructs and validates the pinned parameter and adopted UserData state against the physical instance and skips the update only when both are already exact. Therefore an older partial attempt that deployed Retain policies but left the SSM AMI parameter dynamic or the stored UserData bytes stale still requires Stage 1.
+Stage 1 does not no-op merely because both Retain policies are already present. It separately verifies that applying Retain makes no change, the AMI parameter definition/default is already pinned with a deployed value matching the physical instance, and stored UserData is either the exact physical UTF-8 or the complete allowed CloudFormation question-mark representation. Only then does it skip the update. Therefore an older partial attempt that deployed Retain policies but left the SSM AMI parameter dynamic or stored UserData outside that narrow representation still requires Stage 1.
 
 ## Stage 2: establish lifecycle ownership
 
