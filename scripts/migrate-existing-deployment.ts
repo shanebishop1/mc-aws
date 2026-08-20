@@ -24,6 +24,7 @@ import {
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
   legacyResourcesPresentAndRetained,
+  normalizePnpmArguments,
   templateParameterNames,
   templatesEqual,
 } from "./existing-deployment-migration";
@@ -104,6 +105,7 @@ Without --execute this command is read-only. Mutation stages require the exact o
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: strict one-pass CLI parsing keeps unsupported flags fail-closed.
 function parseOptions(argv: string[]): Options {
+  const arguments_ = normalizePnpmArguments(argv);
   const options: Options = {
     stage: "plan",
     execute: false,
@@ -112,9 +114,9 @@ function parseOptions(argv: string[]): Options {
     assertStandardDeploySafe: false,
     confirmExclusiveTagging: false,
   };
-  for (let index = 0; index < argv.length; index += 1) {
-    const argument = argv[index];
-    const value = () => argv[++index] ?? usage();
+  for (let index = 0; index < arguments_.length; index += 1) {
+    const argument = arguments_[index];
+    const value = () => arguments_[++index] ?? usage();
     if (argument === "--stage") options.stage = value() as Stage;
     else if (argument === "--execute") options.execute = true;
     else if (argument === "--stack-name") options.stackName = value();

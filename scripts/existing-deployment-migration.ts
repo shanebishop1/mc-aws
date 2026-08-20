@@ -125,6 +125,10 @@ export function assertExclusiveTaggingAcknowledged(
   }
 }
 
+export function normalizePnpmArguments(arguments_: string[]): string[] {
+  return arguments_[0] === "--" ? arguments_.slice(1) : arguments_;
+}
+
 function resource(template: CloudFormationTemplate, logicalId: string, expectedType: string): JsonRecord {
   const candidate = template.Resources?.[logicalId];
   if (!candidate || candidate.Type !== expectedType) {

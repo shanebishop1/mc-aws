@@ -17,6 +17,7 @@ import {
   buildPinnedInstanceBridgeTemplate,
   establishOwnershipTags,
   inspectInstanceAndRootVolume,
+  normalizePnpmArguments,
 } from "./existing-deployment-migration";
 
 const stackId = "arn:aws:cloudformation:us-west-1:123456789012:stack/MinecraftStack/stack-id";
@@ -93,6 +94,11 @@ const volumeResponse = (tags = ownershipTags) => ({
 });
 
 describe("existing deployment migration template contracts", () => {
+  it("accepts the leading separator forwarded by pnpm scripts", () => {
+    expect(normalizePnpmArguments(["--", "--stage", "retain"])).toEqual(["--stage", "retain"]);
+    expect(normalizePnpmArguments(["--stage", "retain"])).toEqual(["--stage", "retain"]);
+  });
+
   it("changes only legacy SES lifecycle policies in the retention stage", () => {
     const live = liveTemplate();
     const retained = buildLegacyRetentionTemplate(live);
