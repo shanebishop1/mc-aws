@@ -19,6 +19,7 @@ permissions:
 jobs:
   real-environment-smoke:
     name: Real-environment smoke contract (S1-S5)
+    if: github.repository == 'shanebishop1/mc-aws' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment:
       name: real-environment-smoke
@@ -31,8 +32,9 @@ jobs:
       SMOKE_ENVIRONMENT_LABEL: redacted
       SMOKE_EXPECT_DOMAIN: ""
       SMOKE_EXPECT_BACKEND_MODE: ${{ vars.SMOKE_EXPECT_BACKEND_MODE || 'aws' }}
-      SMOKE_ENABLE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.enable_s5_environment_probe || vars.SMOKE_ENABLE_S5_ENVIRONMENT_PROBE || 'false' }}
-      SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE: ${{ github.event_name == 'workflow_dispatch' && inputs.require_s5_environment_probe || vars.SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE || 'false' }}
+      # Requiring S5 also enables it, so the required probe cannot silently skip.
+      SMOKE_ENABLE_S5_ENVIRONMENT_PROBE: ${{ inputs.enable_s5_environment_probe || inputs.require_s5_environment_probe }}
+      SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE: ${{ inputs.require_s5_environment_probe }}
       SMOKE_SUMMARY_OUTPUT_PATH: artifacts/real-environment-smoke-summary.md
 
     steps:
@@ -60,10 +62,6 @@ jobs:
 
           if [ -z "${SMOKE_SESSION_COOKIE:-}" ]; then
             missing+=("secret: SMOKE_SESSION_COOKIE")
-          fi
-
-          if [ -z "${SMOKE_ENVIRONMENT_LABEL:-}" ]; then
-            missing+=("variable: SMOKE_ENVIRONMENT_LABEL")
           fi
 
           if [ ${#missing[@]} -gt 0 ]; then

@@ -46,6 +46,7 @@
     "mock:scenario": "tsx scripts/mock-cli.ts scenario",
     "validate:dev-login": "MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true tsx scripts/validate-dev-login.ts",
     "docs:check": "tsx scripts/validate-docs-consistency.ts",
+    "release:prepare": "tsx scripts/prepare-release.ts",
     "preview:cf": "opennextjs-cloudflare build && wrangler dev",
     "deploy:cf": "./scripts/deploy-cloudflare.sh",
     "cdk:version": "cd infra && cdk --version",

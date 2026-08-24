@@ -11,6 +11,7 @@ const filesToCheck = [
   "README.md",
   "SECURITY.md",
   "docs/README.md",
+  "docs/RELEASING.md",
   "docs/AWS_CREDENTIALS_SETUP.md",
   "docs/CLOUDFLARE_SETUP.md",
   "docs/docs/API.md",

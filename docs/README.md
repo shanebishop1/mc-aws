@@ -21,6 +21,7 @@ The guides under `docs/setup/` are canonical for first-time setup. The top-level
 - [Mock Mode Developer Guide](MOCK_MODE_DEVELOPER_GUIDE.md)
 - [API Reference](docs/API.md)
 - [Provider implementation](provider-implementation.md)
+- [Release process](RELEASING.md)
 
 
 

@@ -1,0 +1,238 @@
+name: Publish Versioned Release
+
+on:
+  workflow_run:
+    workflows: ["Baseline Validation"]
+    types: [completed]
+    branches: [main]
+
+concurrency:
+  group: publish-versioned-release
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  publish:
+    name: Tag validated version changes
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    env:
+      VALIDATED_SHA: ${{ github.event.workflow_run.head_sha }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout the exact validated commit
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Validate version and repository release state
+        id: release
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          import os
+          import re
+          import subprocess
+
+          sha = os.environ["VALIDATED_SHA"]
+          if not re.fullmatch(r"[0-9a-f]{40}", sha):
+              raise SystemExit("Validated SHA is not a full lowercase commit SHA")
+          if subprocess.check_output(["git", "rev-parse", "HEAD"], text=True).strip() != sha:
+              raise SystemExit("Checkout does not match the validated SHA")
+
+          with open("package.json", encoding="utf-8") as package_file:
+              current_package = json.load(package_file)
+          parent_package = json.loads(
+              subprocess.check_output(["git", "show", "HEAD^:package.json"], text=True)
+          )
+          if current_package.get("private") is not True:
+              raise SystemExit("package.json must remain private")
+
+          stable_semver = re.compile(r"(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+
+          def parse_version(package, label):
+              version = package.get("version")
+              if not isinstance(version, str) or not stable_semver.fullmatch(version):
+                  raise SystemExit(f"{label} package version is not strict stable SemVer")
+              return version, tuple(int(part) for part in version.split("."))
+
+          current, current_parts = parse_version(current_package, "Current")
+          parent, parent_parts = parse_version(parent_package, "Parent")
+          tag = f"v{current}"
+
+          strict_tag = re.compile(r"v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)")
+
+          def tag_version(tag_name):
+              match = strict_tag.fullmatch(tag_name)
+              return tuple(int(part) for part in match.groups()) if match else None
+
+          tag_names = {
+              name
+              for name in subprocess.check_output(["git", "tag", "--list"], text=True).splitlines()
+              if tag_version(name) is not None
+          }
+          release_pages = json.loads(
+              subprocess.check_output(
+                  [
+                      "gh",
+                      "api",
+                      "--paginate",
+                      "--slurp",
+                      "-H",
+                      "Accept: application/vnd.github+json",
+                      f"repos/{os.environ['GITHUB_REPOSITORY']}/releases?per_page=100",
+                  ],
+                  text=True,
+              )
+          )
+          release_names = {
+              release["tag_name"]
+              for page in release_pages
+              for release in page
+              if isinstance(release.get("tag_name"), str) and tag_version(release["tag_name"]) is not None
+          }
+          repository_versions = {
+              name: tag_version(name) for name in tag_names | release_names
+          }
+          highest_name = max(repository_versions, key=repository_versions.get) if repository_versions else None
+          highest_parts = repository_versions.get(highest_name) if highest_name else None
+          has_tag = tag in tag_names
+          has_release = tag in release_names
+
+          if highest_parts is not None and current_parts < highest_parts:
+              raise SystemExit(
+                  f"Package version {current} is behind highest repository version {highest_name}"
+              )
+
+          def resolve_tag_commit(tag_name):
+              try:
+                  commit = subprocess.check_output(
+                      ["git", "rev-list", "-n", "1", f"refs/tags/{tag_name}"], text=True
+                  ).strip()
+              except subprocess.CalledProcessError as error:
+                  raise SystemExit(f"Tag {tag_name} does not resolve to a commit") from error
+              if not re.fullmatch(r"[0-9a-f]{40}", commit):
+                  raise SystemExit(f"Tag {tag_name} does not resolve to a commit")
+              return commit
+
+          def find_prior_distinct_version():
+              commits = subprocess.check_output(
+                  ["git", "rev-list", "--first-parent", "HEAD^"], text=True
+              ).splitlines()
+              for commit in commits:
+                  try:
+                      historical_package = json.loads(
+                          subprocess.check_output(
+                              ["git", "show", f"{commit}:package.json"], text=True
+                          )
+                      )
+                  except (subprocess.CalledProcessError, json.JSONDecodeError):
+                      continue
+                  historical = historical_package.get("version")
+                  if not isinstance(historical, str) or not stable_semver.fullmatch(historical):
+                      continue
+                  if historical != current:
+                      return historical, tuple(int(part) for part in historical.split("."))
+              return None
+
+          action = "none"
+          reason = "version is unchanged and no release recovery is needed"
+          parent_changed = current != parent
+
+          if has_release and not has_tag:
+              raise SystemExit(f"Release {tag} exists without a resolvable repository tag")
+
+          if not parent_changed and has_tag and has_release:
+              # A normal commit after an already-published version is not a new
+              # publication attempt. The existing immutable release remains valid.
+              resolve_tag_commit(tag)
+              reason = f"{tag} is already published"
+          elif has_tag:
+              tag_commit = resolve_tag_commit(tag)
+              if tag_commit != sha:
+                  raise SystemExit(
+                      f"Tag {tag} points to {tag_commit}, not validated SHA {sha}; refusing to move it"
+                  )
+              if has_release:
+                  action = "idempotent"
+                  reason = f"{tag} and its release already exist at the validated SHA"
+              else:
+                  higher_exists = highest_parts is not None and highest_parts > current_parts
+                  if higher_exists:
+                      raise SystemExit(
+                          f"Cannot publish {tag}; repository state already contains higher {highest_name}"
+                      )
+                  action = "release-existing-tag"
+                  reason = f"{tag} exists at the validated SHA but its release is missing"
+          elif has_release:
+              raise SystemExit(f"Release {tag} exists without tag {tag}")
+          elif parent_changed:
+              if current_parts <= parent_parts:
+                  raise SystemExit(f"Version must increase monotonically: {parent} -> {current}")
+              if highest_parts is not None and current_parts <= highest_parts:
+                  raise SystemExit(
+                      f"Version {current} must be greater than highest repository version {highest_name}"
+                  )
+              action = "create"
+              reason = f"validated version bump {parent} -> {current}"
+          elif not parent_changed:
+              # Recovery path: an earlier main commit introduced this version,
+              # but its validation/publication did not complete. This successful
+              # run validates the full snapshot that will now be released. A
+              # historical lower version proves this is a bump, including when
+              # recovering the repository's first release.
+              prior_version = find_prior_distinct_version()
+              above_repository_state = highest_parts is None or current_parts > highest_parts
+              if (
+                  prior_version is not None
+                  and current_parts > prior_version[1]
+                  and above_repository_state
+              ):
+                  action = "create"
+                  recovery_anchor = highest_name or f"historical version {prior_version[0]}"
+                  reason = f"recovering unpublished {tag} after {recovery_anchor}"
+
+          output = os.environ["GITHUB_OUTPUT"]
+          with open(output, "a", encoding="utf-8") as output_file:
+              output_file.write(f"action={action}\nversion={current}\ntag={tag}\n")
+          print(f"Release decision: {action} ({reason}).")
+          PY
+
+      - name: Create tag at validated SHA
+        if: steps.release.outputs.action == 'create'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh api \
+            --method POST \
+            "repos/$GITHUB_REPOSITORY/git/refs" \
+            --raw-field "ref=refs/tags/$TAG" \
+            --raw-field "sha=$VALIDATED_SHA" \
+            >/dev/null
+
+      - name: Create GitHub Release from verified tag
+        if: >-
+          steps.release.outputs.action == 'create' ||
+          steps.release.outputs.action == 'release-existing-tag'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --verify-tag \
+            --title "$TAG" \
+            --generate-notes
