@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareVersions, parseStableSemver, resolveReleaseVersion } from "./prepare-release";
+import { compareVersions, parsePorcelainPaths, parseStableSemver, resolveReleaseVersion } from "./prepare-release";
 
 describe("release version contract", () => {
   it.each([
@@ -22,5 +22,9 @@ describe("release version contract", () => {
     expect(() => resolveReleaseVersion("2.0.0", "2.0.0")).toThrow(/must be greater/);
     expect(() => resolveReleaseVersion("2.0.0", "1.99.99")).toThrow(/must be greater/);
     expect(compareVersions("10.0.0", "9.99.99")).toBe(1);
+  });
+
+  it("preserves filenames from porcelain status output", () => {
+    expect(parsePorcelainPaths(" M package.json\n?? pnpm-lock.yaml")).toEqual(["package.json", "pnpm-lock.yaml"]);
   });
 });

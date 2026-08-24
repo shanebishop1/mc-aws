@@ -53,7 +53,14 @@ function command(command: string, args: readonly string[]): string {
     const detail = result.stderr.trim() || result.stdout.trim() || `exit status ${result.status ?? "unknown"}`;
     throw new Error(`${command} ${args.join(" ")} failed: ${detail}`);
   }
-  return result.stdout.trim();
+  return result.stdout.trimEnd();
+}
+
+export function parsePorcelainPaths(output: string): string[] {
+  return output
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => line.slice(3));
 }
 
 function commandSucceeds(executable: string, args: readonly string[]): boolean {
@@ -116,10 +123,7 @@ export function main(args = process.argv.slice(2)): void {
   // pnpm does not encode the root package version in lockfile v9, but this
   // reconciles pnpm-lock.yaml whenever package metadata requires a lock update.
   command("pnpm", ["install", "--lockfile-only"]);
-  const changedFiles = command("git", ["status", "--porcelain", "--untracked-files=all"])
-    .split("\n")
-    .filter(Boolean)
-    .map((line) => line.slice(3));
+  const changedFiles = parsePorcelainPaths(command("git", ["status", "--porcelain", "--untracked-files=all"]));
   if (
     !changedFiles.includes("package.json") ||
     changedFiles.some((file) => !["package.json", "pnpm-lock.yaml"].includes(file))
