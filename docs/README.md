@@ -1,6 +1,6 @@
 # Documentation
 
-Start here to distinguish current operating guidance from design history. Commands in historical plans may be obsolete or unsafe for a current deployment.
+Current setup, operations, and development references for `mc-aws`.
 
 ## Current user guides
 
@@ -22,8 +22,3 @@ The guides under `docs/setup/` are canonical for first-time setup. The top-level
 - [API Reference](docs/API.md)
 - [Provider implementation](provider-implementation.md)
 - [Release process](RELEASING.md)
-
-
-
-
-
