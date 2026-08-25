@@ -583,10 +583,13 @@ main() {
     error_exit "Could not determine whether CloudFormation stack '$STACK_NAME' already exists: $stack_probe"
   fi
 
-  run_with_mise pnpm exec tsx scripts/migrate-existing-deployment.ts \
-    --assert-standard-deploy-safe \
-    --stack-name "$STACK_NAME" \
-    --region "$CDK_DEFAULT_REGION"
+  (
+    unset CLOUDFLARE_API_TOKEN
+    run_with_mise pnpm exec tsx scripts/migrate-existing-deployment.ts \
+      --assert-standard-deploy-safe \
+      --stack-name "$STACK_NAME" \
+      --region "$CDK_DEFAULT_REGION"
+  )
 
   MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs aws-init \
     --account "$CDK_DEFAULT_ACCOUNT" \
@@ -609,7 +612,11 @@ main() {
   fi
 
   print_deployment_preflight
-  (cd infra && run_with_mise pnpm exec cdk deploy "${cdk_parameters[@]}" --require-approval never)
+  (
+    cd infra
+    unset CLOUDFLARE_API_TOKEN
+    run_with_mise pnpm exec cdk deploy "${cdk_parameters[@]}" --require-approval never
+  )
   success "CDK deployment complete"
 
   # Step 7: Capture INSTANCE_ID from stack outputs

@@ -22,7 +22,7 @@ export class MinecraftStack extends cdk.Stack {
     const driveRoot = process.env.GDRIVE_ROOT || "mc-backups";
     const cloudflareZoneId = process.env.CLOUDFLARE_ZONE_ID?.trim() ?? "";
     const cloudflareDomain = process.env.CLOUDFLARE_MC_DOMAIN?.trim() ?? "";
-    const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN || "").trim();
+    const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || "").trim();
     const duckdnsDomain = process.env.DUCKDNS_DOMAIN?.trim() ?? "";
     const duckdnsToken = process.env.DUCKDNS_TOKEN?.trim() ?? "";
     const lifecycleProjectTag = "mc-aws";

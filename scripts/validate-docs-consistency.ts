@@ -132,7 +132,9 @@ const requiredContracts: ReadonlyArray<[string, boolean]> = [
   ["setup requires typed DEPLOY confirmation", setupSource.includes('[[ "$confirmation" != "DEPLOY" ]]')],
   [
     "preflight confirmation immediately precedes CDK deployment",
-    /print_deployment_preflight\s*\n\s*\(cd infra && run_with_mise pnpm exec cdk deploy/.test(setupSource),
+    /print_deployment_preflight\s*\n\s*\(\s*\n\s*cd infra\s*\n\s*unset CLOUDFLARE_API_TOKEN\s*\n\s*run_with_mise pnpm exec cdk deploy/.test(
+      setupSource
+    ),
   ],
   [
     "completion output does not claim unconditional readiness",

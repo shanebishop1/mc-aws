@@ -46,6 +46,15 @@ describe("deployment credential boundary", () => {
     expect(standaloneUploaderSource).toContain("deploy-env.ts worker-secret-entries");
   });
 
+  it("keeps the generic Cloudflare deploy token out of CDK runtime parameters", () => {
+    const setupSource = readFileSync(path.resolve(process.cwd(), "setup.sh"), "utf8");
+    const stackSource = readFileSync(path.resolve(process.cwd(), "infra/lib/minecraft-stack.ts"), "utf8");
+
+    expect(setupSource.match(/unset CLOUDFLARE_API_TOKEN/g)).toHaveLength(2);
+    expect(stackSource).toContain('const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || "").trim()');
+    expect(stackSource).not.toContain("process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN");
+  });
+
   it("uses the shell deploy token only as an external-mode route API fallback and preserves DNS", () => {
     const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
 
