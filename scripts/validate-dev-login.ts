@@ -116,7 +116,7 @@ function testEnvironmentVariables(): void {
   recordTest(
     "AUTH_SECRET",
     !!process.env.AUTH_SECRET && process.env.AUTH_SECRET.length > 0,
-    process.env.AUTH_SECRET ? `AUTH_SECRET is set (${process.env.AUTH_SECRET.length} chars)` : "AUTH_SECRET is not set"
+    process.env.AUTH_SECRET ? "AUTH_SECRET is set" : "AUTH_SECRET is not set"
   );
 }
 

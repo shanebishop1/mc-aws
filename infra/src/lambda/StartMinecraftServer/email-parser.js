@@ -15,8 +15,7 @@ export function parseEmailFromEvent(event) {
     const toAddr = payload.mail?.commonHeaders?.from?.[0];
     if (!toAddr) return { error: { statusCode: 400, body: "Sender address missing." } };
 
-    const emailMatch = toAddr.match(/<([^>]+)>/) || [null, toAddr];
-    const senderEmail = (emailMatch[1] || toAddr).trim().toLowerCase();
+    const senderEmail = extractAngleAddress(toAddr).trim().toLowerCase();
     const subject = (payload.mail?.commonHeaders?.subject || "").toLowerCase();
     const body = payload.content ? Buffer.from(payload.content, "base64").toString("utf8").toLowerCase() : "";
 
@@ -34,4 +33,19 @@ export function parseEmailFromEvent(event) {
     console.error("ERROR parsing email:", error.message);
     return { error: { statusCode: 400, body: "Error processing incoming message." } };
   }
+}
+
+function extractAngleAddress(address) {
+  let openIndex = -1;
+  for (let index = 0; index < address.length; index++) {
+    const character = address[index];
+    if (character === "<" && openIndex === -1) {
+      openIndex = index;
+    } else if (character === ">" && openIndex !== -1) {
+      if (index > openIndex + 1) return address.slice(openIndex + 1, index);
+      openIndex = -1;
+    }
+  }
+
+  return address;
 }

@@ -7,6 +7,7 @@ import { getRuntimeStateAdapter } from "@/lib/runtime-state";
 import { snapshotCacheKeys } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
 import { type NextRequest, NextResponse } from "next/server";
+import { isValidEmail } from "./email-validation";
 
 function uniqueEmails(emails: string[]): string[] {
   const output: string[] = [];
@@ -69,8 +70,7 @@ export async function PUT(request: NextRequest): Promise<NextResponse<ApiRespons
     const normalizedEmails = uniqueEmails(emails);
 
     // Basic email validation
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    const invalidEmails = normalizedEmails.filter((e) => !emailRegex.test(e));
+    const invalidEmails = normalizedEmails.filter((email) => !isValidEmail(email));
     if (invalidEmails.length > 0) {
       return NextResponse.json(
         {

@@ -57,12 +57,14 @@ function githubHeadingAnchors(content: string): Set<string> {
     const match = line.match(/^#{1,6}\s+(.+?)\s*#*$/);
     if (!match) continue;
 
-    const base = match[1]
-      .trim()
-      .toLowerCase()
-      .replace(/<[^>]+>/g, "")
-      .replace(/[^\p{L}\p{N}\s_-]/gu, "")
-      .replace(/\s+/g, "-");
+    let heading = match[1].trim().toLowerCase();
+    let previousHeading: string;
+    do {
+      previousHeading = heading;
+      heading = heading.replace(/<[^>]+>/g, "");
+    } while (heading !== previousHeading);
+
+    const base = heading.replace(/[^\p{L}\p{N}\s_-]/gu, "").replace(/\s+/g, "-");
     const duplicateCount = counts.get(base) ?? 0;
     counts.set(base, duplicateCount + 1);
     anchors.add(duplicateCount === 0 ? base : `${base}-${duplicateCount}`);

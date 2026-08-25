@@ -456,7 +456,7 @@ export async function injectFault(config: FaultConfig): Promise<void> {
     await stateStore.setGlobalLatency(config.latency);
   }
 
-  console.log(`[SCENARIO] Injected fault for operation: ${config.operation}`, config);
+  console.log("[SCENARIO] Injected fault for operation: %s", config.operation, config);
 }
 
 /**
