@@ -28,6 +28,7 @@ interface Harness {
   serverDir: string;
   uploadedArchive: string;
   systemctlLog: string;
+  rcloneLog: string;
   runBackup: () => SpawnSyncReturns<string>;
   runRestore: () => SpawnSyncReturns<string>;
 }
@@ -40,6 +41,9 @@ const createHarness = (): Harness => {
   const serverParent = path.join(rootDir, "minecraft");
   const serverDir = path.join(serverParent, "server");
   const systemctlLog = path.join(stateDir, "systemctl.log");
+  const rcloneLog = path.join(stateDir, "rclone.log");
+  const remoteFile = path.join(stateDir, "gdrive-remote");
+  const rootFile = path.join(stateDir, "gdrive-root");
   const uploadedArchive = path.join(uploadDir, "contract.tar.gz");
 
   mkdirSync(binDir, { recursive: true });
@@ -48,11 +52,15 @@ const createHarness = (): Harness => {
   mkdirSync(serverDir, { recursive: true });
   writeFileSync(path.join(serverDir, "world.txt"), "producer-world\n", { mode: 0o640 });
   writeFileSync(systemctlLog, "", "utf8");
+  writeFileSync(rcloneLog, "", "utf8");
+  writeFileSync(remoteFile, "persisted-drive\n", "utf8");
+  writeFileSync(rootFile, "nested/backups\n", "utf8");
 
   makeExecutable(
     path.join(binDir, "rclone"),
     `#!/usr/bin/env bash
 set -euo pipefail
+printf '%s\n' "$*" >> "${rcloneLog}"
 if [[ "\${1:-}" != "copy" ]]; then
   exit 2
 fi
@@ -94,6 +102,11 @@ exit 0
     MC_SERVER_DIR: serverDir,
     MC_OPERATION_LOCK: path.join(stateDir, "operation.lock"),
     MC_MAINTENANCE_LOCK: path.join(stateDir, "maintenance.lock"),
+    MC_RCLONE_CONFIG_HELPER: "/usr/bin/true",
+    MC_RCLONE_REMOTE_FILE: remoteFile,
+    MC_RCLONE_ROOT_FILE: rootFile,
+    GDRIVE_REMOTE: undefined,
+    GDRIVE_ROOT: undefined,
     COPYFILE_DISABLE: "1",
   };
 
@@ -102,6 +115,7 @@ exit 0
     serverDir,
     uploadedArchive,
     systemctlLog,
+    rcloneLog,
     runBackup: () =>
       spawnSync("bash", [backupScript, "contract"], {
         env: {
@@ -136,6 +150,7 @@ describe("backup and restore archive contract", () => {
     const backupResult = harness.runBackup();
     expect(backupResult.status, backupResult.stderr).toBe(0);
     expect(existsSync(harness.uploadedArchive)).toBe(true);
+    expect(readFileSync(harness.rcloneLog, "utf8")).toContain("persisted-drive:nested/backups/");
 
     writeFileSync(path.join(harness.serverDir, "world.txt"), "changed-after-backup\n", "utf8");
     const restoreResult = harness.runRestore();

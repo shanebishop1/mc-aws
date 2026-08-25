@@ -1,4 +1,6 @@
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
@@ -35,12 +37,14 @@ const sesEnvironmentNames = [
   "START_KEYWORD",
 ] as const;
 
-const synthesizeStack = (sesEnvironment: Partial<Record<(typeof sesEnvironmentNames)[number], string>> = {}) => {
-  const previousEnvironment = Object.fromEntries(sesEnvironmentNames.map((name) => [name, process.env[name]]));
-  for (const name of sesEnvironmentNames) {
+const stackEnvironmentNames = [...sesEnvironmentNames, "GDRIVE_REMOTE", "GDRIVE_ROOT"] as const;
+
+const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironmentNames)[number], string>> = {}) => {
+  const previousEnvironment = Object.fromEntries(stackEnvironmentNames.map((name) => [name, process.env[name]]));
+  for (const name of stackEnvironmentNames) {
     delete process.env[name];
   }
-  Object.assign(process.env, sesEnvironment);
+  Object.assign(process.env, stackEnvironment);
 
   const app = new cdk.App();
   const account = "111111111111";
@@ -71,7 +75,7 @@ const synthesizeStack = (sesEnvironment: Partial<Record<(typeof sesEnvironmentNa
   try {
     return Template.fromStack(new MinecraftStack(app, "MinecraftStack", { env: { account, region } }));
   } finally {
-    for (const name of sesEnvironmentNames) {
+    for (const name of stackEnvironmentNames) {
       const previousValue = previousEnvironment[name];
       if (previousValue === undefined) {
         delete process.env[name];
@@ -81,6 +85,32 @@ const synthesizeStack = (sesEnvironment: Partial<Record<(typeof sesEnvironmentNa
     }
   }
 };
+
+describe("minecraft-stack user data shell quoting", () => {
+  it("synthesizes Drive settings as literal data instead of executable shell syntax", () => {
+    const rootDir = mkdtempSync(path.join(os.tmpdir(), "mc-user-data-shell-quote-"));
+    const markerPath = path.join(rootDir, "injected");
+    const driveRemote = `drive'$(touch "${markerPath}")`;
+    const driveRoot = `nested/it's; touch "${markerPath}"; \$(touch "${markerPath}")`;
+
+    try {
+      const template = synthesizeStack({ GDRIVE_REMOTE: driveRemote, GDRIVE_ROOT: driveRoot });
+      const instances = template.findResources("AWS::EC2::Instance");
+      const instance = Object.values(instances)[0];
+      const userData = instance.Properties.UserData["Fn::Base64"] as string;
+      const exportLines = userData.split("\n").slice(0, 3).join("\n");
+      const result = spawnSync("bash", ["-c", `${exportLines}\nprintf '%s\\n%s\\n' "$GDRIVE_REMOTE" "$GDRIVE_ROOT"`], {
+        encoding: "utf8",
+      });
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toBe(`${driveRemote}\n${driveRoot}\n`);
+      expect(existsSync(markerPath)).toBe(false);
+    } finally {
+      rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("minecraft-stack optional SES contract", () => {
   const allIamStatements = (template: Template) =>

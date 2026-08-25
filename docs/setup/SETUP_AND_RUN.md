@@ -72,9 +72,10 @@ Panel hosting is separate from the Minecraft connection mode. Every Minecraft mo
 When setup prints the panel URL, add these exact values to the Google OAuth web client:
 
 - Authorized JavaScript origin: `<panel-origin>`
-- Authorized redirect URI: `<panel-origin>/api/auth/callback`
+- Sign-in redirect URI: `<panel-origin>/api/auth/callback`
+- Google Drive redirect URI: `<panel-origin>/api/gdrive/callback`
 
-For example, Workers hosting might use `https://mc-aws-panel.account-name.workers.dev` and `https://mc-aws-panel.account-name.workers.dev/api/auth/callback`.
+For example, Workers hosting might use `https://mc-aws-panel.account-name.workers.dev` with both `/api/auth/callback` and `/api/gdrive/callback` on that exact origin.
 
 ## 5. Local Run Against AWS
 

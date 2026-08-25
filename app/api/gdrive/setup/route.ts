@@ -65,7 +65,9 @@ export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ 
     });
 
     const redirectUri = `${env.NEXT_PUBLIC_APP_URL}/api/gdrive/callback`;
-    const scope = "https://www.googleapis.com/auth/drive.file";
+    // Existing backups may have been created by rclone's previous OAuth client.
+    // drive.file cannot discover those files without a Google Picker grant.
+    const scope = "https://www.googleapis.com/auth/drive";
 
     const params = new URLSearchParams({
       client_id: clientId,

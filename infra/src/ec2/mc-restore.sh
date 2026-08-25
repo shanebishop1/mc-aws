@@ -8,6 +8,7 @@ umask 077
 log() { echo "[$(date -Is)] $*"; }
 
 export RCLONE_CONFIG="${RCLONE_CONFIG:-/opt/setup/rclone/rclone.conf}"
+RCLONE_CONFIG_HELPER="${MC_RCLONE_CONFIG_HELPER:-/usr/local/bin/mc-rclone-config.sh}"
 
 OPERATION_LOCK="${MC_OPERATION_LOCK:-/tmp/mc-operation.lock}"
 MAINTENANCE_LOCK="${MC_MAINTENANCE_LOCK:-/tmp/mc-maintenance.lock}"
@@ -72,6 +73,14 @@ if [[ ! -e "$MAINTENANCE_LOCK" ]]; then
   MAINTENANCE_LOCK_OWNED=1
 fi
 
+GDRIVE_REMOTE_FILE="${MC_RCLONE_REMOTE_FILE:-/etc/minecraft/gdrive-remote}"
+if [[ -z "${GDRIVE_REMOTE:-}" && -r "$GDRIVE_REMOTE_FILE" ]]; then
+  IFS= read -r GDRIVE_REMOTE < "$GDRIVE_REMOTE_FILE" || true
+fi
+GDRIVE_ROOT_FILE="${MC_RCLONE_ROOT_FILE:-/etc/minecraft/gdrive-root}"
+if [[ -z "${GDRIVE_ROOT:-}" && -r "$GDRIVE_ROOT_FILE" ]]; then
+  IFS= read -r GDRIVE_ROOT < "$GDRIVE_ROOT_FILE" || true
+fi
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 SERVER_DIR="${MC_SERVER_DIR:-/opt/minecraft/server}"
@@ -91,6 +100,11 @@ if [[ "$(basename -- "$SERVER_DIR")" != "server" || ! -d "$SERVER_PARENT" ]]; th
 fi
 if [[ ! "$BACKUP_RETENTION" =~ ^[1-9][0-9]*$ ]]; then
   log "ERROR: MC_RESTORE_BACKUP_RETENTION must be a positive integer"
+  exit 1
+fi
+
+if ! "$RCLONE_CONFIG_HELPER"; then
+  log "ERROR: Failed to materialize Google Drive configuration"
   exit 1
 fi
 

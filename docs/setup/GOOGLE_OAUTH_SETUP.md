@@ -11,18 +11,33 @@ Google docs:
 
 - https://developers.google.com/workspace/guides/create-project
 
-## 2. Configure OAuth Consent
+## 2. Configure OAuth Consent And Audience
 
-1. Open **APIs & Services -> OAuth consent screen**.
-2. Complete the required app information.
-3. Use **External** for normal personal use.
-4. Add yourself as a test user if the app is in testing mode.
+1. Open **Google Auth Platform -> Branding** and complete the required app information.
+2. Open **Google Auth Platform -> Audience**.
+3. Use **External** for a personal app used outside one Google Workspace organization.
+4. If **Publishing status** is **Testing**, add every Google account that will sign in or connect Drive under **Test users**, including `ADMIN_EMAIL` and any `ALLOWED_EMAILS` users.
+5. An **Internal** app is limited to users in its Google Workspace organization.
+
+External apps in Testing can receive refresh tokens that expire after seven days when Drive scopes are used. For durable unattended backups, move the app to **In production** when you are ready and complete any Google requirements shown for the app.
 
 Google docs:
 
 - https://support.google.com/cloud/answer/10311615
 
-## 3. Create A Web OAuth Client
+## 3. Enable The Google Drive API
+
+If you will use Google Drive backups:
+
+1. Open **APIs & Services -> Library** in the same project as the OAuth client.
+2. Find **Google Drive API**.
+3. Click **Enable**.
+
+OAuth consent can succeed while the Drive API is disabled, but backup listing and restore will then fail with `SERVICE_DISABLED`.
+
+Drive setup requests full Drive access so it can restore archives created by previous rclone OAuth clients. Google may classify this as a sensitive or restricted scope and show additional publishing or verification guidance. Keep the app limited to your intended users and use a dedicated backup folder/account where practical.
+
+## 4. Create A Web OAuth Client
 
 1. Open **APIs & Services -> Credentials**.
 2. Click **Create credentials -> OAuth client ID**.
@@ -51,7 +66,7 @@ http://localhost:3000/api/gdrive/callback
 https://panel.example.com/api/gdrive/callback
 ```
 
-Use only the origin and callback for the panel hosting mode selected during setup. Setup prints both exact values. A workers.dev callback uses the same `/api/auth/callback` path and must match the derived Worker URL exactly; do not add `/google`.
+Use only the origin and callbacks for the panel hosting mode selected during setup. Setup prints the exact origin, sign-in callback, and Drive callback. A workers.dev callback must match the derived Worker URL exactly; do not add `/google`.
 
 ## Values Needed Later
 

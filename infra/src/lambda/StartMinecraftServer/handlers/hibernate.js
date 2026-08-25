@@ -14,6 +14,7 @@ import {
   VOLUME_DETACH_POLL_INTERVAL_MS,
 } from "../runtime-budgets.js";
 import { executeSSMCommand } from "../ssm.js";
+import { handleRefreshBackups } from "./backups.js";
 
 /**
  * Handle hibernate command - runs backup, stops instance, detaches/deletes volume
@@ -29,10 +30,13 @@ async function handleHibernate(instanceId, _args, adminEmail) {
     console.log("Step 1: Running backup before hibernation...");
     const backupOutput = await executeSSMCommand(instanceId, ["/usr/local/bin/mc-backup.sh"]);
 
-    console.log("Step 2: Stopping instance...");
+    console.log("Step 2: Refreshing backup cache before removing the root volume...");
+    await handleRefreshBackups(instanceId);
+
+    console.log("Step 3: Stopping instance...");
     await stopInstanceAndWait(instanceId);
 
-    console.log("Step 3: Detaching and deleting the managed root volume...");
+    console.log("Step 4: Detaching and deleting the managed root volume...");
     await detachAndDeleteRootVolume(instanceId);
 
     const message = `Hibernation completed successfully.\n\nBackup output:\n${backupOutput}`;

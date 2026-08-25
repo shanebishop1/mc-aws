@@ -21,4 +21,13 @@ describe("EC2 user data", () => {
     expect(script).toContain("trap bootstrap_failed EXIT");
     expect(script).toContain("systemctl poweroff || shutdown -h now");
   });
+
+  it("installs the rclone helper and optionally materializes config without an inline token", () => {
+    expect(script).toContain("mc-rclone-config.sh mc-backup.sh");
+    expect(script).toContain("/usr/local/bin/mc-rclone-config.sh --bootstrap");
+    expect(script).toContain("/etc/minecraft/gdrive-remote");
+    expect(script).toContain("/etc/minecraft/gdrive-root");
+    expect(script).not.toContain("TOKEN_JSON=");
+    expect(script).not.toContain("chown -R minecraft:minecraft /opt/setup/rclone");
+  });
 });

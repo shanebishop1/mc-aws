@@ -12,6 +12,7 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 
 import * as ssm from "aws-cdk-lib/aws-ssm";
+import { quotePosixShellArgument } from "./posix-shell";
 import { createWorkerRuntimePolicyStatements } from "./worker-runtime-policy";
 
 export class MinecraftStack extends cdk.Stack {
@@ -239,13 +240,14 @@ export class MinecraftStack extends cdk.Stack {
       // Insert exports immediately after the shebang to keep cloud-init happy
       .replace(
         /^#!.*\n/,
-        (line) => `${line}export GDRIVE_REMOTE="${driveRemote}"\nexport GDRIVE_ROOT="${driveRoot}"\n`
+        (line) =>
+          `${line}export GDRIVE_REMOTE=${quotePosixShellArgument(driveRemote)}\nexport GDRIVE_ROOT=${quotePosixShellArgument(driveRoot)}\n`
       );
 
     // Fallback if no shebang was found (should not happen, but keeps user-data valid)
     const userDataScript = baseUserData.startsWith("#!/")
       ? baseUserData
-      : `#!/usr/bin/env bash\nexport GDRIVE_REMOTE="${driveRemote}"\nexport GDRIVE_ROOT="${driveRoot}"\n${baseUserData}`;
+      : `#!/usr/bin/env bash\nexport GDRIVE_REMOTE=${quotePosixShellArgument(driveRemote)}\nexport GDRIVE_ROOT=${quotePosixShellArgument(driveRoot)}\n${baseUserData}`;
 
     const instance = new ec2.Instance(this, "MinecraftServer", {
       vpc,

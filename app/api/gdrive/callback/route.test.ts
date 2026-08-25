@@ -12,8 +12,9 @@ import { GET } from "./route";
 const mocks = vi.hoisted(() => ({
   isMockMode: vi.fn(() => false),
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com" }),
+  mockStoreSetParameter: vi.fn().mockResolvedValue(undefined),
   getMockStateStore: vi.fn(() => ({
-    setParameter: vi.fn().mockResolvedValue(undefined),
+    setParameter: mocks.mockStoreSetParameter,
   })),
   putParameter: vi.fn().mockResolvedValue(undefined),
   cookieStore: {
@@ -123,6 +124,20 @@ describe("GET /api/gdrive/callback", () => {
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=success");
 
+      const [, storedValue, storedType] = mocks.putParameter.mock.calls[0];
+      const envelope = JSON.parse(storedValue) as Record<string, unknown>;
+      expect(storedType).toBe("SecureString");
+      expect(envelope).toMatchObject({
+        version: 1,
+        client_id: "test-client-id",
+        client_secret: "test-client-secret",
+        token: {
+          access_token: "test-access-token",
+          refresh_token: "test-refresh-token",
+          token_type: "Bearer",
+        },
+      });
+
       // State cookie should be cleared on success
     });
   });
@@ -136,6 +151,14 @@ describe("GET /api/gdrive/callback", () => {
 
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=success");
+
+      const [, storedValue] = mocks.mockStoreSetParameter.mock.calls[0];
+      expect(JSON.parse(storedValue)).toMatchObject({
+        version: 1,
+        client_id: "test-client-id",
+        client_secret: "test-client-secret",
+        token: { token_type: "Bearer" },
+      });
 
       // State cookie should be cleared
     });

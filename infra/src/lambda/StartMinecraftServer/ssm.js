@@ -6,7 +6,14 @@ import {
   SendCommandCommand,
   ssm,
 } from "./clients.js";
-import { SSM_MAX_ATTEMPTS, SSM_POLL_INTERVAL_MS } from "./runtime-budgets.js";
+import {
+  SSM_MAX_ATTEMPTS,
+  SSM_POLL_INTERVAL_MS,
+  SSM_SEND_MAX_ATTEMPTS,
+  SSM_SEND_RETRY_INTERVAL_MS,
+} from "./runtime-budgets.js";
+
+const SSM_NOT_READY_ERRORS = new Set(["InvalidInstanceId", "TargetNotConnected"]);
 
 /**
  * Execute an SSM command on an EC2 instance and wait for completion
@@ -17,19 +24,39 @@ import { SSM_MAX_ATTEMPTS, SSM_POLL_INTERVAL_MS } from "./runtime-budgets.js";
 async function executeSSMCommand(instanceId, commands) {
   console.log(`Executing SSM command on instance ${instanceId}: ${commands.join(" ")}`);
 
-  const sendResponse = await ssm.send(
-    new SendCommandCommand({
-      InstanceIds: [instanceId],
-      DocumentName: "AWS-RunShellScript",
-      Parameters: { commands },
-    })
-  );
+  const sendResponse = await sendCommandWhenReady(instanceId, commands);
 
   const commandId = sendResponse.Command?.CommandId;
   if (!commandId) throw new Error("Failed to get command ID from SSM response");
 
   console.log(`SSM command sent with ID: ${commandId}`);
   return await waitForSSMCompletion(commandId, instanceId);
+}
+
+async function sendCommandWhenReady(instanceId, commands) {
+  for (let attempt = 1; attempt <= SSM_SEND_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await ssm.send(
+        new SendCommandCommand({
+          InstanceIds: [instanceId],
+          DocumentName: "AWS-RunShellScript",
+          Parameters: { commands },
+        })
+      );
+    } catch (error) {
+      const errorName = error instanceof Error ? error.name : "";
+      if (!SSM_NOT_READY_ERRORS.has(errorName) || attempt === SSM_SEND_MAX_ATTEMPTS) {
+        throw error;
+      }
+
+      console.log(
+        `SSM managed node is not ready (attempt ${attempt}/${SSM_SEND_MAX_ATTEMPTS}); retrying command delivery...`
+      );
+      await new Promise((resolve) => setTimeout(resolve, SSM_SEND_RETRY_INTERVAL_MS));
+    }
+  }
+
+  throw new Error("SSM command delivery retry budget exhausted");
 }
 
 function buildSSMFailureOutput(response) {

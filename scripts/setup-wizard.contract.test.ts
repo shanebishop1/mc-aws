@@ -66,11 +66,14 @@ describe("setup-wizard panel hosting contract", () => {
     expect(run("not-a-zone-id")).toBe("invalid");
   });
 
-  it("prints the exact production Google OAuth origin and callback", () => {
+  it("prints the exact production Google OAuth origin and callbacks", () => {
     const source = readFileSync(setupWizardPath, "utf8");
 
     expect(source).toContain("Authorized JavaScript origin: $NEXT_PUBLIC_APP_URL");
-    expect(source).toContain("Authorized redirect URI:      ${NEXT_PUBLIC_APP_URL}/api/auth/callback");
-    expect(source).toContain("sign-in will fail until both exact values are registered");
+    expect(source).toContain("Sign-in redirect URI:          ${NEXT_PUBLIC_APP_URL}/api/auth/callback");
+    expect(source).toContain("Google Drive redirect URI:     ${NEXT_PUBLIC_APP_URL}/api/gdrive/callback");
+    expect(source).toContain("sign-in and Drive setup require these exact values");
+    expect(source).toContain("enable Google Drive API in the same project");
+    expect(source).toContain("Audience -> Test users");
   });
 });

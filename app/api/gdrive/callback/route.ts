@@ -30,9 +30,16 @@ async function handleMockOAuth(): Promise<NextResponse> {
     expiry: expiryDate.toISOString(),
   };
 
-  // Store mock token in mock state store
+  const mockCredentialEnvelope = {
+    version: 1,
+    client_id: env.GOOGLE_CLIENT_ID,
+    client_secret: env.GOOGLE_CLIENT_SECRET,
+    token: mockRcloneToken,
+  };
+
+  // Store mock credentials in mock state store
   const mockStore = getMockStateStore();
-  await mockStore.setParameter("/minecraft/gdrive-token", JSON.stringify(mockRcloneToken), "SecureString");
+  await mockStore.setParameter("/minecraft/gdrive-token", JSON.stringify(mockCredentialEnvelope), "SecureString");
 
   console.log("[MOCK-GDRIVE] Mock token stored successfully");
 
@@ -95,8 +102,15 @@ async function storeToken(tokens: Record<string, string>): Promise<void> {
     expiry: expiryDate.toISOString(),
   };
 
+  const credentialEnvelope = {
+    version: 1,
+    client_id: env.GOOGLE_CLIENT_ID,
+    client_secret: env.GOOGLE_CLIENT_SECRET,
+    token: rcloneToken,
+  };
+
   console.log("[GDRIVE-CALLBACK] Storing token in SSM");
-  await putParameter("/minecraft/gdrive-token", JSON.stringify(rcloneToken), "SecureString");
+  await putParameter("/minecraft/gdrive-token", JSON.stringify(credentialEnvelope), "SecureString");
   console.log("[GDRIVE-CALLBACK] Token stored successfully");
 }
 

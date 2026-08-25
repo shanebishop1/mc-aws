@@ -942,8 +942,11 @@ collect_panel_hosting() {
   echo ""
   echo "Google OAuth production settings:"
   echo "  Authorized JavaScript origin: $NEXT_PUBLIC_APP_URL"
-  echo "  Authorized redirect URI:      ${NEXT_PUBLIC_APP_URL}/api/auth/callback"
-  echo "Update the Google OAuth client now; sign-in will fail until both exact values are registered."
+  echo "  Sign-in redirect URI:          ${NEXT_PUBLIC_APP_URL}/api/auth/callback"
+  echo "  Google Drive redirect URI:     ${NEXT_PUBLIC_APP_URL}/api/gdrive/callback"
+  echo "Update the Google OAuth client now; sign-in and Drive setup require these exact values."
+  echo "For Drive backups, enable Google Drive API in the same project."
+  echo "If an External app is in Testing, add every allowed account under Audience -> Test users."
   echo ""
 }
 

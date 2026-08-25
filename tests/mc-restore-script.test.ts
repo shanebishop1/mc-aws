@@ -211,6 +211,7 @@ fi
           MC_SERVER_DIR: serverDir,
           MC_OPERATION_LOCK: operationLock,
           MC_MAINTENANCE_LOCK: maintenanceLock,
+          MC_RCLONE_CONFIG_HELPER: "/usr/bin/true",
           MC_RESTORE_HEALTH_DELAY: "0",
           MC_RESTORE_STAGING_PARENT: serverParent,
           ...extraEnv,

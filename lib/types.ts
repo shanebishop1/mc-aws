@@ -98,6 +98,8 @@ export interface ListBackupsResponse {
   count: number;
   status?: "listing" | "caching" | "error";
   cachedAt?: number;
+  errorMessage?: string;
+  retryAt?: number;
 }
 
 export interface EmailData {

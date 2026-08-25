@@ -9,6 +9,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   executeSSMCommand: vi.fn(),
+  handleRefreshBackups: vi.fn(),
   send: vi.fn(),
 }));
 
@@ -17,6 +18,7 @@ vi.mock("../clients.js", async () => {
   return { ...actual, ec2: { send: mocks.send } };
 });
 vi.mock("../ssm.js", () => ({ executeSSMCommand: mocks.executeSSMCommand }));
+vi.mock("./backups.js", () => ({ handleRefreshBackups: mocks.handleRefreshBackups }));
 vi.mock("../notifications.js", () => ({
   getSanitizedErrorMessage: vi.fn(),
   sendNotification: vi.fn(),
@@ -39,6 +41,7 @@ describe("lambda handlers/hibernate", () => {
     vi.stubEnv("MC_PROJECT_TAG", "mc-aws");
     vi.stubEnv("MC_STACK_TAG", "MinecraftStack");
     mocks.executeSSMCommand.mockResolvedValue("backup complete");
+    mocks.handleRefreshBackups.mockResolvedValue("cache refreshed");
   });
 
   it("deletes only the managed root volume and preserves unrelated attached volumes", async () => {
@@ -95,6 +98,21 @@ describe("lambda handlers/hibernate", () => {
     expect(getCommands(DetachVolumeCommand)[0]?.input).toMatchObject({ VolumeId: "vol-root", InstanceId: "i-managed" });
     expect(getCommands(DeleteVolumeCommand)).toHaveLength(1);
     expect(getCommands(DeleteVolumeCommand)[0]?.input.VolumeId).toBe("vol-root");
+    expect(mocks.handleRefreshBackups).toHaveBeenCalledWith("i-managed");
+    expect(mocks.executeSSMCommand.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.handleRefreshBackups.mock.invocationCallOrder[0]
+    );
+    expect(mocks.handleRefreshBackups.mock.invocationCallOrder[0]).toBeLessThan(mocks.send.mock.invocationCallOrder[0]);
+  });
+
+  it("does not stop or delete the root volume when cache refresh fails", async () => {
+    mocks.handleRefreshBackups.mockRejectedValueOnce(new Error("cache failed"));
+
+    await expect(handleHibernate("i-managed", [], "")).rejects.toThrow("cache failed");
+
+    expect(getCommands(StopInstancesCommand)).toHaveLength(0);
+    expect(getCommands(DetachVolumeCommand)).toHaveLength(0);
+    expect(getCommands(DeleteVolumeCommand)).toHaveLength(0);
   });
 
   it("refuses to detach a root volume without matching ownership tags", async () => {

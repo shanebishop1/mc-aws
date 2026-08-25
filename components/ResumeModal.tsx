@@ -2,6 +2,7 @@
 
 import { BackupSelectionList } from "@/components/backup";
 import { LuxuryButton } from "@/components/ui/Button";
+import { pollBackups } from "@/lib/backups-polling";
 import { fetchBackups as fetchBackupsApi, queryKeys } from "@/lib/client-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { AnimatePresence, motion } from "framer-motion";
@@ -41,13 +42,6 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
     setIsLoading(true);
     setError(null);
 
-    let attempts = 0;
-    const maxAttempts = 10; // 30 seconds max
-
-    // Helper to check backup status
-    // I'll use a standard loop or local helper.
-    // simpler:
-
     try {
       const check = async () => {
         const data = await queryClient.fetchQuery({
@@ -57,12 +51,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
         return data.data;
       };
 
-      let data = await check();
-      while (data?.status === "caching" && attempts < maxAttempts) {
-        attempts++;
-        await new Promise((r) => setTimeout(r, 3000));
-        data = await check();
-      }
+      const data = await pollBackups(check);
 
       setBackups(data?.backups || []);
     } catch (err) {

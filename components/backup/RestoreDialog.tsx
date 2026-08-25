@@ -1,5 +1,6 @@
 "use client";
 
+import { pollBackups } from "@/lib/backups-polling";
 import { fetchBackups as fetchBackupsApi, queryKeys } from "@/lib/client-api";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
@@ -29,9 +30,6 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
     setIsLoading(true);
     setError(null);
 
-    let attempts = 0;
-    const maxAttempts = 10; // 30 seconds max (3s * 10)
-
     try {
       const check = async () => {
         const data = await queryClient.fetchQuery({
@@ -41,12 +39,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
         return data.data;
       };
 
-      let data = await check();
-      while (data?.status === "caching" && attempts < maxAttempts) {
-        attempts++;
-        await new Promise((resolve) => setTimeout(resolve, 3000));
-        data = await check();
-      }
+      const data = await pollBackups(check);
 
       if (data?.backups) {
         setBackups(data.backups.map((backup) => backup.name));

@@ -16,10 +16,12 @@ After sign-in, server-side role mapping controls permissions:
 
 1. Go to Google Cloud Console.
 2. Create or select a project.
-3. Open **APIs & Services -> OAuth consent screen** and configure required fields.
-4. Add test users if your app is not published.
-5. Open **APIs & Services -> Credentials**.
-6. Create **OAuth client ID** with application type **Web application**.
+3. Open **Google Auth Platform -> Branding** and configure required fields.
+4. Open **Google Auth Platform -> Audience**.
+5. For an External app with **Publishing status: Testing**, add every account that will sign in or connect Drive under **Test users**. Testing-mode refresh tokens using Drive scopes can expire after seven days; move to **In production** when durable unattended backups are required.
+6. Enable **Google Drive API** under **APIs & Services -> Library** in this same project if Drive backups are enabled.
+7. Open **APIs & Services -> Credentials**.
+8. Create **OAuth client ID** with application type **Web application**.
 
 ## Add authorized redirect URIs
 
@@ -29,7 +31,13 @@ Add the exact callback for each origin you use:
 - `https://panel.yourdomain.com/api/auth/callback`, for a custom panel hostname
 - `https://mc-aws-panel.account-name.workers.dev/api/auth/callback`, for workers.dev hosting
 
-Setup prints the exact production origin and callback after panel hosting is selected. Add the production origin under **Authorized JavaScript origins** too. Do not add `/google` to the callback.
+If you use Google Drive backups, also add the matching Drive callback:
+
+- `http://localhost:3000/api/gdrive/callback`
+- `https://panel.yourdomain.com/api/gdrive/callback`, for a custom panel hostname
+- `https://mc-aws-panel.account-name.workers.dev/api/gdrive/callback`, for workers.dev hosting
+
+Setup prints the exact production origin and both callbacks after panel hosting is selected. Add the production origin under **Authorized JavaScript origins** too. Do not add `/google` to either callback.
 
 ## Add values to env files
 
@@ -95,7 +103,7 @@ By default, deploy already uses `.env.production`.
 ### `redirect_uri_mismatch`
 
 - Redirect URI in Google Console does not match app callback URL.
-- Add exact URLs listed above.
+- Add both exact callback URLs listed above when sign-in and Drive backups are enabled.
 
 ### OAuth button appears but flow fails immediately
 

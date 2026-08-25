@@ -15,6 +15,8 @@ export const PUBLIC_IP_MAX_ATTEMPTS = 120; // 120s
 // Shared SSM polling ceilings. Backups/restores can spend several minutes in rclone uploads/downloads.
 export const SSM_POLL_INTERVAL_MS = 2000;
 export const SSM_MAX_ATTEMPTS = 300; // 600s
+export const SSM_SEND_RETRY_INTERVAL_MS = 5000;
+export const SSM_SEND_MAX_ATTEMPTS = 12; // 60s for the agent to reconnect after EC2 starts
 
 // Hibernate-specific ceilings
 export const VOLUME_DETACH_POLL_INTERVAL_MS = 2000;

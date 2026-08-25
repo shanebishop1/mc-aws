@@ -487,7 +487,8 @@ if [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
   echo "   Panel DNS management: $PANEL_DNS_MANAGEMENT"
 fi
 echo "   Canonical URL: $NEXT_PUBLIC_APP_URL"
-echo "   Google OAuth callback: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
+echo "   Google sign-in callback: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
+echo "   Google Drive callback: ${NEXT_PUBLIC_APP_URL%/}/api/gdrive/callback"
 echo ""
 
 echo "🔍 Running strict production schema validation..."
@@ -999,7 +1000,8 @@ echo "🔑 Uploading secrets from $ENV_FILE..."
 put_secret() {
   local put_key="$1"
   local put_value="$2"
-  echo "$put_value" | wrangler secret put --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" "$put_key"
+  echo "$put_value" | \
+    wrangler secret put --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" "$put_key" || return 1
   record_worker_deployment_identity
 }
 
@@ -1007,7 +1009,14 @@ put_secret_base64() {
   local put_key="$1"
   local encoded_value="$2"
   node -e 'process.stdout.write(Buffer.from(process.argv[1], "base64"))' "$encoded_value" | \
-    wrangler secret put --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" "$put_key"
+    wrangler secret put --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" "$put_key" || return 1
+  record_worker_deployment_identity
+}
+
+prune_obsolete_worker_secrets_bulk() {
+  local deletion_patch="$1"
+  printf '%s' "$deletion_patch" | \
+    wrangler secret bulk --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" || return 1
   record_worker_deployment_identity
 }
 
@@ -1046,6 +1055,35 @@ fi
 echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
 echo ""
 
+# Wrangler v4 secret bulk uses RFC 7396 merge-patch semantics: included null
+# values are deleted and every omitted secret remains unchanged. Inventory the
+# Worker first so an empty intersection is a no-op and only the explicit legacy
+# policy can ever contribute deletion keys.
+echo "🧹 Pruning explicitly obsolete Worker secrets..."
+if ! WORKER_SECRET_INVENTORY="$(wrangler secret list --config "$WRANGLER_DEPLOY_CONFIG_FILE" \
+  --name "$WORKER_NAME" --format json)"; then
+  echo "❌ Error: Failed to inventory Worker secrets before legacy pruning"
+  exit 1
+fi
+if ! LEGACY_SECRET_DELETION_PATCH="$(printf '%s' "$WORKER_SECRET_INVENTORY" | \
+  pnpm exec tsx scripts/legacy-worker-secret-policy.ts merge-patch)"; then
+  echo "❌ Error: Failed to apply the explicit legacy Worker secret policy"
+  exit 1
+fi
+unset WORKER_SECRET_INVENTORY
+
+if [[ "$LEGACY_SECRET_DELETION_PATCH" == "{}" ]]; then
+  echo "✅ No obsolete Worker secrets found"
+elif ! retry 3 prune_obsolete_worker_secrets_bulk "$LEGACY_SECRET_DELETION_PATCH"; then
+  echo ""
+  echo "❌ Error: Failed to prune explicitly obsolete Worker secrets"
+  exit 1
+else
+  echo "✅ Obsolete Worker secrets pruned with one merge-patch request"
+fi
+unset LEGACY_SECRET_DELETION_PATCH
+echo ""
+
 echo "🔁 Restoring non-secret Worker bindings after secret upload..."
 if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
   echo ""
@@ -1073,7 +1111,8 @@ echo ""
 
 if [[ "$PANEL_HOSTING_MODE" == "workers_dev" ]]; then
   echo "✅ Verified actual Workers URL through runtime credential probe: $NEXT_PUBLIC_APP_URL"
-  echo "   Google OAuth redirect URI: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
+  echo "   Google sign-in redirect URI: ${NEXT_PUBLIC_APP_URL%/}/api/auth/callback"
+  echo "   Google Drive redirect URI: ${NEXT_PUBLIC_APP_URL%/}/api/gdrive/callback"
   echo ""
 fi
 

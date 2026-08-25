@@ -174,20 +174,21 @@ else
 fi
 chown -R minecraft:minecraft /opt/minecraft/server/
 
-# 9.5 Configure rclone for Drive if token provided (reads from SSM Parameter Store)
-TOKEN_JSON=$(aws ssm get-parameter --name /minecraft/gdrive-token --with-decryption --query Parameter.Value --output text 2>/dev/null || echo "")
-if [[ -n "$TOKEN_JSON" ]]; then
-  mkdir -p /opt/setup/rclone
-  cat > /opt/setup/rclone/rclone.conf <<EOF
-[${GDRIVE_REMOTE}]
-type = drive
-token = ${TOKEN_JSON}
-EOF
-  chown -R minecraft:minecraft /opt/setup/rclone
-  log "rclone configured for Google Drive"
-else
-  log "No Google Drive token found in SSM; skipping rclone setup"
+# 9.5 Persist the non-secret Drive destination used by runtime scripts.
+if [[ ! "$GDRIVE_REMOTE" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]]; then
+  log "ERROR: Invalid Google Drive remote name"
+  exit 1
 fi
+if [[ -z "$GDRIVE_ROOT" || "$GDRIVE_ROOT" == *$'\n'* || "$GDRIVE_ROOT" == *$'\r'* ]]; then
+  log "ERROR: Invalid Google Drive root path"
+  exit 1
+fi
+install -d -o root -g root -m 0755 /etc/minecraft
+printf '%s\n' "$GDRIVE_REMOTE" > /etc/minecraft/gdrive-remote
+printf '%s\n' "$GDRIVE_ROOT" > /etc/minecraft/gdrive-root
+chown root:root /etc/minecraft/gdrive-remote
+chown root:root /etc/minecraft/gdrive-root
+chmod 0644 /etc/minecraft/gdrive-remote /etc/minecraft/gdrive-root
 
 # 10. Deploy service unit and shutdown script
 if [[ ! -f "/etc/systemd/system/minecraft.service" ]]; then
@@ -216,14 +217,17 @@ CRON
   fi
 fi
 
-# 12. Deploy management scripts (backup, restore, hibernate, resume)
-for script in mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh; do
+# 12. Deploy management scripts (rclone config, backup, restore, hibernate, resume)
+for script in mc-rclone-config.sh mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh; do
   if [[ -f /opt/setup/infra/src/ec2/$script ]]; then
     cp /opt/setup/infra/src/ec2/$script /usr/local/bin/$script
     chmod +x /usr/local/bin/$script
     log "Deployed $script"
   fi
 done
+
+# The Drive OAuth flow may not have completed yet, so token absence is optional only here.
+/usr/local/bin/mc-rclone-config.sh --bootstrap
 
 # 12.5. Deploy DNS update service
 log "Installing DNS update service..."
