@@ -212,6 +212,7 @@ fi
           MC_OPERATION_LOCK: operationLock,
           MC_MAINTENANCE_LOCK: maintenanceLock,
           MC_RCLONE_CONFIG_HELPER: "/usr/bin/true",
+          MC_PROFILE_INSTALLER: "/usr/bin/true",
           MC_RESTORE_HEALTH_DELAY: "0",
           MC_RESTORE_STAGING_PARENT: serverParent,
           ...extraEnv,
@@ -250,6 +251,7 @@ describe("mc-restore.sh", () => {
     expect(readFileSync(harness.maintenanceLock, "utf8")).toBe("caller-owned\n");
     expect(existsSync(harness.operationLock)).toBe(false);
     expect(readFileSync(harness.systemctlLog, "utf8")).toContain("is-active --quiet minecraft");
+    expect(result.stdout).toContain("Applying current server profile to restored world");
   });
 
   it("supports latest selection of a .gz archive", () => {
@@ -266,6 +268,7 @@ describe("mc-restore.sh", () => {
 
   it.each([
     ["install", { RESTORE_TEST_INSTALL_FAIL: "1" }],
+    ["profile application", { MC_PROFILE_INSTALLER: "/usr/bin/false" }],
     ["start", { RESTORE_TEST_START_FAIL_ONCE: "1" }],
     ["health check", { RESTORE_TEST_HEALTH_FAIL_ONCE: "1" }],
   ])("restores and restarts the previous server after a %s failure", (_failure, environment) => {
