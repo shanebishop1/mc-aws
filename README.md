@@ -1,5 +1,18 @@
 # On-Demand Minecraft Server on AWS
 
+<p align="center">
+  <a href="https://github.com/shanebishop1/mc-aws/actions/workflows/baseline-pr-validation.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/shanebishop1/mc-aws/baseline-pr-validation.yml?branch=main&amp;style=flat-square&amp;label=build" /></a>
+  <a href="https://github.com/shanebishop1/mc-aws/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/shanebishop1/mc-aws?sort=semver&amp;display_name=tag&amp;style=flat-square" /></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/shanebishop1/mc-aws?style=flat-square" /></a>
+</p>
+
+<p align="center">
+  <a href="docs/setup/SETUP_AND_RUN.md">Setup Guide</a> &middot;
+  <a href="docs/README.md">Documentation</a> &middot;
+  <a href="docs/OPERATIONS_GUIDE.md">Operations</a> &middot;
+  <a href="https://github.com/shanebishop1/mc-aws/releases">Releases</a>
+</p>
+
 <p align="center"><img width="320" height="320" alt="Minecraft server hosted on AWS" src="docs/assets/readme/hero.png" /></p>
 
 Run a Minecraft server on AWS without paying to leave it running all the time. Friends can sign in, check the server status, and start it when they want to play.
