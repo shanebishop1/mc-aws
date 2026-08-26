@@ -79,8 +79,6 @@ You are not at the whim of a provider's dashboard, pricing model, plugin support
 
 Complete these first. These are very common and well-documented paths, so ask your AI to help you if you get stuck:
 
-- [Fork this repo](docs/setup/GITHUB_REPO_SETUP.md)
-- [Create a GitHub token](docs/setup/GITHUB_TOKEN_SETUP.md)
 - [Prepare your AWS account](docs/setup/AWS_ACCOUNT_SETUP.md)
 - [Create a Google OAuth client](docs/setup/GOOGLE_OAUTH_SETUP.md)
 
@@ -94,15 +92,17 @@ Optional:
 
 ## Setup
 
-After the prerequisites are done, run the setup script from your fork:
+After the prerequisites are done, clone the canonical application and run setup:
 
 ```bash
-git clone https://github.com/<you>/mc-aws.git
+git clone https://github.com/shanebishop1/mc-aws.git
 cd mc-aws
 bash ./setup.sh
 ```
 
-The script installs the project toolchain, uses your local AWS CLI/SSO session for deployment, creates a separate least-privilege Worker runtime identity, writes non-secret deployment outputs, and deploys the web app to Cloudflare.
+The script installs the project toolchain, validates the selected server profile, uses your local AWS CLI/SSO session for deployment, creates a separate least-privilege Worker runtime identity, writes non-secret deployment outputs, and deploys the web app to Cloudflare. EC2 receives content-addressed runtime/profile assets through its IAM role; it does not need a fork or GitHub token.
+
+Customize Minecraft configuration and plugins with [Server Profiles](docs/SERVER_PROFILES.md). Run `pnpm profile:init`; the ignored local profile is selected automatically. An explicit `MC_SERVER_PROFILE_DIR` may select a profile subdirectory in an independent private repository.
 
 For the Minecraft connection address, setup supports three modes:
 
@@ -213,7 +213,7 @@ pnpm cdk:diff
 pnpm cdk:deploy
 ```
 
-Legacy live stacks must not take a normal CDK update first. Run the read-only `pnpm migrate:existing` inventory and follow [Existing Deployment Safety Migration](docs/EXISTING_DEPLOYMENT_MIGRATION.md). Normal setup/deploy entry points block legacy SES ownership or an unresolved live-instance definition diff.
+Legacy live stacks must not take a normal CDK update first. Run the read-only `pnpm migrate:existing` inventory and follow [Existing Deployment Safety Migration](docs/EXISTING_DEPLOYMENT_MIGRATION.md). Guards also refuse a pinned-instance bridge when physical user data still references legacy GitHub SSM parameters that current CDK removes.
 
 ## Removing A Deployment
 
@@ -231,7 +231,7 @@ This can reduce idle cost compared with leaving a server running all the time, b
 
 - `stop` stops compute, but attached EBS storage still costs money
 - `hibernate` removes attached instance volumes after backup, so it is better for longer idle periods
-- Cloudflare, AWS, Google, and GitHub setup are still your responsibility
+- Cloudflare, AWS, and Google setup are still your responsibility
 - Check AWS Billing and Cost Explorer after deployment, especially while testing
 
 ## Docs
@@ -240,12 +240,11 @@ See the reader-oriented [documentation index](docs/README.md) for current user g
 
 Setup:
 
-- [Fork this repo](docs/setup/GITHUB_REPO_SETUP.md)
-- [Create a GitHub token](docs/setup/GITHUB_TOKEN_SETUP.md)
 - [AWS account setup](docs/setup/AWS_ACCOUNT_SETUP.md)
 - [Cloudflare setup](docs/setup/CLOUDFLARE_SETUP.md)
 - [Google OAuth setup](docs/setup/GOOGLE_OAUTH_SETUP.md)
 - [Setup and Run](docs/setup/SETUP_AND_RUN.md)
+- [Server Profiles](docs/SERVER_PROFILES.md)
 
 Operations:
 

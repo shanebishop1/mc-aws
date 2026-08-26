@@ -12,6 +12,9 @@ const envCandidates = [".env.production", ".env.local"].map((file) => path.resol
 const selectedEnvPath = envCandidates.find((candidate) => fs.existsSync(candidate));
 
 loadEnvironmentPreservingCdkTarget(() => {
+  if (process.env.CI === "true") {
+    return;
+  }
   if (selectedEnvPath) {
     // override=true so a blank shell env var does not block file values. Explicit,
     // non-empty CDK target variables are restored after dotenv loads.

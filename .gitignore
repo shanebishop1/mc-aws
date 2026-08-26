@@ -47,6 +47,7 @@ yarn-error.log*
 
 # local configuration
 mise.local.toml
+/server-profile/
 
 # local e2e artifacts
 tests/*-output.txt

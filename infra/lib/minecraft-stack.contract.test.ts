@@ -15,15 +15,13 @@ import {
 const stackSourcePath = path.resolve(process.cwd(), "infra/lib/minecraft-stack.ts");
 
 describe("minecraft-stack SecureString/KMS policy contract", () => {
-  it("uses StringLike encryption-context scoping for /minecraft/* parameters", () => {
+  it("scopes decryption context to exact EC2-readable SecureString parameters", () => {
     const source = readFileSync(stackSourcePath, "utf8");
 
     expect(source).toContain('actions: ["kms:Decrypt"]');
     expect(source).toContain("resources: [`arn:aws:kms:${this.region}:${this.account}:key/*`]");
-    expect(source).toContain("StringLike");
-    expect(source).toContain(
-      '"kms:EncryptionContext:PARAMETER_ARN": `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`'
-    );
+    expect(source).toContain("StringEquals");
+    expect(source).toContain('"kms:EncryptionContext:PARAMETER_ARN": ec2EncryptedParameters.map(ec2ParameterArn)');
   });
 });
 
@@ -37,14 +35,25 @@ const sesEnvironmentNames = [
   "START_KEYWORD",
 ] as const;
 
-const stackEnvironmentNames = [...sesEnvironmentNames, "GDRIVE_REMOTE", "GDRIVE_ROOT", "AL2023_ARM64_AMI_ID"] as const;
+const stackEnvironmentNames = [
+  ...sesEnvironmentNames,
+  "GDRIVE_REMOTE",
+  "GDRIVE_ROOT",
+  "AL2023_ARM64_AMI_ID",
+  "MC_SERVER_PROFILE_DIR",
+  "MC_ALLOW_EMPTY_WHITELIST",
+] as const;
 
 const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironmentNames)[number], string>> = {}) => {
   const previousEnvironment = Object.fromEntries(stackEnvironmentNames.map((name) => [name, process.env[name]]));
   for (const name of stackEnvironmentNames) {
     delete process.env[name];
   }
-  Object.assign(process.env, { AL2023_ARM64_AMI_ID: `ami-${"1".repeat(17)}`, ...stackEnvironment });
+  Object.assign(process.env, {
+    AL2023_ARM64_AMI_ID: `ami-${"1".repeat(17)}`,
+    MC_ALLOW_EMPTY_WHITELIST: "true",
+    ...stackEnvironment,
+  });
 
   const app = new cdk.App();
   const account = "111111111111";
@@ -116,6 +125,131 @@ describe("minecraft-stack user data shell quoting", () => {
       expect(existsSync(markerPath)).toBe(false);
     } finally {
       rmSync(rootDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("minecraft-stack server profile assets", () => {
+  it("publishes separate runtime/profile assets with one atomic SSM manifest and exact object reads", () => {
+    const template = synthesizeStack();
+    const json = template.toJSON();
+    const serialized = JSON.stringify(json);
+    const parameters = Object.values(template.findResources("AWS::SSM::Parameter"));
+    const manifest = parameters.find((resource) => resource.Properties.Name === "/minecraft/server-profile-manifest");
+
+    expect(manifest).toBeDefined();
+    expect(JSON.stringify(manifest?.Properties.Value)).toContain('\\"version\\":1');
+    expect(JSON.stringify(manifest?.Properties.Value)).toMatch(/sha256/);
+    expect(JSON.stringify(manifest?.Properties.Value)).toContain("s3://");
+    expect(serialized).not.toContain("/minecraft/github-");
+    expect(json.Parameters ?? {}).not.toHaveProperty("GithubTokenParam");
+
+    const statements = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+      (policy) => policy.Properties.PolicyDocument.Statement
+    );
+    const s3Reads = statements.filter((statement) =>
+      (Array.isArray(statement.Action) ? statement.Action : [statement.Action]).includes("s3:GetObject")
+    );
+    expect(s3Reads).toHaveLength(1);
+    expect(s3Reads[0].Resource).toHaveLength(2);
+    expect(JSON.stringify(s3Reads[0].Resource)).toContain(".zip");
+    expect(JSON.stringify(s3Reads[0].Resource)).not.toContain("/*");
+    expect(statements.some((statement) => statement.Action === "s3:ListBucket")).toBe(false);
+    expect(JSON.stringify(statements)).not.toContain("s3:GetObjectVersion");
+  });
+
+  it("keeps the profile manifest read-only and scopes EC2 SSM mutations to root-script paths", () => {
+    const template = synthesizeStack();
+    const statements = Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
+      (policy) => policy.Properties.PolicyDocument.Statement
+    );
+    const actionsFor = (statement: Record<string, unknown>) =>
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const resourcesFor = (statement: Record<string, unknown>) =>
+      (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]).map(String);
+    const getStatement = statements.find(
+      (statement) =>
+        actionsFor(statement).includes("ssm:GetParameter") &&
+        resourcesFor(statement).some((resource) => resource.includes("server-profile-manifest"))
+    );
+    const putStatement = statements.find(
+      (statement) =>
+        actionsFor(statement).length === 1 &&
+        actionsFor(statement).includes("ssm:PutParameter") &&
+        resourcesFor(statement).some((resource) => resource.includes("player-count"))
+    );
+    const deleteStatement = statements.find(
+      (statement) =>
+        actionsFor(statement).length === 1 &&
+        actionsFor(statement).includes("ssm:DeleteParameter") &&
+        resourcesFor(statement).some((resource) => resource.includes("startup-triggered-by"))
+    );
+
+    expect(getStatement).toBeDefined();
+    expect(resourcesFor(getStatement!)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("server-profile-manifest"),
+        expect.stringContaining("resume-pending"),
+        expect.stringContaining("gdrive-token"),
+        expect.stringContaining("cloudflare-api-token"),
+        expect.stringContaining("duckdns-token"),
+      ])
+    );
+    expect(actionsFor(getStatement!)).not.toContain("ssm:PutParameter");
+    expect(actionsFor(getStatement!)).not.toContain("ssm:DeleteParameter");
+    expect(resourcesFor(putStatement!)).toEqual([expect.stringContaining("player-count")]);
+    expect(resourcesFor(deleteStatement!)).toEqual([expect.stringContaining("startup-triggered-by")]);
+    expect(JSON.stringify(statements)).not.toContain("parameter/minecraft/*");
+  });
+
+  it("keeps the repository root and user data out of file asset sources", () => {
+    const app = new cdk.App();
+    app.node.setContext(
+      "vpc-provider:account=111111111111:filter.isDefault=true:region=us-west-1:returnAsymmetricSubnets=true",
+      {
+        vpcId: "vpc-12345",
+        vpcCidrBlock: "10.0.0.0/16",
+        ownerAccountId: "111111111111",
+        availabilityZones: [],
+        subnetGroups: [
+          {
+            name: "Public",
+            type: "Public",
+            subnets: [
+              {
+                subnetId: "subnet-12345",
+                cidr: "10.0.0.0/24",
+                availabilityZone: "us-west-1a",
+                routeTableId: "rtb-12345",
+              },
+            ],
+          },
+        ],
+      }
+    );
+    const previous = process.env.AL2023_ARM64_AMI_ID;
+    process.env.AL2023_ARM64_AMI_ID = `ami-${"1".repeat(17)}`;
+    const previousAllowEmpty = process.env.MC_ALLOW_EMPTY_WHITELIST;
+    process.env.MC_ALLOW_EMPTY_WHITELIST = "true";
+    try {
+      const stack = new MinecraftStack(app, "MinecraftStack", {
+        env: { account: "111111111111", region: "us-west-1" },
+      });
+      const assets = stack.node
+        .findAll()
+        .filter(
+          (node) =>
+            node.node.path.includes("MinecraftRuntimeAsset") || node.node.path.includes("MinecraftServerProfileAsset")
+        );
+      expect(assets.length).toBeGreaterThanOrEqual(2);
+      expect(readFileSync(path.resolve(process.cwd(), "infra/src/ec2/user_data.sh"), "utf8")).not.toContain(
+        "MC_SERVER_PROFILE_DIR"
+      );
+    } finally {
+      if (previous === undefined) process.env.AL2023_ARM64_AMI_ID = undefined;
+      else process.env.AL2023_ARM64_AMI_ID = previous;
+      if (previousAllowEmpty === undefined) process.env.MC_ALLOW_EMPTY_WHITELIST = undefined;
+      else process.env.MC_ALLOW_EMPTY_WHITELIST = previousAllowEmpty;
     }
   });
 });

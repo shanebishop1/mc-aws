@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { GetCommandInvocationCommand, SendCommandCommand } from "./clients.js";
+import { GetCommandInvocationCommand, type PutParameterCommand, SendCommandCommand } from "./clients.js";
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
@@ -17,7 +17,7 @@ vi.mock("./runtime-budgets.js", () => ({
   SSM_SEND_RETRY_INTERVAL_MS: 0,
 }));
 
-import { executeSSMCommand } from "./ssm.js";
+import { executeSSMCommand, putParameter } from "./ssm.js";
 
 const namedError = (name: string): Error => Object.assign(new Error(name), { name });
 
@@ -55,5 +55,27 @@ describe("lambda SSM command delivery", () => {
 
     await expect(executeSSMCommand("i-abc123", ["true"])).rejects.toMatchObject({ name: "InvalidInstanceId" });
     expect(mocks.send).toHaveBeenCalledTimes(3);
+  });
+
+  it("supports atomic create while preserving overwrite-by-default compatibility", async () => {
+    mocks.send.mockResolvedValue({});
+
+    await putParameter("/minecraft/default", "one");
+    await putParameter("/minecraft/create", "two", "String", false);
+
+    expect((mocks.send.mock.calls[0][0] as PutParameterCommand).input.Overwrite).toBe(true);
+    expect((mocks.send.mock.calls[1][0] as PutParameterCommand).input.Overwrite).toBe(false);
+  });
+
+  it("sets a remote execution timeout and refuses timed-out completion", async () => {
+    mocks.send
+      .mockResolvedValueOnce({ Command: { CommandId: "command-timeout" } })
+      .mockResolvedValueOnce({ Status: "ExecutionTimedOut", StandardErrorContent: "timed out" });
+
+    await expect(
+      executeSSMCommand("i-abc123", ["long-running"], { maxAttempts: 1, timeoutSeconds: 450 })
+    ).rejects.toThrow("SSM command failed: timed out");
+    const send = mocks.send.mock.calls[0][0] as SendCommandCommand;
+    expect(send.input.TimeoutSeconds).toBe(450);
   });
 });

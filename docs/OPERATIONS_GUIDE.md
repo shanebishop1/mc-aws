@@ -110,6 +110,10 @@ Deploy:
 pnpm cdk:deploy
 ```
 
+## Updating Server Configuration
+
+Use the ignored deployment-specific profile described in [Server Profiles](SERVER_PROFILES.md). `pnpm profile:validate` is local and read-only. Profiles apply on fresh provisioning/rebuild, not on `git pull` or service restart. Restored backup data takes precedence until an explicit reviewed profile transition. `pnpm profile:rollout:check` deliberately validates and stops without deploying or sending SSM commands.
+
 ## Operation State Cleanup
 
 Durable operation-state records in SSM use a 30-day retention window by default.
@@ -139,6 +143,7 @@ Immediately before stack deletion, teardown gracefully stops Minecraft and EC2 w
 - Check whether the server is hibernated and needs `resume` instead of `start`.
 - Check AWS credentials and region values.
 - Check Lambda and SSM command logs in AWS.
+- A failed resume intentionally leaves `/minecraft/resume-pending` in SSM so reconstructed bootstrap cannot expose an unrestored server. Treat an existing marker as stale or active: inspect the failed Lambda, cloud-init, and SSM command first. Delete that non-secret marker only after confirming no resume is running, then retry the reviewed resume operation.
 
 ### DNS does not update
 

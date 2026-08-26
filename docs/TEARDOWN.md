@@ -122,7 +122,7 @@ Cloud teardown revokes the dedicated Worker runtime IAM keys. It intentionally d
 
 - remove the production origin and redirect URI—or delete the OAuth client/project—in Google Cloud;
 - revoke deploy/DNS API tokens in Cloudflare if they are no longer used elsewhere;
-- revoke the GitHub token if it was dedicated to this deployment;
+- for a legacy deployment only, revoke its dedicated GitHub token after completing the server-profile transition and confirming nothing still reads the legacy SSM parameters;
 - rotate/revoke a DuckDNS token only if it is not shared;
 - remove Google Drive backup access/data only after deciding whether to retain backups;
 - remove local AWS SSO/profile credentials only if you intend to retire that local identity.

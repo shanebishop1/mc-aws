@@ -2,14 +2,14 @@
 
 This is the project-specific setup after the account prerequisites are done.
 
-## 1. Clone Your Fork
+## 1. Clone The Canonical Application
 
 ```bash
-git clone https://github.com/<you>/mc-aws.git
+git clone https://github.com/shanebishop1/mc-aws.git
 cd mc-aws
 ```
 
-Use your fork, not the upstream repo, because the EC2 instance clones the GitHub repo configured during setup.
+Keep application code canonical. For deployment-specific Minecraft files, create the ignored local profile documented in [Server Profiles](../SERVER_PROFILES.md). EC2 downloads narrow content-addressed assets with its IAM role and never clones this repository.
 
 ## 2. Run Setup
 
@@ -17,13 +17,15 @@ Use your fork, not the upstream repo, because the EC2 instance clones the GitHub
 bash ./setup.sh
 ```
 
+On a clean clone, the first run creates ignored `server-profile/` and stops before credential collection. Add at least one real Minecraft UUID/name to `server-profile/whitelist.json`, run `pnpm profile:validate`, then rerun `bash ./setup.sh`.
+
 The script:
 
 1. Installs or verifies `mise`.
 2. Uses the repo-pinned Node.js and `pnpm` versions.
 3. Installs project dependencies.
-4. Runs `scripts/setup-wizard.sh`.
-5. Deploys AWS infrastructure with CDK.
+4. Validates the selected server profile before credential collection or cloud inspection.
+5. Runs `scripts/setup-wizard.sh`, then assets the profile and deploys AWS infrastructure with CDK.
 6. Locates the dedicated least-privilege Worker runtime IAM identity.
 7. Reads `INSTANCE_ID` from the CloudFormation stack output.
 8. Writes non-secret deployment values to `.env.production` and `.env.local`.
@@ -45,7 +47,6 @@ The wizard collects:
 - Minecraft connection mode: Cloudflare custom domain, DuckDNS free subdomain, or raw public IP
 - panel hosting mode, independently: generated `workers.dev` URL or custom Cloudflare hostname
 - optional SES email settings
-- GitHub repo and token values
 - optional Google Drive backup path values
 - generated `AUTH_SECRET`
 
@@ -104,6 +105,8 @@ pnpm dev:mock
 Open `http://localhost:3000/api/auth/dev-login`.
 
 ## 7. Deploy Updates
+
+Application updates and profile changes are separate. A service restart never pulls code or reapplies profile files. See [Server Profiles](../SERVER_PROFILES.md) before changing profile content; existing-instance profile rollout remains fail-closed pending a reviewed rebuild/transition.
 
 App update:
 

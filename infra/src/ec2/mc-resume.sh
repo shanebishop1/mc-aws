@@ -57,6 +57,12 @@ if [[ "$RESTORE_MODE" == "named" ]]; then
   }
 fi
 
+# Publish DNS before opening Minecraft so a DNS failure cannot leave the game running.
+if ! systemctl start minecraft-dns.service; then
+  log "ERROR: Failed to start minecraft DNS service"
+  exit 1
+fi
+
 log "Starting Minecraft server service..."
 if ! systemctl start minecraft; then
   log "ERROR: Failed to start minecraft service"

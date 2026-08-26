@@ -21,19 +21,19 @@ const SSM_NOT_READY_ERRORS = new Set(["InvalidInstanceId", "TargetNotConnected"]
  * @param {string[]} commands - Array of commands to execute
  * @returns {Promise<string>} The command output
  */
-async function executeSSMCommand(instanceId, commands) {
+async function executeSSMCommand(instanceId, commands, options = {}) {
   console.log(`Executing SSM command on instance ${instanceId}: ${commands.join(" ")}`);
 
-  const sendResponse = await sendCommandWhenReady(instanceId, commands);
+  const sendResponse = await sendCommandWhenReady(instanceId, commands, options.timeoutSeconds);
 
   const commandId = sendResponse.Command?.CommandId;
   if (!commandId) throw new Error("Failed to get command ID from SSM response");
 
   console.log(`SSM command sent with ID: ${commandId}`);
-  return await waitForSSMCompletion(commandId, instanceId);
+  return await waitForSSMCompletion(commandId, instanceId, options.maxAttempts);
 }
 
-async function sendCommandWhenReady(instanceId, commands) {
+async function sendCommandWhenReady(instanceId, commands, timeoutSeconds) {
   for (let attempt = 1; attempt <= SSM_SEND_MAX_ATTEMPTS; attempt++) {
     try {
       return await ssm.send(
@@ -41,6 +41,7 @@ async function sendCommandWhenReady(instanceId, commands) {
           InstanceIds: [instanceId],
           DocumentName: "AWS-RunShellScript",
           Parameters: { commands },
+          ...(timeoutSeconds ? { TimeoutSeconds: timeoutSeconds } : {}),
         })
       );
     } catch (error) {
@@ -72,8 +73,8 @@ function buildSSMFailureOutput(response) {
   return failureOutput;
 }
 
-async function waitForSSMCompletion(commandId, instanceId) {
-  const maxAttempts = SSM_MAX_ATTEMPTS;
+async function waitForSSMCompletion(commandId, instanceId, configuredMaxAttempts) {
+  const maxAttempts = configuredMaxAttempts ?? SSM_MAX_ATTEMPTS;
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     await new Promise((resolve) => setTimeout(resolve, SSM_POLL_INTERVAL_MS));
@@ -87,7 +88,7 @@ async function waitForSSMCompletion(commandId, instanceId) {
       console.log(`Poll attempt ${attempt}/${maxAttempts} - Command status: ${status}`);
 
       if (status === "Success") return response.StandardOutputContent || "";
-      if (status === "Failed") {
+      if (["Failed", "Cancelled", "TimedOut", "DeliveryTimedOut", "ExecutionTimedOut"].includes(status)) {
         throw new Error(`SSM command failed: ${buildSSMFailureOutput(response)}`);
       }
     } catch (error) {
@@ -113,13 +114,13 @@ async function deleteParameter(name) {
   }
 }
 
-async function putParameter(name, value, type = "String") {
+async function putParameter(name, value, type = "String", overwrite = true) {
   try {
     const command = new PutParameterCommand({
       Name: name,
       Value: value,
       Type: type,
-      Overwrite: true,
+      Overwrite: overwrite,
     });
     await ssm.send(command);
     console.log(`Successfully put parameter: ${name}`);

@@ -16,6 +16,8 @@ import { extractEmails, getAllowlist, updateAllowlist } from "./allowlist.js";
 import { parseCommand } from "./command-parser.js";
 import { parseEmailFromEvent } from "./email-parser.js";
 import { resolveResumeRestoreStrategy } from "./restore-contract.js";
+import { buildResumeCommand } from "./resume-command.js";
+import { RESUME_SSM_MAX_ATTEMPTS, RESUME_SSM_TIMEOUT_SECONDS } from "./runtime-budgets.js";
 
 // Command handlers
 import { handleBackup } from "./handlers/backup.js";
@@ -410,18 +412,39 @@ async function handleResumeCommand(instanceId, senderEmail, notificationEmail, a
     restoreMode,
   });
 
+  const resumePendingParameter = "/minecraft/resume-pending";
+  try {
+    await putParameter(
+      resumePendingParameter,
+      JSON.stringify({
+        version: 1,
+        mode: restoreStrategy.mode,
+        backupArchiveName: restoreStrategy.backupArchiveName ?? null,
+        createdAt: new Date().toISOString(),
+      }),
+      "String",
+      false
+    );
+  } catch (error) {
+    if (error?.name === "ParameterAlreadyExists") {
+      throw new Error(
+        `Resume refused because ${resumePendingParameter} already exists. Treat it as a stale or active failed-resume marker and investigate before deleting it.`
+      );
+    }
+    throw error;
+  }
+
   console.log(`[RESUME] Restore strategy selected: ${restoreStrategy.mode}`);
 
   await handleResume(instanceId);
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
-  const resumeCommandByMode = {
-    fresh: "/usr/local/bin/mc-resume.sh fresh",
-    latest: "/usr/local/bin/mc-resume.sh latest",
-    named: `/usr/local/bin/mc-resume.sh named ${restoreStrategy.backupArchiveName}`,
-  };
-  const resumeCommand = resumeCommandByMode[restoreStrategy.mode];
-  const resumeOutput = await executeSSMCommand(instanceId, [resumeCommand]);
+  const resumeCommand = buildResumeCommand(restoreStrategy);
+  const resumeOutput = await executeSSMCommand(instanceId, [resumeCommand], {
+    maxAttempts: RESUME_SSM_MAX_ATTEMPTS,
+    timeoutSeconds: RESUME_SSM_TIMEOUT_SECONDS,
+  });
+  await deleteParameter(resumePendingParameter);
 
   let restoreMsg = "\n\nFresh world requested (no backup restore).";
   if (restoreStrategy.mode === "latest") {

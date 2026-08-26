@@ -9,6 +9,7 @@ import {
   adoptActualInstanceUserData,
   assertExclusiveTaggingAcknowledged,
   assertInstanceUserDataTransition,
+  assertLegacyGithubUserDataDependenciesPreserved,
   assertLegacyResourcesRetained,
   assertOwnershipTagsComplete,
   assertPinnedInstanceImageTransition,
@@ -132,6 +133,178 @@ const volumeResponse = (tags = ownershipTags) => ({
 });
 
 describe("existing deployment migration template contracts", () => {
+  it("revalidates legacy dependencies against the exact pending template before bridge execution", () => {
+    const commandSource = readFileSync(path.resolve(process.cwd(), "scripts/migrate-existing-deployment.ts"), "utf8");
+    const executeBridgeSource = commandSource.slice(
+      commandSource.indexOf("function executeBridge("),
+      commandSource.indexOf("function assertStandardDeploySafe(")
+    );
+    expect(executeBridgeSource).toContain("assertLegacyGithubUserDataDependenciesPreserved(live, pendingTemplate)");
+    expect(executeBridgeSource.indexOf("assertLegacyGithubUserDataDependenciesPreserved")).toBeLessThan(
+      executeBridgeSource.indexOf('"execute-change-set"')
+    );
+  });
+
+  it("refuses to delete parameters required by physical legacy GitHub UserData", () => {
+    const live = liveTemplate();
+    live.Resources[INSTANCE_LOGICAL_ID].Properties.UserData["Fn::Base64"] =
+      "#!/bin/bash\naws ssm get-parameter --name /minecraft/github-pat\n";
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, currentTemplate())).toThrow(
+      "Complete an explicit server-profile transition"
+    );
+    const compatible = currentTemplate();
+    live.Resources[INSTANCE_LOGICAL_ID].Properties.IamInstanceProfile = { Ref: "InstanceProfile" };
+    compatible.Resources.LegacyGithubPat = {
+      Type: "AWS::SSM::Parameter",
+      Properties: { Name: "/minecraft/github-pat", Type: "SecureString" },
+    };
+    compatible.Resources.InstanceProfile = {
+      Type: "AWS::IAM::InstanceProfile",
+      Properties: { Roles: [{ Ref: "InstanceRole" }] },
+    };
+    compatible.Resources.InstanceRole = {
+      Type: "AWS::IAM::Role",
+      Properties: {
+        Policies: [
+          {
+            PolicyDocument: {
+              Statement: [
+                {
+                  Effect: "Allow",
+                  Action: "ssm:GetParameter",
+                  Resource: {
+                    "Fn::Sub":
+                      "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/minecraft/github-pat",
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, compatible)).not.toThrow();
+    const joinedArn = structuredClone(compatible);
+    joinedArn.Resources.InstanceRole.Properties.Policies[0].PolicyDocument.Statement[0].Resource = {
+      "Fn::Join": [
+        "",
+        [
+          "arn:",
+          { Ref: "AWS::Partition" },
+          ":ssm:",
+          { Ref: "AWS::Region" },
+          ":",
+          { Ref: "AWS::AccountId" },
+          ":parameter/minecraft/github-pat",
+        ],
+      ],
+    };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, joinedArn)).not.toThrow();
+    const exactCustomResource = structuredClone(compatible);
+    Reflect.deleteProperty(exactCustomResource.Resources, "LegacyGithubPat");
+    const putPat = JSON.stringify({
+      service: "SSM",
+      action: "putParameter",
+      parameters: { Name: "/minecraft/github-pat", Type: "SecureString" },
+    });
+    exactCustomResource.Resources.LegacyGithubPatCustom = {
+      Type: "Custom::AWS",
+      Properties: { Create: putPat, Update: putPat },
+    };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, exactCustomResource)).not.toThrow();
+    const objectCallCustomResource = structuredClone(exactCustomResource);
+    objectCallCustomResource.Resources.LegacyGithubPatCustom.Properties.Create = JSON.parse(putPat);
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, objectCallCustomResource)).toThrow(
+      "Complete an explicit server-profile transition"
+    );
+    const mixedTypeCustomResource = structuredClone(exactCustomResource);
+    mixedTypeCustomResource.Resources.LegacyGithubPatCustom.Properties.Update = JSON.stringify({
+      service: "SSM",
+      action: "putParameter",
+      parameters: { Name: "/minecraft/github-pat", Type: "String" },
+    });
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, mixedTypeCustomResource)).toThrow(
+      "Complete an explicit server-profile transition"
+    );
+    const nearMatchRead = structuredClone(compatible);
+    nearMatchRead.Resources.InstanceRole.Properties.Policies[0].PolicyDocument.Statement[0].Resource =
+      "arn:aws:ssm:us-west-1:123456789012:parameter/minecraft/github-pat-old";
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, nearMatchRead)).toThrow(
+      "exact ssm:GetParameter"
+    );
+    const conditionedRead = structuredClone(compatible);
+    conditionedRead.Resources.InstanceRole.Properties.Policies[0].PolicyDocument.Statement[0].Condition = {
+      StringEquals: { "aws:PrincipalTag/Environment": "legacy" },
+    };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, conditionedRead)).toThrow(
+      "exact ssm:GetParameter"
+    );
+    const missingRead = structuredClone(compatible);
+    missingRead.Resources.InstanceRole.Properties.Policies = [];
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, missingRead)).toThrow("exact ssm:GetParameter");
+    const explicitlyDenied = structuredClone(compatible);
+    explicitlyDenied.Resources.InstanceRole.Properties.Policies[0].PolicyDocument.Statement.push({
+      Effect: "Deny",
+      Action: "ssm:*",
+      Resource: "*",
+    });
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, explicitlyDenied)).toThrow(
+      "exact ssm:GetParameter"
+    );
+    const plaintextPat = structuredClone(compatible);
+    plaintextPat.Resources.LegacyGithubPat.Properties.Type = "String";
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, plaintextPat)).toThrow("SecureString");
+    const customerKey = structuredClone(compatible);
+    customerKey.Resources.LegacyGithubPat.Properties.KeyId = "arn:aws:kms:us-west-1:123456789012:key/key-id";
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, customerKey)).toThrow("kms:Decrypt");
+    const unclearKey = structuredClone(compatible);
+    unclearKey.Resources.LegacyGithubPat.Properties.KeyId = { Ref: "LegacyKey" };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, unclearKey)).toThrow("dynamic or unclear");
+    customerKey.Resources.InstanceRole.Properties.Policies[0].PolicyDocument.Statement.push({
+      Effect: "Allow",
+      Action: "kms:Decrypt",
+      Resource: "arn:aws:kms:us-west-1:123456789012:key/key-id",
+    });
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, customerKey)).not.toThrow();
+    const nearMatchKey = structuredClone(customerKey);
+    nearMatchKey.Resources.InstanceRole.Properties.Policies[0].PolicyDocument.Statement[1].Resource =
+      "arn:aws:kms:us-west-1:123456789012:key/key-id-old";
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, nearMatchKey)).toThrow("kms:Decrypt");
+    const deleteOnlyCustomResource = structuredClone(compatible);
+    Reflect.deleteProperty(deleteOnlyCustomResource.Resources, "LegacyGithubPat");
+    deleteOnlyCustomResource.Resources.LegacyGithubPatCustom = {
+      Type: "Custom::AWS",
+      Properties: {
+        Delete: JSON.stringify({
+          service: "SSM",
+          action: "deleteParameter",
+          parameters: { Name: "/minecraft/github-pat" },
+        }),
+      },
+    };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, deleteOnlyCustomResource)).toThrow(
+      "Complete an explicit server-profile transition"
+    );
+    const splitCustomResource = structuredClone(exactCustomResource);
+    splitCustomResource.Resources.LegacyGithubPatCustom.Properties.Create = JSON.stringify({
+      service: "SSM",
+      action: "putParameter",
+      unrelated: { Name: "/minecraft/github-pat" },
+      parameters: { Name: "/minecraft/github-pat-old", Type: "SecureString" },
+    });
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, splitCustomResource)).toThrow(
+      "Complete an explicit server-profile transition"
+    );
+    const unrelatedString = currentTemplate();
+    unrelatedString.Resources.Unrelated = {
+      Type: "AWS::SNS::Topic",
+      Properties: { DisplayName: "/minecraft/github-pat" },
+    };
+    expect(() => assertLegacyGithubUserDataDependenciesPreserved(live, unrelatedString)).toThrow(
+      "Complete an explicit server-profile transition"
+    );
+  });
+
   it("accepts the leading separator forwarded by pnpm scripts", () => {
     expect(normalizePnpmArguments(["--", "--stage", "retain"])).toEqual(["--stage", "retain"]);
     expect(normalizePnpmArguments(["--stage", "retain"])).toEqual(["--stage", "retain"]);
@@ -607,6 +780,29 @@ describe("existing deployment migration template contracts", () => {
     live.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = pinnedImageId;
     current.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = pinnedImageId;
     expect(() => assertStandardDeploymentInstanceSafe(live, current)).not.toThrow();
+  });
+
+  it("blocks ordinary deployment when physical UserData differs or retains legacy dependencies", () => {
+    const pinnedImageId = `ami-${"5".repeat(17)}`;
+    const live = currentTemplate();
+    live.Resources[INSTANCE_LOGICAL_ID].Properties.ImageId = pinnedImageId;
+    live.Resources[INSTANCE_LOGICAL_ID].Properties.UserData = { "Fn::Base64": "#!/bin/bash\nprintf safe\n" };
+    const current = JSON.parse(JSON.stringify(live));
+
+    expect(() =>
+      assertStandardDeploymentInstanceSafe(
+        live,
+        current,
+        Buffer.from("#!/bin/bash\naws ssm get-parameter --name /minecraft/github-pat\n")
+      )
+    ).toThrow(/physical UTF-8 text/);
+
+    const legacyPhysical = "#!/bin/bash\naws ssm get-parameter --name /minecraft/github-pat\n";
+    live.Resources[INSTANCE_LOGICAL_ID].Properties.UserData = { "Fn::Base64": legacyPhysical };
+    current.Resources[INSTANCE_LOGICAL_ID] = JSON.parse(JSON.stringify(live.Resources[INSTANCE_LOGICAL_ID]));
+    expect(() => assertStandardDeploymentInstanceSafe(live, current, Buffer.from(legacyPhysical))).toThrow(
+      "Complete an explicit server-profile transition"
+    );
   });
 
   it("allows later pinned-instance bridges after both legacy resources are no longer managed", () => {
