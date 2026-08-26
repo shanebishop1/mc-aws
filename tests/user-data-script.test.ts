@@ -22,6 +22,11 @@ describe("EC2 user data", () => {
     expect(script).toContain("systemctl poweroff || shutdown -h now");
   });
 
+  it("uses the AWS CLI preinstalled by the pinned AL2023 image", () => {
+    expect(script).not.toContain("awscli2");
+    expect(script).toContain("command -v aws");
+  });
+
   it("installs the rclone helper and optionally materializes config without an inline token", () => {
     expect(script).toContain("mc-profile-install.sh");
     expect(script).toContain("/usr/local/bin/mc-rclone-config.sh --bootstrap");
