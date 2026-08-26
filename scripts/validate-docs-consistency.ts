@@ -14,7 +14,7 @@ const filesToCheck = [
   "docs/RELEASING.md",
   "docs/AWS_CREDENTIALS_SETUP.md",
   "docs/CLOUDFLARE_SETUP.md",
-  "docs/docs/API.md",
+  "docs/API.md",
   "docs/GOOGLE_OAUTH_SETUP.md",
   "docs/OPERATIONS_GUIDE.md",
   "docs/QUICK_START_MOCK_MODE.md",
