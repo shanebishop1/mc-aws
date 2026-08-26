@@ -23,7 +23,8 @@ GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 dnf update -y
 rpm --import https://yum.corretto.aws/corretto.key
 curl --fail --location --proto '=https' --tlsv1.2 --output /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
-dnf install -y java-21-amazon-corretto-devel unzip python3 python3-pip cronie screen jq awscli2
+dnf install -y java-21-amazon-corretto-devel unzip python3 python3-pip cronie screen jq
+command -v aws >/dev/null 2>&1 || { log "ERROR: pinned AL2023 image does not provide the AWS CLI"; exit 1; }
 systemctl enable --now crond
 python3 -m pip install mcstatus
 
