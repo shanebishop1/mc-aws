@@ -9,6 +9,7 @@ log() { echo "[$(date -Is)] $*"; }
 
 export RCLONE_CONFIG="${RCLONE_CONFIG:-/opt/setup/rclone/rclone.conf}"
 RCLONE_CONFIG_HELPER="${MC_RCLONE_CONFIG_HELPER:-/usr/local/bin/mc-rclone-config.sh}"
+PROFILE_INSTALLER="${MC_PROFILE_INSTALLER:-/usr/local/bin/mc-profile-install.sh}"
 
 OPERATION_LOCK="${MC_OPERATION_LOCK:-/tmp/mc-operation.lock}"
 MAINTENANCE_LOCK="${MC_MAINTENANCE_LOCK:-/tmp/mc-maintenance.lock}"
@@ -428,6 +429,13 @@ fi
 FAILURE_CONTEXT="staged-server install failure"
 if ! mv -- "$STAGED_SERVER" "$SERVER_DIR"; then
   log "ERROR: Failed to install staged server directory"
+  exit 1
+fi
+
+FAILURE_CONTEXT="server-profile reapplication failure"
+log "Applying current server profile to restored world..."
+if ! "$PROFILE_INSTALLER" --bootstrap; then
+  log "ERROR: Failed to apply the current server profile after restore"
   exit 1
 fi
 

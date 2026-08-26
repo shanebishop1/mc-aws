@@ -112,7 +112,7 @@ pnpm cdk:deploy
 
 ## Updating Server Configuration
 
-Use the ignored deployment-specific profile described in [Server Profiles](SERVER_PROFILES.md). `pnpm profile:validate` is local and read-only. Profiles apply on fresh provisioning/rebuild, not on `git pull` or service restart. Restored backup data takes precedence until an explicit reviewed profile transition. `pnpm profile:rollout:check` deliberately validates and stops without deploying or sending SSM commands.
+Use the ignored deployment-specific profile described in [Server Profiles](SERVER_PROFILES.md). `pnpm profile:validate` is local and read-only. Profiles apply on fresh provisioning/rebuild and are reapplied after a validated Google Drive restore, not on `git pull` or an ordinary service restart. Restore preserves world and unrelated server data while the current deployment profile remains authoritative for its declared paths and plugin destinations. `pnpm profile:rollout:check` deliberately validates and stops without deploying or sending SSM commands.
 
 ## Operation State Cleanup
 

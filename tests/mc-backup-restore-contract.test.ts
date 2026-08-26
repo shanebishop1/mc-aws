@@ -128,6 +128,7 @@ exit 0
       spawnSync("bash", [restoreScript, "contract.tar.gz"], {
         env: {
           ...commonEnv,
+          MC_PROFILE_INSTALLER: "/usr/bin/true",
           MC_RESTORE_HEALTH_DELAY: "0",
           MC_RESTORE_STAGING_PARENT: serverParent,
         },
