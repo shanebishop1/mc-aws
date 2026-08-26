@@ -1,9 +1,11 @@
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const rootDir = process.cwd();
 const setupPath = path.join(rootDir, "setup.sh");
+const setupSource = readFileSync(setupPath, "utf8");
 const command = `source "${setupPath}"; CDK_DEFAULT_ACCOUNT=123456789012; CDK_DEFAULT_REGION=us-east-1; STACK_NAME=MinecraftStack; print_deployment_preflight`;
 
 function runPreflight(confirm?: string) {
@@ -18,6 +20,15 @@ function runPreflight(confirm?: string) {
 }
 
 describe("public setup deployment preflight", () => {
+  it("validates the server profile before AWS inspection or deployment state mutation", () => {
+    expect(setupSource.indexOf("run_with_mise pnpm profile:validate")).toBeLessThan(
+      setupSource.indexOf("aws cloudformation describe-stacks")
+    );
+    expect(setupSource.indexOf("run_with_mise pnpm profile:init")).toBeLessThan(
+      setupSource.indexOf("Starting interactive setup wizard")
+    );
+  });
+
   it("refuses a non-interactive deployment without explicit confirmation", () => {
     const result = runPreflight();
 

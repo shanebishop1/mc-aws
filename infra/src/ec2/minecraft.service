@@ -1,6 +1,7 @@
 [Unit]
 Description=Minecraft Server
-After=network.target
+Requires=minecraft-dns.service
+After=network-online.target minecraft-dns.service
 
 [Service]
 # Treat the screen process as the long-running process; don't expect a fork/PID file
@@ -8,28 +9,18 @@ Type=simple
 User=minecraft
 
 WorkingDirectory=/opt/minecraft/server
-PermissionsStartOnly=true
-
-# Mark /opt/setup as safe (git ownership check workaround)
-ExecStartPre=/usr/bin/git config --global --add safe.directory /opt/setup
-
-# Update the repo to get the latest config
-ExecStartPre=/usr/bin/git -C /opt/setup pull
-
-# Sync only your repo files (won’t delete world/)
-ExecStartPre=/usr/bin/rsync -a /opt/setup/config/ /opt/minecraft/server/
 
 # Ensure correct ownership
-ExecStartPre=/bin/chown -R minecraft:minecraft /opt/minecraft/server/
+ExecStartPre=+/bin/chown -R minecraft:minecraft /opt/minecraft/server/
 
 # Start inside a detached screen session
 ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3276M -Xmx3276M -jar paper.jar nogui
 
 # Gracefully ask Minecraft to stop
-ExecStop=/usr/bin/screen -S mc-server -p 0 -X stuff "stop$(printf \\r)"
+ExecStop=/usr/local/bin/mc-stop.sh
 
 # Then kill off the screen session itself
-ExecStopPost=/usr/bin/screen -S mc-server -X quit || true
+ExecStopPost=-/usr/bin/screen -S mc-server -X quit
 
 # Ensure systemd kills any remaining children of this unit
 KillMode=control-group
@@ -45,6 +36,8 @@ Restart=on-failure
 ProtectSystem=full
 ProtectHome=true
 ReadWritePaths=/opt/minecraft
+IPAddressDeny=169.254.169.254/32
+IPAddressDeny=fd00:ec2::254/128
 
 [Install]
 WantedBy=multi-user.target

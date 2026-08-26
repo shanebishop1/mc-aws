@@ -39,7 +39,7 @@ wizard_header() {
   echo -e "${BLUE}───────────────────────────────────────────────────────────────${NC}"
 }
 
-readonly WIZARD_TOTAL=10
+readonly WIZARD_TOTAL=9
 readonly LOCAL_ENV_FILE=".env.local"
 readonly PRODUCTION_ENV_FILE=".env.production"
 # Capture a shell deployment token before resume files are loaded. This value is
@@ -1028,42 +1028,8 @@ collect_email_settings() {
   log_success "Email settings saved"
 }
 
-collect_github_settings() {
-  step_section 8 "GitHub Repo Access"
-
-  log "Configure GitHub access so the EC2 instance can clone your fork during setup."
-  echo ""
-
-  echo "Use your fork of this repository."
-  echo ""
-
-  prompt GITHUB_USER "Enter GitHub username" "${GITHUB_USER:-}"
-
-  prompt GITHUB_REPO "Enter GitHub repository name" "${GITHUB_REPO:-}"
-
-  echo ""
-  echo "To create a GitHub personal access token:"
-  echo "  1. Go to GitHub → Settings → Developer settings → Personal access tokens"
-  echo "  2. Create a token that can read your fork"
-  echo "  3. If using a classic token, select scope: repo"
-  echo "  4. Generate and copy the token"
-  echo ""
-
-  prompt GITHUB_TOKEN "Enter GitHub personal access token" "${GITHUB_TOKEN:-}" true
-
-  log_success "GitHub settings configured"
-  echo ""
-
-  # Write to env files
-  write_env_files "GITHUB_USER" "$GITHUB_USER"
-  write_env_files "GITHUB_REPO" "$GITHUB_REPO"
-  write_env_files "GITHUB_TOKEN" "$GITHUB_TOKEN"
-
-  log_success "GitHub settings saved"
-}
-
 collect_gdrive_settings() {
-  step_section 9 "Optional: Google Drive Backups"
+  step_section 8 "Optional: Google Drive Backups"
 
   log "Configure Google Drive integration for server backups."
   log "This requires rclone to be configured with a Google Drive remote."
@@ -1096,7 +1062,7 @@ collect_gdrive_settings() {
 }
 
 generate_auth_secret() {
-  step_section 10 "Generating AUTH_SECRET"
+  step_section 9 "Generating AUTH_SECRET"
 
   log "Generating a secure AUTH_SECRET for session encryption..."
   echo ""
@@ -1141,7 +1107,6 @@ main() {
   collect_dns_mode
   collect_panel_hosting
   collect_email_settings
-  collect_github_settings
   collect_gdrive_settings
   generate_auth_secret
 

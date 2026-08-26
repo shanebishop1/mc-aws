@@ -1,9 +1,12 @@
+import { execFileSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as cdk from "aws-cdk-lib";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as ses from "aws-cdk-lib/aws-ses";
 import * as sesActions from "aws-cdk-lib/aws-ses-actions";
 import * as sns from "aws-cdk-lib/aws-sns";
@@ -12,6 +15,7 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 
 import * as ssm from "aws-cdk-lib/aws-ssm";
+import { resolveServerProfileDirectory, validateServerProfile } from "../../lib/server-profile";
 import { quotePosixShellArgument } from "./posix-shell";
 import { createWorkerRuntimePolicyStatements } from "./worker-runtime-policy";
 
@@ -60,53 +64,6 @@ export class MinecraftStack extends cdk.Stack {
         "Inbound SES commands require SES_INBOUND_RECIPIENT, SES_RECEIPT_RULE_SET_NAME, and START_KEYWORD."
       );
     }
-
-    // 0. SSM Parameters (GitHub Credentials)
-    new ssm.StringParameter(this, "GithubUserParam", {
-      parameterName: "/minecraft/github-user",
-      stringValue: process.env.GITHUB_USER || "error-missing-user",
-    });
-
-    new ssm.StringParameter(this, "GithubRepoParam", {
-      parameterName: "/minecraft/github-repo",
-      stringValue: process.env.GITHUB_REPO || "error-missing-repo",
-    });
-
-    // Read GitHub Token (Passed as a deployment parameter to keep it out of the template)
-    const githubTokenParam = new cdk.CfnParameter(this, "GithubTokenParam", {
-      type: "String",
-      description: "GitHub Personal Access Token (PAT)",
-      noEcho: true, // Critical: Prevents the value from being stored in the template
-    });
-
-    // Use Custom Resource to put the parameter into SSM securely
-    new cr.AwsCustomResource(this, "GithubTokenSecureParam", {
-      installLatestAwsSdk: false,
-      onUpdate: {
-        service: "SSM",
-        action: "putParameter",
-        parameters: {
-          Name: "/minecraft/github-pat",
-          Value: githubTokenParam.valueAsString,
-          Type: "SecureString",
-          Overwrite: true,
-        },
-        physicalResourceId: cr.PhysicalResourceId.of("GithubTokenSecureParam"),
-      },
-      onDelete: {
-        service: "SSM",
-        action: "deleteParameter",
-        parameters: {
-          Name: "/minecraft/github-pat",
-        },
-      },
-      policy: cr.AwsCustomResourcePolicy.fromStatements([
-        new iam.PolicyStatement({
-          actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
-          resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/github-pat`],
-        }),
-      ]),
-    });
 
     const createSecureStringParameter = (id: string, parameterName: string, valueParameter: cdk.CfnParameter) => {
       new cr.AwsCustomResource(this, id, {
@@ -196,23 +153,132 @@ export class MinecraftStack extends cdk.Stack {
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")],
     });
 
-    // Add permissions to read/write SSM parameters (GitHub credentials, player count, startup trigger)
+    const repositoryRoot = path.resolve(__dirname, "../..");
+    const profileDirectory = resolveServerProfileDirectory(repositoryRoot);
+    const allowEmptyWhitelist = (process.env.MC_ALLOW_EMPTY_WHITELIST ?? "false").trim().toLowerCase();
+    if (allowEmptyWhitelist !== "true" && allowEmptyWhitelist !== "false") {
+      throw new Error("MC_ALLOW_EMPTY_WHITELIST must be exactly true or false when set.");
+    }
+    validateServerProfile(profileDirectory, { allowEmptyWhitelist: allowEmptyWhitelist === "true" });
+    const createArchiveAsset = (assetId: string, sourceDirectory: string, excludedBasenames: string[]) => {
+      const archive = execFileSync(
+        "python3",
+        [
+          "-c",
+          `import io,json,os,stat,sys,zipfile
+root=os.path.realpath(sys.argv[1]); excluded=set(json.loads(sys.argv[2])); output=io.BytesIO()
+with zipfile.ZipFile(output,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
+  for current,dirs,files in os.walk(root,followlinks=False):
+    dirs.sort(); files.sort()
+    for name in dirs+files:
+      source=os.path.join(current,name); mode=os.lstat(source).st_mode
+      if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)): raise SystemExit("asset contains link or special entry")
+    for name in files:
+      if name in excluded: continue
+      source=os.path.join(current,name); relative=os.path.relpath(source,root).replace(os.sep,"/")
+      info=zipfile.ZipInfo(relative,(2020,1,1,0,0,0)); info.create_system=3; info.external_attr=(os.stat(source).st_mode&0xffff)<<16
+      with open(source,"rb") as item: archive.writestr(info,item.read(),compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
+sys.stdout.buffer.write(output.getvalue())`,
+          sourceDirectory,
+          JSON.stringify(excludedBasenames),
+        ],
+        { encoding: "buffer", maxBuffer: 160 * 1024 * 1024 }
+      );
+      const digest = createHash("sha256").update(archive).digest("hex");
+      const generatedDirectory = path.resolve(cdk.Stage.of(this)?.outdir ?? "cdk.out", "mc-asset-archives");
+      fs.mkdirSync(generatedDirectory, { recursive: true, mode: 0o700 });
+      const archivePath = path.join(generatedDirectory, `${digest}.zip`);
+      if (!fs.existsSync(archivePath)) fs.writeFileSync(archivePath, archive, { mode: 0o600 });
+      return new s3assets.Asset(this, assetId, { path: archivePath });
+    };
+    // A prebuilt deterministic ZIP lets the manifest digest the exact bytes CDK publishes.
+    const runtimeAsset = createArchiveAsset("MinecraftRuntimeAsset", path.join(__dirname, "../src/ec2"), [
+      "user_data.sh",
+    ]);
+    const profileAsset = createArchiveAsset("MinecraftServerProfileAsset", profileDirectory, []);
+    const archiveSha256 = (asset: s3assets.Asset): string => {
+      const assemblyDirectory = cdk.Stage.of(this)?.outdir;
+      const archivePath = path.isAbsolute(asset.assetPath)
+        ? asset.assetPath
+        : path.resolve(assemblyDirectory ?? process.cwd(), asset.assetPath);
+      if (!fs.statSync(archivePath).isFile()) {
+        throw new Error(`Expected CDK file asset ${asset.node.path} to be one staged ZIP archive.`);
+      }
+      return createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex");
+    };
+    const profileManifestParameter = new ssm.StringParameter(this, "ServerProfileManifest", {
+      parameterName: "/minecraft/server-profile-manifest",
+      description: "Atomic content-addressed Minecraft runtime and server profile asset manifest",
+      stringValue: JSON.stringify({
+        version: 1,
+        runtime: {
+          uri: `s3://${runtimeAsset.s3BucketName}/${runtimeAsset.s3ObjectKey}`,
+          sha256: archiveSha256(runtimeAsset),
+        },
+        profile: {
+          uri: `s3://${profileAsset.s3BucketName}/${profileAsset.s3ObjectKey}`,
+          sha256: archiveSha256(profileAsset),
+        },
+      }),
+    });
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
-        actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
-        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`],
+        actions: ["s3:GetObject"],
+        resources: [
+          runtimeAsset.bucket.arnForObjects(runtimeAsset.s3ObjectKey),
+          profileAsset.bucket.arnForObjects(profileAsset.s3ObjectKey),
+        ],
       })
     );
 
-    // Add permission to decrypt (needed for SecureString)
-    // Narrowed to account-level KMS keys with encryption context limiting to /minecraft/* SSM parameters
+    const ec2ParameterArn = (name: string) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`;
+    const ec2ReadableParameters = [
+      "/minecraft/server-profile-manifest",
+      "/minecraft/resume-pending",
+      "/minecraft/gdrive-token",
+      "/minecraft/cloudflare-zone-id",
+      "/minecraft/cloudflare-domain",
+      "/minecraft/cloudflare-api-token",
+      "/minecraft/duckdns-domain",
+      "/minecraft/duckdns-token",
+      "/minecraft/verified-sender",
+      "/minecraft/notification-email",
+      "/minecraft/startup-triggered-by",
+    ];
+    const ec2EncryptedParameters = [
+      "/minecraft/gdrive-token",
+      "/minecraft/cloudflare-api-token",
+      "/minecraft/duckdns-token",
+    ];
+
+    // Runtime reads are exact; the content-addressed manifest is deliberately read-only.
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: ec2ReadableParameters.map(ec2ParameterArn),
+      })
+    );
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:PutParameter"],
+        resources: [ec2ParameterArn("/minecraft/player-count")],
+      })
+    );
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:DeleteParameter"],
+        resources: [ec2ParameterArn("/minecraft/startup-triggered-by")],
+      })
+    );
+
+    // Add permission to decrypt only the exact SecureString parameters read by root-owned helpers.
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         actions: ["kms:Decrypt"],
         resources: [`arn:aws:kms:${this.region}:${this.account}:key/*`],
         conditions: {
-          StringLike: {
-            "kms:EncryptionContext:PARAMETER_ARN": `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/*`,
+          StringEquals: {
+            "kms:EncryptionContext:PARAMETER_ARN": ec2EncryptedParameters.map(ec2ParameterArn),
           },
         },
       })
@@ -277,6 +343,7 @@ export class MinecraftStack extends cdk.Stack {
         },
       ],
     });
+    instance.node.addDependency(profileManifestParameter);
 
     // Propagate ownership tags to the initial root volume so lifecycle operations can prove ownership.
     const cfnInstance = instance.node.defaultChild as ec2.CfnInstance;
@@ -536,6 +603,7 @@ export class MinecraftStack extends cdk.Stack {
         resources: [
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/startup-triggered-by`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/resume-pending`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/operations/*`,
         ],
       })

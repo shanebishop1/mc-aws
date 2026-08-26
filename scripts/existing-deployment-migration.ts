@@ -303,6 +303,191 @@ export function assertInstanceUserDataTransition(
   }
 }
 
+const LEGACY_GITHUB_PARAMETER_NAMES = [
+  "/minecraft/github-user",
+  "/minecraft/github-repo",
+  "/minecraft/github-pat",
+] as const;
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: management, role, IAM, and KMS checks intentionally fail as one assertion.
+export function assertLegacyGithubUserDataDependenciesPreserved(
+  liveTemplate: CloudFormationTemplate,
+  currentTemplate: CloudFormationTemplate
+): void {
+  const liveInstance = resource(liveTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  const userData = JSON.stringify(liveInstance.Properties?.UserData ?? "");
+  const referenced = LEGACY_GITHUB_PARAMETER_NAMES.filter((name) => userData.includes(name));
+  if (!referenced.length) return;
+  const parsedSerializedCall = (value: unknown): JsonRecord | undefined => {
+    if (typeof value !== "string") return undefined;
+    try {
+      const parsed = JSON.parse(value);
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? (parsed as JsonRecord) : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+  const customResourcePreservesParameter = (candidate: JsonRecord, parameterName: string): boolean => {
+    return [candidate.Properties?.Create, candidate.Properties?.Update].every((operation) => {
+      const call = parsedSerializedCall(operation);
+      const parameters = call?.parameters;
+      if (!parameters || typeof parameters !== "object" || Array.isArray(parameters)) return false;
+      const input = parameters as JsonRecord;
+      return (
+        call?.service === "SSM" &&
+        call.action === "putParameter" &&
+        input.Name === parameterName &&
+        (parameterName !== "/minecraft/github-pat" || input.Type === "SecureString")
+      );
+    });
+  };
+  const managedParameter = (parameterName: string): JsonRecord | undefined =>
+    Object.values(currentTemplate.Resources).find((candidate) => {
+      if (candidate?.Type === "AWS::SSM::Parameter") return candidate.Properties?.Name === parameterName;
+      if (candidate?.Type !== "Custom::AWS") return false;
+      return customResourcePreservesParameter(candidate, parameterName);
+    });
+  const missingManagement = referenced.filter((name) => !managedParameter(name));
+  if (missingManagement.length) {
+    throw new Error(
+      `Legacy GitHub-dependent EC2 UserData references ${missingManagement.join(", ")}, but current CDK deletes those dependencies. Bridge/profile rollout refused to protect hibernate/resume and rebuild safety. Complete an explicit server-profile transition or retain the legacy parameters in a separately reviewed template before running pnpm migrate:existing.`
+    );
+  }
+
+  const instanceProfileReference = liveInstance.Properties?.IamInstanceProfile;
+  const profileLogicalId =
+    instanceProfileReference && typeof instanceProfileReference === "object" && !Array.isArray(instanceProfileReference)
+      ? instanceProfileReference.Ref
+      : undefined;
+  const profile =
+    typeof profileLogicalId === "string"
+      ? currentTemplate.Resources[profileLogicalId]
+      : Object.values(currentTemplate.Resources).find(
+          (candidate) =>
+            candidate?.Type === "AWS::IAM::InstanceProfile" &&
+            candidate?.Properties?.InstanceProfileName === instanceProfileReference
+        );
+  if (profile?.Type !== "AWS::IAM::InstanceProfile" || profile.Properties?.Roles?.length !== 1) {
+    throw new Error(
+      "Legacy GitHub dependency check could not resolve the EC2 instance role from the pending template."
+    );
+  }
+  const roleReference = profile.Properties.Roles[0];
+  const roleLogicalId = roleReference && typeof roleReference === "object" ? roleReference.Ref : undefined;
+  const role = typeof roleLogicalId === "string" ? currentTemplate.Resources[roleLogicalId] : undefined;
+  if (role?.Type !== "AWS::IAM::Role") {
+    throw new Error("Legacy GitHub dependency check could not resolve one template-managed EC2 instance role.");
+  }
+
+  const statements: JsonRecord[] = [];
+  for (const policy of role.Properties?.Policies ?? []) statements.push(...(policy?.PolicyDocument?.Statement ?? []));
+  for (const candidate of Object.values(currentTemplate.Resources)) {
+    if (
+      candidate?.Type === "AWS::IAM::Policy" &&
+      (candidate.Properties?.Roles ?? []).some((item: unknown) =>
+        Boolean(item && typeof item === "object" && (item as JsonRecord).Ref === roleLogicalId)
+      )
+    ) {
+      statements.push(...(candidate.Properties?.PolicyDocument?.Statement ?? []));
+    }
+  }
+  const actions = (statement: JsonRecord): string[] =>
+    (Array.isArray(statement.Action) ? statement.Action : [statement.Action]).filter(
+      (action): action is string => typeof action === "string"
+    );
+  const resources = (statement: JsonRecord): unknown[] =>
+    Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource];
+  const canonicalArnExpression = (value: unknown): string | undefined => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+    const record = value as JsonRecord;
+    if (typeof record["Fn::Sub"] === "string") return record["Fn::Sub"];
+    const join = record["Fn::Join"];
+    if (!Array.isArray(join) || join.length !== 2 || typeof join[0] !== "string" || !Array.isArray(join[1])) {
+      return undefined;
+    }
+    const parts = join[1].map((part): string | undefined => {
+      if (typeof part === "string") return part;
+      if (!part || typeof part !== "object" || Array.isArray(part)) return undefined;
+      const reference = (part as JsonRecord).Ref;
+      return typeof reference === "string" && reference.startsWith("AWS::") ? `\${${reference}}` : undefined;
+    });
+    return parts.some((part) => part === undefined) ? undefined : parts.join(join[0]);
+  };
+  const exactParameterResource = (value: unknown, name: string): boolean => {
+    const expression = canonicalArnExpression(value);
+    return expression === `arn:\${AWS::Partition}:ssm:\${AWS::Region}:\${AWS::AccountId}:parameter${name}`;
+  };
+  const actionMatches = (candidate: string, required: string): boolean => {
+    const escaped = candidate.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replaceAll("*", ".*");
+    return new RegExp(`^${escaped}$`, "i").test(required);
+  };
+  const allows = (action: string, resourceMatch: (value: unknown) => boolean): boolean =>
+    statements.some((statement) => {
+      const matchingResources = resources(statement).some(resourceMatch);
+      const matchingAction = actions(statement).some((candidate) => actionMatches(candidate, action));
+      return statement.Effect === "Allow" && statement.Condition === undefined && matchingAction && matchingResources;
+    }) &&
+    !statements.some((statement) => {
+      const matchingResources = resources(statement).some((value) => value === "*" || resourceMatch(value));
+      return (
+        statement.Effect === "Deny" &&
+        actions(statement).some((candidate) => actionMatches(candidate, action)) &&
+        matchingResources
+      );
+    });
+  const denied = referenced.filter(
+    (name) => !allows("ssm:GetParameter", (value) => exactParameterResource(value, name))
+  );
+  if (denied.length) {
+    throw new Error(
+      `Pending template does not grant the EC2 instance role exact ssm:GetParameter access to legacy dependency parameters: ${denied.join(", ")}.`
+    );
+  }
+
+  if (referenced.includes("/minecraft/github-pat")) {
+    const parameter = managedParameter("/minecraft/github-pat")!;
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: nested JSON custom-resource calls are traversed fail-closed.
+    const propertyValues = (value: unknown, key: string): unknown[] => {
+      if (typeof value === "string" && value.startsWith("{")) {
+        try {
+          return propertyValues(JSON.parse(value), key);
+        } catch {
+          return [];
+        }
+      }
+      if (!value || typeof value !== "object") return [];
+      if (Array.isArray(value)) return value.flatMap((item) => propertyValues(item, key));
+      const record = value as JsonRecord;
+      return [
+        ...(Object.hasOwn(record, key) ? [record[key]] : []),
+        ...Object.values(record).flatMap((item) => propertyValues(item, key)),
+      ];
+    };
+    const parameterTypes = propertyValues(parameter.Properties, "Type");
+    if (!parameterTypes.includes("SecureString")) {
+      throw new Error("Legacy /minecraft/github-pat must remain a SecureString in the pending template.");
+    }
+    const keyIds = propertyValues(parameter.Properties, "KeyId");
+    const usesDefaultSsmKey = keyIds.length === 0 || keyIds.every((key) => key === "alias/aws/ssm");
+    if (keyIds.some((key) => typeof key !== "string")) {
+      throw new Error("Legacy github-pat KMS KeyId semantics are dynamic or unclear; refusing the pending template.");
+    }
+    if (
+      !usesDefaultSsmKey &&
+      (!keyIds.every(
+        (key) =>
+          typeof key === "string" &&
+          /^arn:aws(?:-[a-z]+)*:kms:[a-z]{2}(?:-gov)?-[a-z]+-\d:\d{12}:key\/[A-Za-z0-9-]+$/.test(key)
+      ) ||
+        !keyIds.every((key) => allows("kms:Decrypt", (value) => value === key)))
+    ) {
+      throw new Error(
+        "EC2 instance role lacks kms:Decrypt access for the customer KMS key protecting legacy github-pat."
+      );
+    }
+  }
+}
+
 function deployedParameter(
   deployedParameters: JsonRecord[],
   parameterName: string
@@ -540,6 +725,7 @@ export function buildPinnedInstanceBridgeTemplate(
   const pinnedLive = pinDeployedInstanceImage(adoptedLive, deployedParameters, physicalImageId);
   const liveInstance = resource(pinnedLive.template, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
   resource(currentTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
+  assertLegacyGithubUserDataDependenciesPreserved(adoptedLive, currentTemplate);
 
   for (const legacyId of [LEGACY_RULE_SET_LOGICAL_ID, LEGACY_ACTIVATION_LOGICAL_ID]) {
     if (currentTemplate.Resources[legacyId]) {
@@ -833,7 +1019,8 @@ export function templatesEqual(left: unknown, right: unknown): boolean {
 
 export function assertStandardDeploymentInstanceSafe(
   liveTemplate: CloudFormationTemplate,
-  currentTemplate: CloudFormationTemplate
+  currentTemplate: CloudFormationTemplate,
+  actualUserData?: Uint8Array
 ): void {
   const liveInstance = resource(liveTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
   const currentInstance = resource(currentTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
@@ -842,6 +1029,15 @@ export function assertStandardDeploymentInstanceSafe(
     throw new Error(
       "Standard deployment blocked: the synthesized EC2 ImageId is dynamic or unpinned, so CloudFormation could re-resolve it and replace the live instance even when the template is unchanged. Use a reviewed pinned-instance bridge or pin the desired AMI explicitly."
     );
+  }
+  if (actualUserData) {
+    assertInstanceUserDataTransition(liveTemplate, liveTemplate, actualUserData);
+    assertLegacyGithubUserDataDependenciesPreserved(
+      adoptActualInstanceUserData(liveTemplate, actualUserData),
+      currentTemplate
+    );
+  } else {
+    assertLegacyGithubUserDataDependenciesPreserved(liveTemplate, currentTemplate);
   }
   if (!templatesEqual(liveInstance, currentInstance)) {
     throw new Error(

@@ -151,9 +151,6 @@ get_missing_required_credentials() {
     "ADMIN_EMAIL"
     "PANEL_HOSTING_MODE"
     "NEXT_PUBLIC_APP_URL"
-    "GITHUB_USER"
-    "GITHUB_REPO"
-    "GITHUB_TOKEN"
   )
   local missing=()
 
@@ -397,9 +394,7 @@ maybe_confirm_existing_credentials() {
     log "  PANEL_WORKERS_DEV_ENABLED=$PANEL_WORKERS_DEV_ENABLED"
   fi
   log "  NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL"
-  log "  GITHUB_USER=$GITHUB_USER"
-  log "  GITHUB_REPO=$GITHUB_REPO"
-  log "  GITHUB_TOKEN=$(mask_value "$GITHUB_TOKEN")"
+  log "  MC_SERVER_PROFILE_DIR=${MC_SERVER_PROFILE_DIR:-auto (server-profile when present, otherwise config)}"
   echo ""
 
   if is_tty; then
@@ -552,6 +547,14 @@ main() {
   fi
   success "AWS CLI + CDK detected"
 
+  # A clean clone must establish player access before collecting credentials or creating cloud resources.
+  load_env_file "$PRODUCTION_ENV_FILE" || true
+  if [[ -z "${MC_SERVER_PROFILE_DIR:-}" && ! -e "server-profile" && ! -L "server-profile" ]]; then
+    run_with_mise pnpm profile:init
+    error_exit "Created server-profile/. Add at least one Minecraft UUID/name to server-profile/whitelist.json, run 'pnpm profile:validate', then re-run ./setup.sh"
+  fi
+  run_with_mise pnpm profile:validate
+
   # Step 5: Run setup wizard (unless credentials already present)
   if [[ "${SKIP_WIZARD}" == "1" ]]; then
     step "Skipping interactive setup wizard"
@@ -618,11 +621,7 @@ main() {
     --stack-id "${existing_stack_id:-unknown}"
   success "Deployment ownership manifest initialized: $DEPLOYMENT_MANIFEST_FILE"
 
-  if [[ -z "${GITHUB_TOKEN:-}" ]]; then
-    error_exit "GITHUB_TOKEN is required for CDK deploy (used to seed SSM). Run the wizard and set it, then re-run ./setup.sh"
-  fi
-
-  cdk_parameters=(--parameters "GithubTokenParam=$GITHUB_TOKEN")
+  cdk_parameters=()
   if [[ -n "${CLOUDFLARE_DNS_API_TOKEN:-}" ]]; then
     cdk_parameters+=(--parameters "CloudflareTokenParam=$CLOUDFLARE_DNS_API_TOKEN")
   fi

@@ -120,6 +120,8 @@ describe("StartMinecraftServer environment contract", () => {
     parseCommandMock.mockReturnValue({ command: "start", args: [] });
     getSanitizedErrorMessageMock.mockReturnValue("Command execution failed. Check CloudWatch logs for details.");
     resolveResumeRestoreStrategyMock.mockReturnValue({ mode: "fresh" });
+    getParameterMock.mockResolvedValue(null);
+    executeSSMCommandMock.mockResolvedValue("resume complete");
   });
 
   it("does not require VERIFIED_SENDER for API start invocation", async () => {
@@ -134,6 +136,69 @@ describe("StartMinecraftServer environment contract", () => {
     expect(response).toEqual({ statusCode: 202, body: "Async command 'start' accepted" });
     expect(ensureInstanceRunningMock).toHaveBeenCalledWith("i-abc123");
     expect(putParameterMock).toHaveBeenCalledWith("/minecraft/startup-triggered-by", "user@example.com", "String");
+    expect(putParameterMock).not.toHaveBeenCalledWith(
+      "/minecraft/resume-pending",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("persists resume-pending before reconstruction and clears it only after command success", async () => {
+    resolveResumeRestoreStrategyMock.mockReturnValue({
+      mode: "named",
+      backupArchiveName: "nightly-2026.tar.gz",
+    });
+
+    await handler({
+      invocationType: "api",
+      instanceId: "i-abc123",
+      userEmail: "user@example.com",
+      command: "resume",
+      restoreMode: "named",
+      args: ["nightly-2026.tar.gz"],
+      operationId: "op-resume",
+    });
+
+    const pendingWrite = putParameterMock.mock.calls.find((call) => call[0] === "/minecraft/resume-pending");
+    expect(pendingWrite).toBeDefined();
+    expect(JSON.parse(pendingWrite?.[1])).toMatchObject({
+      version: 1,
+      mode: "named",
+      backupArchiveName: "nightly-2026.tar.gz",
+    });
+    expect(pendingWrite?.[3]).toBe(false);
+    expect(putParameterMock.mock.invocationCallOrder[1]).toBeLessThan(handleResumeMock.mock.invocationCallOrder[0]);
+    expect(executeSSMCommandMock).toHaveBeenCalledWith("i-abc123", [expect.stringContaining("bootstrap-complete")], {
+      maxAttempts: 285,
+      timeoutSeconds: 560,
+    });
+    expect(executeSSMCommandMock.mock.invocationCallOrder[0]).toBeLessThan(
+      deleteParameterMock.mock.invocationCallOrder[0]
+    );
+    expect(deleteParameterMock).toHaveBeenCalledWith("/minecraft/resume-pending");
+  });
+
+  it("refuses a stale resume marker without reconstructing or clearing it", async () => {
+    putParameterMock.mockImplementation(async (name: string) => {
+      if (name === "/minecraft/resume-pending") {
+        throw Object.assign(new Error("already exists"), { name: "ParameterAlreadyExists" });
+      }
+    });
+
+    await handler({
+      invocationType: "api",
+      instanceId: "i-abc123",
+      userEmail: "user@example.com",
+      command: "resume",
+      restoreMode: "latest",
+      operationId: "op-stale-resume",
+    });
+
+    expect(handleResumeMock).not.toHaveBeenCalled();
+    expect(executeSSMCommandMock).not.toHaveBeenCalled();
+    expect(deleteParameterMock).not.toHaveBeenCalledWith("/minecraft/resume-pending");
+    expect(getParameterMock).not.toHaveBeenCalledWith("/minecraft/resume-pending");
+    expect(updateOperationStateMock).toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
   });
 
   it("returns clear error for email invocation when inbound commands are disabled", async () => {

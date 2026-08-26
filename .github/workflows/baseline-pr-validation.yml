@@ -172,8 +172,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:
-      GITHUB_USER: ci-validation
-      GITHUB_REPO: mc-aws
       # Offline synthesis validates literal pinning without selecting a deployable image.
       AL2023_ARM64_AMI_ID: ami-11111111111111111
     steps:
@@ -231,6 +229,8 @@ jobs:
       - name: Synthesize CDK application
         # --quiet prevents the synthesized template's infrastructure metadata
         # from being copied into the public Actions log.
+        env:
+          MC_ALLOW_EMPTY_WHITELIST: "true"
         run: pnpm cdk:synth --quiet --no-lookups
 
       - name: Validate tracked shell syntax

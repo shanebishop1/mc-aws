@@ -15,6 +15,7 @@ import {
   adoptActualInstanceUserData,
   assertExclusiveTaggingAcknowledged,
   assertInstanceUserDataTransition,
+  assertLegacyGithubUserDataDependenciesPreserved,
   assertLegacyResourcesRetained,
   assertOwnershipTagsComplete,
   assertPinnedInstanceImageTransition,
@@ -233,16 +234,20 @@ function inspectOwnership(identity: StackIdentity): OwnershipInspection {
   return inspectInstanceAndRootVolume(identity, instanceId, instanceResponse, volumeResponse);
 }
 
-function actualInstanceUserData(identity: StackIdentity, inspection: OwnershipInspection): Buffer {
+function actualInstanceUserDataForInstance(identity: StackIdentity, instanceId: string): Buffer {
   const response = aws(identity.region, [
     "ec2",
     "describe-instance-attribute",
     "--instance-id",
-    inspection.instanceId,
+    instanceId,
     "--attribute",
     "userData",
   ]);
-  return decodeInstanceUserDataAttribute(inspection.instanceId, response);
+  return decodeInstanceUserDataAttribute(instanceId, response);
+}
+
+function actualInstanceUserData(identity: StackIdentity, inspection: OwnershipInspection): Buffer {
+  return actualInstanceUserDataForInstance(identity, inspection.instanceId);
 }
 
 function synthesizeCurrentTemplate(identity: StackIdentity, assemblyDirectory: string): CloudFormationTemplate {
@@ -542,6 +547,7 @@ function prepareBridge(
         true
       );
       assertInstanceUserDataTransition(adoptedLive, pendingTemplate, userData);
+      assertLegacyGithubUserDataDependenciesPreserved(adoptedLive, pendingTemplate);
     } catch (error) {
       aws(identity.region, [
         "cloudformation",
@@ -590,6 +596,7 @@ function executeBridge(
   const pendingTemplate = getChangeSetTemplate(identity, changeSet.ChangeSetId);
   assertPinnedInstanceImageTransition(live, pendingTemplate, changeSet.Parameters ?? [], inspection.imageId, true);
   assertInstanceUserDataTransition(live, pendingTemplate, originalUserData);
+  assertLegacyGithubUserDataDependenciesPreserved(live, pendingTemplate);
   const originalInstanceId = inspection.instanceId;
   const originalVolumeId = inspection.rootVolumeId;
   const originalImageId = inspection.imageId;
@@ -649,8 +656,9 @@ function assertStandardDeploySafe(options: Options): void {
   }
   const assemblyDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-deploy-guard-"));
   try {
+    const actualUserData = actualInstanceUserDataForInstance(identity, physicalInstanceId(identity));
     const current = synthesizeCurrentTemplate(identity, assemblyDirectory);
-    assertStandardDeploymentInstanceSafe(live, current);
+    assertStandardDeploymentInstanceSafe(live, current, actualUserData);
   } finally {
     rmSync(assemblyDirectory, { recursive: true, force: true });
   }

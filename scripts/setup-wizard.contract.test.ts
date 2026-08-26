@@ -24,6 +24,14 @@ describe("setup-wizard email optional contract", () => {
   });
 });
 
+describe("setup-wizard server profile contract", () => {
+  it("does not collect or persist GitHub deployment credentials", () => {
+    const source = readFileSync(setupWizardPath, "utf8");
+    expect(source).not.toMatch(/collect_github_settings|write_env_files "GITHUB_(?:USER|REPO|TOKEN)"/);
+    expect(source).toContain('step_section 8 "Optional: Google Drive Backups"');
+  });
+});
+
 describe("setup-wizard panel hosting contract", () => {
   it("collects panel hosting independently from Minecraft DNS", () => {
     const source = readFileSync(setupWizardPath, "utf8");
