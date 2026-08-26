@@ -238,7 +238,7 @@ Operations:
 
 - [Operations Guide](docs/OPERATIONS_GUIDE.md)
 - [Ownership-Aware Teardown](docs/TEARDOWN.md)
-- [API Reference](docs/docs/API.md)
+- [API Reference](docs/API.md)
 
 Development:
 
