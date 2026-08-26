@@ -218,6 +218,18 @@ get_missing_required_credentials() {
   fi
 }
 
+ensure_al2023_ami_pin() {
+  local pinned_ami
+  if ! pinned_ami="$(run_with_mise pnpm exec tsx scripts/pin-al2023-ami.ts ensure \
+    --region "$CDK_DEFAULT_REGION" \
+    --env-file "$PRODUCTION_ENV_FILE" \
+    --env-file "$LOCAL_ENV_FILE")"; then
+    return 1
+  fi
+  AL2023_ARM64_AMI_ID="$pinned_ami"
+  export AL2023_ARM64_AMI_ID
+}
+
 resolve_minecraft_connection_mode() {
   case "${MC_CONNECTION_MODE:-}" in
     cloudflare|duckdns|raw_ip)
@@ -312,7 +324,8 @@ print_deployment_preflight() {
   log "  Region, usage, snapshots, data transfer, requests, optional services, and pricing changes add cost."
   echo ""
   log "Teardown: run 'pnpm destroy' to preview, then 'pnpm destroy:execute' after reviewing the inventory."
-  log "AWS backups/snapshots may be retained and billed until you remove them deliberately."
+  log "Default teardown relies on separately verified Google Drive backups and creates no snapshot."
+  log "An explicitly requested final EBS snapshot is retained and billed until you remove it deliberately."
   echo ""
 
   local confirmation=""
@@ -564,6 +577,12 @@ main() {
   if ! ensure_cdk_defaults; then
     error_exit "AWS CLI credentials are unavailable. Run 'aws sso login' (recommended) or configure local deployment credentials, then re-run ./setup.sh"
   fi
+
+  step "Resolving immutable Amazon Linux 2023 image"
+  if ! ensure_al2023_ami_pin; then
+    error_exit "Could not validate or persist the exact ARM64 Amazon Linux 2023 AMI pin. Existing pins are never refreshed automatically; use the reviewed pnpm ami:upgrade workflow for an intentional change."
+  fi
+  success "Validated exact ARM64 AL2023 AMI pin: $AL2023_ARM64_AMI_ID"
 
   # Step 6: Deploy AWS infrastructure (CDK)
   step "Deploying AWS infrastructure (CDK)"

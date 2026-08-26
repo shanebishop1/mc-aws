@@ -219,7 +219,13 @@ function validateManifest(manifest) {
 
   assertKeys(
     manifest.teardown,
-    ["completedResources", "finalRootSnapshot", "pendingFinalRootSnapshot", "hibernatedBackupEvidence"],
+    [
+      "completedResources",
+      "finalRootSnapshot",
+      "pendingFinalRootSnapshot",
+      "hibernatedBackupEvidence",
+      "googleDriveBackupEvidence",
+    ],
     "manifest.teardown"
   );
   if (!Array.isArray(manifest.teardown.completedResources))
@@ -270,6 +276,20 @@ function validateManifest(manifest) {
     if (!Number.isSafeInteger(evidence.cacheCachedAt) || evidence.cacheCachedAt < 1)
       fail("hibernated backup cachedAt is invalid");
     assertString(evidence.observedAt, /^\d{4}-\d{2}-\d{2}T/, "manifest.teardown.hibernatedBackupEvidence.observedAt");
+  }
+  if (manifest.teardown.googleDriveBackupEvidence !== undefined) {
+    const evidence = manifest.teardown.googleDriveBackupEvidence;
+    assertKeys(
+      evidence,
+      ["parameterName", "backupCount", "cacheCachedAt", "observedAt"],
+      "manifest.teardown.googleDriveBackupEvidence"
+    );
+    if (evidence.parameterName !== "/minecraft/backups-cache") fail("invalid Google Drive backup parameter");
+    if (!Number.isInteger(evidence.backupCount) || evidence.backupCount < 1)
+      fail("Google Drive backup evidence is empty");
+    if (!Number.isSafeInteger(evidence.cacheCachedAt) || evidence.cacheCachedAt < 1)
+      fail("Google Drive backup cachedAt is invalid");
+    assertString(evidence.observedAt, /^\d{4}-\d{2}-\d{2}T/, "manifest.teardown.googleDriveBackupEvidence.observedAt");
   }
 
   const forbidden = /(^|_)(secret|token|password|private.?key|credential)(_|$)/i;
@@ -431,11 +451,30 @@ switch (command) {
       dlmPolicies: manifest.aws.dlmPolicies || [],
     };
     if (stackState === "absent") {
+      const completed = new Set(manifest.teardown.completedResources);
+      const completedCloudTeardown = [
+        "cloudflare-routes",
+        "cloudflare-worker",
+        "cloudflare-kv",
+        "cloudflare-dns",
+        "cloudformation-stack",
+      ].every((resource) => completed.has(resource));
+      if (completedCloudTeardown) {
+        // A fully verified teardown makes prior route/DNS observations historical.
+        // Re-inventory them on rebuild, preserve only live pre-existing KV identities,
+        // and discard IDs for project-created namespaces that teardown deleted.
+        manifest.cloudflare.routes = [];
+        manifest.cloudflare.panelDnsRecords = [];
+        manifest.cloudflare.kvNamespaces = manifest.cloudflare.kvNamespaces.filter(
+          (namespace) => !namespace.createdByProject
+        );
+      }
       manifest.aws.instanceId = undefined;
       manifest.aws.runtimeIam = undefined;
       manifest.teardown.finalRootSnapshot = undefined;
       manifest.teardown.pendingFinalRootSnapshot = undefined;
       manifest.teardown.hibernatedBackupEvidence = undefined;
+      manifest.teardown.googleDriveBackupEvidence = undefined;
       manifest.teardown.completedResources = [];
     }
     break;
@@ -595,6 +634,21 @@ switch (command) {
       state: "completed",
       createdAt: required(args, "created-at"),
     };
+    manifest.teardown.pendingFinalRootSnapshot = undefined;
+    manifest.teardown.hibernatedBackupEvidence = undefined;
+    manifest.teardown.googleDriveBackupEvidence = undefined;
+    break;
+  }
+  case "google-drive-backup": {
+    const backupCount = Number(required(args, "backup-count"));
+    const cacheCachedAt = Number(required(args, "cached-at"));
+    manifest.teardown.googleDriveBackupEvidence = {
+      parameterName: "/minecraft/backups-cache",
+      backupCount,
+      cacheCachedAt,
+      observedAt: required(args, "observed-at"),
+    };
+    manifest.teardown.finalRootSnapshot = undefined;
     manifest.teardown.pendingFinalRootSnapshot = undefined;
     manifest.teardown.hibernatedBackupEvidence = undefined;
     break;

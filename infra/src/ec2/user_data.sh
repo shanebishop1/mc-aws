@@ -29,7 +29,7 @@ dnf update -y
 rpm --import https://yum.corretto.aws/corretto.key
 curl -L -o /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
 
-# 3. Install Java 21, unzip, git, Python3 & pip3, and cron
+# 3. Install Java 21, unzip, git, Python3 & pip3, and cron
 log "Installing Java, Git, Python, pip, cron, rsync, jq (core deps)..."
 dnf install -y java-21-amazon-corretto-devel unzip git python3 python3-pip cronie rsync screen jq
 log "Installing rclone (upstream binary)..."

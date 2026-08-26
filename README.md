@@ -210,7 +210,7 @@ Start with the non-mutating live inventory:
 pnpm destroy
 ```
 
-The ownership-aware teardown uses the ignored `.mc-aws-deployment.json` written by setup, refuses stale/same-name ownership, preserves pre-existing resources, gracefully stops a running Minecraft/EC2 instance, and only then creates a final root-volume snapshot before deleting the exact recorded CloudFormation StackId. It never automatically deletes snapshots. Read [Ownership-Aware Teardown](docs/TEARDOWN.md) before running `pnpm destroy:execute`.
+The ownership-aware teardown uses the ignored `.mc-aws-deployment.json` written by setup, refuses stale/same-name ownership, preserves pre-existing resources, and gracefully stops a running Minecraft/EC2 instance before deleting the exact recorded CloudFormation StackId. Its default Google Drive durability mode requires cached backup evidence and creates no EBS snapshot; `pnpm destroy:execute:snapshot` is the explicit retained-snapshot alternative. It never deletes Google Drive data or existing snapshots. Read [Ownership-Aware Teardown](docs/TEARDOWN.md) before execution.
 
 ## Cost Notes
 

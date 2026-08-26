@@ -37,14 +37,14 @@ const sesEnvironmentNames = [
   "START_KEYWORD",
 ] as const;
 
-const stackEnvironmentNames = [...sesEnvironmentNames, "GDRIVE_REMOTE", "GDRIVE_ROOT"] as const;
+const stackEnvironmentNames = [...sesEnvironmentNames, "GDRIVE_REMOTE", "GDRIVE_ROOT", "AL2023_ARM64_AMI_ID"] as const;
 
 const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironmentNames)[number], string>> = {}) => {
   const previousEnvironment = Object.fromEntries(stackEnvironmentNames.map((name) => [name, process.env[name]]));
   for (const name of stackEnvironmentNames) {
     delete process.env[name];
   }
-  Object.assign(process.env, stackEnvironment);
+  Object.assign(process.env, { AL2023_ARM64_AMI_ID: `ami-${"1".repeat(17)}`, ...stackEnvironment });
 
   const app = new cdk.App();
   const account = "111111111111";
@@ -87,6 +87,14 @@ const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironme
 };
 
 describe("minecraft-stack user data shell quoting", () => {
+  it("keeps synthesized UserData ASCII-stable across CloudFormation GetTemplate", () => {
+    const template = synthesizeStack();
+    const instance = Object.values(template.findResources("AWS::EC2::Instance"))[0];
+    const userData = instance.Properties.UserData["Fn::Base64"] as string;
+
+    expect([...userData].every((character) => character.codePointAt(0)! <= 0x7f)).toBe(true);
+  });
+
   it("synthesizes Drive settings as literal data instead of executable shell syntax", () => {
     const rootDir = mkdtempSync(path.join(os.tmpdir(), "mc-user-data-shell-quote-"));
     const markerPath = path.join(rootDir, "injected");
@@ -262,6 +270,24 @@ describe("minecraft-stack lifecycle Lambda IAM contract", () => {
         { Key: "McAwsStack", Value: "MinecraftStack" },
       ]),
     });
+  });
+});
+
+describe("minecraft-stack immutable AMI contract", () => {
+  it("synthesizes the exact configured AMI without a latest-SSM parameter", () => {
+    const imageId = `ami-${"a".repeat(17)}`;
+    const template = synthesizeStack({ AL2023_ARM64_AMI_ID: imageId }).toJSON();
+    const instance = Object.values(
+      template.Resources as Record<string, { Type: string; Properties: Record<string, unknown> }>
+    ).find((resource) => resource.Type === "AWS::EC2::Instance");
+
+    expect(instance?.Properties.ImageId).toBe(imageId);
+    expect(JSON.stringify(template)).not.toContain("ami-amazon-linux-latest");
+    expect(JSON.stringify(template.Parameters ?? {})).not.toContain("AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>");
+  });
+
+  it("fails synthesis without an exact AMI pin", () => {
+    expect(() => synthesizeStack({ AL2023_ARM64_AMI_ID: "latest" })).toThrow("must be an exact setup-managed AMI ID");
   });
 });
 

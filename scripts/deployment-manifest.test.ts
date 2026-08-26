@@ -171,6 +171,96 @@ describe("deployment ownership manifest transitions", () => {
     ).toBe(0);
   });
 
+  it("resets fully torn-down Cloudflare identities so one-shot rebuild can re-inventory them", () => {
+    const test = harness();
+    const runOk = (args: string[]) => expect(test.run(args).status).toBe(0);
+    runOk([
+      "aws-init",
+      "--account",
+      account,
+      "--region",
+      region,
+      "--stack",
+      stack,
+      "--stack-state",
+      "absent",
+      "--stack-id",
+      "unknown",
+    ]);
+    runOk([
+      "cloudflare-init",
+      "--account",
+      cfAccount,
+      "--worker",
+      "mc-aws-panel",
+      "--worker-state",
+      "absent",
+      "--live-deployment",
+      "none",
+      "--mode",
+      "custom",
+      "--workers-dev",
+      "false",
+    ]);
+    runOk(["cloudflare-deployed", "--deployment-id", deploymentId]);
+    runOk([
+      "route",
+      "--zone",
+      "b".repeat(32),
+      "--id",
+      "c".repeat(32),
+      "--pattern",
+      "panel.example.com/*",
+      "--script",
+      "mc-aws-panel",
+      "--ownership",
+      "created",
+    ]);
+    runOk(["kv", "--binding", "OWNED_KV", "--id", "d".repeat(32), "--title", "owned-kv", "--ownership", "created"]);
+    runOk([
+      "kv",
+      "--binding",
+      "PRESERVED_KV",
+      "--id",
+      "e".repeat(32),
+      "--title",
+      "preserved-kv",
+      "--ownership",
+      "preexisting",
+    ]);
+    for (const resource of [
+      "cloudflare-routes",
+      "cloudflare-worker",
+      "cloudflare-kv",
+      "cloudflare-dns",
+      "cloudformation-stack",
+    ]) {
+      runOk(["mark-complete", "--resource", resource]);
+    }
+    runOk([
+      "aws-init",
+      "--account",
+      account,
+      "--region",
+      region,
+      "--stack",
+      stack,
+      "--stack-state",
+      "absent",
+      "--stack-id",
+      "unknown",
+    ]);
+
+    const cloudflare = test.read().cloudflare as {
+      routes: unknown[];
+      panelDnsRecords: unknown[];
+      kvNamespaces: Array<{ binding: string }>;
+    };
+    expect(cloudflare.routes).toEqual([]);
+    expect(cloudflare.panelDnsRecords).toEqual([]);
+    expect(cloudflare.kvNamespaces).toEqual([expect.objectContaining({ binding: "PRESERVED_KV" })]);
+  });
+
   it("allows an exact proven preexisting-to-created route ID replacement", () => {
     const test = harness();
     expect(

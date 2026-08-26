@@ -78,4 +78,13 @@ describe("Worker secret upload entries", () => {
     expect(output).not.toContain("CLOUDFLARE_DNS_API_TOKEN");
     expect(output).not.toContain("CLOUDFLARE_API_TOKEN");
   });
+
+  it("treats the exact setup-managed AMI pin as deploy-only metadata", () => {
+    const entries = buildWorkerSecretUploadEntries(
+      `AUTH_SECRET=selected-file-secret\nAL2023_ARM64_AMI_ID=ami-${"1".repeat(17)}\n`
+    );
+
+    expect(entries).toContainEqual({ key: "AUTH_SECRET", value: "selected-file-secret" });
+    expect(entries.some(({ key }) => key === "AL2023_ARM64_AMI_ID")).toBe(false);
+  });
 });

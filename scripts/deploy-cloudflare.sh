@@ -138,7 +138,7 @@ manifest_route_state() {
 }
 
 is_worker_not_found_output() {
-  [[ "$1" =~ (^|[^0-9])10090([^0-9]|$) ]]
+  [[ "$1" =~ (^|[^0-9])(10007|10090)([^0-9]|$) ]]
 }
 
 deployment_id_from_status_json() {
@@ -278,7 +278,7 @@ get_kv_namespace_title() {
   local namespace_id="$1"
   local namespaces_json
   if ! namespaces_json="$(wrangler --config /dev/null kv namespace list 2>/dev/null)"; then
-    return 1
+    return 2
   fi
 
   printf '%s' "$namespaces_json" | node -e '
@@ -312,6 +312,36 @@ ensure_runtime_state_kv_namespace_ids() {
 
   local runtime_state_snapshot_kv_preview_id
   runtime_state_snapshot_kv_preview_id="$(get_env_value "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID")"
+
+  local namespace_title probe_status
+  if is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_id"; then
+    if namespace_title="$(get_kv_namespace_title "$runtime_state_snapshot_kv_id")"; then
+      :
+    else
+      probe_status="$?"
+      if [[ "$probe_status" -eq 2 ]]; then
+        echo "❌ Error: Cloudflare KV inventory failed while validating RUNTIME_STATE_SNAPSHOT_KV_ID"
+        exit 1
+      fi
+      echo "🔁 Recorded runtime-state KV namespace is absent; creating a replacement"
+      runtime_state_snapshot_kv_id=""
+      update_env_value "RUNTIME_STATE_SNAPSHOT_KV_ID" ""
+    fi
+  fi
+  if is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_preview_id"; then
+    if namespace_title="$(get_kv_namespace_title "$runtime_state_snapshot_kv_preview_id")"; then
+      :
+    else
+      probe_status="$?"
+      if [[ "$probe_status" -eq 2 ]]; then
+        echo "❌ Error: Cloudflare KV inventory failed while validating RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"
+        exit 1
+      fi
+      echo "🔁 Recorded preview KV namespace is absent; creating a replacement"
+      runtime_state_snapshot_kv_preview_id=""
+      update_env_value "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID" ""
+    fi
+  fi
 
   if is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_id" &&
     { [[ -z "$runtime_state_snapshot_kv_preview_id" ]] || is_cloudflare_kv_namespace_id "$runtime_state_snapshot_kv_preview_id"; }; then
@@ -1020,6 +1050,24 @@ prune_obsolete_worker_secrets_bulk() {
   record_worker_deployment_identity
 }
 
+provider_secret_deletion_patch() {
+  case "$(get_env_value "MC_CONNECTION_MODE")" in
+    cloudflare)
+      printf '%s' '{"DUCKDNS_DOMAIN":null,"DUCKDNS_TOKEN":null}'
+      ;;
+    duckdns)
+      printf '%s' '{"CLOUDFLARE_DNS_API_TOKEN":null,"CLOUDFLARE_ZONE_ID":null,"CLOUDFLARE_RECORD_ID":null,"CLOUDFLARE_MC_DOMAIN":null}'
+      ;;
+    raw_ip)
+      printf '%s' '{"CLOUDFLARE_DNS_API_TOKEN":null,"CLOUDFLARE_ZONE_ID":null,"CLOUDFLARE_RECORD_ID":null,"CLOUDFLARE_MC_DOMAIN":null,"DUCKDNS_DOMAIN":null,"DUCKDNS_TOKEN":null}'
+      ;;
+    *)
+      echo "❌ Error: MC_CONNECTION_MODE is invalid while pruning provider secrets" >&2
+      return 1
+      ;;
+  esac
+}
+
 SECRET_COUNT=0
 if ! SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
   echo "❌ Error: Failed to parse approved Worker secrets from $ENV_FILE"
@@ -1053,6 +1101,16 @@ if [[ -z "$(get_env_value "AWS_ACCOUNT_ID")" && -n "$(get_env_value "CDK_DEFAULT
 fi
 
 echo "✅ Secrets uploaded ($SECRET_COUNT secrets)"
+echo ""
+
+echo "🧹 Pruning secrets for inactive Minecraft DNS providers..."
+if ! PROVIDER_SECRET_DELETION_PATCH="$(provider_secret_deletion_patch)" || \
+  ! retry 3 prune_obsolete_worker_secrets_bulk "$PROVIDER_SECRET_DELETION_PATCH"; then
+  echo "❌ Error: Failed to prune inactive Minecraft DNS provider secrets"
+  exit 1
+fi
+unset PROVIDER_SECRET_DELETION_PATCH
+echo "✅ Inactive Minecraft DNS provider secrets pruned"
 echo ""
 
 # Wrangler v4 secret bulk uses RFC 7396 merge-patch semantics: included null

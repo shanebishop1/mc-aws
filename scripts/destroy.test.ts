@@ -26,6 +26,7 @@ interface MockState {
   stackId: string;
   stackDescribeCount: number;
   stackFinalFailure: boolean;
+  deletedStackDescribable: boolean;
   replaceStackAfterInventory: boolean;
   user: boolean;
   userTags: Record<string, string>;
@@ -35,6 +36,7 @@ interface MockState {
   worker: boolean;
   workerDeployments: string[];
   workerFinalFailure: boolean;
+  workerNotFoundCode: number;
   secrets: string[];
   kv: Array<{ id: string; title: string }>;
   routes: Array<{ id: string; pattern: string; script: string }>;
@@ -74,6 +76,7 @@ const baseState = (): MockState => ({
   stackId,
   stackDescribeCount: 0,
   stackFinalFailure: false,
+  deletedStackDescribable: false,
   replaceStackAfterInventory: false,
   user: true,
   userTags: {
@@ -87,6 +90,7 @@ const baseState = (): MockState => ({
   worker: true,
   workerDeployments: [workerDeploymentId],
   workerFinalFailure: false,
+  workerNotFoundCode: 10090,
   secrets: ["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY"],
   kv: [{ id: kvId, title: "mc-aws-runtime-state" }],
   routes: [],
@@ -179,8 +183,9 @@ if (tool === "aws") {
     save();
     const requested = args[args.indexOf("--stack-name") + 1];
     if (!state.stack && state.stackFinalFailure) fail("AccessDenied: cloudformation DescribeStacks denied");
-    if (!state.stack || (requested.startsWith("arn:") && requested !== state.stackId)) fail("ValidationError: Stack does not exist");
-    output({ Stacks: [{ StackId: state.stackId }] });
+    if (!state.stack && state.deletedStackDescribable && requested === state.stackId) output({ Stacks: [{ StackId: state.stackId, StackStatus: "DELETE_COMPLETE" }] });
+    else if (!state.stack || (requested.startsWith("arn:") && requested !== state.stackId)) fail("ValidationError: Stack does not exist");
+    else output({ Stacks: [{ StackId: state.stackId }] });
   } else if (service === "cloudformation" && command === "delete-stack") {
     const requested = args[args.indexOf("--stack-name") + 1];
     if (!state.stack || requested !== state.stackId) fail("ValidationError: Stack does not exist");
@@ -275,7 +280,7 @@ if (tool === "aws") {
   if (joined.includes("whoami")) output("Account ID: " + cfAccountId);
   else if (joined.includes("deployments status")) {
     if (state.workerFinalFailure && !state.worker) fail("AccessDenied: code 10000");
-    if (!state.worker) fail("Worker API error code 10090");
+    if (!state.worker) fail("Worker API error code " + state.workerNotFoundCode);
     output({ id: state.workerDeployments[0] });
   } else if (joined.includes("kv namespace list")) output(state.kv);
   else if (joined.includes("secret list")) { mutate("wrangler:secret-list"); output(state.secrets.map((name) => ({ name, type: "secret_text" }))); }
@@ -371,9 +376,30 @@ describe("ownership-aware destroy", () => {
     expect(harness.readState().mutations).toEqual([]);
   });
 
-  it("creates, waits for, verifies, and records a final root snapshot before exact StackId deletion", () => {
+  it("defaults execution to Google Drive evidence without retaining a new EBS snapshot", () => {
     const harness = makeHarness();
     const result = harness.run(["--execute"], confirmation);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("Data preservation:    google-drive");
+    expect(harness.readState().mutations.some((entry) => entry.startsWith("ec2:create-snapshot"))).toBe(false);
+    expect(harness.readState().mutations).toContain(`cloudformation:stack-deleted:${stackId}`);
+    expect((harness.readManifest().teardown as Record<string, unknown>).googleDriveBackupEvidence).toMatchObject({
+      parameterName: "/minecraft/backups-cache",
+      backupCount: 1,
+      cacheCachedAt: 1_769_000_000_000,
+    });
+  }, 20_000);
+
+  it("accepts exact DELETE_COMPLETE stack history and current Wrangler 10007 Worker absence", () => {
+    const harness = makeHarness({ deletedStackDescribable: true, workerNotFoundCode: 10007 });
+    const result = harness.run(["--execute"], confirmation);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain("DELETE_COMPLETE (retained API history only)");
+  }, 20_000);
+
+  it("creates, waits for, verifies, and records a final root snapshot before exact StackId deletion", () => {
+    const harness = makeHarness();
+    const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const state = harness.readState();
     expect(state.mutations).toContain(`ec2:create-snapshot:${snapshotId}`);
@@ -391,7 +417,7 @@ describe("ownership-aware destroy", () => {
 
   it("blocks stack deletion when final snapshot creation fails", () => {
     const harness = makeHarness({ snapshotCreateFails: true });
-    const result = harness.run(["--execute"], confirmation);
+    const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("blocking CloudFormation stack deletion");
     expect(harness.readState().mutations.some((entry) => entry.startsWith("cloudformation:delete-stack"))).toBe(false);
@@ -401,7 +427,7 @@ describe("ownership-aware destroy", () => {
     "quiesces Minecraft and stops a %s instance before creating the snapshot",
     (state) => {
       const harness = makeHarness({ instanceState: state });
-      const result = harness.run(["--execute"], confirmation);
+      const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
       expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
       const mutations = harness.readState().mutations;
       const quiesceIndex = mutations.indexOf("ssm:quiesce-minecraft");
@@ -437,7 +463,7 @@ describe("ownership-aware destroy", () => {
 
   it("resumes a failed snapshot wait without creating a duplicate snapshot", () => {
     const harness = makeHarness({ snapshotWaitFails: true });
-    const first = harness.run(["--execute"], confirmation);
+    const first = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(first.status).not.toBe(0);
     expect(harness.readState().mutations.filter((entry) => entry.startsWith("ec2:create-snapshot"))).toHaveLength(1);
     expect((harness.readManifest().teardown as Record<string, unknown>).pendingFinalRootSnapshot).toMatchObject({
@@ -446,7 +472,7 @@ describe("ownership-aware destroy", () => {
       state: "pending",
     });
     harness.updateState({ snapshotWaitFails: false });
-    const retry = harness.run(["--execute"], confirmation);
+    const retry = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(retry.status, `${retry.stdout}\n${retry.stderr}`).toBe(0);
     expect(harness.readState().mutations.filter((entry) => entry.startsWith("ec2:create-snapshot"))).toHaveLength(1);
     const teardown = harness.readManifest().teardown as Record<string, unknown>;
@@ -462,7 +488,7 @@ describe("ownership-aware destroy", () => {
     });
     const result = harness.run(["--execute"], confirmation);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("lacks non-empty backups and a valid cachedAt");
+    expect(result.stderr).toContain("requires non-empty backup cache evidence with a valid cachedAt");
     expect(harness.readState().mutations.some((entry) => entry.startsWith("cloudformation:delete-stack"))).toBe(false);
 
     const invalidTimestamp = makeHarness({
@@ -480,7 +506,7 @@ describe("ownership-aware destroy", () => {
     const result = harness.run(["--execute"], confirmation);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(harness.readState().mutations.some((entry) => entry.startsWith("ec2:create-snapshot"))).toBe(false);
-    expect((harness.readManifest().teardown as Record<string, unknown>).hibernatedBackupEvidence).toMatchObject({
+    expect((harness.readManifest().teardown as Record<string, unknown>).googleDriveBackupEvidence).toMatchObject({
       parameterName: "/minecraft/backups-cache",
       backupCount: 1,
       cacheCachedAt: 1_769_000_000_000,
@@ -665,7 +691,7 @@ describe("ownership-aware destroy", () => {
 
   it("creates a fresh snapshot after stack deletion failure and remains idempotent", () => {
     const harness = makeHarness({ failStackDeleteWaitOnce: true });
-    const first = harness.run(["--execute"], confirmation);
+    const first = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(first.status).not.toBe(0);
     expect(harness.readState().mutations.filter((entry) => entry.startsWith("ec2:create-snapshot"))).toEqual([
       `ec2:create-snapshot:${snapshotId}`,
@@ -675,7 +701,7 @@ describe("ownership-aware destroy", () => {
       state: "completed",
     });
 
-    const retry = harness.run(["--execute"], confirmation);
+    const retry = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(retry.status, `${retry.stdout}\n${retry.stderr}`).toBe(0);
     const state = harness.readState();
     expect(state.mutations.filter((entry) => entry.startsWith("ec2:create-snapshot"))).toEqual([
@@ -701,7 +727,7 @@ describe("ownership-aware destroy", () => {
     expect(secondSnapshotIndex).toBeLessThan(deleteIndexes[1]);
 
     const mutationCount = state.mutations.length;
-    expect(harness.run(["--execute"], confirmation).status).toBe(0);
+    expect(harness.run(["--execute", "--retain-final-snapshot"], confirmation).status).toBe(0);
     expect(harness.readState().mutations).toHaveLength(mutationCount);
   }, 50_000);
 

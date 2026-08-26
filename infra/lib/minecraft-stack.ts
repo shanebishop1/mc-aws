@@ -42,6 +42,13 @@ export class MinecraftStack extends cdk.Stack {
     const sesInboundRecipient = (process.env.SES_INBOUND_RECIPIENT ?? "").trim().toLowerCase();
     const sesReceiptRuleSetName = (process.env.SES_RECEIPT_RULE_SET_NAME ?? "").trim();
     const startKeyword = (process.env.START_KEYWORD ?? "").trim();
+    const al2023Arm64AmiId = (process.env.AL2023_ARM64_AMI_ID ?? "").trim();
+
+    if (!/^ami-[a-f0-9]{8,17}$/.test(al2023Arm64AmiId)) {
+      throw new Error(
+        "AL2023_ARM64_AMI_ID must be an exact setup-managed AMI ID. Run bash ./setup.sh or the explicit pnpm ami:upgrade workflow."
+      );
+    }
 
     if (sesNotificationsEnabled && (!verifiedSender || !notificationEmail)) {
       throw new Error(
@@ -253,9 +260,7 @@ export class MinecraftStack extends cdk.Stack {
       vpc,
       vpcSubnets: { subnetType: ec2.SubnetType.PUBLIC },
       instanceType: ec2.InstanceType.of(ec2.InstanceClass.T4G, ec2.InstanceSize.MEDIUM),
-      machineImage: ec2.MachineImage.latestAmazonLinux2023({
-        cpuType: ec2.AmazonLinuxCpuType.ARM_64,
-      }),
+      machineImage: ec2.MachineImage.genericLinux({ [this.region]: al2023Arm64AmiId }),
       securityGroup,
       role: ec2Role,
       keyPair: process.env.KEY_PAIR_NAME

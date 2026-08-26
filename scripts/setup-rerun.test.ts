@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -136,5 +137,15 @@ describe("setup completion connection output", () => {
     ["raw_ip", "the public IP shown in the control panel"],
   ] satisfies Array<[MinecraftMode, string]>)("prints the correct target for %s", (minecraftMode, expected) => {
     expect(runSetupFunction("minecraft_connection_target", modeEnv(minecraftMode, "workers_dev"))).toBe(expected);
+  });
+});
+
+describe("setup immutable AMI integration", () => {
+  it("invokes the pinning command with both reusable deployment env files", () => {
+    const source = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
+    expect(source).toContain("pin-al2023-ami.ts ensure");
+    expect(source).toContain('--env-file "$PRODUCTION_ENV_FILE"');
+    expect(source).toContain('--env-file "$LOCAL_ENV_FILE"');
+    expect(source.indexOf("ensure_al2023_ami_pin")).toBeLessThan(source.indexOf("migrate-existing-deployment.ts"));
   });
 });

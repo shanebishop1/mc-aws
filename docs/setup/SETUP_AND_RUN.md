@@ -30,6 +30,7 @@ The script:
 9. Deploys the web app to Cloudflare Workers.
 10. Creates a runtime key in memory, uploads it directly to Wrangler, verifies it through the Worker, then revokes any prior key owned by that runtime identity.
 11. Writes strict resource IDs, immutable StackId/Worker deployment evidence, and created-versus-pre-existing ownership facts to the ignored, non-secret mode-`0600` `.mc-aws-deployment.json` manifest used by safe teardown. Setup refuses to overwrite unproven same-name stacks or Workers.
+12. Resolves AWS's current ARM64 Amazon Linux 2023 image once, validates it, and persists the exact AMI ID in both ignored deployment env files. Routine reruns preserve that pin.
 
 Immediately before the first chargeable CDK deployment, setup shows the authenticated AWS account, region, fixed `t4g.medium` instance with 8 GB GP3 root volume, resource categories, cost caveats, and teardown commands. It proceeds only after you type `DEPLOY`. Review the identity and region carefully; cancellation creates no stack resources.
 
@@ -117,6 +118,19 @@ pnpm cdk:diff
 pnpm cdk:deploy
 ```
 
+The stack never synthesizes a dynamic latest-AMI SSM parameter. To intentionally upgrade the base image, first resolve and review the candidate ID, plan for EC2 replacement and restore, then pass that exact ID as confirmation:
+
+```bash
+LATEST_AMI="$(aws ssm get-parameter \
+  --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 \
+  --query Parameter.Value --output text)"
+printf '%s\n' "$LATEST_AMI"
+pnpm ami:upgrade -- upgrade --region "$AWS_REGION" --confirm "$LATEST_AMI"
+pnpm cdk:diff
+```
+
+Do not execute the resulting deployment unless its reviewed change set intentionally allows the instance replacement and the restore plan is ready.
+
 Rotate only the dedicated Worker runtime key:
 
 ```bash
@@ -165,5 +179,7 @@ After reviewing the live inventory, execute with an account-specific typed confi
 ```bash
 pnpm destroy:execute
 ```
+
+This default uses verified Google Drive durability evidence and retains no new EBS snapshot. If you deliberately want a billed final EBS snapshot instead, use `pnpm destroy:execute:snapshot`.
 
 Do not remove `.mc-aws-deployment.json` before teardown. See [Ownership-Aware Teardown](../TEARDOWN.md) for retained backups, failure recovery, manual removal, OAuth/credential cleanup, and billing verification.

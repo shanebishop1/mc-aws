@@ -33,6 +33,18 @@ describe("Cloudflare legacy secret pruning deployment contract", () => {
     expect(runtimeRotation).toBeGreaterThan(bindingRestore);
   });
 
+  it("removes credentials for inactive DNS providers before runtime verification", () => {
+    expect(source).toContain("provider_secret_deletion_patch()");
+    expect(source).toContain('{"DUCKDNS_DOMAIN":null,"DUCKDNS_TOKEN":null}');
+    expect(source).toContain('"CLOUDFLARE_DNS_API_TOKEN":null');
+    const providerPrune = source.indexOf('echo "🧹 Pruning secrets for inactive Minecraft DNS providers..."');
+    const runtimeRotation = source.indexOf(
+      'echo "🔐 Provisioning dedicated least-privilege AWS runtime credentials..."'
+    );
+    expect(providerPrune).toBeGreaterThan(-1);
+    expect(providerPrune).toBeLessThan(runtimeRotation);
+  });
+
   it.each([
     ["put_secret", "wrangler secret put"],
     ["put_secret_base64", "wrangler secret put"],

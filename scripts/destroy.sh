@@ -15,13 +15,17 @@ NODE_BIN="${NODE_BIN:-node}"
 WRANGLER_HOME_DIR="${WRANGLER_HOME_DIR:-$HOME/.config/mc-aws/wrangler-home}"
 EXECUTE="0"
 CLEANUP_LOCAL_ENV="0"
+DATA_PRESERVATION_MODE="google-drive"
 
 usage() {
   cat <<'EOF'
-Usage: scripts/destroy.sh [--execute] [--cleanup-local-env] [--manifest PATH]
+Usage: scripts/destroy.sh [--execute] [--retain-final-snapshot] [--cleanup-local-env] [--manifest PATH]
 
 Default: live inventory and dry-run only; no resources or local files change.
   --execute            perform only ownership-verified deletion actions
+  --retain-final-snapshot
+                       explicitly create and retain a final EBS snapshot instead
+                       of relying on independently verified Google Drive backups
   --cleanup-local-env  after cloud teardown, separately confirm local env deletion
   --manifest PATH      use a specific deployment ownership manifest
 EOF
@@ -38,6 +42,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     --cleanup-local-env)
       CLEANUP_LOCAL_ENV="1"
+      shift
+      ;;
+    --retain-final-snapshot)
+      DATA_PRESERVATION_MODE="snapshot"
       shift
       ;;
     --manifest)
@@ -193,7 +201,15 @@ is_stack_not_found_error() { [[ "$1" == *"ValidationError"* && "$1" == *"does no
 is_iam_not_found_error() { [[ "$1" == *"NoSuchEntity"* ]]; }
 is_dlm_not_found_error() { [[ "$1" == *"ResourceNotFoundException"* ]]; }
 is_snapshot_not_found_error() { [[ "$1" == *"InvalidSnapshot.NotFound"* ]]; }
-is_worker_not_found_error() { [[ "$1" =~ (^|[^0-9])10090([^0-9]|$) ]]; }
+is_worker_not_found_error() { [[ "$1" =~ (^|[^0-9])(10007|10090)([^0-9]|$) ]]; }
+
+is_exact_stack_delete_complete_json() {
+  local response="$1"
+  printf '%s' "$response" | EXPECTED_STACK_ID="$STACK_ID" "$NODE_BIN" -e '
+const d=JSON.parse(require("node:fs").readFileSync(0,"utf8")); const stack=d.Stacks?.[0];
+process.exit(stack?.StackId===process.env.EXPECTED_STACK_ID && stack?.StackStatus==="DELETE_COMPLETE" ? 0 : 1);
+' 2>/dev/null
+}
 
 wrangler() {
   env -i PATH="$PATH" HOME="$WRANGLER_HOME_DIR" TERM="${TERM:-}" USER="${USER:-}" \
@@ -305,7 +321,8 @@ assert_exact_stack_live_now() {
 assert_exact_stack_absent_now() {
   local response
   if response="$(aws_cli cloudformation describe-stacks --stack-name "$STACK_ID" --output json 2>&1)"; then
-    return 1
+    is_exact_stack_delete_complete_json "$response"
+    return
   fi
   is_stack_not_found_error "$response"
 }
@@ -362,7 +379,7 @@ quiesce_instance_for_snapshot() {
 
   case "$initial_state" in
     running|pending)
-      log "  ⏳ Gracefully stopping Minecraft before snapshotting the $initial_state instance"
+      log "  ⏳ Gracefully stopping Minecraft before preserving data for the $initial_state instance"
       if [[ "$initial_state" == "pending" ]]; then
         if ! aws_cli ec2 wait instance-running --instance-ids "$INSTANCE_ID"; then
           error "Pending EC2 instance did not reach running state for graceful Minecraft quiescence"
@@ -417,7 +434,7 @@ process.exit(d.CommandId===process.env.EXPECTED_COMMAND && d.InstanceId===proces
       fi
       ;;
     stopped)
-      log "  ✅ Instance is already stopped; final snapshot can proceed"
+      log "  ✅ Instance is already stopped; selected data-preservation checks can proceed"
       ;;
     stopping)
       log "  ⏳ Instance is already stopping; waiting for exact stopped state"
@@ -427,7 +444,7 @@ process.exit(d.CommandId===process.env.EXPECTED_COMMAND && d.InstanceId===proces
       fi
       ;;
     *)
-      error "Instance is in unsupported state '$initial_state'; refusing final root snapshot"
+      error "Instance is in unsupported state '$initial_state'; refusing final data preservation"
       return 1
       ;;
   esac
@@ -480,6 +497,30 @@ process.stdout.write(snapshot.State);
 '
 }
 
+record_google_drive_backup_evidence() {
+  local observed_at="$1"
+  local backup_json backup_line backup_count backup_cached_at
+  backup_json="$(aws_cli ssm get-parameter --name /minecraft/backups-cache --output json)" || {
+    error "Google Drive durability mode requires readable backup evidence in /minecraft/backups-cache"
+    return 1
+  }
+  backup_line="$(printf '%s' "$backup_json" | "$NODE_BIN" -e '
+const d=JSON.parse(require("node:fs").readFileSync(0,"utf8")); let cache; try{cache=JSON.parse(d.Parameter?.Value||"");}catch{process.exit(2)}
+if(!cache || typeof cache!=="object" || Array.isArray(cache) || !Array.isArray(cache.backups) || cache.backups.length<1 || !Number.isSafeInteger(cache.cachedAt) || cache.cachedAt<=0) process.exit(1);
+process.stdout.write(`${cache.backups.length}\t${cache.cachedAt}`);
+')" || {
+    error "Google Drive durability mode requires non-empty backup cache evidence with a valid cachedAt timestamp"
+    return 1
+  }
+  IFS=$'\t' read -r backup_count backup_cached_at <<< "$backup_line"
+  assert_manifest_unchanged
+  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+    google-drive-backup --backup-count "$backup_count" --cached-at "$backup_cached_at" --observed-at "$observed_at" >/dev/null
+  refresh_manifest_digest
+  log "  ✅ Recorded Google Drive cache evidence: $backup_count backup(s), cachedAt=$backup_cached_at"
+  log "     Google Drive content is external and will not be deleted; no EBS snapshot will be retained."
+}
+
 preserve_final_root_data() {
   local root_line instance_state root_device root_volume_id final_root_volume snapshot_id pending_snapshot_id pending_snapshot_volume pending_snapshot_state pending_snapshot_created_at create_json tag_spec backup_json backup_line backup_count backup_cached_at observed_at
   root_line="$(read_managed_instance_root)" || {
@@ -494,24 +535,7 @@ preserve_final_root_data() {
       error "Instance has no root volume but is in state '$instance_state'; refusing ambiguous hibernated teardown"
       return 1
     fi
-    backup_json="$(aws_cli ssm get-parameter --name /minecraft/backups-cache --output json)" || {
-      error "Instance has no root volume and existing backup state could not be read from /minecraft/backups-cache"
-      return 1
-    }
-    backup_line="$(printf '%s' "$backup_json" | "$NODE_BIN" -e '
-const d=JSON.parse(require("node:fs").readFileSync(0,"utf8")); let cache; try{cache=JSON.parse(d.Parameter?.Value||"");}catch{process.exit(2)}
-if(!cache || typeof cache!=="object" || Array.isArray(cache) || !Array.isArray(cache.backups) || cache.backups.length<1 || !Number.isSafeInteger(cache.cachedAt) || cache.cachedAt<=0) process.exit(1);
-process.stdout.write(`${cache.backups.length}\t${cache.cachedAt}`);
-')" || {
-      error "Instance is hibernated/no-root, but /minecraft/backups-cache lacks non-empty backups and a valid cachedAt timestamp"
-      return 1
-    }
-    IFS=$'\t' read -r backup_count backup_cached_at <<< "$backup_line"
-    assert_manifest_unchanged
-    MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
-      hibernated-backup --backup-count "$backup_count" --cached-at "$backup_cached_at" --observed-at "$observed_at" >/dev/null
-    refresh_manifest_digest
-    log "  ✅ Hibernated instance cache has $backup_count recorded backup(s) at cachedAt=$backup_cached_at; no root volume exists to snapshot"
+    record_google_drive_backup_evidence "$observed_at" || return 1
     mark_complete "final-data-preservation"
     return 0
   fi
@@ -521,6 +545,12 @@ process.stdout.write(`${cache.backups.length}\t${cache.cachedAt}`);
     return 1
   fi
   quiesce_instance_for_snapshot "$instance_state" "$root_volume_id" || return 1
+
+  if [[ "$DATA_PRESERVATION_MODE" == "google-drive" ]]; then
+    record_google_drive_backup_evidence "$observed_at" || return 1
+    mark_complete "final-data-preservation"
+    return 0
+  fi
 
   snapshot_id="$(json_get teardown.finalRootSnapshot.snapshotId)"
   if [[ -n "$snapshot_id" ]]; then
@@ -611,6 +641,7 @@ log "━━━━━━━━━━━━━━━━━━━━━━━━━
 log "mc-aws ownership-aware teardown inventory"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log "Mode:                 $([[ "$EXECUTE" == "1" ]] && printf 'EXECUTE (confirmation still required)' || printf 'DRY RUN (default)')"
+log "Data preservation:    $DATA_PRESERVATION_MODE"
 log "Manifest:             $MANIFEST_FILE"
 log "AWS deployment:       ${AWS_ACCOUNT_ID}/${AWS_REGION_VALUE}/${STACK_NAME}"
 log "Cloudflare Worker:    ${WORKER_NAME:-not recorded} (panel mode: ${PANEL_MODE:-unknown})"
@@ -893,8 +924,12 @@ log "  - KV/DNS: delete project-created only; preserve pre-existing (restore pro
 log "  - Runtime IAM: revoke/delete keys before CloudFormation deletes the stack-owned user"
 log "  - DLM: delete only manifest-owned policies with matching live tags"
 log "  - Stack: $([[ "$STACK_OWNED" == "true" ]] && printf 'delete exact recorded StackId via CloudFormation if live' || printf 'preserve (not proven project-created)')"
-log "  - Root data: create/verify a final snapshot (or require hibernated backup evidence) before stack deletion"
-log "  - Snapshots/volumes: report and retain snapshots; the stack-owned root volume itself will be deleted"
+if [[ "$DATA_PRESERVATION_MODE" == "snapshot" ]]; then
+  log "  - Root data: stop/quiesce and create/verify an explicitly requested retained final EBS snapshot"
+else
+  log "  - Root data: stop/quiesce, require Google Drive backup-cache evidence, and retain no new EBS snapshot"
+fi
+log "  - Snapshots/volumes: report existing snapshots; the stack-owned root volume itself will be deleted"
 
 if [[ ${#blockers[@]} -gt 0 ]]; then
   log ""
@@ -1091,8 +1126,8 @@ if [[ "$STACK_OWNED" == "true" && "$STACK_LIVE" == "1" ]]; then
     stack_wait_error=""
     if ! stack_wait_error="$(aws_cli cloudformation wait stack-delete-complete --stack-name "$STACK_ID" 2>&1)"; then
       stack_after_wait=""
-      if ! stack_after_wait="$(aws_cli cloudformation describe-stacks --stack-name "$STACK_ID" --output json 2>&1)" && \
-        is_stack_not_found_error "$stack_after_wait"; then
+      if { ! stack_after_wait="$(aws_cli cloudformation describe-stacks --stack-name "$STACK_ID" --output json 2>&1)" && \
+        is_stack_not_found_error "$stack_after_wait"; } || is_exact_stack_delete_complete_json "$stack_after_wait"; then
         log "  ✅ Exact CloudFormation stack is absent despite waiter failure"
       else
         error "CloudFormation stack deletion did not complete: ${stack_wait_error:-$stack_after_wait}"
@@ -1108,9 +1143,7 @@ mark_complete "cloudformation-stack"
 # If CloudFormation is gone but left its tagged user after a partial failure, delete only
 # the expected inline-policy-only identity. Unexpected attachments/groups block direct cleanup.
 post_stack=""
-if ! post_stack="$(aws_cli cloudformation describe-stacks --stack-name "$STACK_ID" --output json 2>&1)" && \
-  [[ "$RUNTIME_USER_OWNED" == "true" ]] && \
-  is_stack_not_found_error "$post_stack"; then
+if [[ "$RUNTIME_USER_OWNED" == "true" ]] && assert_exact_stack_absent_now; then
   post_user=""
   if post_user="$(aws_cli iam get-user --user-name "$RUNTIME_USER_NAME" --output json 2>&1)"; then
     if ! assert_aws_account_now || ! assert_exact_stack_absent_now || ! assert_runtime_iam_tags_now; then
@@ -1143,8 +1176,13 @@ log "Final billing-resource verification:"
 final_failures=()
 final_stack="present"
 if final_stack_output="$(aws_cli cloudformation describe-stacks --stack-name "$STACK_ID" --output json 2>&1)"; then
-  log "  ⚠️  CloudFormation stack remains: $STACK_NAME (owned=$STACK_OWNED)"
-  if [[ "$STACK_OWNED" == "true" ]]; then final_failures+=("owned CloudFormation stack remains"); fi
+  if is_exact_stack_delete_complete_json "$final_stack_output"; then
+    final_stack="absent"
+    log "  ✅ CloudFormation stack is DELETE_COMPLETE (retained API history only)"
+  else
+    log "  ⚠️  CloudFormation stack remains: $STACK_NAME (owned=$STACK_OWNED)"
+    if [[ "$STACK_OWNED" == "true" ]]; then final_failures+=("owned CloudFormation stack remains"); fi
+  fi
 elif is_stack_not_found_error "$final_stack_output"; then
   final_stack="absent"
   log "  ✅ CloudFormation stack is absent"

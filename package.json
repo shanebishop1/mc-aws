@@ -54,12 +54,15 @@
     "cdk:synth": "cd infra && cdk synth",
     "cdk:diff": "cd infra && cdk diff",
     "cdk:deploy": "tsx scripts/migrate-existing-deployment.ts --assert-standard-deploy-safe && cd infra && cdk deploy",
+    "ami:pin": "tsx scripts/pin-al2023-ami.ts",
+    "ami:upgrade": "tsx scripts/pin-al2023-ami.ts",
     "migrate:existing": "tsx scripts/migrate-existing-deployment.ts",
     "cdk:destroy": "./scripts/destroy.sh",
     "cdk:destroy:force": "./scripts/destroy.sh --execute",
     "destroy": "./scripts/destroy.sh",
     "destroy:force": "./scripts/destroy.sh --execute",
     "destroy:execute": "./scripts/destroy.sh --execute",
+    "destroy:execute:snapshot": "./scripts/destroy.sh --execute --retain-final-snapshot",
     "destroy:cleanup-local": "./scripts/destroy.sh --execute --cleanup-local-env"
   },
   "dependencies": {
