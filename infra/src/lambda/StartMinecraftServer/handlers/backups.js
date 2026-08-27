@@ -94,7 +94,7 @@ async function handleRefreshBackups(instanceId) {
 
     return `Backups refreshed and cached. Found ${backups.length} backups.`;
   } catch (error) {
-    console.error("ERROR in handleRefreshBackups:", error.message, error.stack);
+    console.error("ERROR in handleRefreshBackups.");
     const now = Date.now();
     await putParameter(
       BACKUPS_CACHE_PARAM,

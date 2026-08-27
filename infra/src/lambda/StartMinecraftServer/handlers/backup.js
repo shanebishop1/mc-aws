@@ -12,12 +12,7 @@ import { handleRefreshBackups } from "./backups.js";
  * @returns {Promise<string>} The backup result message
  */
 async function handleBackup(instanceId, args, adminEmail) {
-  console.log(
-    `Handling backup command for instance ${instanceId} with args:`,
-    JSON.stringify(args),
-    "adminEmail:",
-    adminEmail
-  );
+  console.log(`Handling backup command for instance ${instanceId}`);
 
   try {
     // Ensure instance is running before attempting SSM command
@@ -38,8 +33,8 @@ async function handleBackup(instanceId, args, adminEmail) {
       console.log("Step 3: Refreshing backup cache...");
       await handleRefreshBackups(instanceId);
       console.log("Step 3 complete: Backup cache refreshed");
-    } catch (cacheError) {
-      console.error("WARNING: Backup completed but cache refresh failed:", cacheError);
+    } catch {
+      console.error("WARNING: Backup completed but cache refresh failed.");
       cacheRefreshWarning =
         "\n\nWarning: Backup cache refresh failed. New backup may not appear in restore list immediately.";
     }
@@ -54,7 +49,7 @@ async function handleBackup(instanceId, args, adminEmail) {
 
     return message;
   } catch (error) {
-    console.error("ERROR in handleBackup:", error.message, error.stack);
+    console.error("ERROR in handleBackup.");
 
     if (adminEmail) {
       console.log("Sending error notification...");

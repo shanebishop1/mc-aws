@@ -44,7 +44,7 @@ async function handleHibernate(instanceId, _args, adminEmail) {
 
     return message;
   } catch (error) {
-    console.error("ERROR in handleHibernate:", error.message);
+    console.error("ERROR in handleHibernate.");
     if (adminEmail)
       await sendNotification(adminEmail, "Minecraft Hibernation Failed", getSanitizedErrorMessage("hibernate"));
     throw error;

@@ -1,14 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { parseEmailFromEvent } from "./email-parser.js";
 
-function createEvent(from: string) {
+function createEvent(from: string, subject = "START") {
   return {
     Records: [
       {
         Sns: {
           Message: JSON.stringify({
-            mail: { commonHeaders: { from: [from], subject: "START" } },
+            mail: { commonHeaders: { from: [from], subject } },
             receipt: {
               spfVerdict: { status: "PASS" },
               dkimVerdict: { status: "PASS" },
@@ -39,5 +39,23 @@ describe("parseEmailFromEvent", () => {
     const from = "<".repeat(200_000);
 
     expect(parseEmailFromEvent(createEvent(from))).toMatchObject({ senderEmail: from });
+  });
+
+  it("never logs raw subject content or command keywords", () => {
+    const subject = "PRIVATE-START-KEYWORD do not disclose";
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    try {
+      expect(parseEmailFromEvent(createEvent("user@example.com", subject))).toMatchObject({
+        subject: subject.toLowerCase(),
+      });
+      const logged = [...log.mock.calls, ...error.mock.calls].flat().join(" ");
+      expect(logged).not.toContain(subject);
+      expect(logged.toLowerCase()).not.toContain("private-start-keyword");
+    } finally {
+      log.mockRestore();
+      error.mockRestore();
+    }
   });
 });

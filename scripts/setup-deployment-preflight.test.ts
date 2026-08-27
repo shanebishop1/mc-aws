@@ -29,6 +29,23 @@ describe("public setup deployment preflight", () => {
     );
   });
 
+  it("runs the read-only SES preflight after AWS identity and before deployment mutations", () => {
+    const envReload = setupSource.indexOf(
+      'load_env_file "$PRODUCTION_ENV_FILE" || true',
+      setupSource.indexOf("# Reload env")
+    );
+    const awsIdentity = setupSource.indexOf("if ! ensure_cdk_defaults", envReload);
+    const sesPreflight = setupSource.indexOf("scripts/ses-preflight.ts", awsIdentity);
+
+    expect(envReload).toBeGreaterThan(-1);
+    expect(awsIdentity).toBeGreaterThan(envReload);
+    expect(sesPreflight).toBeGreaterThan(awsIdentity);
+    expect(sesPreflight).toBeLessThan(setupSource.indexOf("ensure_al2023_ami_pin", sesPreflight));
+    expect(sesPreflight).toBeLessThan(setupSource.indexOf("migrate-existing-deployment.ts", sesPreflight));
+    expect(sesPreflight).toBeLessThan(setupSource.indexOf("deployment-manifest.mjs aws-init", sesPreflight));
+    expect(sesPreflight).toBeLessThan(setupSource.indexOf("pnpm exec cdk deploy", sesPreflight));
+  });
+
   it("refuses a non-interactive deployment without explicit confirmation", () => {
     const result = runPreflight();
 

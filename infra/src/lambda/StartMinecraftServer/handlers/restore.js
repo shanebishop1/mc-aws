@@ -12,12 +12,7 @@ import { executeSSMCommand } from "../ssm.js";
  */
 
 export async function handleRestore(instanceId, args, adminEmail) {
-  console.log(
-    `Handling restore command for instance ${instanceId} with args:`,
-    JSON.stringify(args),
-    "adminEmail:",
-    adminEmail
-  );
+  console.log(`Handling restore command for instance ${instanceId}`);
 
   try {
     // Ensure instance is running before attempting SSM command
@@ -32,7 +27,7 @@ export async function handleRestore(instanceId, args, adminEmail) {
     if (isLatest) {
       console.log("Step 2: Restoring latest backup (no specific name provided)");
     } else {
-      console.log("Step 2: Restoring specific backup:", backupName);
+      console.log("Step 2: Restoring a specific backup");
     }
 
     // Build command: latest restore is explicit; named restores normalize to archive filename.
@@ -58,7 +53,7 @@ export async function handleRestore(instanceId, args, adminEmail) {
 
     return message;
   } catch (error) {
-    console.error("ERROR in handleRestore:", error.message, error.stack);
+    console.error("ERROR in handleRestore.");
 
     if (adminEmail) {
       console.log("Sending error notification...");

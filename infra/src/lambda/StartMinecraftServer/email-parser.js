@@ -27,10 +27,9 @@ export function parseEmailFromEvent(event) {
       dmarc: receipt.dmarcVerdict?.status || "UNKNOWN",
     };
 
-    console.log("Parsed email - From:", senderEmail, "Subject:", subject, "Verdicts:", JSON.stringify(verdicts));
     return { senderEmail, subject, body, verdicts };
-  } catch (error) {
-    console.error("ERROR parsing email:", error.message);
+  } catch {
+    console.error("ERROR parsing email payload.");
     return { error: { statusCode: 400, body: "Error processing incoming message." } };
   }
 }
