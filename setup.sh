@@ -572,7 +572,7 @@ main() {
     chmod +x scripts/setup-wizard.sh
 
     # Tell the wizard we're returning here after it finishes
-    MC_AWS_SETUP_RETURN_TO_SETUP_SH=1 ./scripts/setup-wizard.sh
+    run_with_mise env MC_AWS_SETUP_RETURN_TO_SETUP_SH=1 bash ./scripts/setup-wizard.sh
   fi
 
   # Reload env for the deploy steps below
@@ -618,13 +618,13 @@ main() {
       --region "$CDK_DEFAULT_REGION"
   )
 
-  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs aws-init \
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs aws-init \
     --account "$CDK_DEFAULT_ACCOUNT" \
     --region "$CDK_DEFAULT_REGION" \
     --stack "$STACK_NAME" \
     --stack-state "$stack_state" \
     --stack-id "${existing_stack_id:-unknown}"
-  success "Deployment ownership manifest initialized: $DEPLOYMENT_MANIFEST_FILE"
+  success "Local deployment record initialized: $DEPLOYMENT_MANIFEST_FILE"
 
   cdk_parameters=()
   if [[ -n "${CLOUDFLARE_DNS_API_TOKEN:-}" ]]; then
@@ -662,7 +662,7 @@ main() {
     error_exit "Could not read StackId for CloudFormation stack '$STACK_NAME'"
   fi
 
-  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs aws-deployed \
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs aws-deployed \
     --stack-id "$STACK_ID" \
     --instance-id "$INSTANCE_ID" \
     --runtime-user "$RUNTIME_IAM_USER_NAME"
@@ -692,8 +692,8 @@ main() {
   log "  1. Confirm the Google OAuth client contains the exact origin and both callbacks printed above"
   log "  2. Enable Google Drive API; while an External app is in Testing, add allowed accounts as test users"
   log "  3. Visit your control panel and sign in with the admin address: ${ADMIN_EMAIL}"
-  log "  4. Configure and verify Google Drive before using backup, restore, or hibernate"
-  log "  5. Start the server (which begins EC2 compute charges), then connect to $(minecraft_connection_target)"
+  log "  4. Wait for the already-started server to become ready, then connect to $(minecraft_connection_target)"
+  log "  5. Configure and verify Google Drive before using backup, restore, or hibernate"
   log "  6. Check AWS Billing/Cost Explorer; preview removal at any time with: pnpm destroy"
   echo ""
 }

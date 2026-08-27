@@ -1,50 +1,71 @@
 # Server Profiles
 
-Use a server profile to customize your Minecraft server. It keeps your whitelist, server settings, datapacks, and plugin configuration together for validation and deployment.
+A profile supplies Minecraft settings, player lists, datapacks, plugin configuration, and other server files.
 
-## Create and select a profile
+## Select and validate
+
+Selection order:
+
+1. A non-blank `MC_SERVER_PROFILE_DIR` path.
+2. `server-profile/` when that directory exists.
+3. Tracked `config/` defaults.
+
+First generate the local `server-profile/` directory, which is excluded from Git:
 
 ```bash
 pnpm profile:init
+```
+
+Then edit `server-profile/whitelist.json` to include at least one real UUID/name. A valid shape is:
+
+```json
+[
+  { "uuid": "123e4567-e89b-42d3-a456-426614174000", "name": "PlayerName" }
+]
+```
+
+Replace both fields with the intended player's real Minecraft UUID and name.
+
+```bash
 pnpm profile:validate
 ```
 
-`profile:init` copies the tracked generic `config/` defaults to ignored `server-profile/` and refuses to overwrite an existing directory. Before validation or deployment, replace the empty `whitelist.json` with at least one real Minecraft UUID/name entry. If `MC_SERVER_PROFILE_DIR` is unset or blank, the existing `server-profile/` is selected automatically; otherwise CDK uses tracked `config/`.
+`profile:init` copies `config/` to `server-profile/` and refuses to overwrite an existing directory. An explicit profile can be inside or outside the worktree but must resolve to a real subdirectory, not a symlink or filesystem/worktree root.
 
-The tracked generic whitelist is deliberately empty and deployment fails closed so a fresh server is not launched with no authorized players. Automation that only synthesizes/tests infrastructure may explicitly set `MC_ALLOW_EMPTY_WHITELIST=true`; this does not weaken `enforce-whitelist` and produces an intentionally inaccessible game server if used for a deployment.
+Validation checks entry types, links, file counts and sizes, selected credential-like filenames and text patterns, player-list JSON, and plugin entries. It rejects JAR files and `rclone.conf`. **It is not a general secret scanner.** Review every selected file yourself; arbitrary tokens or sensitive data can pass its limited patterns.
 
-For independent private versioning, set `MC_SERVER_PROFILE_DIR` to an absolute path or a worktree-relative path such as `../mc-private/profiles/production`. The selected root must be a real, non-symlink profile subdirectory. It may be outside this application worktree; all profile contents still receive the same strict validation before CDK creates an asset.
+The generated/default profile requires a present, non-empty `whitelist.json`. `MC_ALLOW_EMPTY_WHITELIST=true` is intended for synthesis or an intentionally inaccessible server; it does not turn off Minecraft's whitelist settings. A custom profile validates its whitelist only when the file is present, so omitting it can leave a newly provisioned server inaccessible even when validation succeeds.
 
-A profile may contain `server.properties`, `whitelist.json`, `ops.json`, datapacks, plugin configuration, and similar server files. Validation recursively rejects links, special files, hard links, `.git`, `.env*`, credentials/private keys, `rclone.conf`, path escapes, excessive counts, and excessive sizes. `whitelist.json` and `ops.json` are schema-checked when present.
+## How profiles are applied
 
-`rclone.conf` is never profile content. Google Drive credentials remain rematerialized from SSM by the existing root-owned helper at `/opt/setup/rclone/rclone.conf`.
+Profile files are copied to the same relative paths under `/opt/minecraft/server`. Existing files at those paths are overwritten. Files and directories not declared by the profile are not deleted. The root `plugins.lock.json` manifest and `rclone.conf` are not copied into the server directory.
+
+Each plugin entry downloads one JAR, checks its SHA-256 value, and overwrites only its declared `plugins/<destination>`. Old profile files and old plugin JARs that are no longer declared are not removed automatically.
+
+| Event | Profile applied? |
+| --- | --- |
+| Fresh instance provisioning | Yes |
+| Successful Drive restore | Yes, before Minecraft starts |
+| Service restart, repository update, or local profile edit | No |
+
+Profiles apply only during fresh provisioning and after a successful restore. Restore keeps a local copy of the previous server directory and attempts to put it back if startup fails, but rollback can fail or the old copy can later be pruned. Keep a separate Drive backup.
 
 ## Plugins
 
-Do not commit or asset plugin JARs; validation rejects them. Add exact downloads to `plugins.lock.json`:
+Do not put JAR files in the profile. Use exact HTTPS downloads and checksums:
 
 ```json
 {
   "version": 1,
   "plugins": [
     {
-      "name": "ExamplePlugin",
-      "destination": "ExamplePlugin.jar",
-      "url": "https://plugins.example.com/releases/ExamplePlugin.jar",
+      "name": "Example",
+      "destination": "Example.jar",
+      "url": "https://plugins.example.com/Example.jar",
       "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
     }
   ]
 }
 ```
 
-Names and destination JAR basenames must be unique and traversal-free. URLs must be canonical HTTPS URLs without credentials, query strings, or fragments. SHA-256 values must be exact lowercase hex. Installation downloads each JAR to a temporary file, verifies its checksum, and then replaces only that declared destination.
-
-## Deployment and precedence
-
-CDK validates the selected profile before synthesis. It packages two separate content-addressed file assets: the trusted `infra/src/ec2` runtime (excluding `user_data.sh`) and the profile directory. A single standard SSM String parameter, `/minecraft/server-profile-manifest`, atomically names both exact S3 objects and SHA-256 digests of the actual staged ZIP bytes. The instance verifies each downloaded archive before extraction. The instance role can read only those two objects; the repository root and local env files are never assets.
-
-Fresh provisioning downloads assets with the instance role, validates every archive path/type/count/size, atomically installs root-owned runtime and profile releases under `/opt/setup`, installs systemd units/scripts, applies profile files without `rsync --delete`, and checksum-installs plugins. EC2 does not clone or pull GitHub. Restarting `minecraft.service` does not reapply a profile.
-
-A profile is applied on fresh provisioning or an intentional rebuild. After a Google Drive restore validates and atomically installs the archived server directory, it reapplies the current profile before Minecraft starts. The restored world and unrelated server files remain intact, while profile-declared paths and plugin destinations remain authoritative for the deployment. An ordinary service restart does not reapply profile files.
-
-Existing-instance rollout is intentionally not automated yet because safely coordinating deployment, legacy user data, server downtime, and SSM execution requires a reviewed transition. `pnpm profile:rollout:check` validates the selected profile but performs no cloud mutation. Use a reviewed rebuild/restore transition; do not manually invoke a partial updater.
+Names and destinations must be unique safe basenames. URLs must be canonical HTTPS without credentials, query strings, or fragments. Checksums must be 64 lowercase hexadecimal characters.

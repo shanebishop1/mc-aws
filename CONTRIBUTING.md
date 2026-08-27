@@ -1,42 +1,27 @@
 # Contributing
 
-Contributions are welcome. Keep changes focused, explain their operational impact, and avoid exposing credentials or account-specific information.
+Contributions are welcome. Keep each change focused, explain its operational impact, and follow the [Code of Conduct](CODE_OF_CONDUCT.md).
 
-## Before You Start
+## Before changing code
 
-- Search existing issues and discussions before proposing a change.
-- Use an issue or discussion for substantial features or infrastructure changes.
-- Report security vulnerabilities according to [SECURITY.md](SECURITY.md), not through a public issue.
-- Review the [Code of Conduct](CODE_OF_CONDUCT.md).
+- Search existing issues and discussions; discuss substantial features or infrastructure changes first.
+- Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md), never in a public issue.
+- Use the pinned Node.js and pnpm versions referenced by `package.json` and `.tool-versions`; do not copy version numbers into new docs or scripts.
+- Install with `pnpm install --frozen-lockfile`.
 
-## Local Development
+For AWS-free development, follow the [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md).
 
-This project uses Node.js 22.15.1 and pnpm 10.30.3.
+## Change requirements
 
-Install dependencies and start the application with its mock backend:
+- Add or update tests for behavior changes and current docs for user-visible changes.
+- Preserve authentication, deployment, migration, backup, and teardown safety.
+- Describe new cloud resources, IAM permissions, recurring costs, migrations, or credential requirements.
+- Test cloud operations only against resources you own or are authorized to use.
+- Never commit credentials, session cookies, `.env` contents, `.mock-state.json`, deployment state, account/resource IDs, private hostnames, or sensitive test output.
 
-```bash
-pnpm install --frozen-lockfile
-pnpm dev:mock
-```
+## Validate before opening a PR
 
-Open `http://localhost:3000/api/auth/dev-login` to sign in as a local administrator.
-
-See the [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md) for additional scenarios and development details.
-
-## Making Changes
-
-- Keep pull requests limited to one coherent change.
-- Add or update tests for behavior changes.
-- Update current documentation when user-visible behavior changes.
-- Preserve deployment, migration, backup, and teardown safety.
-- Describe new cloud resources, permissions, recurring costs, or credential requirements.
-- Do not include credentials, `.env` contents, deployment state, account IDs, resource IDs, or private hostnames.
-- Test cloud operations only against infrastructure you own or are authorized to use.
-
-## Validation
-
-Run the checks relevant to your change:
+Baseline checks are expected locally:
 
 ```bash
 pnpm check
@@ -45,26 +30,18 @@ pnpm test
 pnpm docs:check
 ```
 
-For changes affecting browser behavior, also run:
+Also run checks relevant to the changed surface:
 
-```bash
-pnpm exec playwright install chromium
-pnpm test:e2e:mock
-```
+- Browser/mock flows: `pnpm exec playwright install chromium`, then `pnpm test:e2e:mock`.
+- Production UI/runtime: `pnpm build`. CI also performs a clean OpenNext build.
+- Infrastructure: run affected contract tests. CI performs a clean CDK synth with its required test context. Never deploy merely to validate a pull request.
+- Shell: run `bash -n <changed-shell-file>` for every changed Bash file.
+- Cloudflare preview: use `pnpm preview:cf` only for an intentional manual preview; it is long-running.
 
-The pull request workflow performs additional production builds, infrastructure synthesis, dependency audits, and secret scanning.
+CI additionally runs clean builds, infrastructure synthesis, production dependency audits, and secret scanning.
 
-## Pull Requests
+## Pull requests
 
-Open pull requests against `main` and complete the pull request template. Include:
+Open against `main` and complete the template. Include what changed and why, exact validation results, related issues, and any security, compatibility, cloud-resource, cost, migration, or teardown impact. Maintainers may decline changes that expand scope, weaken safety, or create disproportionate maintenance cost.
 
-- A concise explanation of what changed and why
-- Any security, compatibility, cloud-resource, cost, migration, or teardown impact
-- The exact validation commands you ran and their results
-- Related issues using `Closes #...` when appropriate
-
-Maintainers may request changes or decline contributions that expand project scope, weaken safety controls, or introduce ongoing maintenance costs.
-
-## License
-
-By contributing, you agree that your contributions will be licensed under the project's [MIT License](LICENSE).
+By contributing, you agree that your work is licensed under the project's [MIT License](LICENSE).

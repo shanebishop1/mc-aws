@@ -428,15 +428,14 @@ collect_aws_core() {
   log "The wizard never copies this human deployment identity into Worker configuration."
   echo ""
 
-  echo "New to AWS? Quick checklist (recommended):"
-  echo "  1. Create an AWS account: https://aws.amazon.com/"
-  echo "  2. Secure the root user: enable MFA; do NOT create access keys for root"
-  echo "  3. Create a separate admin identity for daily use (not root):"
-  echo "     - IAM -> Users -> Create user (e.g., mc-aws-admin)"
-  echo "     - Attach AdministratorAccess (you can tighten permissions later)"
-  echo "  4. Optional (recommended): use a dedicated AWS account for mc-aws"
-  echo "     - Better isolation (billing/permissions), safer experimentation, easier cleanup"
-  echo "     - If you use AWS Organizations: create a new account (e.g., 'mc-aws') and use it here"
+  echo "AWS checklist:"
+  echo "  1. Secure the root user with MFA and never create root access keys."
+  echo "  2. Prefer an IAM Identity Center/SSO session with temporary administrator-level"
+  echo "     permission for deployment; do not create a permanent daily-use IAM admin user."
+  echo "  3. This repository publishes no least-privilege policy for human deployment."
+  echo "     Remove or reduce the temporary permission after deployment."
+  echo "  4. A dedicated AWS account is recommended for billing and permission isolation."
+  echo "See docs/setup/AWS_ACCOUNT_SETUP.md for the account prerequisite."
   echo ""
 
   # AWS Region selection (prefer existing configuration)
@@ -520,17 +519,8 @@ collect_aws_core() {
 collect_ec2_access() {
   step_section 2 "EC2 Access"
 
-  log "An EC2 key pair is optional. Add one only if you want SSH key access to the instance."
-  echo ""
-
-  echo "To create an EC2 key pair:"
-  echo "  1. Go to AWS Console → EC2 → Key Pairs"
-  echo "  2. Click 'Create key pair'"
-  echo "  3. Enter a name (e.g., 'minecraft-server')"
-  echo "  4. Key pair type: RSA"
-  echo "  5. Private key file format: .pem"
-  echo "  6. Click 'Create key pair' and download the .pem file"
-  echo "  7. Save the .pem file securely - you cannot download it again!"
+  log "SSH ingress is closed by default. Leave the key pair blank and use SSM Session Manager."
+  log "A key pair is useful only if you separately configure restricted SSH ingress."
   echo ""
 
   prompt_optional KEY_PAIR_NAME "Enter your EC2 key pair name" "${KEY_PAIR_NAME:-}"
@@ -554,26 +544,8 @@ collect_google_oauth() {
   log "These credentials enable Google OAuth authentication for the control panel."
   echo ""
 
-  echo "To create Google OAuth credentials:"
-  echo "  1. Go to https://console.cloud.google.com/"
-  echo "  2. Create a new project or select existing one"
-  echo "  3. Go to 'APIs & Services' → 'OAuth consent screen'"
-  echo "  4. If you see a 'Get started' button, click it and complete the form"
-  echo "     (app name, support email, developer contact info)."
-  echo "  5. Choose 'External' user type (common for personal projects)"
-  echo "     and add yourself as a test user while the app is in testing."
-  echo "  5. Go to 'APIs & Services' → 'Credentials'"
-  echo "  6. Click 'Create Credentials' → 'OAuth client ID'"
-  echo "  7. Application type: Web application"
-  echo "  8. Setup will print the exact production origin after you choose panel hosting."
-  echo "     Add it to 'Authorized JavaScript origins'."
-  echo "  9. Setup will also print the exact callback for 'Authorized redirect URIs'."
-  echo "     The callback always ends in /api/auth/callback (no trailing /google)."
-  echo "  10. If you want to use Google sign-in locally, also add:"
-  echo "      - Origin:   http://localhost:3000"
-  echo "      - Redirect: http://localhost:3000/api/auth/callback"
-  echo "      Otherwise you can skip localhost and use the built-in dev login locally."
-  echo "  11. Click 'Create' and copy the Client ID and Client Secret"
+  echo "Create a Web application client using docs/setup/GOOGLE_OAUTH_SETUP.md."
+  echo "Setup prints the exact production origin and callbacks after panel hosting is chosen."
   echo ""
 
   prompt GOOGLE_CLIENT_ID "Enter Google OAuth Client ID" "${GOOGLE_CLIENT_ID:-}"
@@ -612,7 +584,7 @@ collect_authorization() {
   echo ""
 
   # Allowed emails
-  echo "Allowed emails are users who can start/stop the server."
+  echo "Allowed emails are users who can start the server; only the admin can stop or administer it."
   echo "Enter a comma-separated list (e.g., friend1@yourdomain.com,friend2@gmail.com)"
   echo "Leave empty to only allow the admin."
   echo ""
@@ -638,17 +610,12 @@ collect_cloudflare() {
 
   log "These credentials enable automatic DNS updates for your Minecraft server."
   echo ""
-  echo "NOTE: You need a Cloudflare API Token for runtime DNS updates (Lambda)."
+  echo "NOTE: You need a Cloudflare API Token for runtime DNS updates from the server."
   echo "      Deployment uses 'wrangler login' (OAuth), not this token."
   echo ""
 
-  echo "To create an API token for DNS updates:"
-  echo "  1. Go to https://dash.cloudflare.com/profile/api-tokens"
-  echo "  2. Click 'Create Token'"
-  echo "  3. Use template 'Edit zone DNS' or create custom with:"
-  echo "     - Zone → DNS → Edit"
-  echo "     - Include → Specific zone → select your domain"
-  echo "  4. Copy the API token (NOT the Global API Key!)"
+  echo "Follow docs/setup/CLOUDFLARE_SETUP.md to create the zone-scoped DNS token."
+  echo "Copy the API token, not the Global API Key."
   echo ""
   echo "This token should have LIMITED permissions (just DNS) for security."
   echo ""
@@ -1006,7 +973,7 @@ collect_email_settings() {
     log "Use a dedicated inbound subdomain unless your root domain already intentionally routes mail to SES."
     log "Changing root-domain MX can disrupt existing mail. The exact recipient domain must be verified in SES."
     log "Its MX and active receipt rule set must use this deployment's AWS region; the stack's SNS topic is same-region."
-    log "Setup runs a read-only SES/DNS preflight before any deployment changes."
+    log "Setup runs a read-only SES/DNS prerequisite check before any deployment changes."
     log "Authorized senders must be ADMIN_EMAIL/ALLOWED_EMAILS entries and pass SPF, DKIM, and DMARC."
     log "The private keyword is not authorization by itself."
     while true; do
@@ -1033,11 +1000,10 @@ collect_email_settings() {
 collect_gdrive_settings() {
   step_section 8 "Optional: Google Drive Backups"
 
-  log "Configure Google Drive integration for server backups."
-  log "This requires rclone to be configured with a Google Drive remote."
+  log "Choose the Google Drive folder used after you connect Drive in the deployed panel."
   echo ""
 
-  echo "Leave these empty to skip Google Drive configuration."
+  echo "Accept the default remote name unless you have a specific reason to change it."
   echo ""
 
   prompt_optional GDRIVE_REMOTE "Enter rclone remote name (usually 'gdrive')" "${GDRIVE_REMOTE:-gdrive}"

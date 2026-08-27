@@ -1,25 +1,22 @@
 # Documentation
 
-Current setup, operations, and development references for `mc-aws`.
+## Production
 
-## Current user guides
-
-- [Project overview and quick setup](../README.md)
-- [Setup and Run](setup/SETUP_AND_RUN.md) — canonical production deployment guide
-- Account prerequisites: [AWS](setup/AWS_ACCOUNT_SETUP.md), [Cloudflare](setup/CLOUDFLARE_SETUP.md), and [Google OAuth](setup/GOOGLE_OAUTH_SETUP.md)
-- Optional setup: [DuckDNS](setup/DUCKDNS_SETUP.md), [EC2 key pair](setup/EC2_KEY_PAIR_SETUP.md), [Google Drive](setup/GOOGLE_DRIVE_SETUP.md), and [SES](setup/SES_SETUP.md)
-- [Operations Guide](OPERATIONS_GUIDE.md)
-- [Server Profiles](SERVER_PROFILES.md)
-- [Ownership-Aware Teardown](TEARDOWN.md)
-- [AWS Credential Boundary](AWS_CREDENTIALS_SETUP.md)
-- [Existing Deployment Safety Migration](EXISTING_DEPLOYMENT_MIGRATION.md)
-
-The guides under `docs/setup/` are canonical for first-time setup. The top-level [Cloudflare](CLOUDFLARE_SETUP.md) and [Google OAuth](GOOGLE_OAUTH_SETUP.md) documents are advanced configuration references, not alternate end-to-end setup paths.
+- [Setup and Run](setup/SETUP_AND_RUN.md) — the only complete production procedure
+- Prerequisites: [AWS account](setup/AWS_ACCOUNT_SETUP.md), [Cloudflare](setup/CLOUDFLARE_SETUP.md), [Google OAuth](setup/GOOGLE_OAUTH_SETUP.md)
+- Optional features: [DuckDNS](setup/DUCKDNS_SETUP.md), [Google Drive](setup/GOOGLE_DRIVE_SETUP.md), [SES](setup/SES_SETUP.md)
+- [AWS credential boundary](AWS_CREDENTIALS_SETUP.md)
+- [Server profiles](SERVER_PROFILES.md)
+- [Operations](OPERATIONS_GUIDE.md)
+- [Teardown](TEARDOWN.md)
+- [Existing Deployment Migration](EXISTING_DEPLOYMENT_MIGRATION.md)
 
 ## Development and reference
 
-- [Mock Mode Quick Start](QUICK_START_MOCK_MODE.md)
-- [Mock Mode Developer Guide](MOCK_MODE_DEVELOPER_GUIDE.md)
-- [API Reference](API.md)
-- [Provider implementation](provider-implementation.md)
+- [Mock mode quick start](QUICK_START_MOCK_MODE.md)
+- [Mock mode developer guide](MOCK_MODE_DEVELOPER_GUIDE.md)
+- [API reference](API.md)
+- [AWS Provider Extension Contract](provider-implementation.md)
 - [Release process](RELEASING.md)
+
+Start at the [project README](../README.md) for a short overview.

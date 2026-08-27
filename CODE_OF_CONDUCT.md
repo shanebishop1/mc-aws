@@ -41,11 +41,11 @@ We agree to restrict the following behaviors in our community. Instances, threat
 
 ## Reporting an Issue
 
-If unacceptable behavior occurs in a GitHub-hosted project space, use GitHub's built-in reporting and blocking tools. You may also notify [@shanebishop1](https://github.com/shanebishop1) in the relevant issue, pull request, or discussion when doing so is safe and does not expose sensitive information.
+Do not disclose private, identifying, or sensitive details in an issue, pull request, discussion, comment, or other public project space. For GitHub-hosted content, use the content menu to report it to GitHub and use GitHub's blocking tools when appropriate.
 
-Do not publish private or sensitive details to make a report. This project does not currently provide a private conduct-reporting channel. Reports requiring private communication should use [GitHub's Report Abuse process](https://support.github.com/contact/report-abuse).
+This project does not currently offer a private project conduct-reporting channel. When a report cannot safely be made in public, or concerns abuse by a GitHub user or GitHub-hosted content, use [GitHub's Report Abuse process](https://support.github.com/contact/report-abuse). That process reports to GitHub; it is not a private channel operated by this project.
 
-The maintainer will review visible violations and take appropriate action when possible. Reports will be handled as consistently and respectfully as the available information allows.
+The maintainer may review visible violations and apply available project moderation measures. No confidentiality, response time, investigation, or outcome beyond the available GitHub processes is guaranteed.
 
 ## Addressing and Repairing Harm
 
@@ -53,15 +53,15 @@ If an investigation by the maintainer finds that this Code of Conduct has been v
 
 1. **Warning**
    - **Event:** A violation involving a single incident or series of incidents.
-   - **Consequence:** A private, written warning from the maintainer.
+   - **Consequence:** A written warning when a suitable contact method is available, or an available project moderation action.
    - **Repair:** Examples of repair include a private written apology, acknowledgement of responsibility, and seeking clarification on expectations.
 2. **Temporarily Limited Activities**
    - **Event:** A repeated incidence of a violation that previously resulted in a warning, or the first incidence of a more serious violation.
-   - **Consequence:** A private, written warning with a time-limited cooldown period designed to underscore the seriousness of the situation and give the community members involved time to process the incident. The cooldown period may be limited to particular communication channels or interactions with particular community members.
+   - **Consequence:** A time-limited cooldown period, communicated when a suitable contact method is available, designed to underscore the seriousness of the situation and give the community members involved time to process the incident. The cooldown period may be limited to particular communication channels or interactions with particular community members.
    - **Repair:** Examples of repair may include making an apology, using the cooldown period to reflect on actions and impact, and being thoughtful about re-entering community spaces after the period is over.
 3. **Temporary Suspension**
    - **Event:** A pattern of repeated violation which the maintainer has tried to address with warnings, or a single serious violation.
-   - **Consequence:** A private written warning with conditions for return from suspension. In general, temporary suspensions give the person being suspended time to reflect upon their behavior and possible corrective actions.
+   - **Consequence:** Suspension with conditions for return communicated when a suitable contact method is available. In general, temporary suspensions give the person being suspended time to reflect upon their behavior and possible corrective actions.
    - **Repair:** Examples of repair include respecting the spirit of the suspension, meeting the specified conditions for return, and being thoughtful about how to reintegrate with the community when the suspension is lifted.
 4. **Permanent Ban**
    - **Event:** A pattern of repeated Code of Conduct violations that other steps on the ladder have failed to resolve, or a violation so serious that the maintainer determines there is no way to keep the community safe with this person as a member.

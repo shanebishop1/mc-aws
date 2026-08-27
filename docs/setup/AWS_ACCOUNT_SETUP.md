@@ -1,117 +1,19 @@
-# AWS Account Setup
+# AWS Account Prerequisite
 
-Use a real AWS account, but do not use the root user for daily work.
+Production setup needs an AWS account with:
 
-## 1. Create Or Choose An AWS Account
+- MFA on the root user and no root access keys
+- a non-root deployment identity with temporary administrator-level capability
+- a default VPC in the target region
+- AWS CLI v2 installed locally
+- CDK bootstrapped once for the target account and region
 
-Use a dedicated account if you can. It makes billing, cleanup, and permissions easier to reason about.
+Prefer IAM Identity Center/SSO so deployment uses temporary credentials. An access-key profile is a fallback. Never put root or human AWS keys in project env files. Setup uses the local AWS credential chain and creates a separate deployment-scoped runtime identity for the Worker. Follow [Setup and Run](SETUP_AND_RUN.md) for the exact login and deployment sequence.
 
-AWS account docs:
+The deployment identity must be able to bootstrap CDK and create or update IAM, CloudFormation, EC2, SSM, Lambda, and related resources. This repository does not include a least-privilege human deployment policy. Grant administrator-level capability only for deployment, then remove or reduce it.
 
-- https://docs.aws.amazon.com/accounts/latest/reference/manage-acct-creating.html
+Setup does not create a default VPC or bootstrap CDK. The complete procedure, including authentication, tool installation, and bootstrap, is in [Setup and Run](SETUP_AND_RUN.md).
 
-## 2. Secure The Root User
+Before deployment, choose a region near the players and create an AWS Budget. Actual charges vary by region, usage, storage, snapshots, data transfer, optional services, and pricing changes.
 
-1. Sign in as the root user once.
-2. Enable MFA for the root user.
-3. Do not create root access keys.
-4. Store root recovery details somewhere safe.
-
-AWS docs:
-
-- https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html
-- https://docs.aws.amazon.com/IAM/latest/UserGuide/enable-mfa-for-root.html
-
-## 3. Create A Non-Root Admin Path
-
-For human access, AWS recommends temporary credentials and federation where possible.
-
-Recommended path:
-
-1. Set up IAM Identity Center.
-2. Create a user for yourself.
-3. Assign administrator access for the account while getting started.
-4. Use AWS CLI SSO locally.
-
-AWS docs:
-
-- https://docs.aws.amazon.com/singlesignon/latest/userguide/getting-started.html
-- https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html
-
-Pragmatic fallback:
-
-1. Create an IAM user for deployment.
-2. Enable MFA for console access.
-3. Create access keys for local CLI/project deployment.
-4. Store the keys securely.
-
-Do not use root access keys.
-
-## 4. Permissions For Setup
-
-Fastest path while getting this running:
-
-1. Use an admin permission set if you are using IAM Identity Center.
-2. Use an IAM user with broad deployment permissions if you are using access keys.
-
-This project deploys EC2, IAM roles, Lambda, SSM parameters, CloudFormation/CDK resources, SES/SNS pieces, and reads cost data. You can tighten permissions after the first successful deployment.
-
-Do not use root credentials for this.
-
-## 5. Install And Verify AWS CLI
-
-Install AWS CLI v2:
-
-- https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html
-
-If using SSO:
-
-```bash
-aws configure sso
-aws sso login
-aws sts get-caller-identity
-```
-
-If using access keys:
-
-```bash
-aws configure
-aws sts get-caller-identity
-```
-
-## 6. Pick A Region
-
-Choose a region near the players.
-
-Common choices:
-
-- `us-east-1`
-- `us-west-2`
-- `eu-west-1`
-- `eu-central-1`
-- `ap-southeast-1`
-
-Use the same region for AWS CLI, CDK, and project env values.
-
-## 7. Set A Billing Alert
-
-Create an AWS Budget before experimenting.
-
-AWS docs:
-
-- https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-create.html
-
-## Values Needed Later
-
-The setup wizard asks for the AWS region and validates the current local AWS CLI session. It does not ask for or persist a human AWS access key.
-
-Recommended invocation with a named SSO profile:
-
-```bash
-aws sso login --profile <profile>
-AWS_PROFILE=<profile> bash ./setup.sh
-```
-
-CDK creates a separate least-privilege IAM identity for the deployed Worker. Setup creates that identity's access key only after deployment and pipes it directly to Wrangler; the key is not placed in CloudFormation outputs or project env files.
-
-See [AWS Credential Boundary](../AWS_CREDENTIALS_SETUP.md) for policy scope, verified rotation, and existing-deployment migration.
+References: [AWS CLI v2 installation](https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html), [IAM Identity Center CLI setup](https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-sso.html), [root-user security](https://docs.aws.amazon.com/IAM/latest/UserGuide/root-user-best-practices.html), and [AWS Budgets](https://docs.aws.amazon.com/cost-management/latest/userguide/budgets-create.html).

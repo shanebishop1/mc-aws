@@ -1,89 +1,44 @@
-# Google OAuth Setup
+# Google OAuth Prerequisite
 
-Google OAuth is used for signing in to the web panel.
+Create the OAuth client before running production setup. Add the production URLs only after setup chooses the panel hostname and prints the exact values.
 
-## 1. Create Or Select A Google Cloud Project
+## Before setup: create the client
 
-1. Open Google Cloud Console.
-2. Create a project or select an existing one.
+1. Create or select a project in Google Cloud Console.
+2. Configure **Google Auth Platform -> Branding** and **Audience**.
+3. For an External app in Testing, add every account that will sign in under **Test users**.
+4. If using backups, enable **Google Drive API** in the same project.
+5. Create **OAuth client ID -> Web application**.
+6. Copy the client ID and client secret for the setup wizard.
 
-Google docs:
+Drive backups request the full Google Drive scope and persist a refresh-token/client-secret bundle in encrypted SSM. Where practical, authorize a dedicated Google account that has no unrelated Drive files.
 
-- https://developers.google.com/workspace/guides/create-project
+For optional local Google sign-in, add:
 
-## 2. Configure OAuth Consent And Audience
+- Authorized JavaScript origin: `http://localhost:3000`
+- Redirect URI: `http://localhost:3000/api/auth/callback`
+- Drive redirect URI: `http://localhost:3000/api/gdrive/callback` if using Drive locally
 
-1. Open **Google Auth Platform -> Branding** and complete the required app information.
-2. Open **Google Auth Platform -> Audience**.
-3. Use **External** for a personal app used outside one Google Workspace organization.
-4. If **Publishing status** is **Testing**, add every Google account that will sign in or connect Drive under **Test users**, including `ADMIN_EMAIL` and any `ALLOWED_EMAILS` users.
-5. An **Internal** app is limited to users in its Google Workspace organization.
+Local development can use dev login instead, so localhost entries are optional.
 
-External apps in Testing can receive refresh tokens that expire after seven days when Drive scopes are used. For durable unattended backups, move the app to **In production** when you are ready and complete any Google requirements shown for the app.
+## During setup: copy exact production URLs
 
-Google docs:
+After panel hosting is selected, setup prints:
 
-- https://support.google.com/cloud/answer/10311615
+- the authorized JavaScript origin
+- the sign-in redirect ending in `/api/auth/callback`
+- the Drive redirect ending in `/api/gdrive/callback`
 
-## 3. Enable The Google Drive API
+Add those exact values to the same Web application client before deployment continues. This includes a `workers.dev` deployment: copy the printed origin and callbacks rather than constructing the account subdomain yourself. Do not append `/google`.
 
-If you will use Google Drive backups:
+Use the Google account that matches `ADMIN_EMAIL`. `ALLOWED_EMAILS` contains additional users. If the app remains in Testing, all of them must be test users.
 
-1. Open **APIs & Services -> Library** in the same project as the OAuth client.
-2. Find **Google Drive API**.
-3. Click **Enable**.
+Testing-mode refresh tokens that use Drive scopes can expire after seven days. For unattended backups, move the app to **In production** when appropriate and complete any Google requirements shown for the requested Drive scope.
 
-OAuth consent can succeed while the Drive API is disabled, but backup listing and restore will then fail with `SERVICE_DISABLED`.
+## Troubleshooting
 
-Drive setup requests full Drive access so it can restore archives created by previous rclone OAuth clients. Google may classify this as a sensitive or restricted scope and show additional publishing or verification guidance. Keep the app limited to your intended users and use a dedicated backup folder/account where practical.
+- `redirect_uri_mismatch`: compare the Google entry character-for-character with setup's printed callback.
+- Login works but Drive fails with `SERVICE_DISABLED`: enable Google Drive API in the OAuth client's project.
+- A user is blocked in Testing: add that account under **Audience -> Test users**.
 
-## 4. Create A Web OAuth Client
-
-1. Open **APIs & Services -> Credentials**.
-2. Click **Create credentials -> OAuth client ID**.
-3. Choose **Web application**.
-
-Add authorized JavaScript origins:
-
-```text
-http://localhost:3000
-https://panel.example.com
-https://mc-aws-panel.account-name.workers.dev
-```
-
-Add authorized redirect URIs:
-
-```text
-http://localhost:3000/api/auth/callback
-https://panel.example.com/api/auth/callback
-https://mc-aws-panel.account-name.workers.dev/api/auth/callback
-```
-
-If you plan to use Google Drive backups, also add:
-
-```text
-http://localhost:3000/api/gdrive/callback
-https://panel.example.com/api/gdrive/callback
-```
-
-Use only the origin and callbacks for the panel hosting mode selected during setup. Setup prints the exact origin, sign-in callback, and Drive callback. A workers.dev callback must match the derived Worker URL exactly; do not add `/google`.
-
-## Values Needed Later
-
-The setup wizard asks for:
-
-- `GOOGLE_CLIENT_ID`
-- `GOOGLE_CLIENT_SECRET`
-
-The wizard also asks for:
-
-- `ADMIN_EMAIL`
-- `ALLOWED_EMAILS`
-
-Use the same email address for `ADMIN_EMAIL` that you will use to sign in with Google.
-
-## Notes
-
-- Callback URLs must match exactly.
-- Do not add `/google` to the callback path.
-- Local dev can use the built-in dev login instead of Google OAuth.
+Continue with [Setup and Run](SETUP_AND_RUN.md).

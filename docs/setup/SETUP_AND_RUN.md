@@ -1,188 +1,166 @@
-# Setup And Run
+# Setup and Run
 
-This is the project-specific setup after the account prerequisites are done.
+This is the complete procedure for a new production deployment.
 
-## 1. Clone The Canonical Application
+## 1. Prepare accounts and tools
+
+You need:
+
+- `git`, AWS CLI v2, `curl`, `python3`, `openssl`, and a browser
+- an AWS account with a default VPC in the deployment region
+- temporary administrator-level AWS deployment capability, preferably through IAM Identity Center/SSO; never use root credentials
+- a Cloudflare account with Workers enabled; a custom domain is optional
+- a Google OAuth **Web application** client ID and secret
+
+When `mise` is missing, setup downloads the current installer from `https://mise.run` over HTTPS and runs it, then uses `mise` for the repository-pinned Node.js and pnpm versions. Install and inspect `mise` yourself before setup if you do not want that remote installer path. Setup does not activate `mise` in the calling shell.
+
+Review the required account guides:
+
+- [AWS account](AWS_ACCOUNT_SETUP.md)
+- [Cloudflare](CLOUDFLARE_SETUP.md)
+- [Google OAuth client creation](GOOGLE_OAUTH_SETUP.md)
+
+Optional features have separate prerequisites: [DuckDNS](DUCKDNS_SETUP.md), [Google Drive](GOOGLE_DRIVE_SETUP.md), and [SES](SES_SETUP.md).
+
+## 2. Authenticate AWS
+
+Use a temporary SSO session when possible:
+
+```bash
+aws configure sso
+aws sso login --profile <profile>
+AWS_PROFILE=<profile> aws sts get-caller-identity
+```
+
+Confirm the returned account before proceeding. Keep the same profile active for both setup passes and CDK bootstrap.
+
+The deployment identity must temporarily be able to bootstrap CDK and create or update IAM, CloudFormation, EC2, SSM, Lambda, and related resources. This repository does not provide a least-privilege policy for human deployment. Remove or reduce that access after deployment.
+
+## 3. Clone and run the first pass
 
 ```bash
 git clone https://github.com/shanebishop1/mc-aws.git
 cd mc-aws
+AWS_PROFILE=<profile> bash ./setup.sh
 ```
 
-Keep application code canonical. For deployment-specific Minecraft files, create the ignored local profile documented in [Server Profiles](../SERVER_PROFILES.md). EC2 downloads narrow content-addressed assets with its IAM role and never clones this repository.
+On a clean clone, setup installs the toolchain, creates ignored `server-profile/`, and exits before collecting credentials or creating cloud resources. This two-pass behavior prevents deployment with an empty player whitelist.
 
-## 2. Run Setup
+For commands you run yourself, add the installer location to `PATH`, install the pinned tools, and invoke pnpm through `mise` exactly as shown:
 
 ```bash
-bash ./setup.sh
+export PATH="$HOME/.local/bin:$PATH"
+mise install
 ```
 
-On a clean clone, the first run creates ignored `server-profile/` and stops before credential collection. Add at least one real Minecraft UUID/name to `server-profile/whitelist.json`, run `pnpm profile:validate`, then rerun `bash ./setup.sh`.
+Edit `server-profile/whitelist.json`. A minimal valid file is:
 
-The script:
+```json
+[
+  { "uuid": "123e4567-e89b-42d3-a456-426614174000", "name": "PlayerName" }
+]
+```
 
-1. Installs or verifies `mise`.
-2. Uses the repo-pinned Node.js and `pnpm` versions.
-3. Installs project dependencies.
-4. Validates the selected server profile before credential collection or cloud inspection.
-5. Runs `scripts/setup-wizard.sh`, then assets the profile and deploys AWS infrastructure with CDK.
-6. Locates the dedicated least-privilege Worker runtime IAM identity.
-7. Reads `INSTANCE_ID` from the CloudFormation stack output.
-8. Writes non-secret deployment values to `.env.production` and `.env.local`.
-9. Deploys the web app to Cloudflare Workers.
-10. Creates a runtime key in memory, uploads it directly to Wrangler, verifies it through the Worker, then revokes any prior key owned by that runtime identity.
-11. Writes strict resource IDs, immutable StackId/Worker deployment evidence, and created-versus-pre-existing ownership facts to the ignored, non-secret mode-`0600` `.mc-aws-deployment.json` manifest used by safe teardown. Setup refuses to overwrite unproven same-name stacks or Workers.
-12. Resolves AWS's current ARM64 Amazon Linux 2023 image once, validates it, and persists the exact AMI ID in both ignored deployment env files. Routine reruns preserve that pin.
-
-Immediately before the first chargeable CDK deployment, setup shows the authenticated AWS account, region, fixed `t4g.medium` instance with 8 GB GP3 root volume, resource categories, cost caveats, and teardown commands. It proceeds only after you type `DEPLOY`. Review the identity and region carefully; cancellation creates no stack resources.
-
-## 3. Wizard Inputs
-
-The wizard collects:
-
-- AWS region (the script uses your already-authenticated local AWS CLI/SSO session)
-- optional EC2 key pair name
-- Google OAuth client ID and secret
-- admin and allowed-user emails
-- Minecraft connection mode: Cloudflare custom domain, DuckDNS free subdomain, or raw public IP
-- panel hosting mode, independently: generated `workers.dev` URL or custom Cloudflare hostname
-- optional SES email settings
-- optional Google Drive backup path values
-- generated `AUTH_SECRET`
-
-## 4. First Login
-
-After setup finishes:
-
-1. Open the panel URL.
-2. Sign in with `ADMIN_EMAIL`.
-3. Check server status.
-4. Start the server.
-5. Connect from Minecraft using the hostname or public IP shown in the panel.
-
-Connection modes:
-
-- Cloudflare: uses `CLOUDFLARE_MC_DOMAIN` and updates the A record when EC2 gets a new IP.
-- DuckDNS: uses `DUCKDNS_DOMAIN.duckdns.org` and updates it when EC2 gets a new IP.
-- No domain: shows the current EC2 public IP in the panel. The IP can change after restarts.
-
-Panel hosting is separate from the Minecraft connection mode. Every Minecraft mode works with either panel mode:
-
-- `workers.dev`: enter your account subdomain (`account-name`, `account-name.workers.dev`) or full expected Worker URL. Setup validates it against the Worker name, derives and saves `NEXT_PUBLIC_APP_URL`, enables `workers_dev`, deploys without `--route`, skips panel DNS checks, and verifies the resulting URL.
-- Custom Cloudflare hostname: enter an HTTPS origin plus the panel zone ID and a zone-scoped token with DNS Read/Edit and Workers Routes Read/Edit. These deploy/teardown panel credentials are separate from Minecraft DNS credentials and are not uploaded as Worker runtime secrets. Setup safely ensures a proxied panel record, records pre-existing route/DNS state, deploys with `--route`, and explicitly asks whether `workers.dev` should stay enabled.
-
-When setup prints the panel URL, add these exact values to the Google OAuth web client:
-
-- Authorized JavaScript origin: `<panel-origin>`
-- Sign-in redirect URI: `<panel-origin>/api/auth/callback`
-- Google Drive redirect URI: `<panel-origin>/api/gdrive/callback`
-
-For example, Workers hosting might use `https://mc-aws-panel.account-name.workers.dev` with both `/api/auth/callback` and `/api/gdrive/callback` on that exact origin.
-
-## 5. Local Run Against AWS
-
-After setup has written `.env.local`:
+Replace both fields with the intended player's real Minecraft UUID and name. Then validate it:
 
 ```bash
-pnpm dev
+AWS_PROFILE=<profile> mise exec -- pnpm profile:validate
 ```
 
-Open `http://localhost:3000`.
+See [Server Profiles](../SERVER_PROFILES.md) for the file format and other server settings.
 
-Local auth options:
+## 4. Bootstrap CDK and run the deployment pass
 
-- Google sign-in, if localhost is configured in Google OAuth
-- Dev login at `http://localhost:3000/api/auth/dev-login`
-
-## 6. Mock Mode
-
-Mock mode does not need AWS credentials:
+After authentication and the first setup pass, bootstrap the selected account and region once. This creates CDK support resources and requires the temporary administrator-level deployment capability described above:
 
 ```bash
-pnpm dev:mock
+export PATH="$HOME/.local/bin:$PATH"
+AWS_PROFILE=<profile> mise exec -- pnpm exec cdk bootstrap aws://<account-id>/<region>
 ```
 
-Open `http://localhost:3000/api/auth/dev-login`.
-
-## 7. Deploy Updates
-
-Application updates and profile changes are separate. A service restart never pulls code or reapplies profile files. See [Server Profiles](../SERVER_PROFILES.md) before changing profile content; existing-instance profile rollout remains fail-closed pending a reviewed rebuild/transition.
-
-App update:
+Then rerun setup:
 
 ```bash
-pnpm deploy:cf
+AWS_PROFILE=<profile> bash ./setup.sh
 ```
 
-Infrastructure update:
+The wizard asks for:
+
+- AWS region
+- Google OAuth client ID/secret, admin email, and optional allowed emails
+- Minecraft address: Cloudflare DNS, DuckDNS, or raw public IP
+- panel host: `workers.dev` or a custom Cloudflare hostname
+- optional SES and Google Drive settings
+
+An EC2 key pair is optional, but port 22 is blocked by default. Leave it blank and use AWS Systems Manager Session Manager.
+
+The wizard writes `.env.local` and `.env.production`. These gitignored files contain credentials and secrets, including the Google client secret and DNS tokens. Protect them; do not commit or share them.
+
+### Cloudflare choices
+
+Choose `workers.dev` or a custom panel hostname. For a custom hostname, follow [Cloudflare Prerequisite](CLOUDFLARE_SETUP.md). In the wizard, **External DNS** means an existing proxied Cloudflare record managed outside setup. Panel hosting and the Minecraft address are independent.
+
+### Google URLs printed during setup
+
+Pause after panel hosting is chosen and copy setup's exact printed origin, sign-in callback, and Drive callback into the OAuth Web client. This applies to custom hosts and `workers.dev`; do not construct the values yourself. [Google OAuth Prerequisite](GOOGLE_OAUTH_SETUP.md) is the canonical URL and consent-screen guide.
+
+### Deployment confirmation
+
+Setup validates the AWS identity, region, profile, optional SES inbound prerequisites, and pinned AMI. It then displays chargeable resources and proceeds only when you type `DEPLOY`.
+
+The deployment uses the region's default VPC, a public subnet, a `t4g.medium` instance, and an encrypted 8 GB GP3 root volume. It deploys AWS resources with CDK, deploys the panel to Cloudflare Workers, creates runtime-state resources, and provisions a dedicated AWS runtime key directly into Cloudflare. The first deployment starts EC2 and Minecraft immediately, so compute billing begins during deployment.
+
+## 5. Finish configuration
+
+After setup completes:
+
+1. Confirm the Google OAuth client contains the exact printed origin and callbacks.
+2. Open the printed panel URL and sign in as `ADMIN_EMAIL`.
+3. Wait for the instance to report running, then check Minecraft service readiness in the panel.
+4. If using Drive, connect it in the panel, create a test backup, and restore that backup.
+5. Connect using the displayed address and confirm the server works.
+6. Check AWS Billing and Cost Explorer.
+
+Use the web panel for production mutations. The repository's `scripts/server-cli.ts` sends no authentication, so its start/stop/backup/restore commands do not work against authenticated production routes.
+
+## Runtime and cost behavior
+
+The instance stops after about 15 minutes of consecutive successful probes showing zero players. Probe failures suppress the automatic stop. Stopping ends EC2 compute charges, but the attached EBS volume remains billed.
+
+Hibernate backs up, stops the instance, and deletes the project-managed root volume. Do not hibernate until Google Drive is configured and a backup and restore have been tested. When resuming, explicitly choose the latest backup, a named backup, or a fresh server; a request without a restore choice starts fresh.
+
+Any cost examples are estimates, not quotes. Actual charges depend on region, instance and storage pricing, snapshots, data transfer, request volume, optional SES/Cloudflare services, taxes, free-tier eligibility, and pricing changes.
+
+## Updates and teardown
+
+Redeploy the Cloudflare Worker and rotate its AWS runtime key:
 
 ```bash
-pnpm cdk:diff
-pnpm cdk:deploy
+AWS_PROFILE=<profile> mise exec -- pnpm deploy:cf
 ```
 
-The stack never synthesizes a dynamic latest-AMI SSM parameter. To intentionally upgrade the base image, first resolve and review the candidate ID, plan for EC2 replacement and restore, then pass that exact ID as confirmation:
+This requires the matching `.mc-aws-deployment.json`, `.env.production`, AWS session, and Cloudflare authentication described in [Cloudflare Prerequisite](CLOUDFLARE_SETUP.md).
+
+Review infrastructure changes before deployment:
 
 ```bash
-LATEST_AMI="$(aws ssm get-parameter \
-  --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-arm64 \
-  --query Parameter.Value --output text)"
-printf '%s\n' "$LATEST_AMI"
-pnpm ami:upgrade -- upgrade --region "$AWS_REGION" --confirm "$LATEST_AMI"
-pnpm cdk:diff
+AWS_PROFILE=<profile> mise exec -- pnpm cdk:diff
+AWS_PROFILE=<profile> mise exec -- pnpm cdk:deploy
 ```
 
-Do not execute the resulting deployment unless its reviewed change set intentionally allows the instance replacement and the restore plan is ready.
-
-Rotate only the dedicated Worker runtime key:
+Preview teardown:
 
 ```bash
-VERIFY_URL=https://panel.example.com bash scripts/rotate-worker-runtime-key.sh
+AWS_PROFILE=<profile> mise exec -- pnpm destroy
 ```
 
-The rotation command requires authenticated local AWS CLI and Wrangler sessions. It never uploads the local human/deployment AWS identity.
+Read [Safe Teardown](../TEARDOWN.md) before executing removal. Keep `.mc-aws-deployment.json`; teardown uses it to identify the exact resources created or changed for this deployment.
 
-## 8. Common Checks
+## Troubleshooting
 
-AWS identity:
-
-```bash
-aws sts get-caller-identity
-```
-
-Typecheck:
-
-```bash
-pnpm typecheck
-```
-
-Tests:
-
-```bash
-pnpm test
-```
-
-Browser/E2E tests require Playwright Chromium once per development environment:
-
-```bash
-pnpm exec playwright install chromium
-pnpm test:e2e:mock
-```
-
-## 9. Teardown
-
-Inventory and preview removal without mutation:
-
-```bash
-pnpm destroy
-```
-
-After reviewing the live inventory, execute with an account-specific typed confirmation:
-
-```bash
-pnpm destroy:execute
-```
-
-This default uses verified Google Drive durability evidence and retains no new EBS snapshot. If you deliberately want a billed final EBS snapshot instead, use `pnpm destroy:execute:snapshot`.
-
-Do not remove `.mc-aws-deployment.json` before teardown. See [Ownership-Aware Teardown](../TEARDOWN.md) for retained backups, failure recovery, manual removal, OAuth/credential cleanup, and billing verification.
+- AWS authentication: run `AWS_PROFILE=<profile> aws sts get-caller-identity` and retry with the same profile.
+- CDK bootstrap errors: rerun the account/region bootstrap command in step 4.
+- No default VPC: recreate one in the selected region or use a region with a default VPC; the current stack does not accept a custom VPC ID.
+- Google `redirect_uri_mismatch`: copy the exact origin and callbacks printed by setup.
+- Wrangler login problems: let setup authenticate its isolated Wrangler home; remove unrelated globally exported Cloudflare DNS tokens.
+- Custom external panel failure: export `CLOUDFLARE_API_TOKEN` with account Workers scripts/secrets/KV access plus zone read and Workers Routes Read/Edit access.

@@ -1,277 +1,51 @@
 # On-Demand Minecraft Server on AWS
 
-<p align="center">
-  <a href="https://github.com/shanebishop1/mc-aws/actions/workflows/baseline-pr-validation.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/shanebishop1/mc-aws/baseline-pr-validation.yml?branch=main&amp;style=flat-square&amp;label=build" /></a>
-  <a href="https://github.com/shanebishop1/mc-aws/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/shanebishop1/mc-aws?sort=semver&amp;display_name=tag&amp;style=flat-square" /></a>
-  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/shanebishop1/mc-aws?style=flat-square" /></a>
-</p>
+`mc-aws` deploys a Minecraft server to AWS and a control panel to Cloudflare Workers. The panel supports Google sign-in, server lifecycle controls, an email allowlist, cost views, and optional Google Drive backups.
 
-<p align="center">
-  <a href="docs/setup/SETUP_AND_RUN.md">Setup Guide</a> &middot;
-  <a href="docs/README.md">Documentation</a> &middot;
-  <a href="docs/OPERATIONS_GUIDE.md">Operations</a> &middot;
-  <a href="https://github.com/shanebishop1/mc-aws/releases">Releases</a>
-</p>
+## Production setup
 
-<p align="center"><img width="320" height="320" alt="Minecraft server hosted on AWS" src="docs/assets/readme/hero.png" /></p>
+Use [Setup and Run](docs/setup/SETUP_AND_RUN.md). It is the complete production procedure and covers both required `setup.sh` passes.
 
-Run a Minecraft server on AWS without paying to leave it running all the time. Friends can sign in, check the server status, and start it when they want to play.
+## Hosting choices
 
-## Features
-<table align="center">
-<tr>
-  <td>
-    <img width="170" height="368" alt="Server status and controls" src="docs/assets/readme/server-stopped.png" />
-    <br/>
-    <p align="center">Monitor</p>
-  </td>
-    <td>
-    <img width="170" height="368" alt="Email access management" src="docs/assets/readme/email-management.png" />
-    <br/>
-    <p align="center">Manage</p>
-  </td>
-  <td>
-    <img width="170" height="368" alt="AWS cost dashboard" src="docs/assets/readme/cost-dashboard.png" />
-    <br/>
-    <p align="center">Budget</p>
-  </td>
-  <td>
-    <img width="170" height="368" alt="Google Drive backup restore" src="docs/assets/readme/restore-backup.png" />
-    <br/>
-    <p align="center">Backup</p>
-  </td>
-</tr>
-</table>
+Cloudflare Workers hosts the panel and is mandatory. Choose either:
 
-- Web panel for start, stop, resume, and hibernate
-- Google sign-in with admin and allowed-user roles
-- Optional Minecraft DNS: Cloudflare, free DuckDNS, or raw public IP mode
-- Backup and restore with Google Drive
-- Optional CLI commands
+- the account's `workers.dev` hostname; no custom domain is needed
+- a custom Cloudflare hostname
 
-## Why?
+Choose the Minecraft address separately:
 
-Most Minecraft hosting is priced like you are going to use the server all month. If you only play occasionally, that means paying for a box that sits idle most of the time.
+- Cloudflare DNS on a custom domain
+- a DuckDNS hostname
+- the current public IP shown in the panel
 
-Self-hosting at home avoids the monthly bill, but it creates a different problem: if your friends want to play, you either leave the server running all the time or you have to be around to start it.
+Setup prints the exact panel origin and Google sign-in/Drive callback URLs. Copy those values into the Google OAuth client, including for `workers.dev`; do not construct the URLs yourself.
 
-This project is the middle path. The server runs on AWS, friends can start it from the control panel, and the instance can shut down when nobody is playing.
+## Operation and cost
 
-The cost model is different from a flat monthly host:
+Use the web panel for production changes. The server automatically stops after about 15 minutes of consecutive successful zero-player checks. A stopped instance no longer incurs EC2 compute charges, but its EBS volume still costs money.
 
-| State | What You Pay For | Rough Cost |
-| --- | --- | --- |
-| Hibernated | No EC2 compute, no attached EBS volume | `$0.00/month` for server compute/storage |
-| Stopped | EBS volume remains attached | about `$0.75/month` for an 8 GB GP3 volume |
-| Running | EC2 compute while people play | about `$0.03-0.04/hour` for the default instance class |
+The first deployment starts EC2 and Minecraft immediately, so billing starts during deployment. After deployment, wait for the instance and Minecraft readiness checks before connecting players or testing backups.
 
-If you play for 8 hours in a month and hibernate the rest of the time, the server compute cost is measured in cents, not a fixed monthly fee. Exact pricing depends on region, instance type, storage size, backups, and AWS pricing changes.
+Hibernate backs up the server and removes its root volume. Configure Drive and test backup and restore first. On resume, choose `latest`, a named backup, or `fresh` for a new server; omitting the choice also starts fresh.
 
-On-demand providers like Exaroton or ServerWave can be a better fit if you want less setup. They are easier to use and have their own feature sets. The reason to use this project is not just penny-level savings. The reason is control.
+Costs vary by region, instance type, storage, snapshots, data transfer, API usage, optional services, free-tier eligibility, and provider pricing. Review the deployment preflight and monitor AWS Billing after deployment.
 
-You own the infrastructure. You can change the instance size, replace the backup flow, add plugins, edit the startup scripts, build a Discord or web portal, add custom scheduled behavior, wire in AWS services, or extend the CDK stack however you want.
+## Access
 
-That matters more now that AI can do a lot of the glue work. You can ask an agent to add a new admin route, generate a plugin workflow, change the deploy stack, add a custom automation, or build a small portal around your server without waiting for a hosting provider to expose that feature.
+- `ADMIN_EMAIL` has administrative panel access.
+- `ALLOWED_EMAILS` seeds the initial list of users who can start the server.
+- Other signed-in users receive public/read-only access.
+- SSH ingress is blocked by default. Use AWS Systems Manager Session Manager for shell access.
 
-You are not at the whim of a provider's dashboard, pricing model, plugin support, or product roadmap. It is your server and your hosting platform.
+## Development
 
-## Before Setup
+For local development without AWS, use [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md). Do not run production setup merely to install development tools.
 
-Complete these first. These are very common and well-documented paths, so ask your AI to help you if you get stuck:
+## Documentation
 
-- [Prepare your AWS account](docs/setup/AWS_ACCOUNT_SETUP.md)
-- [Create a Google OAuth client](docs/setup/GOOGLE_OAUTH_SETUP.md)
-
-Optional:
-
-- [Set up a Cloudflare-managed domain](docs/setup/CLOUDFLARE_SETUP.md), if you want a custom Minecraft hostname
-- [Set up DuckDNS](docs/setup/DUCKDNS_SETUP.md), if you want a free Minecraft hostname
-- [Create an EC2 key pair](docs/setup/EC2_KEY_PAIR_SETUP.md), if you want SSH key access
-- [Configure optional SES capabilities](docs/setup/SES_SETUP.md) for independent outbound notifications and inbound commands
-- [Configure Google Drive backups](docs/setup/GOOGLE_DRIVE_SETUP.md), if you want backup, restore, and hibernate workflows
-
-## Setup
-
-After the prerequisites are done, clone the canonical application and run setup:
-
-```bash
-git clone https://github.com/shanebishop1/mc-aws.git
-cd mc-aws
-bash ./setup.sh
-```
-
-The script installs the project toolchain, validates the selected server profile, uses your local AWS CLI/SSO session for deployment, creates a separate least-privilege Worker runtime identity, writes non-secret deployment outputs, and deploys the web app to Cloudflare. EC2 receives content-addressed runtime/profile assets through its IAM role; it does not need a fork or GitHub token.
-
-Customize Minecraft configuration and plugins with [Server Profiles](docs/SERVER_PROFILES.md). Run `pnpm profile:init`; the ignored local profile is selected automatically. An explicit `MC_SERVER_PROFILE_DIR` may select a profile subdirectory in an independent private repository.
-
-For the Minecraft connection address, setup supports three modes:
-
-- Cloudflare custom domain: friends connect to `mc.example.com`.
-- DuckDNS free subdomain: friends connect to `myserver.duckdns.org`.
-- No-domain mode: friends connect to the public IP shown in the panel.
-
-Choose panel hosting separately from the Minecraft address:
-
-- `workers.dev`: setup derives `https://mc-aws-panel.<account-subdomain>.workers.dev`, enables `workers_dev`, skips panel DNS, and deploys without a route. No custom domain is needed.
-- Custom Cloudflare hostname: setup validates panel-zone DNS access, creates or proxies the panel record safely, deploys with the hostname route, and asks whether the `workers.dev` endpoint should remain enabled.
-
-For either choice, register the exact panel origin plus `<panel-origin>/api/auth/callback` and `<panel-origin>/api/gdrive/callback` in the Google OAuth web client. Setup prints all three values before deployment and again in completion output.
-
-For the full walkthrough, use the canonical [Setup and Run](docs/setup/SETUP_AND_RUN.md) guide. `setup.sh` presents a cost/resource preflight and requires `DEPLOY` immediately before it creates chargeable resources.
-
-## Local Development
-
-Use mock mode if you want to work on the app without AWS:
-
-```bash
-pnpm install
-pnpm dev:mock
-```
-
-Open `http://localhost:3000/api/auth/dev-login` to sign in as a local admin.
-
-More detail:
-
-- [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md)
-- [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
-
-## Using the Panel
-
-The web app is the primary interface. It handles:
-
-- Server status, health, and player visibility
-- Start, stop, resume, and hibernate operations
-- Backup, restore, and backup listing
-- Cost views and email allowlist management
-- Admin shortcuts for common operations
-
-Roles:
-
-- `admin`: the address in `ADMIN_EMAIL`; full lifecycle, backup, restore, cost, and access-management controls
-- `allowed`: addresses in the server-side `/minecraft/email-allowlist` (initially seeded from `ADMIN_EMAIL` and `ALLOWED_EMAILS`); authenticated status and start access
-- `public`: other authenticated users; read-only status access
-
-## Start, Stop, Resume, Hibernate
-
-- `start`: starts the server in the normal path
-- `stop`: stops the instance but keeps storage attached
-- `hibernate`: backs up the server, stops the instance, and deletes only the project-managed root volume
-- `resume`: recreates storage and brings a hibernated server back online
-
-Use `stop` for shorter pauses. Use `hibernate` when the server will be idle long enough that you want to avoid EBS storage cost too.
-
-Hibernate is intentionally destructive. Resume reconstructs the root volume from the instance's own source AMI metadata. If that metadata cannot be resolved, resume fails instead of guessing.
-
-## Backups
-
-Backup and restore use Google Drive.
-
-If Google Drive is not configured, backup, restore, and hibernate flows are not useful. Configure it during setup or from the web panel before relying on those operations.
-
-See [Operations Guide](docs/OPERATIONS_GUIDE.md) for day-to-day backup, restore, and recovery notes.
-
-## CLI
-
-The CLI is optional. It calls the app API and defaults to `http://localhost:3000/api`.
-
-```bash
-pnpm server:status
-pnpm server:start
-pnpm server:stop
-pnpm server:resume
-pnpm server:hibernate
-pnpm server:backup
-pnpm server:backups
-pnpm server:restore -- <backup-name>
-```
-
-To point it at another panel API:
-
-```bash
-API_BASE=https://panel.yourdomain.com/api pnpm server:status
-```
-
-Advanced shell access:
-
-```bash
-./bin/connect.sh
-./bin/console.sh
-```
-
-## Deploying Updates
-
-For app updates:
-
-```bash
-pnpm deploy:cf
-```
-
-For infrastructure changes:
-
-```bash
-pnpm cdk:diff
-pnpm cdk:deploy
-```
-
-Legacy live stacks must not take a normal CDK update first. Run the read-only `pnpm migrate:existing` inventory and follow [Existing Deployment Safety Migration](docs/EXISTING_DEPLOYMENT_MIGRATION.md). Guards also refuse a pinned-instance bridge when physical user data still references legacy GitHub SSM parameters that current CDK removes.
-
-## Removing A Deployment
-
-Start with the non-mutating live inventory:
-
-```bash
-pnpm destroy
-```
-
-The ownership-aware teardown uses the ignored `.mc-aws-deployment.json` written by setup, refuses stale/same-name ownership, preserves pre-existing resources, and gracefully stops a running Minecraft/EC2 instance before deleting the exact recorded CloudFormation StackId. Its default Google Drive durability mode requires cached backup evidence and creates no EBS snapshot; `pnpm destroy:execute:snapshot` is the explicit retained-snapshot alternative. It never deletes Google Drive data or existing snapshots. Read [Ownership-Aware Teardown](docs/TEARDOWN.md) before execution.
-
-## Cost Notes
-
-This can reduce idle cost compared with leaving a server running all the time, but it does not make AWS free.
-
-- `stop` stops compute, but attached EBS storage still costs money
-- `hibernate` removes attached instance volumes after backup, so it is better for longer idle periods
-- Cloudflare, AWS, and Google setup are still your responsibility
-- Check AWS Billing and Cost Explorer after deployment, especially while testing
-
-## Docs
-
-See the reader-oriented [documentation index](docs/README.md) for current user guides, contributor references, and clearly separated historical plans.
-
-Setup:
-
-- [AWS account setup](docs/setup/AWS_ACCOUNT_SETUP.md)
-- [Cloudflare setup](docs/setup/CLOUDFLARE_SETUP.md)
-- [Google OAuth setup](docs/setup/GOOGLE_OAUTH_SETUP.md)
 - [Setup and Run](docs/setup/SETUP_AND_RUN.md)
-- [Server Profiles](docs/SERVER_PROFILES.md)
-
-Operations:
-
+- [Documentation index](docs/README.md)
 - [Operations Guide](docs/OPERATIONS_GUIDE.md)
-- [Ownership-Aware Teardown](docs/TEARDOWN.md)
-- [API Reference](docs/API.md)
-
-Development:
-
-- [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md)
-- [Mock Mode Developer Guide](docs/MOCK_MODE_DEVELOPER_GUIDE.md)
-
-## Troubleshooting
-
-### Setup fails
-
-- Run `aws sts get-caller-identity` and confirm AWS CLI access works
-- Check `.env.production` for missing values
-- Re-run `bash ./setup.sh`
-
-### Google login fails
-
-- Add the exact callback URLs in Google Cloud
-- Make sure `NEXT_PUBLIC_APP_URL` matches the deployed panel URL
-
-### Cloudflare deployment auth fails
-
-- Use Wrangler OAuth for deployment auth
-- Keep `CLOUDFLARE_DNS_API_TOKEN` for runtime DNS updates only
-- Do not export the DNS token globally in your shell
+- [Server Profiles](docs/SERVER_PROFILES.md)
+- [Teardown](docs/TEARDOWN.md)

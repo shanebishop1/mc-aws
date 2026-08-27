@@ -1,166 +1,104 @@
 # Operations Guide
 
-This guide covers normal use after setup.
+Use the signed-in web panel for production operations. It shows server state, starts and stops the server, creates and restores backups, resumes a hibernated server, manages panel access, and shows costs. The repository CLI does not provide browser-cookie authentication and is not a supported way to control a production panel.
 
-## Web Panel
+## Panel roles
 
-Use the web panel for routine operations:
+- **Admin:** the Google account matching `ADMIN_EMAIL`. It can use every panel action.
+- **Allowed:** a signed-in account in `/minecraft/email-allowlist`. It can start the server and view signed-in status; it cannot stop, back up, restore, hibernate, resume, manage emails, or view costs.
+- **Authenticated public:** a valid signed-in account that is neither admin nor allowed. It can use authenticated status and player-count views, but cannot start or administer the server.
+- **Anonymous:** not signed in. It can see the public server and stack status described in [API](API.md), with resource IDs hidden.
 
-- check status
-- start the server
-- stop the server
-- resume from hibernation
-- create backups
-- restore backups
-- manage allowed emails
-- view costs
+Allowlist behavior differs by update path:
 
-## Roles
+- Initial deployment adds `ADMIN_EMAIL` and `ALLOWED_EMAILS`.
+- Panel saves retain `NOTIFICATION_EMAIL`, `ADMIN_EMAIL`, and `ALLOWED_EMAILS`.
+- Inbound-email admin updates sent with subject `allowlist` retain `ADMIN_EMAIL` and `ALLOWED_EMAILS`, but not `NOTIFICATION_EMAIL`.
 
-- `ADMIN_EMAIL`: full access
-- `ALLOWED_EMAILS`: seeds the server-side allowlist on deployment; allowlisted users can check authenticated status and start, while admin-only operations remain restricted
-- other signed-in users: status-only
+`NOTIFICATION_EMAIL` receives notices only. Other allowed senders may email only the start command; only `ADMIN_EMAIL` may send admin commands.
 
-## Start And Stop
+## Start, stop, hibernate, and resume
 
-Use `start` when the server has normal attached storage and just needs to boot.
+- **Start** boots a stopped instance that still has its root volume.
+- **Stop** stops EC2 but keeps the root EBS volume, which continues to cost money.
+- **Hibernate** creates a Drive backup, refreshes the backup cache, stops EC2, and deletes the managed root volume. Do not use it until you have verified a backup and restore.
+- **Resume** normally reconstructs a stopped, hibernated instance that has no root volume, then starts fresh or restores Drive data. On an ordinary stopped instance with an attached root volume, it reuses that disk and may still run the selected restore; use Start when no restore is intended.
 
-Use `stop` when people are done for now but you expect to use the server again soon. The EC2 instance stops, but the EBS volume remains attached and still costs money.
+Resume choices are explicit:
 
-## Hibernate And Resume
+| Choice | Result |
+| --- | --- |
+| `fresh` | Does not restore a backup. A hibernated server starts from its new system volume; an ordinary stopped server reuses its attached disk. This is the default when no mode or backup name is sent. |
+| `latest` | Restores the newest Drive backup. |
+| `named` | Restores the supplied backup name. |
 
-Use `hibernate` for longer idle periods.
+Use the panel choice you intend. A resume requested while EC2 or its volume is in a transitional state can fail and leave `/minecraft/resume-pending`; wait for EC2 and storage to become stable, inspect the marker, Lambda/SSM results, and tagged volumes, then retry only after confirming no resume is still running. If storage cleanup also fails, a tagged reconstructed EBS volume can remain.
 
-Hibernate:
+## Backups and restores
 
-1. creates a backup
-2. stops the instance
-3. detaches and deletes only the project-managed root volume
+Backups use Google Drive and require the server to be running. A backup:
 
-Resume recreates storage using the instance's pinned source AMI metadata, then brings the server back online.
+1. checks the server tree;
+2. stops Minecraft, causing player downtime;
+3. creates and checks the archive;
+4. uploads it to Drive;
+5. restarts Minecraft and refreshes the cached backup list.
 
-Do not use hibernate until you have created and verified a backup.
+Most failures attempt to restart Minecraft. A partial failure is possible: the archive may already be in Drive while Minecraft fails to restart, or the backup may succeed while the cached list fails to refresh. Check Drive directly, check service status, and start the service before retrying. Test a restore during planned downtime before relying on backups.
 
-## Backups
+A restore replaces the server directory from Drive, reapplies the current server profile, and restarts Minecraft. If the restored server does not start, rollback to the prior local directory is attempted; rollback can also fail. Keep an independent backup.
 
-Backups use Google Drive.
+## Server profiles
 
-Before relying on backups:
+See [Server Profiles](SERVER_PROFILES.md) for when profile content is applied and how to validate it.
 
-1. Configure Google Drive from the panel.
-2. Create a manual backup.
-3. Confirm it appears in the backup list.
-4. Run a restore test when you can tolerate downtime.
+## SSM access
 
-## CLI
-
-The CLI calls the app API:
-
-```bash
-pnpm server:status
-pnpm server:start
-pnpm server:stop
-pnpm server:backup
-pnpm server:backups
-pnpm server:restore -- <backup-name>
-pnpm server:hibernate
-pnpm server:resume
-```
-
-Default API base:
-
-```text
-http://localhost:3000/api
-```
-
-Override it:
-
-```bash
-API_BASE=https://panel.yourdomain.com/api pnpm server:status
-```
-
-## Manual Shell Access
-
-Advanced access:
+Use the panel first. For a running instance, advanced access is available through AWS Systems Manager:
 
 ```bash
 ./bin/connect.sh
 ./bin/console.sh
 ```
 
-Use the web panel first unless you specifically need shell or console access.
+This requires the AWS CLI, Session Manager plugin, a signed-in AWS identity allowed to start SSM sessions, the deployment region/profile, a managed instance online in SSM, and outbound network access from the instance. Port 22 is not open.
 
-## Updating The App
+## Deploy changes
+
+Update the panel:
 
 ```bash
 pnpm deploy:cf
 ```
 
-## Updating Infrastructure
-
-Preview first:
+Preview infrastructure changes, then deploy only after reviewing replacements and data impact:
 
 ```bash
 pnpm cdk:diff
-```
-
-Deploy:
-
-```bash
 pnpm cdk:deploy
 ```
 
-## Updating Server Configuration
+Older stacks may require [Legacy Stack Safety Bridge](EXISTING_DEPLOYMENT_MIGRATION.md) instead of a normal deployment.
 
-Use the ignored deployment-specific profile described in [Server Profiles](SERVER_PROFILES.md). `pnpm profile:validate` is local and read-only. Profiles apply on fresh provisioning/rebuild and are reapplied after a validated Google Drive restore, not on `git pull` or an ordinary service restart. Restore preserves world and unrelated server data while the current deployment profile remains authoritative for its declared paths and plugin destinations. `pnpm profile:rollout:check` deliberately validates and stops without deploying or sending SSM commands.
+## Operation record cleanup
 
-## Operation State Cleanup
-
-Durable operation-state records in SSM use a 30-day retention window by default.
+Operation records under `/minecraft/operations` are eligible for deletion 30 days after their last recorded update by default, regardless of their last status. Automatic cleanup is best-effort and can leave old records when AWS calls fail. Always preview manual cleanup first:
 
 ```bash
+pnpm operations:cleanup -- --dry-run
 pnpm operations:cleanup
-pnpm operations:cleanup -- --dry-run --retention-days=14
 ```
 
-Override the default with:
+Use `--retention-days=<days>` or `MC_OPERATION_STATE_RETENTION_DAYS` to change the cutoff. A shorter value removes troubleshooting history sooner.
 
-```bash
-MC_OPERATION_STATE_RETENTION_DAYS=14 pnpm operations:cleanup
-```
+## Remove the deployment
 
-## Removing The Deployment
-
-`pnpm destroy` is always a live inventory/dry run. `pnpm destroy:execute` requires an exact typed confirmation and deletes only resources proved project-owned by `.mc-aws-deployment.json` plus live identity/tags.
-
-Immediately before stack deletion, teardown gracefully stops Minecraft and EC2 when running and revalidates exact ownership. The default flow requires the real non-empty `{backups,cachedAt}` cache shape as supporting Google Drive evidence and creates no EBS snapshot; `pnpm destroy:execute:snapshot` is the explicit retained-snapshot alternative. It then deletes CloudFormation by the recorded StackId/ARN. Existing snapshots and other retained EBS volumes are reported and never silently deleted. See [Ownership-Aware Teardown](TEARDOWN.md) before removing cloud resources or local env files.
+Read [Safe Teardown](TEARDOWN.md), verify Drive directly, and run the dry run before deleting anything.
 
 ## Troubleshooting
 
-### Server will not start
-
-- Check the panel status.
-- Check whether the server is hibernated and needs `resume` instead of `start`.
-- Check AWS credentials and region values.
-- Check Lambda and SSM command logs in AWS.
-- A failed resume intentionally leaves `/minecraft/resume-pending` in SSM so reconstructed bootstrap cannot expose an unrestored server. Treat an existing marker as stale or active: inspect the failed Lambda, cloud-init, and SSM command first. Delete that non-secret marker only after confirming no resume is running, then retry the reviewed resume operation.
-
-### DNS does not update
-
-- Check `CLOUDFLARE_DNS_API_TOKEN`.
-- Check `CLOUDFLARE_ZONE_ID`.
-- Check `CLOUDFLARE_RECORD_ID` if you supplied one.
-- Confirm the token has DNS edit access for the correct zone.
-
-### Google login fails
-
-- Check `NEXT_PUBLIC_APP_URL`.
-- Check Google OAuth callback URLs.
-- Restart local dev after changing env values.
-
-### Backup or restore fails
-
-- Confirm Google Drive is configured in the panel.
-- Confirm the backup list loads.
-- Check the EC2 script logs.
-- Do not hibernate until backup succeeds.
+- **Start fails:** check panel state. A hibernated server needs resume, not start. Check AWS region, Lambda logs, and SSM command results.
+- **Resume fails:** inspect Lambda, cloud-init, SSM results, and tagged EBS volumes before retrying. Do not remove `/minecraft/resume-pending` unless no resume is running and you understand the failed step.
+- **DNS fails:** check the selected DNS mode, token, zone, and hostname and confirm the token can edit the intended zone.
+- **Google sign-in fails:** check the app URL and Google callback URL, then restart local development after environment changes.
+- **Backup or restore fails:** check Drive configuration, EC2 script logs, service status, and Drive itself. The panel backup list is cached.
