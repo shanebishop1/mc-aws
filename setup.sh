@@ -581,6 +581,11 @@ main() {
     error_exit "AWS CLI credentials are unavailable. Run 'aws sso login' (recommended) or configure local deployment credentials, then re-run ./setup.sh"
   fi
 
+  step "Checking SES inbound-command prerequisites"
+  if ! run_with_mise pnpm exec tsx scripts/ses-preflight.ts; then
+    error_exit "SES inbound-command prerequisites are not ready. No deployment changes were made; review docs/setup/SES_SETUP.md and re-run setup."
+  fi
+
   step "Resolving immutable Amazon Linux 2023 image"
   if ! ensure_al2023_ami_pin; then
     error_exit "Could not validate or persist the exact ARM64 Amazon Linux 2023 AMI pin. Existing pins are never refreshed automatically; use the reviewed pnpm ami:upgrade workflow for an intentional change."

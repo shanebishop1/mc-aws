@@ -399,19 +399,15 @@ validate_duckdns_domain() {
 }
 
 validate_duckdns_token() {
-  local domain="$1"
+  local _domain="$1"
   local token="$2"
 
-  log "Validating DuckDNS token..."
-  local response
-  response=$(curl -fsS "https://www.duckdns.org/update?domains=${domain}&token=${token}&verbose=true" 2>/dev/null || echo "KO")
-
-  if [[ "$response" == OK* ]]; then
-    log_success "DuckDNS token is valid"
+  if [[ "$token" =~ ^[A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}$ ]]; then
+    log_success "DuckDNS token format accepted; it will be verified on the first runtime DNS update"
     return 0
   fi
 
-  log_error "DuckDNS token or subdomain validation failed"
+  log_error "DuckDNS token must use the UUID shown in your DuckDNS account"
   return 1
 }
 
@@ -1007,13 +1003,19 @@ collect_email_settings() {
     echo ""
     log "Inbound commands require an existing, active receipt rule set that you name explicitly."
     log "The stack adds/removes only its own rule and never changes which account-wide rule set is active."
+    log "Use a dedicated inbound subdomain unless your root domain already intentionally routes mail to SES."
+    log "Changing root-domain MX can disrupt existing mail. The exact recipient domain must be verified in SES."
+    log "Its MX and active receipt rule set must use this deployment's AWS region; the stack's SNS topic is same-region."
+    log "Setup runs a read-only SES/DNS preflight before any deployment changes."
+    log "Authorized senders must be ADMIN_EMAIL/ALLOWED_EMAILS entries and pass SPF, DKIM, and DMARC."
+    log "The private keyword is not authorization by itself."
     while true; do
       prompt SES_INBOUND_RECIPIENT "Enter inbound command recipient" "$existing_inbound_recipient"
       validate_email "$SES_INBOUND_RECIPIENT" && break
       log_error "Invalid email format. Please try again."
     done
     prompt SES_RECEIPT_RULE_SET_NAME "Enter existing receipt rule set name" "$existing_rule_set_name"
-    prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword"
+    prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword" true
   fi
   echo ""
 

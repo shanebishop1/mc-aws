@@ -366,9 +366,7 @@ sys.stdout.buffer.write(output.getvalue())`,
       .split(",")
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean);
-    const emailAllowlistSeed = Array.from(
-      new Set([notificationEmail, adminEmail, ...allowedEmails].filter(Boolean))
-    ).join(",");
+    const emailAllowlistSeed = Array.from(new Set([adminEmail, ...allowedEmails].filter(Boolean))).join(",");
 
     if (sesNotificationsEnabled) {
       // SSM parameters are created only when EC2 notifications are enabled.

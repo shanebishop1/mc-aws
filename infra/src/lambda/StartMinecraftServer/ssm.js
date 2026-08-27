@@ -22,7 +22,7 @@ const SSM_NOT_READY_ERRORS = new Set(["InvalidInstanceId", "TargetNotConnected"]
  * @returns {Promise<string>} The command output
  */
 async function executeSSMCommand(instanceId, commands, options = {}) {
-  console.log(`Executing SSM command on instance ${instanceId}: ${commands.join(" ")}`);
+  console.log(`Executing ${commands.length} SSM command(s) on instance ${instanceId}`);
 
   const sendResponse = await sendCommandWhenReady(instanceId, commands, options.timeoutSeconds);
 
@@ -65,10 +65,7 @@ function buildSSMFailureOutput(response) {
   const standardOutput = response.StandardOutputContent || "";
   const failureOutput = errorOutput || standardOutput || "No command output available";
 
-  console.error(`SSM command failed. Error output: ${errorOutput}`);
-  if (standardOutput) {
-    console.error(`SSM command failed. Standard output: ${standardOutput}`);
-  }
+  console.error("SSM command failed; raw command output omitted from logs.");
 
   return failureOutput;
 }

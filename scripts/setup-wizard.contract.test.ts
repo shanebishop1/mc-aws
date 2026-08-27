@@ -14,13 +14,46 @@ describe("setup-wizard email optional contract", () => {
     expect(source).toContain("Outbound notifications only");
     expect(source).toContain("Inbound email commands only");
     expect(source).toContain("never changes which account-wide rule set is active");
+    expect(source).toContain("Use a dedicated inbound subdomain");
+    expect(source).toContain("Changing root-domain MX can disrupt existing mail");
+    expect(source).toContain("pass SPF, DKIM, and DMARC");
+    expect(source).not.toContain("duckdns.org/update");
+    expect(source).toContain("DuckDNS token must use the UUID shown in your DuckDNS account");
+    expect(source).toContain("keyword is not authorization by itself");
     expect(source).toContain('write_env_files "SES_NOTIFICATIONS_ENABLED" "$SES_NOTIFICATIONS_ENABLED"');
     expect(source).toContain('write_env_files "SES_INBOUND_COMMANDS_ENABLED" "$SES_INBOUND_COMMANDS_ENABLED"');
     expect(source).toContain('write_env_files "VERIFIED_SENDER" "$VERIFIED_SENDER"');
     expect(source).toContain('write_env_files "NOTIFICATION_EMAIL" "$NOTIFICATION_EMAIL"');
     expect(source).toContain('write_env_files "SES_INBOUND_RECIPIENT" "$SES_INBOUND_RECIPIENT"');
     expect(source).toContain('write_env_files "SES_RECEIPT_RULE_SET_NAME" "$SES_RECEIPT_RULE_SET_NAME"');
+    expect(source).toContain('prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword" true');
+    expect(source).not.toContain('prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword"\n');
     expect(source).toContain('write_env_files "START_KEYWORD" "$START_KEYWORD"');
+  });
+
+  it("masks and preserves an existing start keyword when secret input is blank", () => {
+    const existingKeyword = "existing-private-keyword";
+    const output = execFileSync(
+      "bash",
+      [
+        "-c",
+        'source scripts/setup-wizard.sh; START_KEYWORD="$EXISTING_KEYWORD"; prompt START_KEYWORD "Enter private start keyword" "$START_KEYWORD" true; [[ "$START_KEYWORD" == "$EXISTING_KEYWORD" ]] && printf preserved',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MC_AWS_SETUP_LIBRARY_ONLY: "1",
+          EXISTING_KEYWORD: existingKeyword,
+        },
+        input: "\n",
+      }
+    );
+
+    expect(output).toContain("[***]");
+    expect(output).toContain("preserved");
+    expect(output).not.toContain(existingKeyword);
   });
 });
 

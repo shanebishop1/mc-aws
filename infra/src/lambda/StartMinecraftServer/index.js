@@ -203,7 +203,7 @@ async function handleEmailInvocation(event) {
   const emailData = parseEmailFromEvent(event);
   if (emailData.error) return emailData.error;
 
-  // Verify email authenticity (SPF/DKIM) to prevent spoofing
+  // Verify authenticated alignment with the visible sender before authorization.
   if (!verifyEmailAuthenticity(emailData.verdicts)) {
     console.warn("Email failed authentication checks - rejecting");
     return { statusCode: 403, body: "Email failed authentication verification." };
@@ -211,7 +211,7 @@ async function handleEmailInvocation(event) {
 
   const { senderEmail, subject, body } = emailData;
   const notificationEmail = (process.env.NOTIFICATION_EMAIL || process.env.ADMIN_EMAIL || "").toLowerCase();
-  const adminEmails = uniqueEmails([process.env.NOTIFICATION_EMAIL, process.env.ADMIN_EMAIL]);
+  const adminEmails = uniqueEmails([process.env.ADMIN_EMAIL]);
   const isAdmin = adminEmails.includes(senderEmail);
 
   // Handle admin allowlist updates
@@ -231,11 +231,11 @@ async function handleEmailInvocation(event) {
 
 /**
  * Verify email authenticity using SES verdicts.
- * Requires SPF and DKIM to pass to prevent email spoofing.
+ * Requires SPF, DKIM, and DMARC to pass so the authenticated domains align with the visible sender.
  * @param {Object} verdicts - { spf, dkim, dmarc } verdict statuses
  * @returns {boolean} True if email is authenticated
  */
-function verifyEmailAuthenticity(verdicts) {
+export function verifyEmailAuthenticity(verdicts) {
   if (!verdicts) {
     console.warn("No verdicts available - cannot verify email authenticity");
     return false;
@@ -243,13 +243,13 @@ function verifyEmailAuthenticity(verdicts) {
 
   const spfPass = verdicts.spf === "PASS";
   const dkimPass = verdicts.dkim === "PASS";
+  const dmarcPass = verdicts.dmarc === "PASS";
 
   if (!spfPass) console.warn("SPF verification failed:", verdicts.spf);
   if (!dkimPass) console.warn("DKIM verification failed:", verdicts.dkim);
-  if (verdicts.dmarc !== "PASS") console.log("DMARC status:", verdicts.dmarc);
+  if (!dmarcPass) console.warn("DMARC verification failed:", verdicts.dmarc);
 
-  // Require both SPF and DKIM to pass
-  return spfPass && dkimPass;
+  return spfPass && dkimPass && dmarcPass;
 }
 
 async function handleAllowlistUpdate(senderEmail, body, notificationEmail, adminEmails) {
@@ -370,8 +370,8 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
       default:
         return { statusCode: 400, body: `Unknown command: ${parsedCommand.command}` };
     }
-  } catch (error) {
-    console.error("ERROR executing command:", error.message);
+  } catch {
+    console.error("ERROR executing command.");
     if (notificationEmail) {
       await sendNotification(
         notificationEmail,
@@ -379,7 +379,7 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
         getSanitizedErrorMessage(parsedCommand.command)
       );
     }
-    return { statusCode: 500, body: `Failed to process request: ${error.message}` };
+    return { statusCode: 500, body: getSanitizedErrorMessage(parsedCommand.command) };
   }
 }
 

@@ -103,7 +103,16 @@ vi.mock("./handlers/resume.js", () => ({
   handleResume: handleResumeMock,
 }));
 
-import { handler } from "./index.js";
+import { handler, verifyEmailAuthenticity } from "./index.js";
+
+describe("email sender authentication", () => {
+  it("requires SPF, DKIM, and DMARC to pass", () => {
+    expect(verifyEmailAuthenticity({ spf: "PASS", dkim: "PASS", dmarc: "PASS" })).toBe(true);
+    expect(verifyEmailAuthenticity({ spf: "FAIL", dkim: "PASS", dmarc: "PASS" })).toBe(false);
+    expect(verifyEmailAuthenticity({ spf: "PASS", dkim: "FAIL", dmarc: "PASS" })).toBe(false);
+    expect(verifyEmailAuthenticity({ spf: "PASS", dkim: "PASS", dmarc: "FAIL" })).toBe(false);
+  });
+});
 
 describe("StartMinecraftServer environment contract", () => {
   beforeEach(() => {
@@ -115,7 +124,7 @@ describe("StartMinecraftServer environment contract", () => {
     process.env.SES_INBOUND_COMMANDS_ENABLED = "false";
 
     getPublicIpMock.mockResolvedValue("203.0.113.10");
-    getAllowlistMock.mockResolvedValue([]);
+    getAllowlistMock.mockResolvedValue(["notify@example.com"]);
     extractEmailsMock.mockReturnValue([]);
     parseCommandMock.mockReturnValue({ command: "start", args: [] });
     getSanitizedErrorMessageMock.mockReturnValue("Command execution failed. Check CloudWatch logs for details.");
@@ -215,5 +224,25 @@ describe("StartMinecraftServer environment contract", () => {
       statusCode: 503,
       body: "Email commands are disabled. Enable and configure inbound SES commands before using this endpoint.",
     });
+  });
+
+  it("does not grant admin command authority to the notification recipient", async () => {
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "true";
+    process.env.NOTIFICATION_EMAIL = "notify@example.com";
+    parseEmailFromEventMock.mockReturnValue({
+      senderEmail: "notify@example.com",
+      subject: "backup",
+      body: "",
+      verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
+    });
+
+    const response = await handler({ Records: [{}] });
+
+    expect(response).toEqual({
+      statusCode: 200,
+      body: "No valid command found.",
+    });
+    expect(parseCommandMock).not.toHaveBeenCalled();
+    expect(handleBackupMock).not.toHaveBeenCalled();
   });
 });

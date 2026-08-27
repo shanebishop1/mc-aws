@@ -33,6 +33,8 @@ const sesEnvironmentNames = [
   "SES_INBOUND_RECIPIENT",
   "SES_RECEIPT_RULE_SET_NAME",
   "START_KEYWORD",
+  "ADMIN_EMAIL",
+  "ALLOWED_EMAILS",
 ] as const;
 
 const stackEnvironmentNames = [
@@ -299,6 +301,26 @@ describe("minecraft-stack optional SES contract", () => {
       );
       expect(statement.Resource).not.toBe("*");
     }
+  });
+
+  it("does not seed the notification recipient into the command allowlist", () => {
+    const template = synthesizeStack({
+      ADMIN_EMAIL: "admin@example.net",
+      ALLOWED_EMAILS: "friend@example.net",
+      SES_NOTIFICATIONS_ENABLED: "true",
+      VERIFIED_SENDER: "sender@example.net",
+      NOTIFICATION_EMAIL: "notify@example.net",
+    });
+
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Handler: "index.handler",
+      Environment: {
+        Variables: Match.objectLike({
+          PARAM_NAME: "/minecraft/email-allowlist",
+          SEED_VALUE: "admin@example.net,friend@example.net",
+        }),
+      },
+    });
   });
 
   it("adds only the project rule to an explicitly named existing rule set in inbound mode", () => {
