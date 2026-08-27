@@ -1,6 +1,6 @@
 # Server Profiles
 
-`mc-aws` application code stays canonical. Deployment-specific Minecraft configuration belongs in a narrow local server profile, not in a fork of the application.
+Use a server profile to customize your Minecraft server. It keeps your whitelist, server settings, datapacks, and plugin configuration together for validation and deployment.
 
 ## Create and select a profile
 
