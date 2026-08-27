@@ -122,6 +122,7 @@ describe("StartMinecraftServer environment contract", () => {
     process.env.NOTIFICATION_EMAIL = "admin@example.com";
     process.env.VERIFIED_SENDER = "";
     process.env.SES_INBOUND_COMMANDS_ENABLED = "false";
+    process.env.START_KEYWORD = "start";
 
     getPublicIpMock.mockResolvedValue("203.0.113.10");
     getAllowlistMock.mockResolvedValue(["notify@example.com"]);
@@ -235,6 +236,7 @@ describe("StartMinecraftServer environment contract", () => {
       body: "",
       verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
     });
+    parseCommandMock.mockReturnValue(null);
 
     const response = await handler({ Records: [{}] });
 
@@ -244,5 +246,91 @@ describe("StartMinecraftServer environment contract", () => {
     });
     expect(parseCommandMock).not.toHaveBeenCalled();
     expect(handleBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("requires the exact start keyword from an allowed sender", async () => {
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "true";
+    parseEmailFromEventMock.mockReturnValue({
+      senderEmail: "notify@example.com",
+      subject: "please start",
+      body: "",
+      verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
+    });
+    parseCommandMock.mockReturnValue(null);
+
+    const response = await handler({ Records: [{}] });
+
+    expect(response).toEqual({ statusCode: 200, body: "No valid command found." });
+    expect(parseCommandMock).not.toHaveBeenCalled();
+    expect(ensureInstanceRunningMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts an exact multi-word start keyword from an allowed sender", async () => {
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "true";
+    process.env.START_KEYWORD = "wake server";
+    parseEmailFromEventMock.mockReturnValue({
+      senderEmail: "notify@example.com",
+      subject: "wake server",
+      body: "",
+      verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
+    });
+
+    const response = await handler({ Records: [{}] });
+
+    expect(response).toEqual({ statusCode: 200, body: "Instance started at IP: 203.0.113.10" });
+    expect(ensureInstanceRunningMock).toHaveBeenCalledWith("i-abc123");
+    expect(parseCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts an exact multi-word start keyword from the admin", async () => {
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "true";
+    process.env.START_KEYWORD = "wake server";
+    parseEmailFromEventMock.mockReturnValue({
+      senderEmail: "admin@example.com",
+      subject: "wake server",
+      body: "",
+      verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
+    });
+
+    const response = await handler({ Records: [{}] });
+
+    expect(response).toEqual({ statusCode: 200, body: "Instance started at IP: 203.0.113.10" });
+    expect(ensureInstanceRunningMock).toHaveBeenCalledWith("i-abc123");
+    expect(parseCommandMock).not.toHaveBeenCalled();
+  });
+
+  it("does not update the allowlist from an admin command body", async () => {
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "true";
+    parseEmailFromEventMock.mockReturnValue({
+      senderEmail: "admin@example.com",
+      subject: "backup",
+      body: "friend@example.com",
+      verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
+    });
+    extractEmailsMock.mockReturnValue(["friend@example.com"]);
+    parseCommandMock.mockReturnValue({ command: "backup", args: [] });
+    handleBackupMock.mockResolvedValue("backup complete");
+
+    const response = await handler({ Records: [{}] });
+
+    expect(response).toEqual({ statusCode: 200, body: "backup complete" });
+    expect(updateAllowlistMock).not.toHaveBeenCalled();
+  });
+
+  it("updates the allowlist only with the explicit admin subject", async () => {
+    process.env.SES_INBOUND_COMMANDS_ENABLED = "true";
+    parseEmailFromEventMock.mockReturnValue({
+      senderEmail: "admin@example.com",
+      subject: "allowlist",
+      body: "friend@example.com",
+      verdicts: { spf: "PASS", dkim: "PASS", dmarc: "PASS" },
+    });
+    extractEmailsMock.mockReturnValue(["friend@example.com"]);
+
+    const response = await handler({ Records: [{}] });
+
+    expect(response).toEqual({ statusCode: 200, body: "Allowlist updated successfully." });
+    expect(updateAllowlistMock).toHaveBeenCalledWith(["admin@example.com", "friend@example.com"]);
+    expect(parseCommandMock).not.toHaveBeenCalled();
   });
 });

@@ -1,38 +1,18 @@
-# DuckDNS Setup
+# DuckDNS Prerequisite
 
-DuckDNS is the free DNS option for the Minecraft connection address. It gives you a hostname like `myserver.duckdns.org` without buying a domain.
+DuckDNS is an optional Minecraft hostname. It does not host the web panel; the panel still requires Cloudflare Workers.
 
-## Create A Subdomain
+1. Sign in at [DuckDNS](https://www.duckdns.org).
+2. Create a subdomain such as `myserver`.
+3. Copy the account token.
 
-1. Go to https://www.duckdns.org.
-2. Sign in with one of the supported providers.
-3. Create a subdomain, for example `myserver`.
-4. Copy your account token from the DuckDNS dashboard.
+During setup, choose DuckDNS and enter:
 
-## Setup Wizard Values
+- `DUCKDNS_DOMAIN`: only `myserver`, without `.duckdns.org`
+- `DUCKDNS_TOKEN`: the account token
 
-When the wizard asks how players should connect, choose `Free DuckDNS subdomain`.
+The token is sensitive. Setup hides it and stores it in gitignored credential-bearing env files before deployment. Setup validates only that it has UUID format; the first runtime DNS update is the first authentication check against DuckDNS.
 
-The wizard asks for:
+When EC2 starts, the runtime updates `myserver.duckdns.org` to the current public IP. You may instead choose raw IP mode and use the address shown in the panel.
 
-- `DUCKDNS_DOMAIN`: the subdomain only, such as `myserver`.
-- `DUCKDNS_TOKEN`: the token from the DuckDNS dashboard.
-
-Do not include `.duckdns.org` in `DUCKDNS_DOMAIN`.
-
-## How Updates Work
-
-The EC2 startup DNS service reads `/minecraft/duckdns-domain` and `/minecraft/duckdns-token` from SSM Parameter Store. When the server starts and receives a public IP, it calls DuckDNS and points `DUCKDNS_DOMAIN.duckdns.org` at that IP.
-
-If you skip both Cloudflare and DuckDNS, mc-aws runs in no-domain mode and the panel shows the raw public IP instead.
-
-## Panel URL
-
-DuckDNS is only for the Minecraft server address. The web panel still deploys to Cloudflare Workers.
-
-You can use either:
-
-- The free `*.workers.dev` URL from Cloudflare Workers.
-- An existing custom panel hostname, such as `panel.example.com`, if its DNS is already configured and proxied in Cloudflare.
-
-You do not need Cloudflare Minecraft DNS variables when using DuckDNS.
+Continue with [Setup and Run](SETUP_AND_RUN.md).

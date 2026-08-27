@@ -1,132 +1,99 @@
-# Ownership-Aware Teardown
+# Safe Teardown
 
-Teardown is intentionally conservative. It inventories live AWS and Cloudflare resources, compares them with the ignored local ownership manifest, and refuses mutation when ownership or provider identity cannot be proved.
+Teardown acts only on resources recorded for this deployment. If an account, ID, ownership tag, or expected configuration does not match, it skips that resource or stops the run. Changed pre-existing Cloudflare routes and DNS records are preserved.
 
-## Deployment Ownership Manifest
+Setup creates `.mc-aws-deployment.json`, a local file excluded from Git. It records exact resource IDs and whether setup created or reused each resource. Keep it with `.env.production` until cloud deletion and billing checks finish. Do not copy it from another deployment or edit it to claim a resource.
 
-`setup.sh` and `scripts/deploy-cloudflare.sh` create and update `.mc-aws-deployment.json`. The file is ignored by Git, must be a current-user-owned regular file (never a symlink) with mode exactly `0600`, and contains identifiers and ownership facts—not credential or secret values. Unknown fields, malformed provider IDs, invalid ownership transitions, and insecure file metadata are rejected.
+## Before execution
 
-### Trust Boundary
+**Verify Google Drive before teardown. The script's cached backup list is not proof that your archives are present or restorable.**
 
-The local OS user who can read this repository and holds the AWS/Cloudflare deletion credentials is trusted. Strict schema validation, mode/link checks, manifest digests, immutable provider IDs, live tags, and repeated provider reads prevent accidents, stale-state deletion, and same-name replacement mistakes. They do **not** defend against a malicious authorized operator who can both rewrite local state and use the same provider credentials directly.
+1. Use the same AWS account and region used for deployment.
+2. Sign Wrangler into the recorded Cloudflare account. Custom-hostname teardown also needs Cloudflare zone DNS and Worker route read/edit access through `CLOUDFLARE_TEARDOWN_API_TOKEN` or the panel DNS token.
+3. Open Google Drive and verify the expected archives directly. Preferably complete a restore test.
+4. Review tagged EBS volumes and snapshots, including storage left by a failed resume.
+5. Keep local environment files until final verification.
 
-Teardown intentionally does not add a second deployment receipt to project KV. Such a receipt would be mutable by the same trusted Cloudflare principal, would not improve this threat boundary, and could write teardown metadata into a user-supplied pre-existing KV namespace that must otherwise be preserved. The exact current Worker deployment ID, account ID, route/DNS/KV IDs, and created-versus-pre-existing facts are the intended provider evidence within the trusted-operator boundary.
+The teardown backup check reads `/minecraft/backups-cache`. That cached list may be stale and is not live proof of Drive contents. More importantly, the script deletes the Cloudflare Worker and its secrets, then removes the Worker runtime AWS keys, **before** it reaches this backup-cache check. If the cache check stops execution, panel and Worker credentials are already gone. Verify Drive first and rerun the same command after fixing the reported problem.
 
-It records:
+## Choose how to preserve server data
 
-- AWS account, region, CloudFormation stack ID, instance ID, and runtime IAM user
-- whether the stack and runtime identity were created by this setup
-- Cloudflare account, Worker name plus provider deployment ID, panel hosting mode, custom routes, panel DNS records, and runtime-state KV namespaces
-- whether DNS, routes, and KV were project-created or pre-existing
-- project-created DLM policies outside the stack, if a deployment flow records any
-- the manifest-recorded pending snapshot attempt, plus a pointer to the newest completed final snapshot
-- completed teardown stages for failure recovery
+Choose before execution.
 
-Keep the manifest until teardown and billing verification are complete. Do not copy another deployment's manifest or mark a resource as owned manually merely because its name looks familiar. Setup refuses to overwrite a same-name Worker unless its recorded provider deployment ID is still present, and refuses a same-name stack whose exact StackId differs.
+### Default: Drive only
 
-## Automated Procedure
+`pnpm destroy:execute` requires a non-empty cached backup list with a valid cache timestamp. It creates no EBS snapshot. The root volume is normally deleted with the stack. Drive archives are left alone.
 
-Prerequisites:
+This mode depends on your direct Drive check; the cached list is only an old application observation. If the instance is already hibernated, there is no root volume to snapshot and the same cache check is required.
 
-1. Authenticate the same local AWS account/profile used for deployment.
-2. Authenticate Wrangler to the same Cloudflare account used for deployment.
-3. For a custom panel hostname, provide a token with **Zone DNS Read/Edit** and **Workers Routes Read/Edit** for the panel zone. Set `CLOUDFLARE_TEARDOWN_API_TOKEN` in the shell or `.env.production`; the panel DNS token is used as a fallback.
-4. Retain `.mc-aws-deployment.json` and `.env.production` until verification finishes.
+### Retain an EBS snapshot
 
-Run the default dry run:
+```bash
+pnpm destroy:execute:snapshot
+```
+
+When a managed root volume exists, this mode stops the server, creates a tagged final snapshot, waits for completion, and leaves the snapshot in AWS. The snapshot keeps incurring storage charges until you remove it. If no root volume exists, it falls back to the Drive-cache check.
+
+The original CloudFormation root volume normally deletes with the stack. Any root volume created by a successful or failed resume can exist outside CloudFormation and survive stack deletion. The script never deletes snapshots or extra EBS volumes. Check every reported and tagged volume after teardown, even after CloudFormation is gone, and remove one manually only after confirming it is no longer needed.
+
+## Run safely
+
+### 1. Inventory
+
+**Action**
 
 ```bash
 pnpm destroy
 ```
 
-The dry run performs live reads but no Cloudflare/AWS mutations, manifest updates, or local-file deletion. Review every `PRESERVE`, retained backup, and blocker.
+**Expected result:** live AWS and Cloudflare inventory, planned deletes/restores, preserved resources, storage that may keep billing, and no changes.
 
-Execute verified teardown:
+**Stop when:** any account, region, ID, tag, route, DNS, Worker, KV, IAM, or stack check is wrong or cannot be read.
+
+**Recovery:** correct credentials or region, recover the deployment record from a trusted backup, or review the uncertain resource manually. Do not delete by name alone.
+
+### 2. Execute
+
+**Action**
 
 ```bash
 pnpm destroy:execute
 ```
 
-The compatibility package aliases `pnpm cdk:destroy` and `pnpm cdk:destroy:force` also route to this ownership-aware script; teardown does not invoke `cdk destroy`.
+Type the exact account-, region-, and stack-specific phrase printed by the script.
 
-Execution requires typing the exact account-, region-, and stack-specific phrase printed by the script. The script then:
+**Expected result:** the script removes project-created Worker routes, Worker, KV, panel DNS, DLM policies, Worker runtime keys, and the exact CloudFormation stack. Unchanged pre-existing routes or panel DNS are restored. If a pre-existing route or DNS record changed after setup, teardown preserves its current value and may not restore the old value while other teardown steps continue. It stops Minecraft and EC2 before deleting the stack when needed. Minecraft DNS, DuckDNS, Drive files, pre-existing Cloudflare resources, retained SES resources, and account-wide SES rule sets are not deleted.
 
-1. removes project-created routes or restores the original target of a pre-existing route;
-2. immediately revalidates the current deployment ID, then deletes only a project-created Worker in one Worker deletion operation (without creating intermediate secret-removal versions);
-3. deletes only project-created KV namespaces;
-4. deletes only project-created panel DNS or restores a recorded proxy-state change on pre-existing DNS;
-5. deletes only manifest-owned DLM policies with matching live project/stack tags;
-6. inactivates and deletes dedicated runtime IAM keys so CloudFormation can delete its IAM user;
-7. immediately before stack deletion, inspects instance state; a running/pending instance must successfully stop Minecraft through SSM, report exact command success, stop through EC2, and reach `stopped` before the exact instance/root volume/tags are re-read;
-8. in the default Google Drive durability mode, parses the real `/minecraft/backups-cache` shape `{backups:[...], cachedAt:<epoch-ms>}`, requires non-empty backups plus a valid positive `cachedAt`, records that evidence, and creates no EBS snapshot;
-9. only when `pnpm destroy:execute:snapshot` was explicitly selected, creates, waits for, tag-verifies, records, and reports a retained final snapshot of the managed root volume;
-10. revalidates the exact StackId and runtime IAM tags after any snapshot wait, requests `cloudformation delete-stack` using the recorded StackId/ARN (never a mutable name), and waits for exact stack deletion;
-11. handles a verified tagged IAM-user orphan after stack deletion;
-12. re-inventories known billing-relevant resources and treats AccessDenied, throttling, malformed responses, and network failures as verification failures—not absence.
+**Stop when:** any identity changes, a provider call fails, Minecraft cannot stop, EC2 does not stop, backup conditions are not met, or final inventory reports remaining resources that should have been removed.
 
-The `workers.dev` mode has no custom panel route or panel DNS to delete. Custom mode requires route and DNS verification. Cloudflare absence is accepted only from the expected HTTP status plus provider error code. Minecraft Cloudflare DNS, DuckDNS, raw-IP configuration, and account-wide SES receipt rule sets are not deleted by this script. The project-owned SES receipt rule is removed with the stack; a pre-existing receipt rule set remains untouched.
+**Recovery:** do not switch to broad deletion. Fix the reported issue and rerun `pnpm destroy:execute`; completed steps can be checked again safely. A partial run may already have removed the panel and Worker credentials. Use provider consoles for diagnosis. Manually remove a remaining resource only after matching its exact ID, account, tags, and recorded pre-existing state.
 
-### Failure And Retry
+## Legacy deployment without a complete local record
 
-Do not switch to broad deletion after a failure. Correct the reported authentication, live-state, or ownership problem and run the same command again. Successful stages are idempotent, and live absence is treated as already complete. A snapshot that is still `pending` and recorded as the current manifest attempt is waited again rather than duplicated. However, if that snapshot completed and the exact CloudFormation deletion did not finish, the instance may have restarted or received new writes. A rerun therefore quiesces/stops again and creates a fresh snapshot before retrying deletion.
+Automated teardown is unavailable when `.mc-aws-deployment.json` is missing or incomplete. Do not copy or invent one.
 
-An ownership mismatch blocks mutation before confirmation. A provider failure during execution may leave a partial teardown; rerun first, then use the manual procedure only for the remaining verified resources.
+1. Verify Drive archives and create a root-volume snapshot if one still exists.
+2. Record the AWS account, region, full CloudFormation StackId, stack resources, EC2 instance, volumes, snapshots, DLM lifecycle policies, IAM user, and SES resources.
+3. Inventory the exact Cloudflare Worker, routes, KV namespaces, and DNS records. Preserve anything that may have existed before this deployment.
+4. Confirm any legacy SES rule set or activation resource has the intended retain policy before stack deletion.
+5. Stop Minecraft cleanly and stop EC2.
+6. Remove only Cloudflare resources, DLM policies, and runtime keys whose exact IDs and deployment history you can verify, then delete the exact CloudFormation stack by its full StackId.
+7. Recheck EBS volumes, snapshots, DLM policies, IAM keys/users, SES, Cloudflare, and billing. Retained or resume-created storage may require separate deletion.
 
-## Final Data Preservation, Backups, And Volumes
+Have another operator review this inventory before deleting anything. If a resource's history is uncertain, preserve it and investigate instead of deleting by name.
 
-CloudFormation normally deletes the instance's root EBS volume. **The root volume itself does not survive stack deletion.** For `running`/`pending`, teardown sends a bounded graceful `systemctl stop minecraft.service` command through SSM, verifies exact `Success`, stops the EC2 instance, waits for `stopped`, and then re-reads the exact instance, root mapping, attachment, and ownership tags. An already stopped instance proceeds directly; an instance already stopping must finish stopping. Any quiesce, stop, wait, identity, or tag failure blocks deletion.
-
-The default `pnpm destroy:execute` uses the project's Google Drive durability model. It requires non-empty cached backup evidence and a valid cache timestamp, records that evidence in the manifest, deletes no Google Drive content, and creates no EBS snapshot. The cache is supporting evidence rather than a live Drive read: independently list the Drive archives (and preferably test restore) before confirming destructive teardown.
-
-Use `pnpm destroy:execute:snapshot` only after explicitly deciding to incur and later manage retained EBS snapshot storage. That mode creates a final `McAwsFinalTeardown=true` snapshot after the stop, records it as the pending manifest attempt, waits for `completed`, verifies exact source/stack tags, and updates the manifest's final-snapshot pointer. Stack deletion is blocked if creation, waiting, or verification fails.
-
-Pending waiter retries are deduplicated only when the exact pending snapshot ID is recorded in the manifest and remains `pending` with matching provider tags. A completed snapshot is never reused as the final preservation point while the stack/root volume still exists: teardown quiesces/stops again and creates a fresh snapshot representing the current volume contents. The manifest pointer moves to the newest completed snapshot; all older completed snapshots remain retained, are included in snapshot inventory/reporting, and may continue to incur charges.
-
-When hibernate has already removed the root volume, no EBS snapshot can be created, so even snapshot mode requires the same Google Drive cache evidence. This is only evidence that the application previously cached a non-empty listing; it is **not** live external Google Drive verification and is not a substitute for checking Google Drive or performing a restore test.
-
-The script has no automatic snapshot or EBS volume **deletion** path. It reports the final snapshot, other project snapshots, and volumes before and after teardown because they may incur charges. This avoids silently deleting backups or a volume retained after a failed resume/stack deletion.
-
-Review each retained item manually. Before deleting one, verify its tags, contents, attachment state, backup/restore requirements, and exact relationship to this deployment. Google Drive backups are external to AWS and are never removed by teardown.
-
-## Optional Local Cleanup
-
-Local environment cleanup has a second, separate confirmation:
+## Cloud teardown plus local environment cleanup
 
 ```bash
 pnpm destroy:cleanup-local
 ```
 
-After cloud verification, type the additional phrase to delete only `.env`, `.env.local`, and `.env.production`. Example files and `.mc-aws-deployment.json` remain. Keep the manifest as an audit/recovery record until you have completed provider billing review.
+Despite its name, this command reruns the full cloud teardown and verification with execution enabled, then asks for a second confirmation before deleting only `.env`, `.env.local`, and `.env.production`. It keeps `.mc-aws-deployment.json`. Run it only while cloud credentials are still available.
 
-## Manual Procedure
+## Final checks
 
-Use this only when the automated flow cannot run. Start with `pnpm destroy` and the manifest. Never infer ownership from a resource name alone.
-
-1. **Identity:** verify `aws sts get-caller-identity`, AWS region, Wrangler account ID, stack ID, and manifest all agree.
-2. **Cloudflare routes:** list routes for the recorded zone. Delete only a route recorded as project-created whose live ID, pattern, and Worker target all match. Restore (do not delete) a pre-existing route to its recorded original target.
-3. **Worker:** require the manifest's provider deployment ID to match the current live deployment immediately before deleting the Worker directly. Do not delete secrets one-by-one first. Never overwrite or delete a merely same-name Worker. There is no safe automated adoption path for an arbitrary pre-existing Worker because prior code and secrets cannot be restored.
-4. **KV and panel DNS:** compare exact IDs plus live title/name/type/content. Delete only entries marked project-created. Preserve pre-existing Minecraft DNS and panel DNS records; restore only changes explicitly recorded in the manifest.
-5. **DLM:** compare policy ID and `McAwsProject=mc-aws` plus `McAwsStack=<stack>`. Delete only a policy marked project-created in the manifest. A matching tag without a manifest ownership fact is not sufficient.
-6. **Runtime IAM:** compare username and all three ownership tags. Inactivate/delete that user's runtime access keys before CloudFormation deletion. Do not revoke local SSO or human deployment credentials as part of this step.
-7. **Final root data:** if a tagged managed root volume is attached, gracefully stop Minecraft through SSM when running, verify SSM success, stop/wait for the instance, and re-read exact identities/tags. In default mode, verify Google Drive separately and require non-empty `{backups,cachedAt}` cache evidence; in explicit snapshot mode, create and verify the tagged final snapshot. Never snapshot a running instance. Do not continue on failure.
-8. **CloudFormation:** re-fetch the exact StackId and runtime IAM tags after the snapshot wait, then call `delete-stack` and its waiter with that exact StackId/ARN. Expect its root EBS volume to be deleted. Do not delete by mutable stack name or use `cdk destroy --all` as a substitute for ownership proof.
-9. **SES:** confirm the project receipt rule disappeared with the stack. Never deactivate or delete the operator-owned SES receipt rule set during this migration/cleanup.
-10. **Backups/storage:** list project-tagged snapshots and volumes. Retain by default; manually delete only after an explicit backup decision.
-11. **Final verification:** check CloudFormation, EC2 instances/volumes/snapshots, DLM, IAM, Worker, routes, KV, panel DNS, AWS Billing/Cost Explorer, and the Cloudflare dashboard. Treat every provider error as unresolved.
-
-If the manifest is missing—or predates the Worker deployment marker—there is no safe automated ownership proof. Inventory manually using CloudFormation resources and provider IDs, preserve ambiguous resources, and recover an authoritative manifest from a secure local backup if available. Do not "adopt" a same-name Worker or stack by editing JSON.
-
-## External Credential And OAuth Cleanup
-
-Cloud teardown revokes the dedicated Worker runtime IAM keys. It intentionally does not make these user-owned decisions:
-
-- remove the production origin and redirect URI—or delete the OAuth client/project—in Google Cloud;
-- revoke deploy/DNS API tokens in Cloudflare if they are no longer used elsewhere;
-- for a legacy deployment only, revoke its dedicated GitHub token after completing the server-profile transition and confirming nothing still reads the legacy SSM parameters;
-- rotate/revoke a DuckDNS token only if it is not shared;
-- remove Google Drive backup access/data only after deciding whether to retain backups;
-- remove local AWS SSO/profile credentials only if you intend to retire that local identity.
-
-## Billing Verification
-
-Provider billing data can lag. After the script's final verification, check AWS Billing and Cost Explorer again after usage data settles. Pay particular attention to retained EBS volumes/snapshots and any unproven DLM policy. Also inspect Cloudflare Workers/KV usage and any separately billed DNS/domain services. A successful script run does not claim that deliberately retained backups are free.
+- Confirm the exact CloudFormation stack, EC2 instance, Worker, project-created routes/KV/panel DNS, DLM policies, and Worker runtime IAM user are gone.
+- Review all EBS volumes and snapshots. Retained storage may keep billing.
+- Confirm the project SES receipt rule is gone; do not remove an account-wide or pre-existing rule set without separate review.
+- Check AWS Billing/Cost Explorer and Cloudflare usage again after provider data catches up.
+- Revoke user-managed Google OAuth, Cloudflare deployment/DNS, DuckDNS, and local AWS credentials only if they are not used elsewhere. Decide separately whether to retain Drive backups.

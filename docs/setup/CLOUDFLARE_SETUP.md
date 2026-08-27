@@ -1,101 +1,48 @@
-# Cloudflare Setup
+# Cloudflare Prerequisite
 
-Cloudflare is used for separate concerns:
+A Cloudflare account with Workers enabled is required because the control panel runs on Cloudflare Workers. A custom domain is optional.
 
-- Workers deployment for the web app
-- Optional DNS updates for the Minecraft server
-- Optional custom DNS for the panel (not needed with `workers.dev`)
+## Panel hosting
 
-Do not mix these credentials up.
+Choose this during setup, independently of the Minecraft address:
 
-You do not need a Cloudflare-managed custom domain to run mc-aws. The panel can run on Cloudflare Workers' `*.workers.dev` URL, and the Minecraft server can use either [DuckDNS](DUCKDNS_SETUP.md) or raw public IP mode.
+### `workers.dev`
 
-## 1. Choose Panel Hosting
+No custom domain or DNS token is required. Find the account Workers subdomain in **Workers & Pages -> Account details**. Setup derives the exact URL for Worker `mc-aws-panel` and prints the Google OAuth origin and callbacks.
 
-The setup wizard offers:
+### Custom panel hostname
 
-- `workers.dev`: no custom domain or panel DNS token is required. Enter your account Workers subdomain (for example `account-name.workers.dev`) or the full expected URL. With Worker name `mc-aws-panel`, setup derives `https://mc-aws-panel.account-name.workers.dev`.
-- Custom Cloudflare hostname: provide an HTTPS origin such as `https://panel.example.com`, then choose managed or external DNS. `PANEL_DNS_MANAGEMENT=managed` (the default) also requires a zone-scoped token with DNS Read/Edit plus Workers Routes Read/Edit so deploy can ensure and record DNS. Choose `PANEL_DNS_MANAGEMENT=external` for an already-proxied, externally managed record; setup validates the zone ID locally and uses the shell deploy token for a read-only zone check when available. Deploy leaves DNS and the DNS manifest untouched while still requiring route API access and checking exact route ownership before and after deployment. If Wrangler recreates an exact same-pattern, same-target route, deploy records the new ID as project-created only through an explicit transition from the validated old ID; any identity, target, or ownership-proof mismatch stops the deployment flow.
+The domain must be in an active Cloudflare zone. Use a hostname such as `panel.example.com`.
 
-Panel hosting does not determine the Minecraft connection address. Cloudflare Minecraft DNS, DuckDNS, and raw-IP modes all work with either panel choice.
+- **Managed DNS:** create a zone-scoped panel token with **DNS Read/Edit** and **Workers Routes Read/Edit**. Setup may create or proxy the panel record and records ownership for teardown.
+- **External DNS:** create a proxied record yourself. A proxied `A` record to placeholder `192.0.2.1` is valid because the Worker route handles requests. Before setup, export `CLOUDFLARE_API_TOKEN` with account access for Worker scripts, secrets, and KV, plus zone read and **Workers Routes Read/Edit** for the panel zone. Setup does not read or modify panel DNS in this mode, but the shell token is required for deployment and route checks.
 
-## 2. Add Your Domain To Cloudflare (Custom Hostnames Only)
+Do not save the external shell deployment token in `.env.local` or `.env.production`.
 
-1. Create or sign in to a Cloudflare account.
-2. Add your domain to Cloudflare.
-3. Change your registrar nameservers to the Cloudflare nameservers.
-4. Wait for Cloudflare to show the zone as active.
+## Wrangler authentication
 
-Cloudflare docs:
+The deploy script runs Wrangler with isolated `HOME=~/.config/mc-aws/wrangler-home`. It does not reuse a login created by a normal `pnpm exec wrangler login` command. Without `CLOUDFLARE_API_TOKEN`, setup opens a browser for OAuth in the isolated home and verifies that session.
 
-- https://developers.cloudflare.com/dns/zone-setups/full-setup/setup/
+Do not export a Minecraft DNS token globally. The deploy script reads it from the gitignored env file for runtime upload and removes it from Wrangler's authentication environment.
 
-## 3. Choose Domains
+## Optional Minecraft DNS
 
-Use separate hostnames unless you have a specific reason not to:
+This is separate from panel hosting. If players will use a Cloudflare hostname:
 
-- Panel URL: `https://panel.example.com`
-- Minecraft domain: `mc.example.com`
+1. Add the domain to Cloudflare and wait for the zone to become active.
+2. Create a DNS-only `A` record such as `mc.example.com`; a placeholder IP is fine.
+3. Create a zone-scoped token with **DNS Edit** for that zone.
+4. Copy the zone ID, hostname, and token for setup.
 
-The setup wizard asks for the Minecraft domain as `CLOUDFLARE_MC_DOMAIN`.
+The runtime updater finds the record by hostname. `CLOUDFLARE_RECORD_ID` is optional legacy compatibility; leave it blank for a new setup. Do not create KV namespaces manually; deployment manages runtime-state KV.
 
-The setup wizard asks for the panel URL as `NEXT_PUBLIC_APP_URL`.
+If you do not want Cloudflare Minecraft DNS, choose [DuckDNS](DUCKDNS_SETUP.md) or raw public IP mode. Either works with `workers.dev` or a custom panel hostname.
 
-## 4. Create DNS API Tokens
+## Troubleshooting
 
-The wizard stores panel and Minecraft DNS credentials separately because they can use different zones and because workers.dev needs no DNS token:
+- Browser login repeats: setup's isolated Wrangler session is separate from the normal Wrangler session; let setup open the browser.
+- External panel mode fails before deploy: confirm `CLOUDFLARE_API_TOKEN` is exported in the setup shell and has Workers/route access to the correct zone.
+- Minecraft DNS does not update: confirm the DNS-only record exists, the zone ID and hostname match it, and the runtime token has DNS Edit for that zone.
+- Panel DNS and Minecraft DNS may use different zones and tokens. Do not interchange them.
 
-- `CLOUDFLARE_PANEL_DNS_API_TOKEN` / `CLOUDFLARE_PANEL_ZONE_ID`: deploy-time custom panel DNS and route ownership. External DNS mode does not require the panel DNS token, but still requires the zone ID.
-- `CLOUDFLARE_DNS_API_TOKEN` / `CLOUDFLARE_ZONE_ID`: runtime Minecraft DNS updates only.
-
-Neither DNS token is the credential used to deploy Workers.
-
-For external DNS mode, one shell-only `CLOUDFLARE_API_TOKEN` may transiently serve both Wrangler deployment and Workers Routes API checks. It is never copied into an env file, build input, or Worker secret. This fallback is not used in managed DNS mode.
-
-1. Open Cloudflare dashboard.
-2. Go to **My Profile -> API Tokens**.
-3. Create a custom token for the panel zone.
-4. Scope it to the specific zone.
-5. For a custom panel hostname, give it `Zone -> DNS -> Read/Edit` and `Zone -> Workers Routes -> Read/Edit`. The route permissions are required to distinguish a project-created route from a pre-existing route during deployment and teardown. A Minecraft-only runtime token needs only `Zone -> DNS -> Edit`.
-6. Copy the token.
-
-Cloudflare docs:
-
-- https://developers.cloudflare.com/fundamentals/api/get-started/create-token/
-
-## 5. Get The Zone ID
-
-1. Open your domain in Cloudflare.
-2. Go to the domain overview page.
-3. Copy the **Zone ID**.
-
-## 6. DNS Record ID
-
-Custom panel deployment can create its missing proxied panel record. For a Cloudflare Minecraft hostname, create an A record first (a placeholder IP is fine); the runtime updater locates it by hostname, so the legacy `CLOUDFLARE_RECORD_ID` value can be left empty.
-
-## 7. Wrangler Login
-
-Workers deployment uses Wrangler OAuth:
-
-```bash
-pnpm exec wrangler login
-```
-
-The deploy script also attempts login if Wrangler is not authenticated.
-
-## Values Needed Later
-
-The setup wizard asks for:
-
-- `PANEL_HOSTING_MODE` (`workers_dev` or `custom`)
-- `PANEL_DNS_MANAGEMENT` (`managed` or `external`) for custom hosting; leave it empty for `workers_dev`
-- `CLOUDFLARE_WORKERS_SUBDOMAIN` for workers.dev, or panel zone/token values for a custom hostname
-- Minecraft DNS values only when Cloudflare is the Minecraft connection mode
-
-Setup derives and persists `NEXT_PUBLIC_APP_URL` for workers.dev. For a custom hostname, it validates the URL you enter.
-
-## Important
-
-- Use `wrangler login` for Workers deployment.
-- Use `CLOUDFLARE_DNS_API_TOKEN` for runtime DNS updates.
-- Do not export `CLOUDFLARE_DNS_API_TOKEN` globally in your shell. It can confuse Wrangler auth.
+Continue with [Setup and Run](SETUP_AND_RUN.md).

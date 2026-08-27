@@ -27,7 +27,7 @@ Default: live inventory and dry-run only; no resources or local files change.
                        explicitly create and retain a final EBS snapshot instead
                        of relying on independently verified Google Drive backups
   --cleanup-local-env  after cloud teardown, separately confirm local env deletion
-  --manifest PATH      use a specific deployment ownership manifest
+  --manifest PATH      use a specific local deployment record
 EOF
 }
 
@@ -83,7 +83,7 @@ require_executable "$AWS_CLI"
 require_executable "$WRANGLER_BIN"
 require_executable "$CURL_BIN"
 [[ -f "$MANIFEST_FILE" ]] || {
-  error "Deployment ownership manifest not found: $MANIFEST_FILE"
+  error "Local deployment record not found: $MANIFEST_FILE"
   error "Refusing teardown because resource ownership cannot be proven. Use the manual procedure in docs/TEARDOWN.md."
   exit 1
 }
@@ -638,7 +638,7 @@ blockers=()
 add_blocker() { blockers+=("$1"); }
 
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-log "mc-aws ownership-aware teardown inventory"
+log "mc-aws safe teardown inventory"
 log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 log "Mode:                 $([[ "$EXECUTE" == "1" ]] && printf 'EXECUTE (confirmation still required)' || printf 'DRY RUN (default)')"
 log "Data preservation:    $DATA_PRESERVATION_MODE"
@@ -1312,7 +1312,7 @@ if [[ "$CLEANUP_LOCAL_ENV" == "1" ]]; then
   IFS= read -r local_confirmation
   if [[ "$local_confirmation" == "$local_phrase" ]]; then
     rm -f "$ROOT_DIR/.env" "$ROOT_DIR/.env.local" "$ROOT_DIR/.env.production"
-    log "  ✅ Deleted local env files. The non-secret ownership manifest was retained as an audit/recovery record."
+    log "  ✅ Deleted local env files. The local deployment record was retained for audit and recovery."
   else
     warn "Local env cleanup skipped; confirmation did not match."
   fi

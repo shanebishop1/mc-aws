@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 
@@ -6,31 +7,6 @@ interface Rule {
   readonly description: string;
   readonly pattern: RegExp;
 }
-
-const filesToCheck = [
-  "README.md",
-  "SECURITY.md",
-  "docs/README.md",
-  "docs/RELEASING.md",
-  "docs/AWS_CREDENTIALS_SETUP.md",
-  "docs/CLOUDFLARE_SETUP.md",
-  "docs/API.md",
-  "docs/GOOGLE_OAUTH_SETUP.md",
-  "docs/OPERATIONS_GUIDE.md",
-  "docs/QUICK_START_MOCK_MODE.md",
-  "docs/MOCK_MODE_DEVELOPER_GUIDE.md",
-  "docs/TEARDOWN.md",
-  "docs/setup/AWS_ACCOUNT_SETUP.md",
-  "docs/setup/CLOUDFLARE_SETUP.md",
-  "docs/setup/DUCKDNS_SETUP.md",
-  "docs/setup/EC2_KEY_PAIR_SETUP.md",
-  "docs/SERVER_PROFILES.md",
-  "docs/setup/GOOGLE_DRIVE_SETUP.md",
-  "docs/setup/GOOGLE_OAUTH_SETUP.md",
-  "docs/setup/SES_SETUP.md",
-  "docs/setup/SETUP_AND_RUN.md",
-  "tests/MOCK_MODE_QUICK_REF.md",
-] as const;
 
 const rules: readonly Rule[] = [
   {
@@ -43,10 +19,57 @@ const rules: readonly Rule[] = [
     description: "Use localhost:3000 as canonical local port",
     pattern: /localhost:3001\b/i,
   },
+  {
+    id: "env-file-safety",
+    description: "Do not describe credential-bearing env files as non-secret or safe to share",
+    pattern: /\.env(?:\.(?:local|production))?[\s\S]{0,80}\b(?:non-secret|not sensitive|safe to (?:commit|share))\b/i,
+  },
+  {
+    id: "automatic-resume-restore",
+    description: "Do not claim resume enforces a restore selection or automatically restores a backup",
+    pattern:
+      /\bresume(?: request)?\s+(?:automatically|by default)\s+restores?\b|\bbare resume(?: request)?\s+(?:automatically\s+)?restores?\b|\bresume(?: request| API| endpoint)?\s+(?:requires?|enforces?)\s+(?:an?\s+)?explicit\s+(?:restore\s+)?(?:mode|selection|choice)\b|\brestore\s+(?:mode|selection|choice)\s+(?:is|are)\s+(?:required|enforced)\s+(?:for|by)\s+resume\b/i,
+  },
+  {
+    id: "unowned-teardown",
+    description: "Teardown claims must remain ownership-aware",
+    pattern: /\bteardown (?:will )?(?:delete|remove)s? all\b/i,
+  },
+  {
+    id: "least-privilege-worker",
+    description: "Do not understate the Worker runtime identity's deployment privileges",
+    pattern: /\b(?:least-privilege|narrow)\b[\s\S]{0,50}\b(?:worker|runtime (?:identity|user|key))\b/i,
+  },
 ];
 
 const rootDir = process.cwd();
 const violations: string[] = [];
+const proseFilesToCheck = Array.from(
+  new Set(
+    execFileSync(
+      "git",
+      [
+        "ls-files",
+        "--cached",
+        "--others",
+        "--exclude-standard",
+        "--",
+        "*.md",
+        "**/*.md",
+        ".env.example",
+        ".env.local.example",
+        ".env.mock.example",
+        ".env.production.example",
+      ],
+      {
+        cwd: rootDir,
+        encoding: "utf8",
+      }
+    )
+      .split("\n")
+      .filter((relativePath) => relativePath && existsSync(path.join(rootDir, relativePath)))
+  )
+).sort();
 
 function githubHeadingAnchors(content: string): Set<string> {
   const anchors = new Set<string>();
@@ -72,6 +95,34 @@ function githubHeadingAnchors(content: string): Set<string> {
   return anchors;
 }
 
+function decodeLinkPath(encodedPath: string): string | undefined {
+  try {
+    return decodeURIComponent(encodedPath);
+  } catch {
+    return undefined;
+  }
+}
+
+function isPathInsideRepository(targetPath: string): boolean {
+  const relativeTarget = path.relative(rootDir, targetPath);
+  return relativeTarget !== ".." && !relativeTarget.startsWith(`..${path.sep}`) && !path.isAbsolute(relativeTarget);
+}
+
+function validateMarkdownAnchor(
+  relativePath: string,
+  targetPath: string,
+  encodedAnchor: string | undefined,
+  rawTarget: string
+): void {
+  if (statSync(targetPath).isDirectory() || !encodedAnchor || !targetPath.endsWith(".md")) return;
+
+  const anchor = decodeURIComponent(encodedAnchor).toLowerCase();
+  const targetContent = readFileSync(targetPath, "utf8");
+  if (!githubHeadingAnchors(targetContent).has(anchor)) {
+    violations.push(`${relativePath}: broken-anchor (${rawTarget})`);
+  }
+}
+
 function validateMarkdownLinks(relativePath: string, content: string): void {
   const linkPattern = /!?\[[^\]]*\]\(([^)]+)\)/g;
   for (const match of content.matchAll(linkPattern)) {
@@ -79,30 +130,36 @@ function validateMarkdownLinks(relativePath: string, content: string): void {
     if (!rawTarget || /^(?:https?:|mailto:)/i.test(rawTarget)) continue;
 
     const [encodedFilePart, encodedAnchor] = rawTarget.split("#", 2);
-    const filePart = decodeURIComponent(encodedFilePart);
+    const filePart = decodeLinkPath(encodedFilePart);
+    if (filePart === undefined) {
+      violations.push(`${relativePath}: invalid-link-encoding (${rawTarget})`);
+      continue;
+    }
     const targetPath = filePart
       ? path.resolve(rootDir, path.dirname(relativePath), filePart)
       : path.resolve(rootDir, relativePath);
+
+    if (!isPathInsideRepository(targetPath)) {
+      violations.push(`${relativePath}: link-outside-repository (${rawTarget})`);
+      continue;
+    }
 
     if (!existsSync(targetPath)) {
       violations.push(`${relativePath}: broken-link (${rawTarget})`);
       continue;
     }
 
-    if (statSync(targetPath).isDirectory() || !encodedAnchor || !targetPath.endsWith(".md")) continue;
-    const anchor = decodeURIComponent(encodedAnchor).toLowerCase();
-    const targetContent = readFileSync(targetPath, "utf8");
-    if (!githubHeadingAnchors(targetContent).has(anchor)) {
-      violations.push(`${relativePath}: broken-anchor (${rawTarget})`);
-    }
+    validateMarkdownAnchor(relativePath, targetPath, encodedAnchor, rawTarget);
   }
 }
 
-for (const relativePath of filesToCheck) {
+for (const relativePath of proseFilesToCheck) {
   const absolutePath = path.join(rootDir, relativePath);
   const content = readFileSync(absolutePath, "utf8");
 
-  validateMarkdownLinks(relativePath, content);
+  if (relativePath.toLowerCase().endsWith(".md")) {
+    validateMarkdownLinks(relativePath, content);
+  }
 
   for (const rule of rules) {
     if (!rule.pattern.test(content)) {
@@ -119,7 +176,7 @@ const mockQuickStart = readFileSync(path.join(rootDir, "docs/QUICK_START_MOCK_MO
 const setupSource = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
 
 const requiredContracts: ReadonlyArray<[string, boolean]> = [
-  ["README uses canonical production setup command", readme.includes("bash ./setup.sh")],
+  ["README does not duplicate setup commands", !readme.includes("bash ./setup.sh")],
   ["setup guide uses canonical production setup command", setupGuide.includes("bash ./setup.sh")],
   ["mock guide documents Playwright browser installation", mockQuickStart.includes("playwright install chromium")],
   [
@@ -139,7 +196,7 @@ const requiredContracts: ReadonlyArray<[string, boolean]> = [
     "completion output does not claim unconditional readiness",
     !setupSource.includes("fully deployed and ready to use"),
   ],
-  ["README describes authoritative server-side allowlist", readme.includes("/minecraft/email-allowlist")],
+  ["README links the complete production setup guide", readme.includes("docs/setup/SETUP_AND_RUN.md")],
 ];
 
 for (const [description, passes] of requiredContracts) {

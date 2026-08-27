@@ -214,8 +214,8 @@ async function handleEmailInvocation(event) {
   const adminEmails = uniqueEmails([process.env.ADMIN_EMAIL]);
   const isAdmin = adminEmails.includes(senderEmail);
 
-  // Handle admin allowlist updates
-  if (isAdmin) {
+  // Allowlist updates require an explicit admin-only subject.
+  if (isAdmin && subject.trim() === "allowlist") {
     const allowlistResult = await handleAllowlistUpdate(senderEmail, body, notificationEmail, adminEmails);
     if (allowlistResult) return allowlistResult;
   }
@@ -296,6 +296,7 @@ async function parseAndAuthorizeCommand(subject, isAdmin, senderEmail) {
   const startKeyword = (process.env.START_KEYWORD || "start").toLowerCase();
 
   if (isAdmin) {
+    if (subject.trim() === startKeyword) return { command: { command: "start", args: [] } };
     const cmd = parseCommand(subject, startKeyword);
     if (!cmd) return { command: null };
     console.log(`Admin executing: ${cmd.command}`);
@@ -319,7 +320,7 @@ async function parseAndAuthorizeCommand(subject, isAdmin, senderEmail) {
     return { error: { statusCode: 403, body: "Email not authorized." } };
   }
 
-  if (!subject.includes(startKeyword)) {
+  if (subject.trim() !== startKeyword) {
     return { command: null };
   }
 

@@ -1,53 +1,28 @@
-# Google Drive Backup Setup
+# Google Drive Backups
 
-Google Drive is used for backup and restore.
+Google Drive is optional, but backup, restore, and hibernate depend on it.
 
-If this is not configured, do not rely on backup, restore, or hibernate.
+Drive authorization requests the full Google Drive scope, not access limited to the backup folder. Use a dedicated Google account without unrelated Drive files where practical.
 
-## How It Works
+Before deployment:
 
-- The EC2 instance uses `rclone` for Google Drive access.
-- The web panel can start a Google Drive OAuth setup flow.
-- The token is stored in SSM as `/minecraft/gdrive-token`.
-- Drive operations materialize a root-only rclone config from SSM immediately before use, so OAuth may safely finish after EC2 bootstrap.
-- Backups are uploaded under `GDRIVE_REMOTE:GDRIVE_ROOT`.
+- enable Google Drive API in the Google OAuth client's project
+- add the exact `/api/gdrive/callback` URL printed by setup
+- if the External app is in Testing, add the admin as a test user
 
-## During Setup
+The wizard asks for a remote name, usually `gdrive`, and a backup folder. These values select a path; they do not authorize Drive.
 
-The setup wizard asks for:
+After deployment:
 
-- `GDRIVE_REMOTE`, usually `gdrive`
-- `GDRIVE_ROOT`, for example `mc-backups`
+1. Sign in to the panel as the admin.
+2. Connect Google Drive.
+3. Create a test backup.
+4. Test restoring that backup and confirm the server data is correct.
 
-These values choose the destination path. They do not complete OAuth by themselves.
+Do not use hibernate until both backup and restore have been tested. Hibernate backs up and then deletes the project-managed root volume; an unverified backup is not a recovery plan.
 
-Before connecting Drive, enable **Google Drive API** in the same Google Cloud project as `GOOGLE_CLIENT_ID`. If the External OAuth app is still in **Testing**, add the admin Google account under **Google Auth Platform -> Audience -> Test users**. Testing-mode Drive refresh tokens can expire after seven days, so use **In production** for durable unattended backups when appropriate.
+Authorization stores a persistent refresh token together with the OAuth client secret in an encrypted SSM credential bundle. Treat that bundle as full access to the authorized account's Drive. When Drive is configured, a root-only rclone configuration exists on EC2 after boot and backup or restore operations. Do not copy either into shell commands or other files.
 
-The Drive consent requests full Drive access because restore must discover archives created by earlier rclone OAuth clients. The narrower `drive.file` scope cannot see those existing files without a Google Picker grant, which this app does not implement. Use a dedicated backup folder and a Google account appropriate for server backups.
+External apps in Testing can receive Drive refresh tokens that expire after seven days. Use an appropriate Google account and move the app to In production when durable unattended backups are required.
 
-## After Deployment
-
-1. Open the web panel.
-2. Sign in as the admin user.
-3. Use the Google Drive setup prompt or backup section to connect Drive.
-4. Confirm the panel reports Google Drive as configured.
-5. Create a test backup before using hibernate.
-
-## Existing Instance Rollout
-
-Updating the stack's EC2 user data does not rerun bootstrap on an existing root volume. Before relying on post-bootstrap OAuth on an instance created by an older release:
-
-1. Start the instance and connect with SSM Session Manager.
-2. Confirm `/opt/setup` has pulled the release containing `infra/src/ec2/mc-rclone-config.sh`.
-3. As root, copy `mc-rclone-config.sh`, `mc-backup.sh`, and `mc-restore.sh` from `/opt/setup/infra/src/ec2/` to `/usr/local/bin/` and set mode `0755`.
-4. Write the deployed `GDRIVE_REMOTE` and `GDRIVE_ROOT` values, one line each, to `/etc/minecraft/gdrive-remote` and `/etc/minecraft/gdrive-root`; set both files to `root:root` mode `0644`.
-5. Run `sudo /usr/local/bin/mc-rclone-config.sh` and then perform a test backup and list operation.
-
-Do not copy the token into commands or files manually. The helper retrieves and decrypts it directly from SSM using the instance role. Reconstructed hibernation volumes run current user data and do not need this one-time rollout.
-
-## Notes
-
-- Your Google OAuth client must include `/api/gdrive/callback` as an authorized redirect URI.
-- Hibernation backs up before deleting attached instance volumes.
-- Test backup and restore before treating the server as durable.
-- Use a dedicated Drive folder so backups are easy to find and clean up.
+The migration bridge does not install Drive helpers on an older EC2 instance. There is no supported in-place Drive rollout for such an instance. Preserve its data, complete the [Existing Deployment Migration](../EXISTING_DEPLOYMENT_MIGRATION.md), and plan a reviewed replacement under the current stack before connecting Drive. Do not copy tokens manually.

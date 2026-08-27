@@ -1,189 +1,101 @@
-# Minecraft Server Control API Reference
+# Control API
 
-This reference documents the current behavior of API routes under `app/api`.
+All routes below are relative to `/api`. Google sign-in creates the HTTP-only `mc_session` cookie, which contains a signed JWT and expires after 30 days. Protected routes obtain roles from an AWS Systems Manager allowlist cached for five minutes.
 
-## Base URL
+## Roles
 
-- Local development: `http://localhost:3000`
-- Production: your deployed app URL
+- **Public:** no cookie. Only the explicitly public routes below.
+- **Authenticated public:** signed in but not allowlisted. It may use `/players` and public status routes with authenticated detail.
+- **Allowed:** SSM allowlist member or admin. It may start, read service status, and poll operations.
+- **Admin:** `ADMIN_EMAIL`. It may use all routes.
 
-## Response Conventions
+## Responses and operations
 
-Most JSON routes return:
-
-```json
-{
-  "success": true,
-  "data": {},
-  "timestamp": "2026-01-09T00:00:00.000Z"
-}
-```
-
-Most errors return:
+Most JSON responses use one of these shapes:
 
 ```json
-{
-  "success": false,
-  "error": "Human-readable message",
-  "timestamp": "2026-01-09T00:00:00.000Z"
-}
+{ "success": true, "data": {}, "timestamp": "2026-01-09T00:00:00.000Z" }
 ```
 
-Notable exceptions:
-- Auth OAuth endpoints (`/api/auth/login`, `/api/auth/callback`) return redirects/HTML.
-- `/api/auth/me` returns `{ authenticated: boolean, ... }`.
+```json
+{ "success": false, "error": "Message", "timestamp": "2026-01-09T00:00:00.000Z" }
+```
 
-## Auth Model
+Mutating actions normally return `202` with an `operation` object. `202` means accepted, not finished. For start, backup, restore, hibernate, and resume, poll:
 
-- `public`: no session required.
-- `allowed`: authenticated allowlisted users (admin and allowed roles).
-- `admin`: admin session required.
+```text
+GET /api/operations/{operationId}
+```
 
-## Server Lifecycle Endpoints
+This route requires an allowed or admin cookie. Status moves through `accepted` or `running`; `completed` and `failed` are terminal. An already-hibernated request can return `200` and `completed`.
 
-| Endpoint | Method | Auth | Behavior | Typical Status |
-|---|---|---|---|---|
-| `/api/start` | `POST` | `allowed` | Invokes Lambda start flow and returns immediately | `200` |
-| `/api/stop` | `POST` | `admin` | Stops EC2 directly (sync command) | `200` |
-| `/api/hibernate` | `POST` | `admin` | Invokes async Lambda hibernate flow | `202` |
-| `/api/resume` | `POST` | `admin` | Invokes async Lambda resume flow | `202` |
-| `/api/backup` | `POST` | `admin` | Invokes async Lambda backup flow | `202` |
-| `/api/restore` | `POST` | `admin` | Invokes async Lambda restore flow | `202` |
+Stop normally remains `accepted`; poll `GET /api/status` until the server state is `stopped` instead of waiting for a terminal operation record.
 
-Notes:
-- Async routes (`hibernate`, `resume`, `backup`, `restore`) return accepted-style responses while work continues.
-- `start` is fire-and-forget but currently returns `200` with initiation message.
-- `400` is used for invalid state transitions (for example already running/stopped).
-- Hibernate is a destructive zero-EBS-cost path: attached instance volumes are detached/deleted before completion.
-- Resume reconstructs root storage from the instance-pinned AMI source (`ImageId` + `RootDeviceName`), with explicit failure when source metadata is unavailable.
+Common errors are `400` invalid input/state, `401` no valid cookie, `403` wrong role, `404` missing/disabled route or operation, `409` another action or service not ready, `429` rate limit, and `500` backend failure.
 
-## Status and Monitoring
+## Server actions
 
-### `/api/status` (`GET`, `public`)
+| Route | Method | Access | Request body |
+| --- | --- | --- | --- |
+| `/start` | `POST` | Allowed | Empty object or no body |
+| `/stop` | `POST` | Admin | Empty object or no body |
+| `/backup` | `POST` | Admin | Optional `{ "backupName": "name" }` |
+| `/restore` | `POST` | Admin | Optional `{ "backupName": "name" }`; omission means latest |
+| `/hibernate` | `POST` | Admin | Empty object or no body |
+| `/resume` | `POST` | Admin | See below |
 
-- Optional auth (`getAuthUser`): anonymous callers are supported.
-- Anonymous responses redact `instanceId`.
-- Rate limited (30 requests per 60 seconds, by client IP).
-- Runtime-state snapshot cache key: `status:latest`.
-- Headers:
-  - `X-Status-Cache: HIT|MISS`
-  - `Vary: Cookie`
-  - `Cache-Control`:
-    - authenticated: `private, no-store`
-    - anonymous: `public, s-maxage=5, stale-while-revalidate=25`
+Resume bodies:
 
-### `/api/service-status` (`GET`, `allowed`)
+```json
+{ "restoreMode": "fresh" }
+```
 
-- Rate limited (20 requests per 60 seconds).
-- Snapshot cache key: `service-status:latest`.
-- Headers:
-  - `X-Service-Status-Cache: HIT|MISS`
-  - `Cache-Control: private, no-store`
+```json
+{ "restoreMode": "latest" }
+```
 
-### `/api/stack-status` (`GET`, `public`)
+```json
+{ "restoreMode": "named", "backupName": "archive-name" }
+```
 
-- Optional auth; anonymous responses redact `stackId`.
-- Rate limited (15 requests per 60 seconds).
-- Snapshot cache key: `stack-status:latest`.
-- Headers:
-  - `X-Stack-Status-Cache: HIT|MISS`
-  - `Vary: Cookie`
-  - `Cache-Control`:
-    - authenticated: `private, no-store`
-    - anonymous: `public, s-maxage=30, stale-while-revalidate=120`
+`mode` aliases `restoreMode`, and `name` aliases `backupName`. A supplied backup name implies `named`. With no mode and no name, resume defaults to **fresh**, not latest.
 
-### `/api/players` (`GET`, `authenticated`)
+## Read and configuration routes
 
-- Requires a valid session (`requireAuth`).
-- Returns player count payload from backend provider.
+| Route | Method | Access | Notes |
+| --- | --- | --- | --- |
+| `/status` | `GET` | Public | Anonymous output includes server state, running address/hostname, and whether a volume exists; `instanceId` is redacted. |
+| `/stack-status` | `GET` | Public | Anonymous output discloses stack existence and status; `stackId` is redacted. |
+| `/players` | `GET` | Any signed-in user | Player-count data. |
+| `/service-status` | `GET` | Allowed | EC2-running and Minecraft-service flags. |
+| `/backups` | `GET` | Admin | Cached Drive list. `refresh=true` requests refresh when possible. A `202` means caching; retry this endpoint. |
+| `/costs` | `GET` | Admin | `refresh=true` bypasses the saved result. |
+| `/emails` | `GET` | Admin | `refresh=true` bypasses the saved result. |
+| `/emails/allowlist` | `PUT` | Admin | `{ "emails": ["user@example.com"] }`. Normalizes and deduplicates, then always adds `NOTIFICATION_EMAIL`, `ADMIN_EMAIL`, and every `ALLOWED_EMAILS` entry. Those configured baseline addresses cannot be removed through this endpoint. |
+| `/aws-config` | `GET` | Admin | Region, instance ID, and EC2 console URL. |
+| `/gdrive/setup` | `GET` | Admin | Returns the Google authorization URL. |
+| `/gdrive/callback` | `GET` | Admin | Google redirect; stores the token and redirects. |
+| `/gdrive/status` | `GET` | Admin | Whether Drive is configured. |
 
-## Backups Listing
+`/auth/login` starts Google OAuth, `/auth/callback` sets `mc_session`, `/auth/me` returns the current auth state, and `POST /auth/logout` clears the cookie. `/auth/dev-login` is development-only and requires `ENABLE_DEV_LOGIN=true`.
 
-### `/api/backups` (`GET`, `admin`)
+`/backups?instanceId=...` is an implementation-only compatibility override, not a supported client contract. External clients must not send it.
 
-- Reads backups from SSM-backed cache parameter.
-- Query params:
-  - `refresh=true`: force refresh Lambda invocation.
-  - `instanceId` (optional): override instance for refresh operation.
-- Returns:
-  - `200` with `status: "listing"` when cache is fresh.
-  - `202` with `status: "caching"` when refresh is triggered.
-- Header: `Cache-Control: no-store`.
+The Worker caches the allowlist for five minutes. A save clears the cache in the Worker instance handling that request, but other instances may use the old list until their cache expires. For a stolen session cookie, rotate `AUTH_SECRET` immediately; allowlist removal alone is not immediate revocation.
 
-## Costs and Email Configuration
+## Rate limits
 
-### `/api/costs` (`GET`, `admin`)
+- All six server-action routes: 4 requests per 30 seconds per signed-in email and action.
+- `/status`: 30 per 60 seconds per client IP.
+- `/stack-status`: 15 per 60 seconds per client IP.
+- `/auth/login` and `/auth/callback`: 6 per 60 seconds per client IP.
+- `/auth/me`: 30 per 60 seconds per client IP.
+- Development-only `/auth/dev-login`: 10 per 60 seconds per client IP.
 
-- Query param: `refresh=true` to force fresh AWS fetch.
-- Cache policy:
-  - On-demand snapshot cache only (no TTL set).
-  - Fresh fetch on cache miss or `refresh=true`.
-- Headers:
-  - `X-Costs-Cache: HIT|MISS`
-  - `Cache-Control: private, no-store`
+`/service-status` has no route-specific limit. Do not infer limits for routes not listed here.
 
-### `/api/emails` (`GET`, `admin`)
+## Internal and mock routes
 
-- Query param: `refresh=true` to bypass snapshot cache.
-- Snapshot cache uses bounded staleness TTL (`emails` key in runtime-state cache config).
-- Headers:
-  - `X-Emails-Cache: HIT|MISS`
-  - `Cache-Control: private, no-store`
+`/internal/runtime-credentials/verify` is a deployment-only Worker credential probe protected by a temporary bearer token. It is not a public client API.
 
-### `/api/emails/allowlist` (`PUT`, `admin`)
-
-- Body: `{ "emails": string[] }`.
-- Validates email format and normalizes casing/deduplication.
-- Invalidates `/api/emails` snapshot after mutation.
-
-## AWS and Google Drive Utility Endpoints
-
-| Endpoint | Method | Auth | Notes |
-|---|---|---|---|
-| `/api/aws-config` | `GET` | `admin` | Returns region, instanceId, and EC2 console URL |
-| `/api/gdrive/setup` | `GET` | `admin` | Returns Google OAuth URL; mock mode returns mock callback URL |
-| `/api/gdrive/callback` | `GET` | `admin` | Exchanges OAuth code and stores token in SSM/mock store |
-| `/api/gdrive/status` | `GET` | `admin` | Returns `{ configured: boolean }`, always `Cache-Control: no-store` |
-
-## Authentication Endpoints
-
-| Endpoint | Method | Description |
-|---|---|---|
-| `/api/auth/login` | `GET` | Starts Google OAuth flow, sets PKCE cookies, redirects to Google |
-| `/api/auth/callback` | `GET` | Handles OAuth callback, creates `mc_session`, redirects or popup-close HTML |
-| `/api/auth/me` | `GET` | Returns auth state (`authenticated` true/false) |
-| `/api/auth/logout` | `POST` | Clears session cookie |
-| `/api/auth/dev-login` | `GET` | Development-only login helper (`NODE_ENV != production` and `ENABLE_DEV_LOGIN=true`) |
-
-Rate limiting:
-- `/api/auth/login`: 6 requests / 60 seconds
-- `/api/auth/callback`: 6 requests / 60 seconds
-
-## Mock Control Endpoints (Mock Mode Only)
-
-These routes return `404` outside mock mode:
-
-- `/api/mock/state` (`GET`)
-- `/api/mock/scenario` (`GET`, `POST`)
-- `/api/mock/fault` (`GET`, `POST`, `DELETE`)
-- `/api/mock/reset` (`POST`)
-- `/api/mock/patch` (`POST`)
-
-Mutation routes require authenticated allowed/admin access.
-
-## Common Status Codes
-
-- `200` successful synchronous response
-- `202` asynchronous operation accepted/caching in progress
-- `400` invalid input or invalid state transition
-- `401` unauthenticated
-- `403` authenticated but insufficient privileges
-- `404` route disabled in current mode (for mock-control in AWS mode)
-- `409` operation conflict (for example service not ready)
-- `429` rate-limited endpoint
-- `500` unexpected backend/server error
-
-## Environment Notes
-
-- Local default app URL fallback: `http://localhost:3000`
-- Deprecated env var: `CLOUDFLARE_API_TOKEN` (use `CLOUDFLARE_DNS_API_TOKEN`)
+`/mock/state`, `/mock/scenario`, `/mock/fault`, `/mock/reset`, and `/mock/patch` are test routes. They return `404` outside mock mode; mock mutations require allowed or admin access.
