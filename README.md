@@ -1,6 +1,78 @@
 # On-Demand Minecraft Server on AWS
 
-`mc-aws` deploys a Minecraft server to AWS and a control panel to Cloudflare Workers. The panel supports Google sign-in, server lifecycle controls, an email allowlist, cost views, and optional Google Drive backups.
+<p align="center">
+  <a href="https://github.com/shanebishop1/mc-aws/actions/workflows/baseline-pr-validation.yml"><img alt="Build status" src="https://img.shields.io/github/actions/workflow/status/shanebishop1/mc-aws/baseline-pr-validation.yml?branch=main&amp;style=flat-square&amp;label=build" /></a>
+  <a href="https://github.com/shanebishop1/mc-aws/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/shanebishop1/mc-aws?sort=semver&amp;display_name=tag&amp;style=flat-square" /></a>
+  <a href="LICENSE"><img alt="MIT license" src="https://img.shields.io/github/license/shanebishop1/mc-aws?style=flat-square" /></a>
+</p>
+
+<p align="center">
+  <a href="docs/setup/SETUP_AND_RUN.md">Setup Guide</a> &middot;
+  <a href="docs/README.md">Documentation</a> &middot;
+  <a href="docs/OPERATIONS_GUIDE.md">Operations</a> &middot;
+  <a href="https://github.com/shanebishop1/mc-aws/releases">Releases</a>
+</p>
+
+<p align="center"><img width="320" height="320" alt="Minecraft server hosted on AWS" src="docs/assets/readme/hero.png" /></p>
+
+Run a Minecraft server on AWS without paying to leave it running all the time. Friends can sign in, check its status, and start it when they want to play.
+
+## Features
+
+<table align="center">
+<tr>
+  <td>
+    <img width="170" height="368" alt="Server status and controls" src="docs/assets/readme/server-stopped.png" />
+    <br/>
+    <p align="center">Monitor</p>
+  </td>
+  <td>
+    <img width="170" height="368" alt="Email access management" src="docs/assets/readme/email-management.png" />
+    <br/>
+    <p align="center">Manage</p>
+  </td>
+  <td>
+    <img width="170" height="368" alt="AWS cost dashboard" src="docs/assets/readme/cost-dashboard.png" />
+    <br/>
+    <p align="center">Budget</p>
+  </td>
+  <td>
+    <img width="170" height="368" alt="Google Drive backup restore" src="docs/assets/readme/restore-backup.png" />
+    <br/>
+    <p align="center">Backup</p>
+  </td>
+</tr>
+</table>
+
+- Web panel for start, stop, resume, and hibernate
+- Google sign-in with admin and allowed-user roles
+- Cloudflare, DuckDNS, or raw-IP Minecraft connections
+- Google Drive backup and restore
+- Optional SES notifications and authenticated email commands
+
+## Why?
+
+Most Minecraft hosting is priced like you are going to use the server all month. If you only play occasionally, that means paying for a box that sits idle most of the time.
+
+Self-hosting at home avoids the monthly bill, but it creates a different problem: if your friends want to play, you either leave the server running all the time or you have to be around to start it.
+
+This project is the middle path. The server runs on AWS, friends can start it from the control panel, and the instance can shut down when nobody is playing.
+
+| State | What you pay for | Rough server cost |
+| --- | --- | --- |
+| Hibernated | No EC2 compute or attached root volume | `$0.00/month` for server compute and attached storage |
+| Stopped | The EBS root volume remains attached | about `$0.75/month` for the default 8 GB volume |
+| Running | EC2 compute while people play | about `$0.03-0.04/hour` for the default instance |
+
+These are rough examples, not quotes. Backups, snapshots, data transfer, logs, requests, optional services, taxes, and provider pricing can add cost.
+
+On-demand hosting providers can be a better fit if you want less setup. The reason to use this project is not just small idle-cost savings. The reason is control.
+
+You own the infrastructure. You can change the instance size, add plugins, replace the backup flow, build a Discord or web portal, add scheduled behavior, use more AWS services, or extend the CDK stack however you want.
+
+That matters even more now that AI can handle a lot of the glue work. You can ask an agent to add an admin route, change a deployment workflow, build a plugin process, or create a custom automation without waiting for a hosting provider to expose that feature.
+
+You are not at the whim of a provider's dashboard, pricing model, plugin support, or roadmap. It is your server and your hosting platform.
 
 ## Production setup
 
