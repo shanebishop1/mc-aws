@@ -47,6 +47,7 @@ yarn-error.log*
 
 # non-secret local deployment ownership state
 .mc-aws-deployment.json
+.mc-aws-deployment.json.cloudflare-recovery.json*
 .mc-aws-host-upgrade.json
 
 # local configuration

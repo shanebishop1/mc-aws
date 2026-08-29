@@ -136,7 +136,7 @@ Paper, rclone, mcstatus, and the AL2023 image never refresh during a routine dep
 
 The manual **Real-Environment Smoke Verification** workflow uses the protected `real-environment-smoke` GitHub Environment. Configure `SMOKE_BASE_URL` and `SMOKE_SESSION_COOKIE` as environment secrets. Configure `SMOKE_EXPECT_DOMAIN` as an environment variable containing the exact Minecraft DNS hostname, without a scheme or path; an explicit workflow input can override it for a single run. `SMOKE_EXPECT_BACKEND_MODE` and `SMOKE_REQUEST_TIMEOUT_MS` are optional environment variables.
 
-The required S4 check forces an authenticated status snapshot write, then requires the next read to return the same opaque response-header probe from snapshot metadata. It also requires the status domain to exactly match `SMOKE_EXPECT_DOMAIN`. The probe and infrastructure identifiers are never written to the summary. Each request has a bounded timeout, and failures still produce the fixed redacted summary artifact.
+The required S4 check forces an authenticated status snapshot write, then requires the next read to return the same opaque response-header probe from snapshot metadata. When the server is running and the status response exposes its domain, S4 requires an exact `SMOKE_EXPECT_DOMAIN` match. A non-running status intentionally omits the domain, allowing smoke verification without starting a stopped server; the deployment preflight still validates the configured domain. The probe and infrastructure identifiers are never written to the summary. Each request has a bounded timeout, and failures still produce the fixed redacted summary artifact.
 
 ## Operation record cleanup
 
