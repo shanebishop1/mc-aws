@@ -57,7 +57,8 @@ const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironme
     ...stackEnvironment,
   });
 
-  const app = new cdk.App();
+  const assemblyDirectory = mkdtempSync(path.join(os.tmpdir(), "mc-aws-cdk.out-"));
+  const app = new cdk.App({ autoSynth: false, outdir: assemblyDirectory });
   const account = "111111111111";
   const region = "us-west-1";
   app.node.setContext(
@@ -86,6 +87,7 @@ const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironme
   try {
     return Template.fromStack(new MinecraftStack(app, "MinecraftStack", { env: { account, region } }));
   } finally {
+    rmSync(assemblyDirectory, { recursive: true, force: true });
     for (const name of stackEnvironmentNames) {
       const previousValue = previousEnvironment[name];
       if (previousValue === undefined) {
@@ -205,7 +207,8 @@ describe("minecraft-stack server profile assets", () => {
   });
 
   it("keeps the repository root and user data out of file asset sources", () => {
-    const app = new cdk.App();
+    const assemblyDirectory = mkdtempSync(path.join(os.tmpdir(), "mc-aws-cdk.out-"));
+    const app = new cdk.App({ autoSynth: false, outdir: assemblyDirectory });
     app.node.setContext(
       "vpc-provider:account=111111111111:filter.isDefault=true:region=us-west-1:returnAsymmetricSubnets=true",
       {
@@ -248,6 +251,7 @@ describe("minecraft-stack server profile assets", () => {
         "MC_SERVER_PROFILE_DIR"
       );
     } finally {
+      rmSync(assemblyDirectory, { recursive: true, force: true });
       if (previous === undefined) process.env.AL2023_ARM64_AMI_ID = undefined;
       else process.env.AL2023_ARM64_AMI_ID = previous;
       if (previousAllowEmpty === undefined) process.env.MC_ALLOW_EMPTY_WHITELIST = undefined;
