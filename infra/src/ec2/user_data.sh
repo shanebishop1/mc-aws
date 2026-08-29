@@ -53,13 +53,16 @@ install -d -o root -g root -m 0755 /var/lib/mc-aws
 } > /var/lib/mc-aws/os-package-manifest.txt
 chmod 0644 /var/lib/mc-aws/os-package-manifest.txt
 systemctl enable --now crond
-curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/mcstatus.whl "$MCSTATUS_URL"
-curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/asyncio-dgram.whl "$ASYNCIO_DGRAM_URL"
-curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/dnspython.whl "$DNSPYTHON_URL"
-printf '%s  %s\n' "$MCSTATUS_SHA256" /tmp/mcstatus.whl | sha256sum --check --status
-printf '%s  %s\n' "$ASYNCIO_DGRAM_SHA256" /tmp/asyncio-dgram.whl | sha256sum --check --status
-printf '%s  %s\n' "$DNSPYTHON_SHA256" /tmp/dnspython.whl | sha256sum --check --status
-python3 -m pip install --no-index --no-deps /tmp/asyncio-dgram.whl /tmp/dnspython.whl /tmp/mcstatus.whl
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/mcstatus-12.0.2-py3-none-any.whl "$MCSTATUS_URL"
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/asyncio_dgram-2.2.0-py3-none-any.whl "$ASYNCIO_DGRAM_URL"
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/dnspython-2.7.0-py3-none-any.whl "$DNSPYTHON_URL"
+printf '%s  %s\n' "$MCSTATUS_SHA256" /tmp/mcstatus-12.0.2-py3-none-any.whl | sha256sum --check --status
+printf '%s  %s\n' "$ASYNCIO_DGRAM_SHA256" /tmp/asyncio_dgram-2.2.0-py3-none-any.whl | sha256sum --check --status
+printf '%s  %s\n' "$DNSPYTHON_SHA256" /tmp/dnspython-2.7.0-py3-none-any.whl | sha256sum --check --status
+python3 -m pip install --no-index --no-deps \
+  /tmp/asyncio_dgram-2.2.0-py3-none-any.whl \
+  /tmp/dnspython-2.7.0-py3-none-any.whl \
+  /tmp/mcstatus-12.0.2-py3-none-any.whl
 
 curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/rclone.zip "$RCLONE_URL"
 printf '%s  %s\n' "$RCLONE_SHA256" /tmp/rclone.zip | sha256sum --check --status

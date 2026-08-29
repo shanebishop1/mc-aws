@@ -49,9 +49,9 @@ download() {
 
 download "$PAPER_URL" "$PAPER_SHA256" "$work/paper.jar"
 download "$RCLONE_URL" "$RCLONE_SHA256" "$work/rclone.zip"
-download "$MCSTATUS_URL" "$MCSTATUS_SHA256" "$work/mcstatus.whl"
-download "$ASYNCIO_DGRAM_URL" "$ASYNCIO_DGRAM_SHA256" "$work/asyncio-dgram.whl"
-download "$DNSPYTHON_URL" "$DNSPYTHON_SHA256" "$work/dnspython.whl"
+download "$MCSTATUS_URL" "$MCSTATUS_SHA256" "$work/mcstatus-12.0.2-py3-none-any.whl"
+download "$ASYNCIO_DGRAM_URL" "$ASYNCIO_DGRAM_SHA256" "$work/asyncio_dgram-2.2.0-py3-none-any.whl"
+download "$DNSPYTHON_URL" "$DNSPYTHON_SHA256" "$work/dnspython-2.7.0-py3-none-any.whl"
 unzip -q "$work/rclone.zip" -d "$work/rclone"
 printf '%s  %s\n' "$RCLONE_SHA256" "$work/rclone.zip" | sha256sum --check --status
 
@@ -70,7 +70,9 @@ trap 'rollback_files; cleanup' EXIT HUP INT TERM
 install -o minecraft -g minecraft -m 0644 "$work/paper.jar" /opt/minecraft/server/paper.jar
 install -o root -g root -m 0755 "$work/rclone/rclone-v${RCLONE_VERSION}-linux-arm64/rclone" /usr/local/bin/rclone
 python3 -m pip install --disable-pip-version-check --no-index --no-deps --force-reinstall \
-  "$work/asyncio-dgram.whl" "$work/dnspython.whl" "$work/mcstatus.whl"
+  "$work/asyncio_dgram-2.2.0-py3-none-any.whl" \
+  "$work/dnspython-2.7.0-py3-none-any.whl" \
+  "$work/mcstatus-12.0.2-py3-none-any.whl"
 python3 - "$MCSTATUS_VERSION" "$ASYNCIO_DGRAM_VERSION" "$DNSPYTHON_VERSION" <<'PY'
 import importlib.metadata, sys
 expected = {"mcstatus": sys.argv[1], "asyncio-dgram": sys.argv[2], "dnspython": sys.argv[3]}
