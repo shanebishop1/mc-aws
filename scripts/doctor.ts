@@ -4,6 +4,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import type { EnvSchemaValidationIssue, RuntimeTarget } from "../lib/runtime-config-schema";
 import { validateEnvForTarget, validateRuntimeStateWranglerConfig } from "../lib/runtime-config-schema";
+import { parseJsoncObject } from "./wrangler-config";
 
 type CheckLevel = "pass" | "warn" | "fail";
 
@@ -281,7 +282,7 @@ const reportWranglerConfig = () => {
   }
 
   try {
-    const wranglerValidation = validateRuntimeStateWranglerConfig(JSON.parse(wranglerConfigRaw));
+    const wranglerValidation = validateRuntimeStateWranglerConfig(parseJsoncObject(wranglerConfigRaw));
     if (wranglerValidation.isValid) {
       addPass("wrangler.jsonc passes runtime-state validation.");
       return;
@@ -297,7 +298,7 @@ const reportWranglerConfig = () => {
     }
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown JSON parse error";
-    addFail(`wrangler.jsonc is not valid JSON: ${message}`);
+    addFail(`wrangler.jsonc is not valid JSONC: ${message}`);
   }
 };
 

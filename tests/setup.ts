@@ -96,6 +96,7 @@ vi.mock("@/lib/env", () => ({
     MC_BACKEND_MODE: "aws",
     AUTH_SECRET: "test-secret-key-for-jwt-signing-12345678",
     ADMIN_EMAIL: "admin@example.com",
+    NEXT_PUBLIC_APP_URL: "http://localhost:3000",
   },
   getEnv: (name: string, optional = false) => {
     const value = process.env[name];

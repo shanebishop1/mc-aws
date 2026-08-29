@@ -1,0 +1,38 @@
+{
+  "schemaVersion": 1,
+  "reviewedAt": "2026-08-27",
+  "artifacts": {
+    "paper": {
+      "version": "1.21.11",
+      "minecraftVersion": "1.21.11",
+      "build": 132,
+      "url": "https://fill-data.papermc.io/v1/objects/5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba/paper-1.21.11-132.jar",
+      "sha256": "5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba",
+      "checksumSource": "https://fill.papermc.io/v3/projects/paper/versions/1.21.11/builds/132"
+    },
+    "rclone": {
+      "version": "1.71.2",
+      "url": "https://downloads.rclone.org/v1.71.2/rclone-v1.71.2-linux-arm64.zip",
+      "sha256": "e2e2efc7ed143026352d60216ef0d46d3fa4fe9d647eff1bd929e6fea498e6f1",
+      "checksumSource": "https://downloads.rclone.org/v1.71.2/SHA256SUMS"
+    },
+    "mcstatus": {
+      "version": "12.0.2",
+      "url": "https://files.pythonhosted.org/packages/d3/eb/ede21d01d19e957573c88ff685401341a02ab595b4dba9a4a41fd382676c/mcstatus-12.0.2-py3-none-any.whl",
+      "sha256": "b2ee5ff189a4ebf255c658e3983b3e2c74a1e0d222d3e74cfe04c2b4f64f66e6",
+      "checksumSource": "https://pypi.org/pypi/mcstatus/12.0.2/json"
+    },
+    "asyncioDgram": {
+      "version": "2.2.0",
+      "url": "https://files.pythonhosted.org/packages/61/00/cb33d8a9ebad87c9507262b131c92659bcf62975320b7feb9acdfb260ba0/asyncio_dgram-2.2.0-py3-none-any.whl",
+      "sha256": "7afe5a587d1d57908c7a02fe84c785f075d3fb59b555039a6ff8aead28622743",
+      "checksumSource": "https://pypi.org/pypi/asyncio-dgram/2.2.0/json"
+    },
+    "dnspython": {
+      "version": "2.7.0",
+      "url": "https://files.pythonhosted.org/packages/68/1b/e0a87d256e40e8c888847551b20a017a6b98139178505dc7ffb96f04e954/dnspython-2.7.0-py3-none-any.whl",
+      "sha256": "b4c34b7d10b51bcc3a5071e7b8dee77939f1e878477eeecc965e9835f63c6c86",
+      "checksumSource": "https://pypi.org/pypi/dnspython/2.7.0/json"
+    }
+  }
+}

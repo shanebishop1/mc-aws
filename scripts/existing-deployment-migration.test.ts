@@ -22,11 +22,13 @@ import {
   buildPinnedInstanceBridgeTemplate,
   decodeInstanceUserDataAttribute,
   establishOwnershipTags,
+  extractWorkerStackOutputs,
   inspectInstanceAndRootVolume,
   isRetentionStageComplete,
   isStableMigrationStackStatus,
   normalizePnpmArguments,
   pinDeployedInstanceImage,
+  updateDotenvValues,
 } from "./existing-deployment-migration";
 
 const stackId = "arn:aws:cloudformation:us-west-1:123456789012:stack/MinecraftStack/stack-id";
@@ -38,6 +40,66 @@ const storedUserData = "#!/bin/bash\nprintf 'legacy'";
 const storedUserDataBytes = Buffer.from(storedUserData, "utf8");
 const actualUserData = "#!/bin/bash\nprintf 'Grüße ☃'\n";
 const actualUserDataBytes = Buffer.from(actualUserData, "utf8");
+
+describe("existing deployment Worker output synchronization", () => {
+  const outputs = [
+    { OutputKey: "InstanceId", OutputValue: instanceId },
+    { OutputKey: "LifecycleLockTableName", OutputValue: "mc-aws-locks" },
+    { OutputKey: "OperationStateTableName", OutputValue: "mc-aws-operations" },
+  ];
+
+  it("extracts exact stack outputs and updates dotenv idempotently", () => {
+    const values = extractWorkerStackOutputs(outputs, instanceId);
+    const updated = updateDotenvValues("# keep\nexport INSTANCE_ID = stale\nAUTH_SECRET=keep\n", values);
+    expect(updated).toContain(`INSTANCE_ID=${instanceId}`);
+    expect(updated).toContain("MC_LIFECYCLE_LOCK_TABLE_NAME=mc-aws-locks");
+    expect(updated).toContain("MC_OPERATION_STATE_TABLE_NAME=mc-aws-operations");
+    expect(updated).toContain("AUTH_SECRET=keep");
+    expect(updateDotenvValues(updated, values)).toBe(updated);
+  });
+
+  it("rejects missing, duplicate, wrong-instance, and duplicate-dotenv identities", () => {
+    expect(() => extractWorkerStackOutputs(outputs.slice(1), instanceId)).toThrow("InstanceId");
+    expect(() => extractWorkerStackOutputs([...outputs, outputs[1]], instanceId)).toThrow("exactly one");
+    expect(() => extractWorkerStackOutputs(outputs, `i-${"9".repeat(17)}`)).toThrow("ownership-proven");
+    expect(() =>
+      updateDotenvValues("INSTANCE_ID=one\nexport INSTANCE_ID=two\n", extractWorkerStackOutputs(outputs, instanceId))
+    ).toThrow("duplicate effective INSTANCE_ID");
+  });
+});
+
+describe("dual-v1 rolling deployment compatibility", () => {
+  it("initializes bridge metadata before Lambda, exports handoff values, and preserves old Worker SSM acquisition order", () => {
+    const stackSource = readFileSync(path.resolve("infra/lib/minecraft-stack.ts"), "utf8");
+    const workerLockSource = readFileSync(path.resolve("lib/server-action-lock.ts"), "utf8");
+    const lambdaSource = readFileSync(path.resolve("infra/src/lambda/StartMinecraftServer/index.js"), "utf8");
+    const migrationCli = readFileSync(path.resolve("scripts/migrate-existing-deployment.ts"), "utf8");
+
+    expect(stackSource).toContain("startLambda.node.addDependency(migrateLockResource)");
+    expect(stackSource).toContain('new cdk.CfnOutput(this, "LifecycleLockTableName"');
+    expect(stackSource).toContain('new cdk.CfnOutput(this, "OperationStateTableName"');
+    expect(workerLockSource.indexOf("acquireLegacyBridgeLock")).toBeLessThan(
+      workerLockSource.indexOf("acquireServerActionLock")
+    );
+    expect(lambdaSource).toContain("bridgeLegacyLifecycleLock");
+    expect(migrationCli).toContain('"sync-worker-env"');
+    expect(migrationCli).toContain("Synchronized INSTANCE_ID and DynamoDB table outputs");
+  });
+
+  it("requires Worker-first rollback and refuses to report completion while either lifecycle lock remains active", () => {
+    const recoverySource = readFileSync(path.resolve("scripts/deploy-cloudflare.sh"), "utf8");
+    const guide = readFileSync(path.resolve("docs/OPERATIONS_GUIDE.md"), "utf8");
+    expect(recoverySource.indexOf("restore_recorded_routes || return 1")).toBeLessThan(
+      recoverySource.indexOf("assert_lifecycle_recovery_unblocked || return 1")
+    );
+    expect(recoverySource.indexOf("assert_lifecycle_recovery_unblocked || return 1")).toBeLessThan(
+      recoverySource.indexOf('finalize_recovery_record "rolled_back"')
+    );
+    expect(recoverySource).toContain("Lifecycle remains blocked by /minecraft/server-action");
+    expect(recoverySource).toContain("DynamoDB lifecycle lease remains active or malformed");
+    expect(guide).toContain("restore the previous Worker version first");
+  });
+});
 
 const liveTemplate = (): CloudFormationTemplate => ({
   Resources: {
@@ -957,6 +1019,7 @@ describe("existing deployment migration entry-point contract", () => {
     const migrationCli = readFileSync(path.join(root, "scripts/migrate-existing-deployment.ts"), "utf8");
     const migrationContracts = readFileSync(path.join(root, "scripts/existing-deployment-migration.ts"), "utf8");
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
+    const deployOrchestrator = readFileSync(path.join(root, "scripts/deploy-cdk.ts"), "utf8");
     const setup = readFileSync(path.join(root, "setup.sh"), "utf8");
 
     expect(migrationCli).toContain('stage: "plan"');
@@ -966,7 +1029,11 @@ describe("existing deployment migration entry-point contract", () => {
     expect(migrationCli).toContain('"describe-instance-attribute"');
     expect(migrationContracts).not.toContain("beforePreview");
     expect(migrationContracts).not.toContain("afterPreview");
-    expect(packageJson.scripts["cdk:deploy"]).toContain("--assert-standard-deploy-safe");
+    expect(packageJson.scripts["cdk:deploy"]).toContain("scripts/deploy-cdk.ts");
+    expect(deployOrchestrator).toContain("--assert-standard-deploy-safe");
+    expect(deployOrchestrator.indexOf("--assert-standard-deploy-safe")).toBeLessThan(
+      deployOrchestrator.indexOf("dependencies.materialize")
+    );
     expect(setup).toContain("migrate-existing-deployment.ts");
     expect(setup).toContain("--assert-standard-deploy-safe");
   });

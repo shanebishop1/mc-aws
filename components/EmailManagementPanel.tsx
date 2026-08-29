@@ -1,13 +1,55 @@
 "use client";
 
 import { AddEmailForm, EmailListItem } from "@/components/email";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { useEmailData } from "@/hooks/useEmailData";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 
 interface EmailManagementPanelProps {
   isOpen: boolean;
   onClose: () => void;
 }
+
+const AllowlistEntries = ({
+  allowlist,
+  isSaving,
+  onRemove,
+}: {
+  allowlist: string[];
+  isSaving: boolean;
+  onRemove: (email: string) => void;
+}) => {
+  if (allowlist.length > 0) {
+    return (
+      <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
+        {allowlist.map((email) => (
+          <EmailListItem key={email} email={email} onRemove={onRemove} disabled={isSaving} />
+        ))}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-sm flex items-start gap-3">
+      <svg
+        className="w-5 h-5 text-yellow-600 flex-shrink-0 -mt-0.5"
+        fill="none"
+        stroke="currentColor"
+        viewBox="0 0 24 24"
+      >
+        <path
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth={2}
+          d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
+        />
+      </svg>
+      <p className="font-sans text-xs text-yellow-800">
+        Email allowlist is empty. Only admin can trigger the server via email.
+      </p>
+    </div>
+  );
+};
 
 export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelProps) => {
   const {
@@ -22,6 +64,8 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
     saveAllowlist,
     isSaving,
   } = useEmailData();
+  const canClose = !isLoading && !isSaving;
+  const dialogRef = useAccessibleDialog(isOpen, onClose);
 
   const handleAdd = (email: string) => {
     if (!allowlist.includes(email)) {
@@ -41,13 +85,13 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
   };
 
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && !hasChanges) {
+    if (e.target === e.currentTarget && !hasChanges && canClose) {
       onClose();
     }
   };
 
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
         <motion.div
           data-testid="email-management-panel"
@@ -56,20 +100,28 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
           onClick={handleClickOutside}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-2 sm:items-center sm:p-4"
         >
           <motion.div
+            ref={dialogRef}
+            // biome-ignore lint/a11y/useSemanticElements: Framer Motion does not expose a motion.dialog element.
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="email-management-title"
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-lg mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
+            className="relative w-full max-w-lg max-h-[calc(100dvh-1rem)] overflow-y-auto bg-cream rounded-sm shadow-xl border border-charcoal/10 sm:max-h-[calc(100dvh-2rem)]"
           >
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading || isSaving}
-              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed"
+              data-dialog-initial-focus
+              aria-label="Close email management"
+              className="absolute top-4 right-4 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed sm:top-6 sm:right-6"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
@@ -81,11 +133,13 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="p-8"
+              className="p-5 pt-14 sm:p-8"
             >
               <div className="flex items-center justify-between mb-8">
                 <div className="text-center flex-1">
-                  <h2 className="font-serif text-2xl italic text-charcoal mb-2">Email Management</h2>
+                  <h2 id="email-management-title" className="font-serif text-2xl italic text-charcoal mb-2">
+                    Email Management
+                  </h2>
                   <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                     Configure email access and notifications
                   </p>
@@ -108,7 +162,9 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                       animate={{ opacity: 1, y: 0 }}
                       className="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm"
                     >
-                      <p className="font-sans text-xs text-red-800 text-center">{error}</p>
+                      <p role="alert" aria-live="assertive" className="font-sans text-xs text-red-800 text-center">
+                        {error}
+                      </p>
                     </motion.div>
                   )}
 
@@ -133,6 +189,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                         disabled={isLoading || isRefetching}
                         className="text-charcoal/40 hover:text-green transition-colors disabled:opacity-50"
                         title="Refresh"
+                        aria-label="Refresh allowed emails"
                       >
                         <svg
                           className={`w-4 h-4 ${isRefetching ? "animate-spin" : ""}`}
@@ -150,34 +207,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
                       </button>
                     </div>
 
-                    {allowlist.length === 0 && (
-                      <div className="mb-4 p-4 bg-yellow-50 border border-yellow-200 rounded-sm flex items-start gap-3">
-                        <svg
-                          className="w-5 h-5 text-yellow-600 flex-shrink-0 -mt-0.5"
-                          fill="none"
-                          stroke="currentColor"
-                          viewBox="0 0 24 24"
-                        >
-                          <path
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            strokeWidth={2}
-                            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
-                          />
-                        </svg>
-                        <p className="font-sans text-xs text-yellow-800">
-                          Email allowlist is empty. Only admin can trigger the server via email.
-                        </p>
-                      </div>
-                    )}
-
-                    {allowlist.length > 0 && (
-                      <div className="space-y-2 mb-4 max-h-40 overflow-y-auto">
-                        {allowlist.map((email) => (
-                          <EmailListItem key={email} email={email} onRemove={handleRemove} disabled={isSaving} />
-                        ))}
-                      </div>
-                    )}
+                    <AllowlistEntries allowlist={allowlist} isSaving={isSaving} onRemove={handleRemove} />
 
                     <AddEmailForm onAdd={handleAdd} disabled={isSaving} />
                   </div>
@@ -207,6 +237,6 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </>
   );
 };

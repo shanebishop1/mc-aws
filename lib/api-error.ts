@@ -99,7 +99,7 @@ export function formatApiErrorResponse<T>(
   const errorMessage = error instanceof Error ? error.message : "Unknown error";
 
   if (error instanceof RuntimeStateConfigurationError) {
-    console.error(`[${operationType.toUpperCase()}] Runtime-state configuration error:`, error);
+    console.error(`[${operationType.toUpperCase()}] Runtime-state configuration error`);
     return NextResponse.json(
       {
         success: false,
@@ -113,7 +113,7 @@ export function formatApiErrorResponse<T>(
 
   // Check if this is a known validation error that should be exposed
   if (isValidationError(errorMessage)) {
-    console.error(`[${operationType.toUpperCase()}] Validation error:`, error);
+    console.error(`[${operationType.toUpperCase()}] Validation error`);
     return NextResponse.json(
       {
         success: false,
@@ -125,8 +125,8 @@ export function formatApiErrorResponse<T>(
     );
   }
 
-  // For all other errors, log the full error but return a generic message
-  console.error(`[${operationType.toUpperCase()}] Error:`, error);
+  // Do not persist provider errors: SDK metadata can contain resource identifiers or request data.
+  console.error(`[${operationType.toUpperCase()}] Request failed`);
 
   const safeMessage = customGenericMessage ?? GENERIC_ERROR_MESSAGES[operationType] ?? "Failed to process request";
 
@@ -151,13 +151,13 @@ export function formatApiErrorResponse<T>(
  * @returns NextResponse with the specified status code and safe error message
  */
 export function formatApiErrorResponseWithStatus<T>(
-  error: unknown,
+  _error: unknown,
   statusCode: number,
   safeMessage: string,
   operation?: OperationInfo
 ): NextResponse<ApiResponse<T>> {
-  // Log the full error
-  console.error("[API] Error:", error);
+  // Keep persisted logs free of provider metadata and request-derived values.
+  console.error("[API] Request failed");
 
   return NextResponse.json(
     {

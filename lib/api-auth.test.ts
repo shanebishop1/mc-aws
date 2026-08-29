@@ -51,4 +51,27 @@ describe("api-auth fixture integration", () => {
     expect(user).toBeNull();
     expect(verifySessionMock).not.toHaveBeenCalled();
   });
+
+  it("rejects a cross-site cookie mutation before session verification", async () => {
+    const request = createMockNextRequest("http://localhost:3000/api/start", {
+      method: "POST",
+      headers: {
+        cookie: "mc_session=session-from-fixture",
+        host: "localhost:3000",
+        origin: "https://attacker.example",
+        "sec-fetch-site": "cross-site",
+      },
+    });
+
+    const { requireAllowed } = await import("@/lib/api-auth");
+    const rejection = (await requireAllowed(request).catch((error) => error as Response)) as Response;
+
+    expect(rejection).toBeInstanceOf(Response);
+    expect(rejection.status).toBe(403);
+    await expect(rejection.json()).resolves.toMatchObject({
+      success: false,
+      error: "Request origin is not allowed",
+    });
+    expect(verifySessionMock).not.toHaveBeenCalled();
+  });
 });

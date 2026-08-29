@@ -13,7 +13,10 @@ import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
+import {
+  isMutatingActionPayloadValidationError,
+  parseMutatingActionRequestPayload,
+} from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
@@ -62,7 +65,7 @@ async function validateBackupState(instanceId: string): Promise<void> {
 
 async function validateServiceReady(instanceId: string): Promise<void> {
   try {
-    console.log("[BACKUP] Checking Minecraft service status on instance:", instanceId);
+    console.log("[BACKUP] Checking Minecraft service status");
     const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
     const trimmedOutput = output.trim();
 
@@ -77,7 +80,7 @@ async function validateServiceReady(instanceId: string): Promise<void> {
       throw error;
     }
 
-    console.error("[BACKUP] Error checking Minecraft service status:", error);
+    console.error("[BACKUP] Error checking Minecraft service status");
     // If we can't check the service status, allow the backup to proceed
     // This prevents blocking backups due to transient SSM issues
     console.warn("[BACKUP] Proceeding with backup despite service check failure");
@@ -88,10 +91,11 @@ async function invokeBackupLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  fencingToken: number,
   operationId: string,
   backupName?: string
 ): Promise<BackupResponse> {
-  console.log(`[BACKUP] Invoking Lambda for backup on ${instanceId}`);
+  console.log("[BACKUP] Invoking backup workflow");
   await invokeLambda("StartMinecraftServer", {
     invocationType: "api",
     command: "backup",
@@ -99,6 +103,7 @@ async function invokeBackupLambda(
     userEmail: user.email,
     args: backupName ? [backupName] : [],
     lockId,
+    fencingToken,
     operationId,
   });
 
@@ -122,7 +127,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     context,
     authenticate: async () => {
       const user = await requireAdmin(context.request);
-      console.log("[BACKUP] Admin action by:", user.email);
+      console.log("[BACKUP] Authorized action requested");
       return user;
     },
     throttle: async ({ user }) => {
@@ -157,7 +162,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking backup action");
       }
 
-      return await invokeBackupLambda(resolvedId, user, lock.lockId, context.operation.id, backupName);
+      return await invokeBackupLambda(
+        resolvedId,
+        user,
+        lock.lockId,
+        lock.fencingToken,
+        context.operation.id,
+        backupName
+      );
     },
     mapError: ({ stage, error }) => {
       if (stage === "auth" && error instanceof Response) {
@@ -189,7 +201,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         });
       }
 
-      if (error instanceof Error && isValidationErrorMessage(error.message)) {
+      if (
+        isMutatingActionPayloadValidationError(error) ||
+        (error instanceof Error && isValidationErrorMessage(error.message))
+      ) {
         return createMutatingActionFailure(error.message, {
           httpStatus: 400,
           code: "invalid_payload",
@@ -208,8 +223,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
       const ownerEmail = user?.email ?? "unknown";
 
-      await releaseServerActionLock(lock.lockId, { action: "backup", ownerEmail }).catch((releaseError) => {
-        console.error("[BACKUP] Failed to release lock after invoke error:", releaseError);
+      await releaseServerActionLock(lock.lockId, {
+        action: "backup",
+        ownerEmail,
+        fencingToken: lock.fencingToken,
+      }).catch(() => {
+        console.error("[BACKUP] Failed to release lock after invoke error");
       });
     },
   });

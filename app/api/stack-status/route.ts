@@ -69,7 +69,7 @@ function buildStackStatusResponse(
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<StackStatusResponse>>> {
   const user = await getAuthUser(request);
-  console.log("[STACK-STATUS] Access by:", user?.email ?? "anonymous");
+  console.log(user ? "[STACK-STATUS] Authenticated status read" : "[STACK-STATUS] Anonymous status read");
 
   const clientIp = getClientIp(request.headers);
   const rateLimit = await checkRateLimit({

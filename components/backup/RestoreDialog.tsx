@@ -1,10 +1,11 @@
 "use client";
 
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { pollBackups } from "@/lib/backups-polling";
 import { fetchBackups as fetchBackupsApi, queryKeys } from "@/lib/client-api";
 import { cn } from "@/lib/utils";
 import { useQueryClient } from "@tanstack/react-query";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { BackupSelectionList } from "./BackupSelectionList";
 
@@ -16,17 +17,21 @@ interface RestoreDialogProps {
 
 export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogProps) => {
   const queryClient = useQueryClient();
-  const modalRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  const fetchControllerRef = useRef<AbortController | null>(null);
 
   const [backupName, setBackupName] = useState("");
   const [backups, setBackups] = useState<string[]>([]);
   const [selectedBackup, setSelectedBackup] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const modalRef = useAccessibleDialog(open, () => onOpenChange(false));
 
   // Fetch backups with polling for caching status
   const fetchBackups = useCallback(async () => {
+    fetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
     setIsLoading(true);
     setError(null);
 
@@ -34,22 +39,26 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
       const check = async () => {
         const data = await queryClient.fetchQuery({
           queryKey: queryKeys.backups(false),
-          queryFn: () => fetchBackupsApi(false),
+          queryFn: () => fetchBackupsApi(false, controller.signal),
         });
         return data.data;
       };
 
-      const data = await pollBackups(check);
+      const data = await pollBackups(check, { signal: controller.signal });
 
-      if (data?.backups) {
+      if (!controller.signal.aborted && data?.backups) {
         setBackups(data.backups.map((backup) => backup.name));
       }
     } catch (err) {
+      if (controller.signal.aborted) return;
       const errorMessage = err instanceof Error ? err.message : "Failed to fetch backups";
       setError(errorMessage);
       // Don't clear backups on error - manual input still works
     } finally {
-      setIsLoading(false);
+      if (fetchControllerRef.current === controller) {
+        setIsLoading(false);
+        fetchControllerRef.current = null;
+      }
     }
   }, [queryClient]);
 
@@ -62,14 +71,14 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
       setIsLoading(false);
       setError(null);
     } else {
-      // Focus input when dialog opens
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 50);
       // Fetch backups when dialog opens
       void fetchBackups();
     }
-  }, [open, fetchBackups]);
+    return () => {
+      fetchControllerRef.current?.abort();
+      void queryClient.cancelQueries({ queryKey: queryKeys.backups(false) });
+    };
+  }, [open, fetchBackups, queryClient]);
 
   // Sync input with selected backup
   useEffect(() => {
@@ -78,48 +87,8 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
     }
   }, [selectedBackup]);
 
-  // Focus trap
-  useEffect(() => {
-    if (!open) return;
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !modalRef.current) return;
-
-      const focusableElements = modalRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-
-      if (focusableElements.length === 0) return;
-
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-
-      if (e.shiftKey && document.activeElement === firstElement) {
-        lastElement.focus();
-        e.preventDefault();
-      } else if (!e.shiftKey && document.activeElement === lastElement) {
-        firstElement.focus();
-        e.preventDefault();
-      }
-    };
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isLoading) {
-        onOpenChange(false);
-      }
-    };
-
-    document.addEventListener("keydown", handleTab);
-    document.addEventListener("keydown", handleEscape);
-
-    return () => {
-      document.removeEventListener("keydown", handleTab);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [open, onOpenChange, isLoading]);
-
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget && !isLoading) {
+    if (e.target === e.currentTarget) {
       onOpenChange(false);
     }
   };
@@ -148,7 +117,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
   const isConfirmDisabled = !backupName.trim();
 
   return (
-    <AnimatePresence>
+    <>
       {open && (
         <motion.div
           data-testid="restore-dialog"
@@ -157,7 +126,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
           onClick={handleClickOutside}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-2 sm:items-center sm:p-4"
           // biome-ignore lint/a11y/useSemanticElements: Using motion.div for Framer Motion animations
           role="dialog"
           aria-modal="true"
@@ -166,17 +135,18 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
         >
           <motion.div
             ref={modalRef}
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-lg mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
+            className="relative w-full max-w-lg max-h-[calc(100dvh-1rem)] overflow-y-auto bg-cream rounded-sm shadow-xl border border-charcoal/10 sm:max-h-[calc(100dvh-2rem)]"
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={() => onOpenChange(false)}
-              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10"
+              className="absolute top-4 right-4 text-charcoal/40 hover:text-charcoal transition-colors z-10 sm:top-6 sm:right-6"
               aria-label="Close dialog"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -184,7 +154,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
               </svg>
             </button>
 
-            <div className="p-8">
+            <div className="p-5 pt-14 sm:p-8">
               {/* Title and Description */}
               <div className="mb-6">
                 <h2 id="restore-dialog-title" className="font-serif text-2xl italic mb-3 text-charcoal">
@@ -199,7 +169,9 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
               {/* Error State */}
               {error && (
                 <div className="mb-4 p-4 bg-red-50 border border-red-200 rounded-sm">
-                  <p className="font-sans text-xs text-red-800 text-center">{error}</p>
+                  <p role="alert" aria-live="assertive" className="font-sans text-xs text-red-800 text-center">
+                    {error}
+                  </p>
                   <p className="font-sans text-xs text-red-600 text-center mt-1">
                     You can still manually enter a backup name below.
                   </p>
@@ -231,6 +203,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
                 </label>
                 <input
                   ref={inputRef}
+                  data-dialog-initial-focus
                   id="restore-backup-input"
                   data-testid="restore-backup-input"
                   type="text"
@@ -267,7 +240,7 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
               )}
 
               {/* Action Buttons */}
-              <div className="flex gap-3">
+              <div className="flex flex-col gap-3 min-[360px]:flex-row">
                 <motion.button
                   type="button"
                   onClick={() => onOpenChange(false)}
@@ -312,6 +285,6 @@ export const RestoreDialog = ({ open, onOpenChange, onConfirm }: RestoreDialogPr
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </>
   );
 };

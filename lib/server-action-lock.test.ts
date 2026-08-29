@@ -1,254 +1,350 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-const lockParam = "/minecraft/server-action";
-const deleteClaimPrefix = "/minecraft/server-action-delete-claim";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  randomUUID: vi.fn(),
+  send: vi.fn(),
   getParameter: vi.fn(),
   putParameter: vi.fn(),
   deleteParameter: vi.fn(),
+  randomUUID: vi.fn(),
+  acquireLifecycleLock: vi.fn(),
+  releaseLifecycleLock: vi.fn(),
+  renewLifecycleLock: vi.fn(),
 }));
-
-vi.mock("node:crypto", () => ({
-  randomUUID: mocks.randomUUID,
-}));
-
+vi.mock("node:crypto", () => ({ randomUUID: mocks.randomUUID }));
 vi.mock("@/lib/aws", () => ({
   getParameter: mocks.getParameter,
   putParameter: mocks.putParameter,
   deleteParameter: mocks.deleteParameter,
 }));
+vi.mock("@/lib/aws/dynamodb-client", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/aws/dynamodb-client")>("@/lib/aws/dynamodb-client");
+  return { ...actual, getDynamoDbClient: () => ({ send: mocks.send }) };
+});
+vi.mock("@/lib/aws/mock-state-store", () => ({
+  getMockStateStore: () => ({
+    acquireLifecycleLock: mocks.acquireLifecycleLock,
+    releaseLifecycleLock: mocks.releaseLifecycleLock,
+    renewLifecycleLock: mocks.renewLifecycleLock,
+  }),
+}));
 
-import { ServerActionLockConflictError, acquireServerActionLock, releaseServerActionLock } from "./server-action-lock";
+import type { UpdateItemCommand } from "@/lib/aws/dynamodb-client";
+import {
+  ServerActionLockConflictError,
+  acquireServerActionLock,
+  assertServerActionLockOwned,
+  releaseServerActionLock,
+  releaseServerActionLockIfOwned,
+  renewServerActionLock,
+} from "./server-action-lock";
 
-function parameterAlreadyExistsError(): Error {
-  const error = new Error("ParameterAlreadyExists");
-  (error as Error & { name: string }).name = "ParameterAlreadyExists";
-  return error;
+function item(lockId: string, token: number, action = "backup") {
+  return {
+    lockKey: { S: "minecraft-server-lifecycle" },
+    lockId: { S: lockId },
+    fencingToken: { N: String(token) },
+    action: { S: action },
+    ownerEmail: { S: "admin@example.com" },
+    createdAt: { S: "2026-04-13T12:00:00.000Z" },
+    leaseExpiresAt: { N: String(Date.parse("2026-04-13T12:45:00.000Z")) },
+    released: { BOOL: false },
+  };
 }
 
-function parameterNotFoundError(): Error {
-  const error = new Error("ParameterNotFound");
-  (error as Error & { name: string }).name = "ParameterNotFound";
-  return error;
-}
+const metadata = { Item: { protocolVersion: { S: "dual-v1" } } };
+const legacy = JSON.stringify({
+  lockId: "lock-a",
+  action: "backup",
+  ownerEmail: "admin@example.com",
+  createdAt: "2026-04-13T12:00:00.000Z",
+  expiresAt: "2026-04-13T12:45:00.000Z",
+});
 
-describe("server-action-lock", () => {
+describe("DynamoDB server action lock", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.send.mockReset();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-13T12:00:00.000Z"));
-    mocks.randomUUID.mockReturnValue("lock-123");
+    vi.stubEnv("MC_BACKEND_MODE", "aws");
+    vi.stubEnv("MC_LIFECYCLE_LOCK_TABLE_NAME", "locks-table");
+    mocks.randomUUID.mockReturnValue("lock-a");
+    mocks.getParameter.mockResolvedValue(legacy);
+    mocks.putParameter.mockResolvedValue(undefined);
+    mocks.deleteParameter.mockResolvedValue(undefined);
+    mocks.releaseLifecycleLock.mockResolvedValue(true);
   });
 
-  afterEach(() => {
-    vi.useRealTimers();
-  });
+  it("acquires with one conditional update and returns the fencing token", async () => {
+    mocks.send.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("lock-a", 7) });
 
-  it("acquires a new lock with ttl metadata", async () => {
-    mocks.putParameter.mockResolvedValueOnce(undefined);
-
-    const lock = await acquireServerActionLock("start", "admin@example.com");
-
-    expect(lock.lockId).toBe("lock-123");
-    expect(lock.createdAt).toBe("2026-04-13T12:00:00.000Z");
-    expect(lock.expiresAt).toBe("2026-04-13T12:30:00.000Z");
-    expect(mocks.putParameter).toHaveBeenCalledWith(lockParam, JSON.stringify(lock), "String", false);
-  });
-
-  it("recovers from stale lock with delete-claim protection", async () => {
-    const staleLock = {
-      lockId: "stale-1",
-      action: "backup",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T09:00:00.000Z",
-      expiresAt: "2026-04-13T10:00:00.000Z",
-    };
-
-    mocks.randomUUID.mockReturnValueOnce("lock-123").mockReturnValueOnce("claim-123");
-
-    mocks.putParameter
-      .mockRejectedValueOnce(parameterAlreadyExistsError())
-      .mockResolvedValueOnce(undefined)
-      .mockResolvedValueOnce(undefined);
-
-    mocks.getParameter
-      .mockResolvedValueOnce(JSON.stringify(staleLock))
-      .mockResolvedValueOnce(JSON.stringify(staleLock));
-
-    mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
-
-    const lock = await acquireServerActionLock("restore", "admin@example.com");
-
-    expect(lock.lockId).toBe("lock-123");
-    expect(mocks.putParameter).toHaveBeenNthCalledWith(
-      2,
-      `${deleteClaimPrefix}/stale-1`,
-      expect.stringContaining('"claimId":"claim-123"'),
-      "String",
-      false
-    );
-    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(1, lockParam);
-    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(2, `${deleteClaimPrefix}/stale-1`);
-  });
-
-  it("does not blindly delete unknown malformed lock payload", async () => {
-    mocks.putParameter
-      .mockRejectedValueOnce(parameterAlreadyExistsError())
-      .mockRejectedValueOnce(parameterAlreadyExistsError());
-    mocks.getParameter.mockResolvedValueOnce("{not-json").mockResolvedValueOnce("{not-json");
-
-    await expect(acquireServerActionLock("hibernate", "admin@example.com")).rejects.toEqual(
-      expect.objectContaining({ name: "ServerActionLockConflictError" })
-    );
-
-    expect(mocks.deleteParameter).not.toHaveBeenCalledWith(lockParam);
-  });
-
-  it("handles stale-cleanup race without deleting newly acquired lock", async () => {
-    const staleLock = {
-      lockId: "stale-1",
-      action: "backup",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T09:00:00.000Z",
-      expiresAt: "2026-04-13T10:00:00.000Z",
-    };
-    const replacementLock = {
-      lockId: "lock-999",
-      action: "restore",
-      ownerEmail: "other@example.com",
-      createdAt: "2026-04-13T12:00:10.000Z",
-      expiresAt: "2026-04-13T12:30:10.000Z",
-    };
-
-    mocks.randomUUID.mockReturnValueOnce("lock-123").mockReturnValueOnce("claim-123");
-
-    mocks.putParameter
-      .mockRejectedValueOnce(parameterAlreadyExistsError())
-      .mockResolvedValueOnce(undefined)
-      .mockRejectedValueOnce(parameterAlreadyExistsError());
-
-    mocks.getParameter
-      .mockResolvedValueOnce(JSON.stringify(staleLock))
-      .mockResolvedValueOnce(JSON.stringify(staleLock))
-      .mockResolvedValueOnce(JSON.stringify(replacementLock));
-
-    mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
-
-    await expect(acquireServerActionLock("restore", "admin@example.com")).rejects.toEqual(
-      expect.objectContaining({
-        name: "ServerActionLockConflictError",
-        existingLock: expect.objectContaining({ lockId: "lock-999" }),
-      })
-    );
-
-    expect(mocks.deleteParameter).toHaveBeenCalledTimes(2);
-    expect(mocks.deleteParameter).toHaveBeenCalledWith(lockParam);
-    expect(mocks.deleteParameter).toHaveBeenCalledWith(`${deleteClaimPrefix}/stale-1`);
-  });
-
-  it("releases lock only when id, action, and owner match", async () => {
-    const activeLock = {
-      lockId: "lock-123",
-      action: "resume",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T11:50:00.000Z",
-      expiresAt: "2026-04-13T12:20:00.000Z",
-    };
-
-    mocks.randomUUID.mockReturnValueOnce("claim-123");
-    mocks.putParameter.mockResolvedValueOnce(undefined);
-    mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
-    mocks.deleteParameter.mockResolvedValueOnce(undefined).mockResolvedValueOnce(undefined);
-
-    const released = await releaseServerActionLock("lock-123", {
-      action: "resume",
-      ownerEmail: "ADMIN@example.com",
+    await expect(acquireServerActionLock("backup", "ADMIN@example.com")).resolves.toMatchObject({
+      lockId: "lock-a",
+      fencingToken: 7,
+      expiresAt: "2026-04-13T12:45:00.000Z",
     });
-
-    expect(released).toBe(true);
+    const command = mocks.send.mock.calls[1][0] as UpdateItemCommand;
+    expect(command.input.ConditionExpression).toContain("leaseExpiresAt < :now");
+    expect(command.input.UpdateExpression).toContain("fencingToken = if_not_exists(fencingToken, :zero) + :one");
+    expect(command.input.UpdateExpression).toContain("REMOVE ttlEpochSeconds");
     expect(mocks.putParameter).toHaveBeenCalledWith(
-      `${deleteClaimPrefix}/lock-123`,
-      expect.stringContaining('"claimId":"claim-123"'),
+      "/minecraft/server-action",
+      expect.stringContaining('"lockId":"lock-a"'),
       "String",
       false
     );
-    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(1, lockParam);
-    expect(mocks.deleteParameter).toHaveBeenNthCalledWith(2, `${deleteClaimPrefix}/lock-123`);
+    const bridgePayload = JSON.parse(
+      mocks.putParameter.mock.calls.find(([name]) => name === "/minecraft/server-action")?.[1] as string
+    );
+    expect(bridgePayload.expiresAt).toBe("2026-04-13T13:30:00.000Z");
   });
 
-  it("does not release when action metadata mismatches", async () => {
-    const activeLock = {
-      lockId: "lock-123",
-      action: "backup",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T11:50:00.000Z",
-      expiresAt: "2026-04-13T12:20:00.000Z",
-    };
-
-    mocks.putParameter.mockResolvedValueOnce(undefined);
-    mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
-    mocks.deleteParameter.mockResolvedValueOnce(undefined);
-
-    const released = await releaseServerActionLock("lock-123", {
-      action: "restore",
-      ownerEmail: "admin@example.com",
+  it("allows exactly one winner when two acquisitions race", async () => {
+    let updateCount = 0;
+    mocks.send.mockImplementation(async (command) => {
+      if (command.input.Key.lockKey.S === "protocol#dual-v1") return metadata;
+      if (command.input.ConsistentRead) return { Item: item("lock-a", 1) };
+      updateCount += 1;
+      if (updateCount === 1) return { Attributes: item("lock-a", 1) };
+      throw Object.assign(new Error("held"), {
+        name: "ConditionalCheckFailedException",
+        Item: item("lock-a", 1),
+      });
     });
+    mocks.putParameter
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }));
 
-    expect(released).toBe(false);
-    expect(mocks.deleteParameter).not.toHaveBeenCalledWith(lockParam);
-    expect(mocks.deleteParameter).toHaveBeenCalledWith(`${deleteClaimPrefix}/lock-123`);
+    const first = acquireServerActionLock("backup", "admin@example.com");
+    const second = acquireServerActionLock("restore", "other@example.com");
+
+    await expect(first).resolves.toMatchObject({ lockId: "lock-a", fencingToken: 1 });
+    await expect(second).rejects.toBeInstanceOf(ServerActionLockConflictError);
   });
 
-  it("returns false when lock disappears during release", async () => {
-    const activeLock = {
-      lockId: "lock-123",
-      action: "stop",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T11:50:00.000Z",
-      expiresAt: "2026-04-13T12:20:00.000Z",
-    };
+  it("releases the exact legacy bridge lock when DynamoDB acquisition loses", async () => {
+    mocks.send
+      .mockResolvedValueOnce(metadata)
+      .mockRejectedValueOnce(
+        Object.assign(new Error("held"), { name: "ConditionalCheckFailedException", Item: item("other-lock", 8) })
+      );
 
-    mocks.putParameter.mockResolvedValueOnce(undefined);
-    mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
-    mocks.deleteParameter.mockRejectedValueOnce(parameterNotFoundError()).mockResolvedValueOnce(undefined);
-
-    const released = await releaseServerActionLock("lock-123", {
-      action: "stop",
-      ownerEmail: "admin@example.com",
-    });
-
-    expect(released).toBe(false);
-  });
-
-  it("prevents release race when another cleanup already holds delete claim", async () => {
-    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError());
-
-    const released = await releaseServerActionLock("lock-123", {
-      action: "stop",
-      ownerEmail: "admin@example.com",
-    });
-
-    expect(released).toBe(false);
-    expect(mocks.getParameter).not.toHaveBeenCalled();
-    expect(mocks.deleteParameter).not.toHaveBeenCalledWith(lockParam);
-  });
-
-  it("throws conflict with existing lock metadata for active lock", async () => {
-    const activeLock = {
-      lockId: "lock-active",
-      action: "backup",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T11:50:00.000Z",
-      expiresAt: "2026-04-13T12:25:00.000Z",
-    };
-
-    mocks.putParameter.mockRejectedValueOnce(parameterAlreadyExistsError());
-    mocks.getParameter.mockResolvedValueOnce(JSON.stringify(activeLock));
-
-    await expect(acquireServerActionLock("restore", "admin@example.com")).rejects.toBeInstanceOf(
+    await expect(acquireServerActionLock("backup", "admin@example.com")).rejects.toBeInstanceOf(
       ServerActionLockConflictError
     );
+    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+  });
+
+  it("uses the legacy delete-claim protocol to recover an expired SSM bridge lock", async () => {
+    vi.setSystemTime(new Date("2026-04-13T13:00:00.000Z"));
+    mocks.randomUUID.mockReturnValueOnce("lock-new").mockReturnValueOnce("claim-new");
+    mocks.putParameter
+      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }))
+      .mockResolvedValue(undefined);
+    mocks.send.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("lock-new", 8) });
+
+    await expect(acquireServerActionLock("backup", "admin@example.com")).resolves.toMatchObject({
+      lockId: "lock-new",
+      fencingToken: 8,
+    });
+    expect(mocks.putParameter).toHaveBeenCalledWith(
+      "/minecraft/server-action-delete-claim/lock-a",
+      expect.stringContaining('"claimId":"claim-new"'),
+      "String",
+      false
+    );
+    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action-delete-claim/lock-a");
+  });
+
+  it("takes over an expired delete-claim lease instead of blocking for the lock lease", async () => {
+    vi.setSystemTime(new Date("2026-04-13T13:00:00.000Z"));
+    const staleClaim = JSON.stringify({
+      claimId: "dead-claim",
+      createdAt: "2026-04-13T12:00:00.000Z",
+      expiresAt: "2026-04-13T12:01:00.000Z",
+    });
+    mocks.randomUUID.mockReturnValueOnce("lock-new").mockReturnValueOnce("claim-new");
+    mocks.getParameter.mockResolvedValueOnce(legacy).mockResolvedValueOnce(staleClaim).mockResolvedValueOnce(legacy);
+    mocks.putParameter
+      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }))
+      .mockRejectedValueOnce(Object.assign(new Error("stale claim"), { name: "ParameterAlreadyExists" }))
+      .mockResolvedValue(undefined);
+    mocks.send.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("lock-new", 9) });
+
+    await expect(acquireServerActionLock("backup", "admin@example.com")).resolves.toMatchObject({
+      lockId: "lock-new",
+      fencingToken: 9,
+    });
+    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action-delete-claim/lock-a");
+    expect(mocks.putParameter).toHaveBeenCalledWith(
+      "/minecraft/server-action-delete-claim/lock-a",
+      expect.stringContaining('"expiresAt"'),
+      "String",
+      false
+    );
+  });
+
+  it("reconciles an ambiguous DynamoDB acquisition that committed", async () => {
+    mocks.send
+      .mockResolvedValueOnce(metadata)
+      .mockRejectedValueOnce(Object.assign(new Error("socket reset"), { name: "TimeoutError" }))
+      .mockResolvedValueOnce({ Item: item("lock-a", 12) });
+
+    await expect(acquireServerActionLock("backup", "admin@example.com")).resolves.toMatchObject({
+      lockId: "lock-a",
+      fencingToken: 12,
+    });
+    expect(mocks.deleteParameter).not.toHaveBeenCalledWith("/minecraft/server-action");
+  });
+
+  it("repairs ambiguous acquisition with an idempotent conditional write when reads fail", async () => {
+    mocks.send
+      .mockResolvedValueOnce(metadata)
+      .mockRejectedValueOnce(Object.assign(new Error("write timeout"), { name: "TimeoutError" }))
+      .mockRejectedValueOnce(Object.assign(new Error("read timeout"), { name: "TimeoutError" }))
+      .mockResolvedValueOnce({ Attributes: item("lock-a", 14) });
+
+    await expect(acquireServerActionLock("backup", "admin@example.com")).resolves.toMatchObject({
+      lockId: "lock-a",
+      fencingToken: 14,
+    });
+    expect((mocks.send.mock.calls[3][0] as UpdateItemCommand).input.ConditionExpression).toContain("lockId = :lockId");
+    expect((mocks.send.mock.calls[3][0] as UpdateItemCommand).input.UpdateExpression).not.toContain("fencingToken");
+  });
+
+  it("fails closed after the bounded ambiguity repair budget is exhausted", async () => {
+    mocks.send
+      .mockResolvedValueOnce(metadata)
+      .mockRejectedValueOnce(Object.assign(new Error("write timeout"), { name: "TimeoutError" }))
+      .mockRejectedValueOnce(Object.assign(new Error("read timeout"), { name: "TimeoutError" }))
+      .mockRejectedValue(Object.assign(new Error("repair timeout"), { name: "TimeoutError" }));
+
+    await expect(acquireServerActionLock("backup", "admin@example.com")).rejects.toThrow("repair timeout");
+    expect(mocks.send).toHaveBeenCalledTimes(6);
+    expect(mocks.deleteParameter).not.toHaveBeenCalledWith("/minecraft/server-action");
+  });
+
+  it("finishes bridge cleanup after an ambiguous release committed", async () => {
+    const released = { ...item("lock-a", 7), released: { BOOL: true } };
+    mocks.send
+      .mockRejectedValueOnce(Object.assign(new Error("socket reset"), { name: "TimeoutError" }))
+      .mockResolvedValueOnce({ Item: released });
+
+    await expect(releaseServerActionLock("lock-a", { fencingToken: 7, action: "backup" })).resolves.toBe(true);
+    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+  });
+
+  it("self-heals an active SSM bridge whose matching DynamoDB owner is already released", async () => {
+    mocks.randomUUID.mockReturnValueOnce("lock-new").mockReturnValueOnce("claim-new");
+    mocks.putParameter
+      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }))
+      .mockResolvedValue(undefined);
+    mocks.send
+      .mockResolvedValueOnce(metadata)
+      .mockResolvedValueOnce({ Item: { ...item("lock-a", 7), released: { BOOL: true } } })
+      .mockResolvedValueOnce({ Attributes: item("lock-new", 8) });
+
+    await expect(acquireServerActionLock("backup", "admin@example.com")).resolves.toMatchObject({
+      lockId: "lock-new",
+      fencingToken: 8,
+    });
+    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+  });
+
+  it("fails closed without dual-protocol table metadata", async () => {
+    mocks.send.mockResolvedValueOnce({});
+    await expect(acquireServerActionLock("backup", "admin@example.com")).rejects.toThrow(
+      "dual-protocol metadata is missing"
+    );
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+  });
+
+  it("asserts ownership using a strongly consistent read", async () => {
+    mocks.send.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Item: item("lock-a", 4) });
+    await expect(assertServerActionLockOwned("lock-a", 4, "backup")).resolves.toMatchObject({ fencingToken: 4 });
+    expect(mocks.send.mock.calls[1][0].input.ConsistentRead).toBe(true);
+  });
+
+  it("prevents an old fencing token from releasing a newer owner", async () => {
+    mocks.send.mockRejectedValueOnce(Object.assign(new Error("changed"), { name: "ConditionalCheckFailedException" }));
+    await expect(
+      releaseServerActionLock("lock-old", {
+        action: "backup",
+        ownerEmail: "admin@example.com",
+        fencingToken: 3,
+      })
+    ).resolves.toBe(false);
+  });
+
+  it("releases an operation lock using its complete fenced identity without resolving a newer fence", async () => {
+    mocks.send.mockResolvedValueOnce({});
+
+    await expect(
+      releaseServerActionLockIfOwned({
+        lockId: "lock-a",
+        action: "backup",
+        ownerEmail: "ADMIN@example.com",
+        fencingToken: 7,
+      })
+    ).resolves.toBe(true);
+
+    const command = mocks.send.mock.calls[0][0] as UpdateItemCommand;
+    expect(command.input.ConditionExpression).toBe(
+      "lockId = :lockId AND fencingToken = :token AND released = :false AND #action = :action AND ownerEmail = :ownerEmail"
+    );
+    expect(command.input.ExpressionAttributeValues).toMatchObject({
+      ":lockId": { S: "lock-a" },
+      ":token": { N: "7" },
+      ":action": { S: "backup" },
+      ":ownerEmail": { S: "admin@example.com" },
+    });
+    expect(mocks.send).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not renew an already expired lease", async () => {
+    mocks.getParameter.mockResolvedValue(JSON.stringify({ ...JSON.parse(legacy), lockId: "lock-old" }));
+    mocks.send
+      .mockResolvedValueOnce(metadata)
+      .mockRejectedValueOnce(Object.assign(new Error("expired"), { name: "ConditionalCheckFailedException" }))
+      .mockResolvedValueOnce({ Item: item("lock-new", 8) });
+
+    await expect(renewServerActionLock("lock-old", 7)).rejects.toBeInstanceOf(ServerActionLockConflictError);
+    const command = mocks.send.mock.calls[1][0] as UpdateItemCommand;
+    expect(command.input.ConditionExpression).toContain("leaseExpiresAt >= :now");
+  });
+
+  it("stores mock locks in the shared provider state and releases only the matching fence", async () => {
+    vi.stubEnv("MC_BACKEND_MODE", "mock");
+    const storedLock = {
+      lockId: "lock-a",
+      fencingToken: 5,
+      action: "backup",
+      ownerEmail: "admin@example.com",
+      createdAt: "2026-04-13T12:00:00.000Z",
+      expiresAt: "2026-04-13T13:30:00.000Z",
+    };
+    mocks.acquireLifecycleLock.mockResolvedValueOnce({ acquired: true, lock: storedLock });
+
+    const lock = await acquireServerActionLock("backup", "ADMIN@example.com");
+
+    expect(lock).toMatchObject({ lockId: "lock-a", fencingToken: 5, ownerEmail: "admin@example.com" });
+    expect(mocks.acquireLifecycleLock).toHaveBeenCalledWith(
+      expect.objectContaining({ lockId: "lock-a", ownerEmail: "admin@example.com" }),
+      Date.parse("2026-04-13T12:00:00.000Z")
+    );
+
+    await expect(
+      releaseServerActionLock(lock.lockId, {
+        action: "backup",
+        ownerEmail: "admin@example.com",
+        fencingToken: lock.fencingToken,
+      })
+    ).resolves.toBe(true);
+    expect(mocks.releaseLifecycleLock).toHaveBeenCalledWith({
+      lockId: "lock-a",
+      fencingToken: 5,
+      action: "backup",
+      ownerEmail: "admin@example.com",
+    });
   });
 });

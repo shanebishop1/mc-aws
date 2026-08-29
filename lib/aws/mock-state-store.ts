@@ -12,7 +12,9 @@
  * - Immediate persistence so separate development route runtimes stay coherent
  */
 
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import type { ServerState } from "@/lib/types";
 
@@ -50,6 +52,15 @@ export interface MockSSMParameter {
   value: string;
   type: "String" | "SecureString";
   lastModified: string;
+}
+
+export interface MockLifecycleLock {
+  lockId: string;
+  fencingToken: number;
+  action: string;
+  ownerEmail: string;
+  createdAt: string;
+  expiresAt: string;
 }
 
 /**
@@ -140,7 +151,25 @@ export interface MockStateStoreOptions {
   enablePersistence?: boolean;
   /** Path to the JSON persistence file */
   persistencePath?: string;
+  /** Maximum time to wait for another runtime's persistence lock */
+  persistenceLockTimeoutMs?: number;
+  /** Age after which an ownerless or invalid lock can be recovered */
+  persistenceLockStaleMs?: number;
 }
+
+interface PersistenceLockOwner {
+  ownerToken: string;
+  pid: number;
+  hostname: string;
+  createdAt: string;
+}
+
+interface PersistenceLockHandle {
+  saveState: () => Promise<void>;
+  release: () => Promise<void>;
+}
+
+const persistenceLockRetryMs = 10;
 
 // ============================================================================
 // Default Fixtures
@@ -317,14 +346,12 @@ export class MockStateStore {
     this.options = {
       enablePersistence: options.enablePersistence ?? false,
       persistencePath: options.persistencePath ?? path.join(process.cwd(), ".mock-state.json"),
+      persistenceLockTimeoutMs: options.persistenceLockTimeoutMs ?? 5_000,
+      persistenceLockStaleMs: options.persistenceLockStaleMs ?? 30_000,
     };
 
-    // Load state from persistence or create default
-    if (this.options.enablePersistence) {
-      this.state = this.loadState() ?? createDefaultMockState();
-    } else {
-      this.state = createDefaultMockState();
-    }
+    // Persistence is loaded under the cross-runtime lock on first access.
+    this.state = createDefaultMockState();
   }
 
   // ========================================================================
@@ -336,29 +363,30 @@ export class MockStateStore {
    * Returns a promise that resolves when the lock is acquired
    */
   private async acquireLock(): Promise<() => void> {
-    // Wait for any ongoing operation to complete
-    await this.lock;
-
-    // Create a new lock promise
-    let resolveLock: (() => void) | null = null;
+    const previousLock = this.lock;
+    let resolveLock!: () => void;
     this.lock = new Promise((resolve) => {
       resolveLock = resolve;
     });
+    await previousLock;
 
+    let released = false;
     return () => {
-      if (resolveLock) {
-        resolveLock();
-      }
+      if (released) return;
+      released = true;
+      resolveLock();
     };
   }
 
   /**
    * Execute a function with exclusive access to the state
    */
-  private async withLock<T>(fn: (state: MockState) => T): Promise<T> {
+  private async withLock<T>(fn: (state: MockState) => T, persist = false): Promise<T> {
     const release = await this.acquireLock();
+    let persistenceLock: PersistenceLockHandle | undefined;
     try {
       if (this.options.enablePersistence) {
+        persistenceLock = await this.acquirePersistenceLock();
         const persistedState = this.loadState();
         if (persistedState) {
           persistedState.pendingTimeouts = this.state.pendingTimeouts;
@@ -367,10 +395,17 @@ export class MockStateStore {
       }
 
       const result = fn(this.state);
-      // Await the result if it's a Promise
-      return await Promise.resolve(result);
+      const resolvedResult = await Promise.resolve(result);
+      if (persist && this.options.enablePersistence) {
+        await persistenceLock?.saveState();
+      }
+      return resolvedResult;
     } finally {
-      release();
+      try {
+        await persistenceLock?.release();
+      } finally {
+        release();
+      }
     }
   }
 
@@ -378,13 +413,7 @@ export class MockStateStore {
    * Execute a function with exclusive access and persist changes
    */
   private async withLockAndPersist<T>(fn: (state: MockState) => T): Promise<T> {
-    return this.withLock(async (state) => {
-      const result = await Promise.resolve(fn(state));
-      if (this.options.enablePersistence) {
-        this.saveState();
-      }
-      return result;
-    });
+    return this.withLock(fn, true);
   }
 
   // ========================================================================
@@ -413,8 +442,7 @@ export class MockStateStore {
 
       return parsed as MockState;
     } catch (error) {
-      console.error("[MOCK-STATE-STORE] Failed to load state:", error);
-      return null;
+      throw new Error("[MOCK-STATE-STORE] Failed to load persisted state", { cause: error });
     }
   }
 
@@ -422,6 +450,8 @@ export class MockStateStore {
    * Save state to JSON file
    */
   private saveState(): void {
+    let temporaryPath: string | undefined;
+    let temporaryFile: number | undefined;
     try {
       // Convert Map to object for JSON serialization
       // Exclude pendingTimeouts as it contains non-serializable NodeJS.Timeout objects
@@ -435,11 +465,345 @@ export class MockStateStore {
       };
 
       const data = JSON.stringify(serializableState, null, 2);
-      const temporaryPath = `${this.options.persistencePath}.${process.pid}.${Math.random().toString(16).slice(2)}.tmp`;
-      fs.writeFileSync(temporaryPath, data, "utf-8");
+      temporaryPath = `${this.options.persistencePath}.${process.pid}.${randomUUID()}.tmp`;
+      temporaryFile = fs.openSync(temporaryPath, "wx", 0o600);
+      fs.writeFileSync(temporaryFile, data, "utf-8");
+      fs.fsyncSync(temporaryFile);
+      fs.closeSync(temporaryFile);
+      temporaryFile = undefined;
       fs.renameSync(temporaryPath, this.options.persistencePath);
+      temporaryPath = undefined;
     } catch (error) {
-      console.error("[MOCK-STATE-STORE] Failed to save state:", error);
+      if (temporaryFile !== undefined) {
+        try {
+          fs.closeSync(temporaryFile);
+        } catch {
+          // Preserve the original persistence error.
+        }
+      }
+      if (temporaryPath) {
+        try {
+          fs.unlinkSync(temporaryPath);
+        } catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+            console.error("[MOCK-STATE-STORE] Failed to clean up owned temporary state file");
+          }
+        }
+      }
+      throw new Error("[MOCK-STATE-STORE] Failed to persist state", { cause: error });
+    }
+  }
+
+  private get persistenceLockPath(): string {
+    return `${this.options.persistencePath}.lock`;
+  }
+
+  private parsePersistenceLockOwner(raw: string): PersistenceLockOwner | null {
+    try {
+      const owner = JSON.parse(raw) as Partial<PersistenceLockOwner>;
+      if (
+        typeof owner.ownerToken !== "string" ||
+        !Number.isSafeInteger(owner.pid) ||
+        (owner.pid ?? 0) <= 0 ||
+        typeof owner.hostname !== "string" ||
+        typeof owner.createdAt !== "string" ||
+        !Number.isFinite(Date.parse(owner.createdAt))
+      ) {
+        return null;
+      }
+      return owner as PersistenceLockOwner;
+    } catch {
+      return null;
+    }
+  }
+
+  private isDeadLocalOwner(owner: PersistenceLockOwner): boolean {
+    if (owner.hostname !== os.hostname()) return false;
+    try {
+      process.kill(owner.pid, 0);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ESRCH";
+    }
+  }
+
+  private createPersistenceLockOwner(): PersistenceLockOwner {
+    return {
+      ownerToken: randomUUID(),
+      pid: process.pid,
+      hostname: os.hostname(),
+      createdAt: new Date().toISOString(),
+    };
+  }
+
+  private readPersistenceLockSnapshot(lockPath: string): {
+    raw: string;
+    owner: PersistenceLockOwner | null;
+    stats: fs.Stats;
+  } | null {
+    try {
+      const raw = fs.readFileSync(lockPath, "utf-8");
+      return { raw, owner: this.parsePersistenceLockOwner(raw), stats: fs.statSync(lockPath) };
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  }
+
+  private isAbandonedPersistenceLock(snapshot: {
+    owner: PersistenceLockOwner | null;
+    stats: fs.Stats;
+  }): boolean {
+    const stale = Date.now() - snapshot.stats.mtimeMs >= this.options.persistenceLockStaleMs;
+    return stale || Boolean(snapshot.owner && this.isDeadLocalOwner(snapshot.owner));
+  }
+
+  private removePersistenceLockSnapshot(lockPath: string, expectedRaw: string): boolean {
+    try {
+      if (fs.readFileSync(lockPath, "utf-8") !== expectedRaw) return false;
+      fs.unlinkSync(lockPath);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return true;
+      throw error;
+    }
+  }
+
+  private releaseOwnedPersistenceLock(lockPath: string, ownerToken: string): void {
+    const snapshot = this.readPersistenceLockSnapshot(lockPath);
+    if (!snapshot) throw new Error("[MOCK-STATE-STORE] Persistence lock disappeared before release");
+    if (snapshot.owner?.ownerToken !== ownerToken) {
+      throw new Error("[MOCK-STATE-STORE] Refusing to release a persistence lock owned by another runtime");
+    }
+    if (!this.removePersistenceLockSnapshot(lockPath, snapshot.raw)) {
+      throw new Error("[MOCK-STATE-STORE] Persistence lock ownership changed before release");
+    }
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Guard creation must pair exclusive open failures with owned cleanup and stale recovery.
+  private tryAcquirePersistenceRecoveryGuard(recoveryPath: string, owner: PersistenceLockOwner): boolean {
+    let recoveryFile: number | undefined;
+    try {
+      recoveryFile = fs.openSync(recoveryPath, "wx", 0o600);
+      fs.writeFileSync(recoveryFile, JSON.stringify(owner), "utf-8");
+      fs.closeSync(recoveryFile);
+      return true;
+    } catch (error) {
+      if (recoveryFile !== undefined) {
+        try {
+          fs.closeSync(recoveryFile);
+        } catch {
+          // Continue with ownership-safe cleanup of the path created above.
+        }
+        try {
+          fs.unlinkSync(recoveryPath);
+        } catch (cleanupError) {
+          if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+            throw new Error("[MOCK-STATE-STORE] Failed to clean up persistence recovery guard", {
+              cause: cleanupError,
+            });
+          }
+        }
+      }
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+        throw new Error("[MOCK-STATE-STORE] Failed to acquire persistence lock recovery guard", { cause: error });
+      }
+      const snapshot = this.readPersistenceLockSnapshot(recoveryPath);
+      if (snapshot && this.isAbandonedPersistenceLock(snapshot)) {
+        this.removePersistenceLockSnapshot(recoveryPath, snapshot.raw);
+      }
+      return false;
+    }
+  }
+
+  private recoverAbandonedPersistenceLock(): boolean {
+    const recoveryPath = `${this.persistenceLockPath}.recovery`;
+    const recoveryOwner = this.createPersistenceLockOwner();
+    if (!this.tryAcquirePersistenceRecoveryGuard(recoveryPath, recoveryOwner)) return false;
+
+    let recovered = false;
+    let recoveryError: unknown;
+    try {
+      const snapshot = this.readPersistenceLockSnapshot(this.persistenceLockPath);
+      recovered =
+        !snapshot ||
+        (this.isAbandonedPersistenceLock(snapshot) &&
+          this.removePersistenceLockSnapshot(this.persistenceLockPath, snapshot.raw));
+    } catch (error) {
+      recoveryError = error;
+    }
+
+    let cleanupError: unknown;
+    try {
+      this.releaseOwnedPersistenceLock(recoveryPath, recoveryOwner.ownerToken);
+    } catch (error) {
+      cleanupError = error;
+    }
+    if (cleanupError) {
+      throw new Error("[MOCK-STATE-STORE] Failed to release persistence recovery guard", { cause: cleanupError });
+    }
+    if (recoveryError) throw recoveryError;
+    return recovered;
+  }
+
+  /**
+   * Release the primary lock while holding the same recovery guard used by
+   * stale-lock takeover. This prevents an old owner from validating its token,
+   * being replaced, and then unlinking the replacement owner's lock.
+   */
+  private async releasePersistenceLock(ownerToken: string): Promise<void> {
+    const recoveryPath = `${this.persistenceLockPath}.recovery`;
+    const recoveryOwner = this.createPersistenceLockOwner();
+    const deadline = Date.now() + this.options.persistenceLockTimeoutMs;
+
+    while (!this.tryAcquirePersistenceRecoveryGuard(recoveryPath, recoveryOwner)) {
+      if (Date.now() >= deadline) {
+        throw new Error(
+          `[MOCK-STATE-STORE] Timed out waiting to release persistence lock: ${this.persistenceLockPath}`
+        );
+      }
+      await new Promise((resolve) => setTimeout(resolve, persistenceLockRetryMs));
+    }
+
+    let releaseError: unknown;
+    try {
+      this.releaseOwnedPersistenceLock(this.persistenceLockPath, ownerToken);
+    } catch (error) {
+      releaseError = error;
+    }
+
+    let guardCleanupError: unknown;
+    try {
+      this.releaseOwnedPersistenceLock(recoveryPath, recoveryOwner.ownerToken);
+    } catch (error) {
+      guardCleanupError = error;
+    }
+    if (guardCleanupError) {
+      throw new Error("[MOCK-STATE-STORE] Failed to release persistence recovery guard", {
+        cause: guardCleanupError,
+      });
+    }
+    if (releaseError) throw releaseError;
+  }
+
+  /**
+   * Validate ownership and replace the state file while excluding stale-lock
+   * takeover. A timed-out former owner must never publish after replacement.
+   */
+  private async saveStateWhilePersistenceLockOwned(ownerToken: string): Promise<void> {
+    const recoveryPath = `${this.persistenceLockPath}.recovery`;
+    const recoveryOwner = this.createPersistenceLockOwner();
+    const deadline = Date.now() + this.options.persistenceLockTimeoutMs;
+
+    while (!this.tryAcquirePersistenceRecoveryGuard(recoveryPath, recoveryOwner)) {
+      if (Date.now() >= deadline) {
+        throw new Error(`[MOCK-STATE-STORE] Timed out validating persistence lock: ${this.persistenceLockPath}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, persistenceLockRetryMs));
+    }
+
+    let saveError: unknown;
+    try {
+      const snapshot = this.readPersistenceLockSnapshot(this.persistenceLockPath);
+      if (snapshot?.owner?.ownerToken !== ownerToken) {
+        throw new Error("[MOCK-STATE-STORE] Persistence lock ownership changed before save");
+      }
+      this.saveState();
+    } catch (error) {
+      saveError = error;
+    }
+
+    let guardCleanupError: unknown;
+    try {
+      this.releaseOwnedPersistenceLock(recoveryPath, recoveryOwner.ownerToken);
+    } catch (error) {
+      guardCleanupError = error;
+    }
+    if (guardCleanupError) {
+      throw new Error("[MOCK-STATE-STORE] Failed to release persistence recovery guard", {
+        cause: guardCleanupError,
+      });
+    }
+    if (saveError) throw saveError;
+  }
+
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Acquisition, bounded retries, heartbeat, and ownership-safe cleanup form one lock protocol.
+  private async acquirePersistenceLock(): Promise<PersistenceLockHandle> {
+    const owner = this.createPersistenceLockOwner();
+    const deadline = Date.now() + this.options.persistenceLockTimeoutMs;
+
+    while (true) {
+      let lockFile: number | undefined;
+      let createdLock = false;
+      try {
+        lockFile = fs.openSync(this.persistenceLockPath, "wx", 0o600);
+        createdLock = true;
+        fs.writeFileSync(lockFile, JSON.stringify(owner), "utf-8");
+        fs.fsyncSync(lockFile);
+        fs.closeSync(lockFile);
+        lockFile = undefined;
+        if (fs.existsSync(`${this.persistenceLockPath}.recovery`)) {
+          fs.unlinkSync(this.persistenceLockPath);
+          createdLock = false;
+          const recoveryInProgress = new Error("Persistence lock recovery is in progress") as NodeJS.ErrnoException;
+          recoveryInProgress.code = "EEXIST";
+          throw recoveryInProgress;
+        }
+        let heartbeatError: unknown;
+        const heartbeat = setInterval(
+          () => {
+            try {
+              const current = this.parsePersistenceLockOwner(fs.readFileSync(this.persistenceLockPath, "utf-8"));
+              if (current?.ownerToken !== owner.ownerToken) {
+                throw new Error("Persistence lock ownership changed during heartbeat");
+              }
+              const now = new Date();
+              fs.utimesSync(this.persistenceLockPath, now, now);
+            } catch (error) {
+              heartbeatError ??= error;
+            }
+          },
+          Math.max(1, Math.floor(this.options.persistenceLockStaleMs / 3))
+        );
+        heartbeat.unref();
+        return {
+          saveState: async () => this.saveStateWhilePersistenceLockOwned(owner.ownerToken),
+          release: async () => {
+            try {
+              await this.releasePersistenceLock(owner.ownerToken);
+            } finally {
+              clearInterval(heartbeat);
+            }
+            if (heartbeatError) {
+              throw new Error("[MOCK-STATE-STORE] Persistence lock heartbeat failed", { cause: heartbeatError });
+            }
+          },
+        };
+      } catch (error) {
+        if (lockFile !== undefined) {
+          fs.closeSync(lockFile);
+        }
+        if (createdLock) {
+          try {
+            fs.unlinkSync(this.persistenceLockPath);
+          } catch (cleanupError) {
+            if ((cleanupError as NodeJS.ErrnoException).code !== "ENOENT") {
+              throw new Error("[MOCK-STATE-STORE] Failed to clean up an incomplete owned lock", {
+                cause: cleanupError,
+              });
+            }
+          }
+        }
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") {
+          throw new Error("[MOCK-STATE-STORE] Failed to acquire persistence lock", { cause: error });
+        }
+      }
+
+      this.recoverAbandonedPersistenceLock();
+      if (Date.now() >= deadline) {
+        throw new Error(`[MOCK-STATE-STORE] Timed out waiting for persistence lock: ${this.persistenceLockPath}`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, persistenceLockRetryMs));
     }
   }
 
@@ -556,6 +920,123 @@ export class MockStateStore {
         type,
         lastModified: new Date().toISOString(),
       };
+    });
+  }
+
+  /** Atomically create or overwrite one parameter, matching SSM PutParameter semantics. */
+  async putParameter(
+    name: string,
+    value: string,
+    type: "String" | "SecureString" = "String",
+    overwrite = true
+  ): Promise<boolean> {
+    return this.withLockAndPersist((state) => {
+      if (!overwrite && state.ssm.parameters[name]) return false;
+      state.ssm.parameters[name] = { value, type, lastModified: new Date().toISOString() };
+      return true;
+    });
+  }
+
+  /** Delete only when the current serialized value still belongs to the caller. */
+  async deleteParameterIfValue(name: string, expectedValue: string): Promise<boolean> {
+    return this.withLockAndPersist((state) => {
+      if (state.ssm.parameters[name]?.value !== expectedValue) return false;
+      delete state.ssm.parameters[name];
+      return true;
+    });
+  }
+
+  /** Atomically acquire the mock lifecycle lock and increment its fencing token. */
+  async acquireLifecycleLock(
+    candidate: Omit<MockLifecycleLock, "fencingToken">,
+    nowMs: number
+  ): Promise<{ acquired: boolean; lock: MockLifecycleLock | null }> {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Parse validation, expiry, and fencing increment are one atomic critical section.
+    return this.withLockAndPersist((state) => {
+      const lockParameter = state.ssm.parameters["/minecraft/server-action"];
+      let existing: MockLifecycleLock | null = null;
+      try {
+        existing = lockParameter ? (JSON.parse(lockParameter.value) as MockLifecycleLock) : null;
+      } catch {
+        return { acquired: false, lock: null };
+      }
+      if (existing) {
+        const expiresAt = Date.parse(existing.expiresAt);
+        if (!Number.isFinite(expiresAt) || !Number.isSafeInteger(existing.fencingToken)) {
+          return { acquired: false, lock: null };
+        }
+        if (expiresAt > nowMs) return { acquired: false, lock: existing };
+      }
+      const tokenParameter = state.ssm.parameters["/minecraft/server-action-fencing-token"];
+      const previousToken = Number(tokenParameter?.value ?? "0");
+      if (tokenParameter && (!Number.isSafeInteger(previousToken) || previousToken < 0)) {
+        return { acquired: false, lock: null };
+      }
+      const fencingToken = previousToken + 1;
+      const lock = { ...candidate, fencingToken };
+      const modifiedAt = new Date(nowMs).toISOString();
+      state.ssm.parameters["/minecraft/server-action-fencing-token"] = {
+        value: String(fencingToken),
+        type: "String",
+        lastModified: modifiedAt,
+      };
+      state.ssm.parameters["/minecraft/server-action"] = {
+        value: JSON.stringify(lock),
+        type: "String",
+        lastModified: modifiedAt,
+      };
+      return { acquired: true, lock };
+    });
+  }
+
+  async releaseLifecycleLock(input: {
+    lockId: string;
+    fencingToken: number;
+    action?: string;
+    ownerEmail?: string;
+  }): Promise<boolean> {
+    return this.withLockAndPersist((state) => {
+      const parameter = state.ssm.parameters["/minecraft/server-action"];
+      if (!parameter) return false;
+      let lock: MockLifecycleLock;
+      try {
+        lock = JSON.parse(parameter.value) as MockLifecycleLock;
+      } catch {
+        return false;
+      }
+      if (lock.lockId !== input.lockId || lock.fencingToken !== input.fencingToken) return false;
+      if (input.action && lock.action !== input.action) return false;
+      if (input.ownerEmail && lock.ownerEmail !== input.ownerEmail.trim().toLowerCase()) return false;
+      Reflect.deleteProperty(state.ssm.parameters, "/minecraft/server-action");
+      return true;
+    });
+  }
+
+  async renewLifecycleLock(lockId: string, fencingToken: number, expiresAt: string, nowMs: number) {
+    return this.withLockAndPersist((state) => {
+      const parameter = state.ssm.parameters["/minecraft/server-action"];
+      if (!parameter) return null;
+      let lock: MockLifecycleLock;
+      try {
+        lock = JSON.parse(parameter.value) as MockLifecycleLock;
+      } catch {
+        return null;
+      }
+      if (
+        lock.lockId !== lockId ||
+        lock.fencingToken !== fencingToken ||
+        !Number.isFinite(Date.parse(lock.expiresAt)) ||
+        Date.parse(lock.expiresAt) <= nowMs
+      ) {
+        return null;
+      }
+      const renewed = { ...lock, expiresAt };
+      state.ssm.parameters["/minecraft/server-action"] = {
+        ...parameter,
+        value: JSON.stringify(renewed),
+        lastModified: new Date(nowMs).toISOString(),
+      };
+      return renewed;
     });
   }
 
@@ -803,7 +1284,7 @@ export class MockStateStore {
     this.clearAllTimeouts();
     await this.withLockAndPersist((state) => {
       const defaultState = createDefaultMockState();
-      console.log("[MOCK-STATE-STORE] Current faults before reset:", Array.from(state.faults.operationFailures.keys()));
+      console.log("[MOCK-STATE-STORE] Clearing configured faults before reset");
       // Replace all properties including nested objects and Maps
       state.instance = { ...defaultState.instance };
       state.ssm = {
@@ -818,10 +1299,8 @@ export class MockStateStore {
         operationFailures: new Map(defaultState.faults.operationFailures),
       };
       state.pendingTimeouts = [];
-      console.log("[MOCK-STATE-STORE] Faults after reset:", Array.from(state.faults.operationFailures.keys()));
+      console.log("[MOCK-STATE-STORE] Configured faults cleared");
     });
-    // Save immediately without debouncing to ensure clean state for next test
-    this.saveState();
     console.log("[MOCK-STATE-STORE] State reset complete and saved");
   }
 
@@ -918,12 +1397,17 @@ export class MockStateStore {
     });
   }
 
+  /** Execute one mock-only read/modify/write transaction under all persistence locks. */
+  async transact<T>(fn: (state: MockState) => T): Promise<T> {
+    return this.withLockAndPersist(fn);
+  }
+
   /**
    * Force immediate persistence
    */
   async persistNow(): Promise<void> {
     if (this.options.enablePersistence) {
-      await this.withLock(() => this.saveState());
+      await this.withLock(() => undefined, true);
     }
   }
 }

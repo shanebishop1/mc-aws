@@ -149,31 +149,53 @@ describe("POST /api/restore", () => {
     );
   });
 
-  it("should ignore instanceId from request body and use server-side resolution", async () => {
+  it("returns 400 instead of restoring latest for malformed JSON", async () => {
+    const req = createMockNextRequest("http://localhost/api/restore", {
+      method: "POST",
+      body: "{malformed",
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(400);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Request body must contain valid JSON");
+    expect(body.operation?.status).toBe("failed");
+    expect(mocks.findInstanceId).not.toHaveBeenCalled();
+    expect(mocks.acquireServerActionLock).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
+  it.each([{ backupName: "" }, { backupName: "   " }, { name: "" }, { name: "\n" }])(
+    "returns 400 instead of restoring latest for an explicitly blank alias: %j",
+    async (payload) => {
+      const req = createMockNextRequest("http://localhost/api/restore", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      const res = await POST(req);
+
+      expect(res.status).toBe(400);
+      const body = await parseNextResponse<ApiResponse<unknown>>(res);
+      expect(body.error).toBe("Backup name cannot be empty");
+      expect(mocks.findInstanceId).not.toHaveBeenCalled();
+      expect(mocks.invokeLambda).not.toHaveBeenCalled();
+    }
+  );
+
+  it("should reject instanceId from request body", async () => {
     const req = createMockNextRequest("http://localhost/api/restore", {
       method: "POST",
       body: JSON.stringify({ backupName: "my-backup-2024", instanceId: "i-custom-id" }),
     });
     const res = await POST(req);
 
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(400);
     const body = await parseNextResponse<ApiResponse<RestoreResponse>>(res);
-    expect(body.success).toBe(true);
-    expect(body.data?.backupName).toBe("my-backup-2024");
-
-    // Should use the server-side resolved ID, not the caller-provided one
-    expect(mocks.invokeLambda).toHaveBeenCalledWith(
-      "StartMinecraftServer",
-      expect.objectContaining({
-        invocationType: "api",
-        command: "restore",
-        instanceId: "i-1234", // Server-side resolved ID
-        userEmail: "admin@example.com",
-        args: ["my-backup-2024"],
-        lockId: "lock-restore-123",
-        operationId: body.operation?.id,
-      })
-    );
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("instanceId is not allowed for restore requests");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("should handle lambda invocation failures", async () => {
@@ -185,11 +207,11 @@ describe("POST /api/restore", () => {
     });
     const res = await POST(req);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Failed to restore backup");
-    expect(body.operation?.status).toBe("failed");
+    expect(body.error).toContain("Remote dispatch could not be confirmed");
+    expect(body.operation?.status).toBe("accepted");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });
@@ -220,30 +242,18 @@ describe("POST /api/restore", () => {
     );
   });
 
-  it("should prefer 'backupName' over 'name' when both are provided", async () => {
+  it("should reject conflicting backup name aliases", async () => {
     const req = createMockNextRequest("http://localhost/api/restore", {
       method: "POST",
       body: JSON.stringify({ backupName: "new-backup", name: "old-backup" }),
     });
     const res = await POST(req);
 
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(400);
     const body = await parseNextResponse<ApiResponse<RestoreResponse>>(res);
-    expect(body.success).toBe(true);
-    expect(body.data?.backupName).toBe("new-backup");
-
-    expect(mocks.invokeLambda).toHaveBeenCalledWith(
-      "StartMinecraftServer",
-      expect.objectContaining({
-        invocationType: "api",
-        command: "restore",
-        instanceId: "i-1234",
-        userEmail: "admin@example.com",
-        args: ["new-backup"],
-        lockId: "lock-restore-123",
-        operationId: body.operation?.id,
-      })
-    );
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("backupName and name must not conflict");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("returns failed operation metadata for auth failures", async () => {

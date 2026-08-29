@@ -46,6 +46,28 @@ describe("public setup deployment preflight", () => {
     expect(sesPreflight).toBeLessThan(setupSource.indexOf("pnpm exec cdk deploy", sesPreflight));
   });
 
+  it("records SSM ownership observations before CDK can mutate parameters", () => {
+    const ownershipInventory = setupSource.indexOf("Recorded pre-deployment SSM ownership facts");
+    const deploy = setupSource.indexOf("pnpm exec cdk deploy", ownershipInventory);
+    expect(ownershipInventory).toBeGreaterThan(setupSource.indexOf("deployment-manifest.mjs aws-init"));
+    expect(deploy).toBeGreaterThan(ownershipInventory);
+    expect(setupSource).toContain("deployment-manifest.mjs ssm-stack-resource");
+  });
+
+  it("guards and confirms before DNS mutation and never forwards removed token parameters", () => {
+    const guard = setupSource.indexOf("--assert-standard-deploy-safe");
+    const confirmation = setupSource.indexOf("print_deployment_preflight", guard);
+    const materialize = setupSource.indexOf("scripts/materialize-dns-secrets.ts", confirmation);
+    const deploy = setupSource.indexOf("pnpm exec cdk deploy", materialize);
+
+    expect(guard).toBeGreaterThan(-1);
+    expect(confirmation).toBeGreaterThan(guard);
+    expect(materialize).toBeGreaterThan(confirmation);
+    expect(deploy).toBeGreaterThan(materialize);
+    expect(setupSource).not.toContain("CloudflareTokenParam");
+    expect(setupSource).not.toContain("DuckDnsTokenParam");
+  });
+
   it("refuses a non-interactive deployment without explicit confirmation", () => {
     const result = runPreflight();
 

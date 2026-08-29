@@ -8,7 +8,6 @@ export interface RuntimeStateTelemetryEvent {
   outcome: RuntimeStateTelemetryOutcome;
   source: string;
   route?: string;
-  key?: string;
   reason?: string;
   retryAfterSeconds?: number;
   timestamp: string;
@@ -29,7 +28,6 @@ export const createRuntimeStateTelemetryEvent = ({
   outcome,
   source,
   route,
-  key,
   reason,
   retryAfterSeconds,
 }: RuntimeStateTelemetryInput): RuntimeStateTelemetryEvent => {
@@ -39,7 +37,6 @@ export const createRuntimeStateTelemetryEvent = ({
     outcome,
     source,
     route,
-    key,
     reason,
     retryAfterSeconds,
     timestamp: new Date().toISOString(),

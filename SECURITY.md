@@ -19,6 +19,7 @@ Only test deployments you own or are authorized to test. Do not access another u
 - **Anonymous access:** callers can see server state, the public IP or hostname while running, volume presence, and CloudFormation stack existence/status. Instance and stack IDs are hidden.
 - **Signed-in but unapproved access:** a valid Google user outside the allowlist can also use authenticated player-count and status views. Signing in does not grant lifecycle or administration actions.
 - Panel sessions use signed, HTTP-only cookies that expire after 30 days. Removing a user from the panel allowlist changes their role within about five minutes, but a stolen cookie remains valid until it expires or `AUTH_SECRET` is rotated.
+- Cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests are pinned to the configured canonical panel origin and request host. Browser mutations require a matching `Origin`; origin-less requests are accepted only without browser Fetch Metadata headers for controlled non-browser clients. OAuth callbacks and read-only `GET` routes are not subject to this mutation check.
 - Google Drive setup requests full Drive scope so it can find archives created by older clients. Treat the token as access to the user's Drive, not just this app's folder.
 - Backup archives are gzip-compressed tar files, not application-encrypted archives. Drive account controls and Google storage encryption protect them, but anyone who obtains an archive can read world data and server files in plaintext.
 - `.env`, `.env.local`, and `.env.production` may contain Google, Cloudflare, DNS, OAuth, session-signing, and other credentials. They are gitignored but remain credential-bearing local files. Restrict local access and backups.
@@ -26,6 +27,7 @@ Only test deployments you own or are authorized to test. Do not access another u
 - `START_KEYWORD` selects an inbound email command. It is not a credential. Inbound authorization still depends on SES mail checks, `ADMIN_EMAIL`, and the email allowlist; do not treat a hard-to-guess keyword as access control.
 - Server-profile validation scans only the selected profile and checks a limited set of filenames, file types, sizes, JSON structures, and credential-like text. It is not a general secret scanner and does not inspect unrelated local files. Review profile content before deployment.
 - `NOTIFICATION_EMAIL` receives notices but is not an inbound-email admin. Saving the panel allowlist retains it alongside `ADMIN_EMAIL` and `ALLOWED_EMAILS`. Only `ADMIN_EMAIL` can issue inbound admin commands.
+- Persisted application logs omit email addresses, roles, cloud resource IDs, OAuth state, inbound subjects, backup names, tokens, command output, and raw provider errors. Cloudflare invocation logs are disabled in source configuration so callback query strings are not persisted; follow the production retention and redaction controls in the Operations Guide before enabling them.
 
 ## If credentials or data are exposed
 

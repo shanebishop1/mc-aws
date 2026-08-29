@@ -28,8 +28,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
   // Require authentication for mutations
   try {
-    const user = await requireAllowed(request);
-    console.log("[MOCK-CONTROL] State patch by:", user.email, "role:", user.role);
+    await requireAllowed(request);
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse<ApiResponse<unknown>>;
@@ -47,7 +46,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    console.log("[MOCK-CONTROL] Patching mock state:", body);
+    console.log("[MOCK-CONTROL] Patching mock state");
     const stateStore = getMockStateStore();
 
     // Convert operationFailures object back to Map if present

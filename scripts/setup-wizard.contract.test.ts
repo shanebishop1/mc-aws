@@ -1,5 +1,6 @@
-import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { execFileSync, spawnSync } from "node:child_process";
+import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -29,6 +30,8 @@ describe("setup-wizard email optional contract", () => {
     expect(source).toContain('prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword" true');
     expect(source).not.toContain('prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword"\n');
     expect(source).toContain('write_env_files "START_KEYWORD" "$START_KEYWORD"');
+    expect(source).toContain('write_env_files "MC_ALARM_EMAIL" "$MC_ALARM_EMAIL"');
+    expect(source).toContain("no alarm email is delivered until you accept it");
   });
 
   it("masks and preserves an existing start keyword when secret input is blank", () => {
@@ -62,6 +65,9 @@ describe("setup-wizard server profile contract", () => {
     const source = readFileSync(setupWizardPath, "utf8");
     expect(source).not.toMatch(/collect_github_settings|write_env_files "GITHUB_(?:USER|REPO|TOKEN)"/);
     expect(source).toContain('step_section 8 "Optional: Google Drive Backups"');
+    expect(source).toContain('write_env_files "MC_SCHEDULED_BACKUP_ENABLED" "$MC_SCHEDULED_BACKUP_ENABLED"');
+    expect(source).toContain("only if EC2 is already running");
+    expect(source).toContain("missing Drive credentials cause a safe skip");
   });
 });
 
@@ -76,14 +82,14 @@ describe("setup-wizard panel hosting contract", () => {
     expect(source).toContain('PANEL_DNS_MANAGEMENT="external"');
     expect(source).toContain("How should deployment manage panel DNS?");
     expect(source).toContain('CLOUDFLARE_PANEL_DNS_API_TOKEN=""');
-    expect(source).toContain('validate_cloudflare_zone_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN"');
+    expect(source).toContain('validate_cloudflare_route_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN"');
     expect(source).toContain('write_env_files "PANEL_DNS_MANAGEMENT" "$PANEL_DNS_MANAGEMENT"');
     expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "cloudflare"');
     expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "duckdns"');
     expect(source).toContain('write_env_files "MC_CONNECTION_MODE" "raw_ip"');
   });
 
-  it("validates external panel zone IDs locally without requiring a DNS token", () => {
+  it("validates zone IDs locally but blocks external hosting without a route-capable shell token", () => {
     const run = (zoneId: string): string =>
       execFileSync(
         "bash",
@@ -105,6 +111,56 @@ describe("setup-wizard panel hosting contract", () => {
 
     expect(run("0123456789abcdef0123456789abcdef")).toBe("valid");
     expect(run("not-a-zone-id")).toBe("invalid");
+    const source = readFileSync(setupWizardPath, "utf8");
+    expect(source).toContain("External custom panel hosting requires a shell-only route-capable Cloudflare token.");
+    expect(source).not.toContain("accepting the validated Zone ID format without an API read");
+  });
+
+  it("distinguishes route inventory permission from generic zone access", () => {
+    const source = readFileSync(setupWizardPath, "utf8");
+    expect(source).toContain("/workers/routes");
+    expect(source).toContain("Workers Routes Read/Edit");
+    expect(source).toContain("AWS deployment is blocked");
+  });
+
+  it("executes the route-list preflight and fails closed on a denied response", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-route-preflight-"));
+    const curlMock = path.join(directory, "curl");
+    writeFileSync(
+      curlMock,
+      `#!/usr/bin/env bash
+if [[ "$*" == *"/workers/routes"* && "\${MOCK_ROUTE_SUCCESS:-0}" == "1" ]]; then
+  printf '%s' '{"success":true,"result":[]}'
+else
+  printf '%s' '{"success":false,"errors":[{"message":"denied"}]}'
+fi
+`,
+      { mode: 0o700 }
+    );
+    chmodSync(curlMock, 0o700);
+    const run = (success: boolean) =>
+      spawnSync(
+        "bash",
+        [
+          "-c",
+          "source scripts/setup-wizard.sh; validate_cloudflare_route_access token 0123456789abcdef0123456789abcdef",
+        ],
+        {
+          cwd: process.cwd(),
+          encoding: "utf8",
+          env: {
+            ...process.env,
+            MC_AWS_SETUP_LIBRARY_ONLY: "1",
+            CURL_BIN: curlMock,
+            MOCK_ROUTE_SUCCESS: success ? "1" : "0",
+          },
+        }
+      );
+
+    expect(run(true).status).toBe(0);
+    const denied = run(false);
+    expect(denied.status).not.toBe(0);
+    expect(`${denied.stdout}${denied.stderr}`).toContain("AWS deployment is blocked");
   });
 
   it("prints the exact production Google OAuth origin and callbacks", () => {

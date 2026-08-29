@@ -127,11 +127,11 @@ describe("POST /api/hibernate", () => {
     const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
     const res = await POST(req);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Failed to hibernate server");
-    expect(body.operation?.status).toBe("failed");
+    expect(body.error).toContain("Remote dispatch could not be confirmed");
+    expect(body.operation?.status).toBe("accepted");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });

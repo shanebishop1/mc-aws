@@ -48,8 +48,8 @@ export async function GET(
   try {
     // Check admin authorization
     try {
-      const user = await requireAdmin(request);
-      console.log("[EMAILS] Admin action by:", user.email);
+      await requireAdmin(request);
+      console.log("[EMAILS] Authorized configuration read requested");
     } catch (error) {
       if (error instanceof Response) {
         return error as NextResponse<ApiResponse<{ adminEmail: string; allowlist: string[]; cachedAt?: number }>>;

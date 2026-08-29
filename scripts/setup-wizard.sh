@@ -45,6 +45,7 @@ readonly PRODUCTION_ENV_FILE=".env.production"
 # Capture a shell deployment token before resume files are loaded. This value is
 # used only for optional read-only external-zone validation and is never written.
 CLOUDFLARE_SETUP_DEPLOY_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
+CURL_BIN="${CURL_BIN:-curl}"
 
 template_for_env_file() {
   local env_file="$1"
@@ -314,7 +315,7 @@ validate_cloudflare_token() {
   
   # Test the token by verifying it with Cloudflare's API
   local response
-  response=$(curl -s -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
+  response=$("$CURL_BIN" -s -X GET "https://api.cloudflare.com/client/v4/user/tokens/verify" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json")
   
@@ -341,7 +342,7 @@ validate_cloudflare_zone_access() {
 
   log "Validating access to Cloudflare zone..."
   local response
-  response=$(curl -sS -q -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}" \
+  response=$("$CURL_BIN" -sS -q -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}" \
     -H "Authorization: Bearer $token" \
     -H "Content-Type: application/json" 2>/dev/null || true)
 
@@ -351,6 +352,30 @@ validate_cloudflare_zone_access() {
   fi
 
   log_error "The token cannot access that Cloudflare zone"
+  return 1
+}
+
+validate_cloudflare_route_access() {
+  local token="$1"
+  local zone_id="$2"
+  local response
+
+  log "Validating Workers Routes read access before AWS deployment..."
+  response=$("$CURL_BIN" -sS -q -X GET "https://api.cloudflare.com/client/v4/zones/${zone_id}/workers/routes" \
+    -H "Authorization: Bearer $token" \
+    -H "Content-Type: application/json" 2>/dev/null || true)
+  if printf '%s' "$response" | node -e '
+const fs=require("node:fs");
+try { const data=JSON.parse(fs.readFileSync(0,"utf8")); process.exit(data.success===true&&Array.isArray(data.result)?0:1); }
+catch { process.exit(1); }
+'; then
+    log_success "Workers Routes read access is valid"
+    log "Deployment and rollback also require Workers Routes Edit on this exact zone."
+    return 0
+  fi
+
+  log_error "The shell token cannot list Workers Routes for that zone."
+  log_error "Use a route-capable token with Workers Routes Read/Edit; AWS deployment is blocked."
   return 1
 }
 
@@ -765,13 +790,7 @@ collect_dns_mode() {
 }
 
 get_worker_name() {
-  node -e '
-const fs = require("node:fs");
-const raw = fs.readFileSync("wrangler.jsonc", "utf8");
-const config = JSON.parse(raw.slice(raw.indexOf("{")));
-if (typeof config.name !== "string" || !config.name.trim()) process.exit(1);
-process.stdout.write(config.name.trim());
-'
+  pnpm exec tsx scripts/wrangler-config.ts worker-name wrangler.jsonc
 }
 
 collect_panel_hosting() {
@@ -846,13 +865,20 @@ collect_panel_hosting() {
           while true; do
             prompt CLOUDFLARE_PANEL_ZONE_ID "Enter Zone ID for the panel hostname" \
               "${CLOUDFLARE_PANEL_ZONE_ID:-${CLOUDFLARE_ZONE_ID:-}}"
-            validate_cloudflare_zone_access "$CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && break
+            validate_cloudflare_zone_access "$CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && \
+              validate_cloudflare_route_access "$CLOUDFLARE_PANEL_DNS_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && break
           done
           ;;
         2)
           PANEL_DNS_MANAGEMENT="external"
           CLOUDFLARE_PANEL_DNS_API_TOKEN=""
           log "External mode will not read, create, modify, or record panel DNS."
+          if [[ -z "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" ]]; then
+            log_error "External custom panel hosting requires a shell-only route-capable Cloudflare token."
+            log_error "Export CLOUDFLARE_DEPLOY_API_TOKEN (or CLOUDFLARE_API_TOKEN) with Workers Routes Read/Edit, then rerun setup."
+            exit 1
+          fi
+          validate_cloudflare_token "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" || exit 1
           while true; do
             prompt CLOUDFLARE_PANEL_ZONE_ID "Enter Zone ID for the panel hostname" \
               "${CLOUDFLARE_PANEL_ZONE_ID:-${CLOUDFLARE_ZONE_ID:-}}"
@@ -860,13 +886,8 @@ collect_panel_hosting() {
               log_error "Cloudflare Zone ID must be a 32-character hexadecimal ID"
               continue
             fi
-            if [[ -n "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" ]]; then
-              validate_cloudflare_zone_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" \
-                "$CLOUDFLARE_PANEL_ZONE_ID" && break
-              continue
-            fi
-            log "No shell deploy token is available; accepting the validated Zone ID format without an API read."
-            break
+            validate_cloudflare_zone_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && \
+              validate_cloudflare_route_access "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" "$CLOUDFLARE_PANEL_ZONE_ID" && break
           done
           ;;
         *)
@@ -921,6 +942,7 @@ collect_email_settings() {
   local existing_inbound_recipient="${SES_INBOUND_RECIPIENT:-}"
   local existing_rule_set_name="${SES_RECEIPT_RULE_SET_NAME:-}"
   local existing_start_keyword="${START_KEYWORD:-}"
+  local existing_alarm_email="${MC_ALARM_EMAIL:-}"
 
   log "Outbound notifications and inbound email commands are independent capabilities."
   log "Core panel/server operations work even when this section is skipped."
@@ -985,6 +1007,15 @@ collect_email_settings() {
     prompt START_KEYWORD "Enter private start keyword" "$existing_start_keyword" true
   fi
   echo ""
+  log "CloudWatch alarms always publish to a project SNS topic. Email delivery is optional and separate from SES."
+  log "If configured, AWS sends a confirmation request; no alarm email is delivered until you accept it."
+  while true; do
+    prompt_optional MC_ALARM_EMAIL "Operator email for infrastructure alarms" "$existing_alarm_email"
+    [[ -z "$MC_ALARM_EMAIL" ]] && break
+    validate_email "$MC_ALARM_EMAIL" && break
+    log_error "Invalid email format. Please try again."
+  done
+  echo ""
 
   write_env_files "SES_NOTIFICATIONS_ENABLED" "$SES_NOTIFICATIONS_ENABLED"
   write_env_files "SES_INBOUND_COMMANDS_ENABLED" "$SES_INBOUND_COMMANDS_ENABLED"
@@ -993,6 +1024,7 @@ collect_email_settings() {
   write_env_files "SES_INBOUND_RECIPIENT" "$SES_INBOUND_RECIPIENT"
   write_env_files "SES_RECEIPT_RULE_SET_NAME" "$SES_RECEIPT_RULE_SET_NAME"
   write_env_files "START_KEYWORD" "$START_KEYWORD"
+  write_env_files "MC_ALARM_EMAIL" "$MC_ALARM_EMAIL"
 
   log_success "Email settings saved"
 }
@@ -1016,8 +1048,26 @@ collect_gdrive_settings() {
 
     prompt_optional GDRIVE_ROOT "Enter Google Drive backup folder path" "${GDRIVE_ROOT:-}"
 
+    echo ""
+    log "Scheduled backups are disabled by default because these folder settings do not authorize Drive."
+    log "When enabled, the conservative default runs Sunday at 05:00 UTC only if EC2 is already running."
+    echo "  1. Keep unattended backups disabled (default; enable after connecting and testing Drive)"
+    echo "  2. Enable weekly unattended backups now (missing Drive credentials cause a safe skip)"
+    local scheduled_backup_default="1"
+    [[ "${MC_SCHEDULED_BACKUP_ENABLED:-false}" == "true" ]] && scheduled_backup_default="2"
+    prompt scheduled_backup_choice "Enter choice" "$scheduled_backup_default"
+    if [[ "$scheduled_backup_choice" == "2" ]]; then
+      MC_SCHEDULED_BACKUP_ENABLED="true"
+    else
+      MC_SCHEDULED_BACKUP_ENABLED="false"
+    fi
+    MC_SCHEDULED_BACKUP_SCHEDULE="${MC_SCHEDULED_BACKUP_SCHEDULE:-cron(0 5 ? * SUN *)}"
+    MC_BACKUP_STALE_AFTER_HOURS="${MC_BACKUP_STALE_AFTER_HOURS:-192}"
     log_success "Google Drive settings configured"
   else
+    MC_SCHEDULED_BACKUP_ENABLED="false"
+    MC_SCHEDULED_BACKUP_SCHEDULE="${MC_SCHEDULED_BACKUP_SCHEDULE:-cron(0 5 ? * SUN *)}"
+    MC_BACKUP_STALE_AFTER_HOURS="${MC_BACKUP_STALE_AFTER_HOURS:-192}"
     log_warning "Skipping Google Drive configuration"
   fi
   echo ""
@@ -1025,6 +1075,9 @@ collect_gdrive_settings() {
   # Write to env files
   write_env_files "GDRIVE_REMOTE" "$GDRIVE_REMOTE"
   write_env_files "GDRIVE_ROOT" "$GDRIVE_ROOT"
+  write_env_files "MC_SCHEDULED_BACKUP_ENABLED" "$MC_SCHEDULED_BACKUP_ENABLED"
+  write_env_files "MC_SCHEDULED_BACKUP_SCHEDULE" "$MC_SCHEDULED_BACKUP_SCHEDULE"
+  write_env_files "MC_BACKUP_STALE_AFTER_HOURS" "$MC_BACKUP_STALE_AFTER_HOURS"
 
   log_success "Google Drive settings saved"
 }

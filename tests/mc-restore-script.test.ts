@@ -73,6 +73,7 @@ interface Harness {
   serverDir: string;
   maintenanceLock: string;
   operationLock: string;
+  restoreJournal: string;
   systemctlLog: string;
   addArchive: (name: string, kind?: ArchiveKind) => void;
   run: (reference?: string, extraEnv?: Record<string, string | undefined>) => SpawnSyncReturns<string>;
@@ -88,6 +89,7 @@ const createHarness = (): Harness => {
   const maintenanceLock = path.join(stateDir, "maintenance.lock");
   const operationLock = path.join(stateDir, "operation.lock");
   const systemctlLog = path.join(stateDir, "systemctl.log");
+  const restoreJournal = path.join(stateDir, "restore-journal.json");
   const startCount = path.join(stateDir, "start-count");
   const healthCount = path.join(stateDir, "health-count");
   const sleepCount = path.join(stateDir, "sleep-count");
@@ -101,6 +103,10 @@ const createHarness = (): Harness => {
   writeFileSync(startCount, "0", "utf8");
   writeFileSync(healthCount, "0", "utf8");
   writeFileSync(sleepCount, "0", "utf8");
+  const bootIdFile = path.join(stateDir, "boot-id");
+  writeFileSync(bootIdFile, "boot-test-1\n", "utf8");
+
+  makeExecutable(path.join(binDir, "flock"), "#!/usr/bin/env bash\nexit 0\n");
 
   makeExecutable(
     path.join(binDir, "rclone"),
@@ -111,6 +117,7 @@ case "\${1:-}" in
     printf '%s' "\${RCLONE_TEST_LIST:-}"
     ;;
   copy)
+    [[ "\${RESTORE_TEST_RCLONE_FAIL:-0}" != "1" ]] || exit 1
     source_name="\${2##*/}"
     /bin/cp "${archiveDir}/\${source_name}" "\${3}/\${source_name}"
     ;;
@@ -118,6 +125,14 @@ case "\${1:-}" in
     exit 2
     ;;
 esac
+`
+  );
+
+  makeExecutable(
+    path.join(binDir, "mcstatus"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+[[ "\${RESTORE_TEST_PROTOCOL_FAIL:-0}" != "1" ]]
 `
   );
 
@@ -193,6 +208,9 @@ if [[ "\${RESTORE_TEST_INSTALL_FAIL:-0}" == "1" && "$source_path" == */extract/s
   exit 1
 fi
 /bin/mv -- "\${args[@]}"
+if [[ "\${RESTORE_TEST_KILL_AFTER_PREVIOUS_MOVE:-0}" == "1" && "$source_path" == "${serverDir}" ]]; then
+  kill -KILL "$PPID"
+fi
 `
   );
 
@@ -201,6 +219,7 @@ fi
     serverDir,
     maintenanceLock,
     operationLock,
+    restoreJournal,
     systemctlLog,
     addArchive: (name, kind = "success") => createArchive(path.join(archiveDir, name), kind),
     run: (reference = "backup", extraEnv = {}) =>
@@ -211,9 +230,15 @@ fi
           MC_SERVER_DIR: serverDir,
           MC_OPERATION_LOCK: operationLock,
           MC_MAINTENANCE_LOCK: maintenanceLock,
+          MC_HIBERNATE_GUARD: path.join(stateDir, "hibernate.guard"),
+          MC_BOOT_ID_FILE: bootIdFile,
           MC_RCLONE_CONFIG_HELPER: "/usr/bin/true",
           MC_PROFILE_INSTALLER: "/usr/bin/true",
           MC_RESTORE_HEALTH_DELAY: "0",
+          MC_STATUS_BIN: path.join(binDir, "mcstatus"),
+          MC_RESTORE_PROTOCOL_MAX_ATTEMPTS: "1",
+          MC_RESTORE_PROTOCOL_POLL_INTERVAL: "0",
+          MC_RESTORE_JOURNAL: restoreJournal,
           MC_RESTORE_STAGING_PARENT: serverParent,
           ...extraEnv,
           NODE_ENV: process.env.NODE_ENV ?? "test",
@@ -249,10 +274,10 @@ describe("mc-restore.sh", () => {
       "original-world\n"
     );
     expect(readFileSync(harness.maintenanceLock, "utf8")).toBe("caller-owned\n");
-    expect(existsSync(harness.operationLock)).toBe(false);
+    expect(existsSync(harness.operationLock)).toBe(true);
     expect(readFileSync(harness.systemctlLog, "utf8")).toContain("is-active --quiet minecraft");
     expect(result.stdout).toContain("Applying current server profile to restored world");
-  });
+  }, 15_000);
 
   it("supports latest selection of a .gz archive", () => {
     const harness = createHarness();
@@ -283,7 +308,7 @@ describe("mc-restore.sh", () => {
     const systemctlCalls = readFileSync(harness.systemctlLog, "utf8");
     expect(systemctlCalls).toMatch(/start minecraft/);
     expect(systemctlCalls.match(/is-active --quiet minecraft/g)).toHaveLength(_failure === "health check" ? 2 : 1);
-    expect(existsSync(harness.operationLock)).toBe(false);
+    expect(existsSync(harness.operationLock)).toBe(true);
   });
 
   it("does not stop the server when staged ownership cannot be set", () => {
@@ -364,6 +389,57 @@ describe("mc-restore.sh", () => {
 
     expect(result.status).not.toBe(0);
     expect(readdirSync(serverParent).filter((entry) => entry.startsWith("server.backup-"))).toHaveLength(3);
+  });
+
+  it("rolls back when the service is active but the Minecraft protocol is not ready", () => {
+    const harness = createHarness();
+    cleanupDirs.push(harness.rootDir);
+    harness.addArchive("backup.tar.gz");
+
+    const result = harness.run("backup", { RESTORE_TEST_PROTOCOL_FAIL: "1" });
+
+    expect(result.status).not.toBe(0);
+    expect(readFileSync(path.join(harness.serverDir, "world.txt"), "utf8")).toBe("original-world\n");
+    expect(result.stdout).toContain("protocol readiness");
+  });
+
+  it("recovers a durable swap journal after SIGKILL before starting another restore", () => {
+    const harness = createHarness();
+    cleanupDirs.push(harness.rootDir);
+    harness.addArchive("backup.tar.gz");
+
+    const killed = harness.run("backup", { RESTORE_TEST_KILL_AFTER_PREVIOUS_MOVE: "1" });
+    expect(killed.signal).toBe("SIGKILL");
+    expect(existsSync(harness.restoreJournal)).toBe(true);
+    expect(existsSync(harness.serverDir)).toBe(false);
+
+    const recovered = harness.run("backup", { RESTORE_TEST_RCLONE_FAIL: "1" });
+    expect(recovered.status).not.toBe(0);
+    expect(readFileSync(path.join(harness.serverDir, "world.txt"), "utf8")).toBe("original-world\n");
+    expect(existsSync(harness.restoreJournal)).toBe(false);
+    expect(readdirSync(path.dirname(harness.serverDir)).filter((entry) => entry.startsWith(".mc-restore."))).toEqual(
+      []
+    );
+    expect(recovered.stdout).toContain("Interrupted restore recovery completed");
+  });
+
+  it("recovers and cleans local journal state before Drive credential setup", () => {
+    const harness = createHarness();
+    cleanupDirs.push(harness.rootDir);
+    harness.addArchive("backup.tar.gz");
+
+    const killed = harness.run("backup", { RESTORE_TEST_KILL_AFTER_PREVIOUS_MOVE: "1" });
+    expect(killed.signal).toBe("SIGKILL");
+
+    const recovered = harness.run("backup", { MC_RCLONE_CONFIG_HELPER: "/usr/bin/false" });
+    expect(recovered.status).not.toBe(0);
+    expect(recovered.stdout).toContain("Interrupted restore recovery completed");
+    expect(recovered.stdout).toContain("Failed to materialize Google Drive configuration");
+    expect(readFileSync(path.join(harness.serverDir, "world.txt"), "utf8")).toBe("original-world\n");
+    expect(existsSync(harness.restoreJournal)).toBe(false);
+    expect(readdirSync(path.dirname(harness.serverDir)).filter((entry) => entry.startsWith(".mc-restore."))).toEqual(
+      []
+    );
   });
 
   it.each([

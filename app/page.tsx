@@ -9,14 +9,45 @@ import { ResumeModal } from "@/components/ResumeModal";
 import { ServerStatus } from "@/components/ServerStatus";
 import { useAuth } from "@/components/auth/auth-provider";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
+import { useOperationPolling } from "@/hooks/useOperationPolling";
 import { usePageFocus } from "@/hooks/usePageFocus";
 import { useServerStatus } from "@/hooks/useServerStatus";
 import { useStackStatus } from "@/hooks/useStackStatus";
-import { type ActionEndpoint, fetchAwsConfig, fetchServiceStatus, postServerAction, queryKeys } from "@/lib/client-api";
+import {
+  type ActionEndpoint,
+  ClientApiError,
+  fetchAwsConfig,
+  fetchServiceStatus,
+  postServerAction,
+  queryKeys,
+} from "@/lib/client-api";
 import { ServerState } from "@/lib/types";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+type MessageKind = "progress" | "success" | "error";
+
+function isAcceptedUnconfirmedError(error: unknown): error is ClientApiError & { operation: { status: "accepted" } } {
+  return error instanceof ClientApiError && error.status === 503 && error.operation?.status === "accepted";
+}
+
+const OperationFeedback = ({ message, kind }: { message: string | null; kind: MessageKind }) => {
+  if (!message) return null;
+
+  return (
+    <motion.p
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      role={kind === "error" ? "alert" : "status"}
+      aria-live={kind === "error" ? "assertive" : "polite"}
+      aria-atomic="true"
+      className={`font-sans text-xs tracking-widest uppercase ${kind === "error" ? "text-red-800" : "text-green"}`}
+    >
+      {message}
+    </motion.p>
+  );
+};
 
 export default function Home() {
   const isPageFocused = usePageFocus();
@@ -25,14 +56,14 @@ export default function Home() {
     useServerStatus();
   const { stackExists, isLoading: stackLoading, error: stackError } = useStackStatus();
 
-  const [_isLoading, setIsLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [messageKind, setMessageKind] = useState<MessageKind>("progress");
   const [serviceActive, setServiceActive] = useState<boolean | undefined>(undefined);
-
-  // Debug: Log message changes
-  useEffect(() => {
-    console.log("[PAGE] Message state changed:", message);
-  }, [message]);
+  const messageTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const actionSequenceRef = useRef(0);
+  const actionRequestRef = useRef<AbortController | null>(null);
+  const mountedRef = useRef(true);
+  const { poll: pollOperation, pollStop, cancel: cancelOperationPolling } = useOperationPolling();
   const [isResumeModalOpen, setIsResumeModalOpen] = useState(false);
   const [isEmailPanelOpen, setIsEmailPanelOpen] = useState(false);
   const [isCostDashboardOpen, setIsCostDashboardOpen] = useState(false);
@@ -109,59 +140,154 @@ export default function Home() {
     [setPendingAction]
   );
 
-  const serverActionMutation = useMutation({
-    mutationFn: ({ endpoint, body }: { endpoint: ActionEndpoint; body?: Record<string, string> }) =>
-      postServerAction(endpoint, body),
-  });
+  const showMessage = useCallback((text: string | null, kind: MessageKind = "progress", clearAfterMs?: number) => {
+    if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
+    messageTimeoutRef.current = null;
+    setMessage(text);
+    setMessageKind(kind);
+    if (text && clearAfterMs) {
+      messageTimeoutRef.current = setTimeout(() => {
+        setMessage(null);
+        messageTimeoutRef.current = null;
+      }, clearAfterMs);
+    }
+  }, []);
 
-  // Helper to schedule status refresh
-  const scheduleStatusRefresh = useCallback(() => {
-    setTimeout(async () => {
-      const hasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
-      if (document.visibilityState === "visible" && hasFocus) {
-        await fetchStatus();
-      }
-    }, 2000);
-  }, [fetchStatus]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      actionSequenceRef.current += 1;
+      actionRequestRef.current?.abort();
+      cancelOperationPolling();
+      if (messageTimeoutRef.current) clearTimeout(messageTimeoutRef.current);
+    };
+  }, [cancelOperationPolling]);
 
   // Helper to handle action error
   const handleActionError = useCallback(
     async (err: unknown) => {
       const error = err as { message?: string };
       const errorMessage = error.message || "Unknown error";
-      console.log("[PAGE ACTION] Error caught, setting message:", errorMessage);
-      setMessage(errorMessage);
+      setPendingAction(null);
+      showMessage(`Failed: ${errorMessage}`, "error");
 
       const hasFocus = typeof document.hasFocus === "function" ? document.hasFocus() : true;
       if (document.visibilityState === "visible" && hasFocus) {
-        await fetchStatus();
+        try {
+          await fetchStatus();
+        } catch {
+          // The action error is authoritative; a best-effort status refresh must not escape as an unhandled rejection.
+        }
       }
     },
-    [fetchStatus]
+    [fetchStatus, setPendingAction, showMessage]
+  );
+
+  const isActionCurrent = useCallback(
+    (actionSequence: number) => mountedRef.current && actionSequence === actionSequenceRef.current,
+    []
+  );
+
+  const shouldIgnoreActionFailure = useCallback(
+    (error: unknown, actionSequence: number) =>
+      (error instanceof DOMException && error.name === "AbortError") || !isActionCurrent(actionSequence),
+    [isActionCurrent]
+  );
+
+  const awaitAcceptedAction = useCallback(
+    async (
+      action: string,
+      endpoint: string,
+      actionSequence: number,
+      data: Awaited<ReturnType<typeof postServerAction>>
+    ): Promise<boolean> => {
+      if (endpoint === "/api/stop") {
+        showMessage("Stop request accepted. Waiting for the server to stop…", "progress");
+        await pollStop();
+        if (!isActionCurrent(actionSequence)) return false;
+        setPendingAction(null);
+        showMessage("Stop completed successfully.", "success", 7000);
+        await fetchStatus();
+        return true;
+      }
+
+      const operationId = data.operation?.id;
+      if (!operationId) throw new Error("The server did not return an operation ID");
+
+      showMessage(`${action} request accepted. Waiting for completion…`, "progress");
+      await pollOperation(operationId);
+      if (!isActionCurrent(actionSequence)) return false;
+
+      setPendingAction(null);
+      showMessage(`${action} completed successfully.`, "success", 7000);
+      await fetchStatus();
+      return true;
+    },
+    [fetchStatus, isActionCurrent, pollOperation, pollStop, setPendingAction, showMessage]
+  );
+
+  const settleAcceptedAction = useCallback(
+    async (
+      action: string,
+      endpoint: string,
+      actionSequence: number,
+      data: Awaited<ReturnType<typeof postServerAction>>
+    ): Promise<boolean> => {
+      try {
+        return await awaitAcceptedAction(action, endpoint, actionSequence, data);
+      } catch (error) {
+        if (shouldIgnoreActionFailure(error, actionSequence)) return false;
+        await handleActionError(error);
+        return false;
+      }
+    },
+    [awaitAcceptedAction, handleActionError, shouldIgnoreActionFailure]
   );
 
   const handleAction = useCallback(
     async (action: string, endpoint: string, bodyData?: Record<string, string>) => {
-      setIsLoading(true);
+      const actionSequence = ++actionSequenceRef.current;
+      actionRequestRef.current?.abort();
+      cancelOperationPolling();
+      const requestController = new AbortController();
+      actionRequestRef.current = requestController;
       updateOptimisticStatus(action);
+      showMessage(`${action} request in progress…`, "progress");
 
       try {
         const typedEndpoint = endpoint as ActionEndpoint;
         const body = bodyData ?? undefined;
-        const data = await serverActionMutation.mutateAsync({ endpoint: typedEndpoint, body });
-
-        if (data.data?.message) {
-          setMessage(data.data.message);
+        const data = await postServerAction(typedEndpoint, body, requestController.signal);
+        if (requestController.signal.aborted || !isActionCurrent(actionSequence)) {
+          return false;
         }
-        scheduleStatusRefresh();
+        return await settleAcceptedAction(action, endpoint, actionSequence, data);
       } catch (err: unknown) {
+        if (shouldIgnoreActionFailure(err, actionSequence)) return false;
+        if (isAcceptedUnconfirmedError(err)) {
+          return await settleAcceptedAction(action, endpoint, actionSequence, {
+            success: false,
+            error: err.message,
+            operation: err.operation,
+            timestamp: new Date().toISOString(),
+          });
+        }
         await handleActionError(err);
+        return false;
       } finally {
-        setIsLoading(false);
-        setTimeout(() => setMessage(null), 5000);
+        if (actionRequestRef.current === requestController) actionRequestRef.current = null;
       }
     },
-    [handleActionError, scheduleStatusRefresh, serverActionMutation, updateOptimisticStatus]
+    [
+      cancelOperationPolling,
+      handleActionError,
+      isActionCurrent,
+      shouldIgnoreActionFailure,
+      settleAcceptedAction,
+      showMessage,
+      updateOptimisticStatus,
+    ]
   );
 
   // If the user clicked Start while logged out, continue automatically after sign-in.
@@ -178,12 +304,14 @@ export default function Home() {
   }, [handleAction, isAuthenticated, stackExists, showStart, showResume]);
 
   const handleResumeClick = () => {
+    setIsEmailPanelOpen(false);
+    setIsCostDashboardOpen(false);
     setIsResumeModalOpen(true);
   };
 
   const handleResumeFromModal = (input: { restoreMode: "fresh" | "named"; backupName?: string }) => {
     setIsResumeModalOpen(false);
-    handleAction("Resume", "/api/resume", {
+    void handleAction("Resume", "/api/resume", {
       restoreMode: input.restoreMode,
       ...(input.backupName ? { backupName: input.backupName } : {}),
     });
@@ -212,7 +340,9 @@ export default function Home() {
             <h2 className="font-serif text-xl italic mb-2 text-red-600">Connection Error</h2>
             <p className="font-sans text-sm text-charcoal/70">{stackError}</p>
           </div>
-          <p className="font-sans text-xs text-charcoal/50">Please check your AWS credentials and try again</p>
+          <p className="font-sans text-xs text-charcoal/50">
+            Please retry in a moment. If the problem continues, contact your administrator.
+          </p>
         </div>
       </main>
     );
@@ -228,8 +358,16 @@ export default function Home() {
         <ArtDecoBorder />
         {/* Header */}
         <PageHeader
-          onOpenCosts={() => setIsCostDashboardOpen(true)}
-          onOpenEmails={() => setIsEmailPanelOpen(true)}
+          onOpenCosts={() => {
+            setIsEmailPanelOpen(false);
+            setIsResumeModalOpen(false);
+            setIsCostDashboardOpen(true);
+          }}
+          onOpenEmails={() => {
+            setIsCostDashboardOpen(false);
+            setIsResumeModalOpen(false);
+            setIsEmailPanelOpen(true);
+          }}
           awsConsoleUrl={awsConsoleUrl}
         />
 
@@ -251,17 +389,7 @@ export default function Home() {
 
         {/* Footer - Fixed Small Height */}
         <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center">
-          {message && (
-            <motion.p
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`font-sans text-xs tracking-widest uppercase ${
-                message.includes("Error") || message.includes("Failed") ? "text-red-800" : "text-green"
-              }`}
-            >
-              {message}
-            </motion.p>
-          )}
+          <OperationFeedback message={message} kind={messageKind} />
           <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
         </footer>
       </main>
@@ -278,8 +406,16 @@ export default function Home() {
         <ArtDecoBorder />
         {/* Header */}
         <PageHeader
-          onOpenCosts={() => setIsCostDashboardOpen(true)}
-          onOpenEmails={() => setIsEmailPanelOpen(true)}
+          onOpenCosts={() => {
+            setIsEmailPanelOpen(false);
+            setIsResumeModalOpen(false);
+            setIsCostDashboardOpen(true);
+          }}
+          onOpenEmails={() => {
+            setIsCostDashboardOpen(false);
+            setIsResumeModalOpen(false);
+            setIsEmailPanelOpen(true);
+          }}
           awsConsoleUrl={awsConsoleUrl}
         />
 
@@ -308,26 +444,14 @@ export default function Home() {
           actionsEnabled={actionsEnabled}
           onAction={handleAction}
           onOpenResume={handleResumeClick}
-          onRestoreStateChange={(_isRestoring, message) => {
-            setMessage(message);
+          onRestoreStateChange={(_isRestoring, nextMessage) => {
+            showMessage(nextMessage, "progress");
           }}
         />
 
         {/* Footer - Fixed Small Height */}
         <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center gap-2">
-          {message && (
-            <motion.p
-              initial={{ opacity: 0, y: 10 }}
-              animate={{ opacity: 1, y: 0 }}
-              className={`font-sans text-xs tracking-widest uppercase ${
-                message.includes("Error") || message.includes("Failed") || status === "unknown"
-                  ? "text-red-800"
-                  : "text-green"
-              }`}
-            >
-              {message}
-            </motion.p>
-          )}
+          <OperationFeedback message={message} kind={messageKind} />
           <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
         </footer>
       </main>

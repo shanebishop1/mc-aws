@@ -174,6 +174,12 @@ const readme = readFileSync(path.join(rootDir, "README.md"), "utf8");
 const setupGuide = readFileSync(path.join(rootDir, "docs/setup/SETUP_AND_RUN.md"), "utf8");
 const mockQuickStart = readFileSync(path.join(rootDir, "docs/QUICK_START_MOCK_MODE.md"), "utf8");
 const setupSource = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
+const deploymentPreflightIndex = setupSource.lastIndexOf("print_deployment_preflight");
+const dnsMaterializationIndex = setupSource.indexOf("scripts/materialize-dns-secrets.ts", deploymentPreflightIndex);
+const cdkDeploymentIndex = setupSource.indexOf(
+  'run_with_mise pnpm exec cdk deploy "$STACK_NAME"',
+  dnsMaterializationIndex
+);
 
 const requiredContracts: ReadonlyArray<[string, boolean]> = [
   ["README does not duplicate setup commands", !readme.includes("bash ./setup.sh")],
@@ -187,10 +193,10 @@ const requiredContracts: ReadonlyArray<[string, boolean]> = [
   ["setup prints region in deployment preflight", setupSource.includes('log "  AWS region:  ${CDK_DEFAULT_REGION}"')],
   ["setup requires typed DEPLOY confirmation", setupSource.includes('[[ "$confirmation" != "DEPLOY" ]]')],
   [
-    "preflight confirmation immediately precedes CDK deployment",
-    /print_deployment_preflight\s*\n\s*\(\s*\n\s*cd infra\s*\n\s*unset CLOUDFLARE_API_TOKEN\s*\n\s*run_with_mise pnpm exec cdk deploy/.test(
-      setupSource
-    ),
+    "preflight confirmation precedes DNS materialization and CDK deployment",
+    deploymentPreflightIndex >= 0 &&
+      dnsMaterializationIndex > deploymentPreflightIndex &&
+      cdkDeploymentIndex > dnsMaterializationIndex,
   ],
   [
     "completion output does not claim unconditional readiness",

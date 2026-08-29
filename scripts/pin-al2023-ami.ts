@@ -164,6 +164,10 @@ function main(): void {
   }
   for (const envFile of options.envFiles) writePin(envFile, selectedImageId);
   process.stdout.write(`${selectedImageId}\n`);
+  if (options.command === "upgrade") {
+    console.error("Pin updated only; no host changed. Next run: pnpm host:upgrade -- plan");
+    console.error("An AMI change requires the backup/snapshot-guarded reviewed replacement workflow.");
+  }
 }
 
 try {

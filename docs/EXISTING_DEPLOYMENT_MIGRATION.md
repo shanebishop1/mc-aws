@@ -13,6 +13,8 @@ Use this runbook for an older live `MinecraftStack` that still manages the old S
 
 Legacy user data may still read `/minecraft/github-user`, `/minecraft/github-repo`, or `/minecraft/github-pat`. Current CDK removes those parameters. The bridge stops if the live instance still depends on them. Plan a separate profile transition or a reviewed temporary template that retains those parameters. Do not assume hibernate or resume is safe until that work is complete.
 
+Inventory all three exact names. Treat `/minecraft/github-pat` as a reusable credential: after dependency removal, delete it only with proven installation ownership or explicit exact-name consent, then revoke the PAT in GitHub. Preserve uncertain user/repository parameters until their history is reviewed. A missing local ownership fact is not evidence that an old parameter belongs to this installation.
+
 ## Prepare
 
 Start from the reviewed repository revision and make a current application backup. Use a clean worktree so synthesis matches what you reviewed; **the command does not check worktree cleanliness for you.** Pause stack updates, EC2 actions, and tag writers.
@@ -113,6 +115,20 @@ pnpm migrate:existing -- \
 
 After success, confirm SES inbound mail still works. The retained SES rule set and activation resource are now your responsibility. Updating an existing Worker requires its matching `.mc-aws-deployment.json` and should be refused without it. If no Worker exists, `pnpm deploy:cf` can create one and a partial local record, but automated teardown remains unavailable until the AWS resource history is safely adopted. Inventory existing Cloudflare resources first. Do not fabricate the record or rerun all of `setup.sh` for this transition.
 
+Capture the exact bridge outputs without rerunning setup or another AWS deployment:
+
+```bash
+pnpm migrate:existing -- \
+  --region "$MC_AWS_REGION" \
+  --stage sync-worker-env \
+  --execute \
+  --confirm-stack-id "$STACK_ID" \
+  --env-file .env.production
+pnpm bootstrap:check -- --env-file .env.production
+```
+
+This revalidates account, region, exact StackId, stable status, physical instance identity, and all three outputs before an atomic `0600` dotenv update. It preserves unrelated values and refuses duplicate effective keys, links, missing outputs, or a mismatched instance. It does not deploy AWS or Cloudflare resources.
+
 ## Unresolved-state checklist
 
 Do not call the bridge complete until every item is resolved:
@@ -122,6 +138,9 @@ Do not call the bridge complete until every item is resolved:
 - [ ] Instance and volume have all three expected tags with no conflicts.
 - [ ] The old SES resources are retained, no longer managed by the stack, and SES remains active.
 - [ ] Old GitHub SSM references are absent or covered by a separately reviewed temporary plan.
+- [ ] The GitHub PAT has been revoked after its final dependency was removed; Parameter Store deletion alone is insufficient.
+- [ ] DynamoDB operation-state reads/writes are verified, the rollback/retention window has closed, and opt-in legacy SSM cleanup has been reviewed before removing SSM fallback or IAM.
+- [ ] `.env.production` contains synchronized `INSTANCE_ID`, `MC_LIFECYCLE_LOCK_TABLE_NAME`, `MC_OPERATION_STATE_TABLE_NAME`, and the validated bootstrap pin digest.
 - [ ] A tested data-preservation plan exists before any later EC2 replacement.
 - [ ] A current application backup and root-volume snapshot exist before any later planned replacement.
 - [ ] Cloudflare deployment and Worker runtime-key setup have completed separately.

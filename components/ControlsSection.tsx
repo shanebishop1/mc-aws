@@ -9,7 +9,7 @@ import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
 import { fetchAuthMe, fetchGDriveStatus, queryKeys } from "@/lib/client-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 interface ControlsSectionProps {
   status: string;
@@ -19,7 +19,7 @@ interface ControlsSectionProps {
   showHibernate: boolean;
   showBackupRestore: boolean;
   actionsEnabled: boolean;
-  onAction: (action: string, endpoint: string, body?: Record<string, string>) => Promise<void>;
+  onAction: (action: string, endpoint: string, body?: Record<string, string>) => Promise<boolean>;
   onOpenResume: () => void;
   onRestoreStateChange?: (isRestoring: boolean, message: string | null) => void;
 }
@@ -52,7 +52,6 @@ export const ControlsSection = ({
   const [gdriveError, setGdriveError] = useState<string | null>(null);
   const [isActionPending, setIsActionPending] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
-  const [restoreMessage, setRestoreMessage] = useState<string | null>(null);
 
   const checkGDriveStatus = async (): Promise<boolean> => {
     try {
@@ -66,32 +65,6 @@ export const ControlsSection = ({
       return false;
     }
   };
-
-  // Monitor restore state - clear when server becomes running
-  useEffect(() => {
-    if (isRestoring && status === "running") {
-      // Server is running again, restore operation completed
-      setIsRestoring(false);
-      setRestoreMessage(null);
-      onRestoreStateChange?.(false, null);
-    }
-  }, [status, isRestoring, onRestoreStateChange]);
-
-  // Set a timeout to clear restore state (2 minutes max)
-  useEffect(() => {
-    if (!isRestoring) return;
-
-    const timeoutId = setTimeout(
-      () => {
-        setIsRestoring(false);
-        setRestoreMessage(null);
-        onRestoreStateChange?.(false, null);
-      },
-      2 * 60 * 1000
-    ); // 2 minutes
-
-    return () => clearTimeout(timeoutId);
-  }, [isRestoring, onRestoreStateChange]);
 
   const handleBackupClick = async () => {
     const gdriveConfigured = await checkGDriveStatus();
@@ -186,10 +159,10 @@ export const ControlsSection = ({
     openLoginPopup();
   };
 
-  const handleAction = async (action: string, endpoint: string, body?: Record<string, string>) => {
+  const handleAction = async (action: string, endpoint: string, body?: Record<string, string>): Promise<boolean> => {
     setIsActionPending(true);
     try {
-      await onAction(action, endpoint, body);
+      return await onAction(action, endpoint, body);
     } finally {
       setIsActionPending(false);
     }
@@ -277,9 +250,10 @@ export const ControlsSection = ({
             onConfirm={(backupName) => {
               setShowRestoreDialog(false);
               setIsRestoring(true);
-              setRestoreMessage("Restoring backup... server will restart");
               onRestoreStateChange?.(true, "Restoring backup... server will restart");
-              void handleAction("Restore", "/api/restore", { backupName });
+              void handleAction("Restore", "/api/restore", { backupName }).finally(() => {
+                setIsRestoring(false);
+              });
             }}
           />
 
@@ -292,7 +266,6 @@ export const ControlsSection = ({
           />
 
           {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGdriveError(null)} />}
-          {restoreMessage && <RestoreStatusMessage message={restoreMessage} />}
         </>
       ) : (
         <section className="w-full max-w-4xl flex flex-col items-center justify-center gap-3">
@@ -513,7 +486,11 @@ const ConfirmationDialogs = ({
 );
 
 const GDriveErrorToast = ({ message, onDismiss }: { message: string; onDismiss: () => void }) => (
-  <div className="fixed bottom-4 right-4 max-w-md bg-red-50 border border-red-200 rounded-sm p-4 shadow-xl z-50">
+  <div
+    role="alert"
+    aria-live="assertive"
+    className="fixed bottom-4 right-4 max-w-[calc(100vw-2rem)] bg-red-50 border border-red-200 rounded-sm p-4 shadow-xl z-50"
+  >
     <div className="flex items-start gap-3">
       <svg className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" fill="currentColor" viewBox="0 0 20 20">
         <path
@@ -540,25 +517,6 @@ const GDriveErrorToast = ({ message, onDismiss }: { message: string; onDismiss: 
           />
         </svg>
       </button>
-    </div>
-  </div>
-);
-
-const RestoreStatusMessage = ({ message }: { message: string }) => (
-  <div className="fixed bottom-4 right-4 max-w-md bg-green/10 border border-green/30 rounded-sm p-4 shadow-xl z-50">
-    <div className="flex items-start gap-3">
-      <svg className="w-5 h-5 text-green flex-shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-        <path
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          strokeWidth={2}
-          d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
-        />
-      </svg>
-      <div className="flex-1">
-        <p className="text-sm font-medium text-charcoal">Restore in Progress</p>
-        <p className="text-sm text-charcoal/70 mt-1">{message}</p>
-      </div>
     </div>
   </div>
 );

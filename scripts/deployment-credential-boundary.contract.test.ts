@@ -32,7 +32,6 @@ describe("deployment credential boundary", () => {
 
   it("keeps deploy and panel-route credentials out of Worker secrets and build input", () => {
     const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
-    const standaloneUploaderSource = readFileSync(path.resolve(process.cwd(), "scripts/upload-secrets.sh"), "utf8");
 
     expect(workerSecretAllowlist).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(workerSecretAllowlist).not.toContain("CLOUDFLARE_PANEL_DNS_API_TOKEN");
@@ -43,7 +42,6 @@ describe("deployment credential boundary", () => {
     expect(deployOnlyIgnoredSecretNames.has("PANEL_DNS_MANAGEMENT")).toBe(true);
     expect(deploySource).toContain("deploy-env.ts worker-secret-entries");
     expect(deploySource).toContain("put_secret_base64");
-    expect(standaloneUploaderSource).toContain("deploy-env.ts worker-secret-entries");
   });
 
   it("keeps the generic Cloudflare deploy token out of CDK runtime parameters", () => {
@@ -51,7 +49,7 @@ describe("deployment credential boundary", () => {
     const stackSource = readFileSync(path.resolve(process.cwd(), "infra/lib/minecraft-stack.ts"), "utf8");
 
     expect(setupSource.match(/unset CLOUDFLARE_API_TOKEN/g)).toHaveLength(2);
-    expect(stackSource).toContain('const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || "").trim()');
+    expect(stackSource).not.toContain("process.env.CLOUDFLARE_API_TOKEN");
     expect(stackSource).not.toContain("process.env.CLOUDFLARE_DNS_API_TOKEN || process.env.CLOUDFLARE_API_TOKEN");
   });
 
@@ -60,10 +58,12 @@ describe("deployment credential boundary", () => {
 
     expect(deploySource).toContain('PANEL_DNS_MANAGEMENT" == "external" && -z "$CF_DNS_API_TOKEN"');
     expect(deploySource).toContain('CF_DNS_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN"');
-    expect(deploySource).toContain('"$PANEL_DNS_MANAGEMENT" == "managed" ]]; then\n  ensure_panel_dns');
+    const managedDnsBranch = deploySource.indexOf('"$PANEL_DNS_MANAGEMENT" == "managed" ]]; then');
+    expect(managedDnsBranch).toBeGreaterThan(-1);
+    expect(deploySource.indexOf("ensure_panel_dns", managedDnsBranch)).toBeGreaterThan(managedDnsBranch);
     expect(deploySource).toContain("Preserving externally managed panel DNS");
-    expect(deploySource.indexOf("capture_panel_route_before_deploy")).toBeLessThan(
-      deploySource.indexOf('"$PANEL_DNS_MANAGEMENT" == "managed"')
+    expect(deploySource.lastIndexOf("capture_panel_route_before_deploy\n")).toBeLessThan(
+      deploySource.lastIndexOf('"$PANEL_DNS_MANAGEMENT" == "managed"')
     );
     expect(deploySource.match(/^capture_panel_route_after_deploy$/gm)).toHaveLength(2);
     expect(deploySource.lastIndexOf("\ncapture_panel_route_after_deploy\n")).toBeGreaterThan(

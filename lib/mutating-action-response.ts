@@ -41,7 +41,7 @@ export function mapMutatingActionExecutionToApiResponse<TData>(
     {
       success: false,
       error: execution.error,
-      operation: withOperationStatus(operation, "failed"),
+      operation: withOperationStatus(operation, execution.operationStatus ?? "failed"),
       timestamp: new Date().toISOString(),
     },
     { status: statusCode }

@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as cdk from "aws-cdk-lib";
@@ -41,12 +41,42 @@ const stackEnvironmentNames = [
   ...sesEnvironmentNames,
   "GDRIVE_REMOTE",
   "GDRIVE_ROOT",
+  "MC_ALARM_EMAIL",
+  "MC_SCHEDULED_BACKUP_ENABLED",
+  "MC_SCHEDULED_BACKUP_SCHEDULE",
+  "MC_BACKUP_STALE_AFTER_HOURS",
+  "CLOUDFLARE_ZONE_ID",
+  "CLOUDFLARE_MC_DOMAIN",
+  "CLOUDFLARE_DNS_API_TOKEN",
+  "DUCKDNS_DOMAIN",
+  "DUCKDNS_TOKEN",
   "AL2023_ARM64_AMI_ID",
   "MC_SERVER_PROFILE_DIR",
   "MC_ALLOW_EMPTY_WHITELIST",
 ] as const;
 
+const synthesizedTemplates = new Map<string, Template>();
+// Asset staging makes a cold CDK synthesis materially slower than a unit test. Keep the
+// timeout local to this contract file; cached templates make repeat assertions inexpensive.
+const synthesisContractTimeout = 30_000;
+
+const restoreEnvironment = (name: string, previousValue: string | undefined): void => {
+  if (previousValue === undefined) {
+    delete process.env[name];
+  } else {
+    process.env[name] = previousValue;
+  }
+};
+
 const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironmentNames)[number], string>> = {}) => {
+  const cacheKey = JSON.stringify(
+    Object.entries(stackEnvironment)
+      .filter(([, value]) => value !== undefined)
+      .sort(([left], [right]) => left.localeCompare(right))
+  );
+  const cached = synthesizedTemplates.get(cacheKey);
+  if (cached) return cached;
+
   const previousEnvironment = Object.fromEntries(stackEnvironmentNames.map((name) => [name, process.env[name]]));
   for (const name of stackEnvironmentNames) {
     delete process.env[name];
@@ -85,28 +115,25 @@ const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironme
     }
   );
   try {
-    return Template.fromStack(new MinecraftStack(app, "MinecraftStack", { env: { account, region } }));
+    const template = Template.fromStack(new MinecraftStack(app, "MinecraftStack", { env: { account, region } }));
+    synthesizedTemplates.set(cacheKey, template);
+    return template;
   } finally {
     rmSync(assemblyDirectory, { recursive: true, force: true });
     for (const name of stackEnvironmentNames) {
-      const previousValue = previousEnvironment[name];
-      if (previousValue === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = previousValue;
-      }
+      restoreEnvironment(name, previousEnvironment[name]);
     }
   }
 };
 
-describe("minecraft-stack user data shell quoting", () => {
+describe("minecraft-stack user data shell quoting", { timeout: synthesisContractTimeout }, () => {
   it("keeps synthesized UserData ASCII-stable across CloudFormation GetTemplate", () => {
     const template = synthesizeStack();
     const instance = Object.values(template.findResources("AWS::EC2::Instance"))[0];
     const userData = instance.Properties.UserData["Fn::Base64"] as string;
 
     expect([...userData].every((character) => character.codePointAt(0)! <= 0x7f)).toBe(true);
-  });
+  }, 60_000);
 
   it("synthesizes Drive settings as literal data instead of executable shell syntax", () => {
     const rootDir = mkdtempSync(path.join(os.tmpdir(), "mc-user-data-shell-quote-"));
@@ -133,7 +160,7 @@ describe("minecraft-stack user data shell quoting", () => {
   });
 });
 
-describe("minecraft-stack server profile assets", () => {
+describe("minecraft-stack server profile assets", { timeout: synthesisContractTimeout }, () => {
   it("publishes separate runtime/profile assets with one atomic SSM manifest and exact object reads", () => {
     const template = synthesizeStack();
     const json = template.toJSON();
@@ -202,7 +229,7 @@ describe("minecraft-stack server profile assets", () => {
     expect(actionsFor(getStatement!)).not.toContain("ssm:PutParameter");
     expect(actionsFor(getStatement!)).not.toContain("ssm:DeleteParameter");
     expect(resourcesFor(putStatement!)).toEqual([expect.stringContaining("player-count")]);
-    expect(resourcesFor(deleteStatement!)).toEqual([expect.stringContaining("startup-triggered-by")]);
+    expect(deleteStatement).toBeUndefined();
     expect(JSON.stringify(statements)).not.toContain("parameter/minecraft/*");
   });
 
@@ -252,15 +279,13 @@ describe("minecraft-stack server profile assets", () => {
       );
     } finally {
       rmSync(assemblyDirectory, { recursive: true, force: true });
-      if (previous === undefined) process.env.AL2023_ARM64_AMI_ID = undefined;
-      else process.env.AL2023_ARM64_AMI_ID = previous;
-      if (previousAllowEmpty === undefined) process.env.MC_ALLOW_EMPTY_WHITELIST = undefined;
-      else process.env.MC_ALLOW_EMPTY_WHITELIST = previousAllowEmpty;
+      restoreEnvironment("AL2023_ARM64_AMI_ID", previous);
+      restoreEnvironment("MC_ALLOW_EMPTY_WHITELIST", previousAllowEmpty);
     }
   });
 });
 
-describe("minecraft-stack optional SES contract", () => {
+describe("minecraft-stack optional SES contract", { timeout: synthesisContractTimeout }, () => {
   const allIamStatements = (template: Template) =>
     Object.values(template.findResources("AWS::IAM::Policy")).flatMap(
       (policy) => policy.Properties.PolicyDocument.Statement
@@ -276,7 +301,9 @@ describe("minecraft-stack optional SES contract", () => {
 
     expect(template.findResources("AWS::SES::ReceiptRule")).toEqual({});
     expect(template.findResources("AWS::SES::ReceiptRuleSet")).toEqual({});
-    expect(template.findResources("AWS::SNS::Topic")).toEqual({});
+    expect(Object.keys(template.findResources("AWS::SNS::Topic"))).toHaveLength(1);
+    expect(template.findResources("AWS::SNS::Subscription")).toEqual({});
+    expect(template.findResources("AWS::Events::Rule")).toEqual({});
     expect(
       allIamStatements(template).some((statement) =>
         actionsFor(statement).some((action) => typeof action === "string" && action.startsWith("ses:"))
@@ -294,17 +321,19 @@ describe("minecraft-stack optional SES contract", () => {
 
     expect(template.findResources("AWS::SES::ReceiptRule")).toEqual({});
     expect(template.findResources("AWS::SES::ReceiptRuleSet")).toEqual({});
-    expect(template.findResources("AWS::SNS::Topic")).toEqual({});
+    expect(Object.keys(template.findResources("AWS::SNS::Topic"))).toHaveLength(1);
+    expect(template.findResources("AWS::SNS::Subscription")).toEqual({});
     const sendStatements = allIamStatements(template).filter((statement) =>
       actionsFor(statement).includes("ses:SendEmail")
     );
-    expect(sendStatements).toHaveLength(2);
+    expect(sendStatements).toHaveLength(1);
     for (const statement of sendStatements) {
       expect(JSON.stringify(statement.Resource)).toContain(
         "arn:aws:ses:us-west-1:111111111111:identity/sender@example.net"
       );
       expect(statement.Resource).not.toBe("*");
     }
+    expect(JSON.stringify(allIamStatements(template))).not.toContain("ses:SendRawEmail");
   });
 
   it("does not seed the notification recipient into the command allowlist", () => {
@@ -345,13 +374,145 @@ describe("minecraft-stack optional SES contract", () => {
         Recipients: ["commands@example.net"],
       }),
     });
-    expect(Object.keys(template.findResources("AWS::SNS::Topic"))).toHaveLength(1);
+    expect(Object.keys(template.findResources("AWS::SNS::Topic"))).toHaveLength(2);
     expect(JSON.stringify(template.toJSON())).not.toContain("SetActiveReceiptRuleSet");
     expect(allIamStatements(template).some((statement) => actionsFor(statement).includes("ses:SendEmail"))).toBe(false);
+
+    const inboundLambda = Object.entries(template.findResources("AWS::Lambda::Function")).find(([, resource]) =>
+      Boolean(resource.Properties?.Environment?.Variables?.EXPECTED_TOPIC_ARN)
+    );
+    const lifecycleLambda = Object.entries(template.findResources("AWS::Lambda::Function")).find(([, resource]) =>
+      Boolean(resource.Properties?.Environment?.Variables?.INSTANCE_ID)
+    );
+    expect(inboundLambda).toBeDefined();
+    expect(lifecycleLambda).toBeDefined();
+    const subscription = Object.values(template.findResources("AWS::SNS::Subscription"))[0];
+    expect(JSON.stringify(subscription.Properties.Endpoint)).toContain(inboundLambda![0]);
+    expect(JSON.stringify(subscription.Properties.Endpoint)).not.toContain(lifecycleLambda![0]);
+    expect(inboundLambda![1].Properties.Environment.Variables).not.toHaveProperty("MIME");
+    expect(JSON.stringify(inboundLambda![1].Properties.Environment.Variables)).not.toContain("content");
   });
 });
 
-describe("minecraft-stack lifecycle Lambda IAM contract", () => {
+describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisContractTimeout }, () => {
+  it("keeps the EC2 role at the exact host call graph and removes obsolete SES/SSM access", () => {
+    const template = synthesizeStack();
+    const instance = Object.values(template.findResources("AWS::EC2::Instance"))[0];
+    const profileLogicalId = instance.Properties.IamInstanceProfile.Ref;
+    const profile = template.findResources("AWS::IAM::InstanceProfile")[profileLogicalId];
+    const roleLogicalId = profile.Properties.Roles[0].Ref;
+    const role = template.findResources("AWS::IAM::Role")[roleLogicalId];
+    const policies = Object.values(template.findResources("AWS::IAM::Policy")).filter((resource) =>
+      resource.Properties.Roles?.some((candidate: { Ref?: string }) => candidate.Ref === roleLogicalId)
+    );
+    const statements = policies.flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const actionsFor = (statement: Record<string, unknown>) =>
+      Array.isArray(statement.Action) ? statement.Action : [statement.Action];
+    const resourcesFor = (statement: Record<string, unknown>) =>
+      (Array.isArray(statement.Resource) ? statement.Resource : [statement.Resource]).map(String);
+    const reads = statements.find((statement) => actionsFor(statement).includes("ssm:GetParameter"));
+
+    expect(resourcesFor(reads!).sort()).toEqual(
+      [
+        "cloudflare-api-token",
+        "cloudflare-domain",
+        "cloudflare-zone-id",
+        "duckdns-domain",
+        "duckdns-token",
+        "gdrive-token",
+        "resume-pending",
+        "server-profile-manifest",
+      ].map((name) => `arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/${name}`)
+    );
+    const roleActions = statements.flatMap(actionsFor);
+    expect(roleActions).not.toContain("ssm:DeleteParameter");
+    expect(roleActions.some((action) => String(action).startsWith("ses:"))).toBe(false);
+    expect(JSON.stringify(role.Properties.ManagedPolicyArns)).toContain("AmazonSSMManagedInstanceCore");
+
+    const ec2SourceDirectory = path.resolve(process.cwd(), "infra/src/ec2");
+    const hostScripts = readdirSync(ec2SourceDirectory)
+      .filter((name) => name.endsWith(".sh"))
+      .map((name) => readFileSync(path.join(ec2SourceDirectory, name), "utf8"))
+      .join("\n");
+    expect(hostScripts).not.toMatch(/\baws\s+ses\b|SendRawEmail|SendEmailCommand/);
+    expect(hostScripts).not.toContain("/minecraft/verified-sender");
+    expect(hostScripts).not.toContain("/minecraft/notification-email");
+    expect(hostScripts).not.toContain("/minecraft/startup-triggered-by");
+  });
+
+  it("builds Lambda deployment assets only through clean production staging", () => {
+    const stackSource = readFileSync(stackSourcePath, "utf8");
+    const helperSource = readFileSync(path.resolve(process.cwd(), "infra/lib/lambda-assets.ts"), "utf8");
+    expect(stackSource).not.toContain('lambda.Code.fromAsset(path.join(__dirname, "../src/lambda');
+    expect(stackSource).toContain("createLambdaDeploymentCode");
+    expect(helperSource).toContain('["ci", "--omit=dev", "--ignore-scripts"');
+    expect(helperSource).toContain("mkdtempSync(path.join(os.tmpdir(), stagingPrefix))");
+    expect(helperSource).toContain("removeOwnedStagingDirectory(stagingDirectory)");
+    expect(readFileSync(path.resolve(process.cwd(), ".github/workflows/baseline-pr-validation.yml"), "utf8")).toContain(
+      "pnpm lambda:assets:audit infra/cdk.out"
+    );
+  });
+
+  it("serializes lifecycle ingress and keeps retry age within the ownership lease budget", () => {
+    const template = synthesizeStack();
+    const startLambda = Object.values(template.findResources("AWS::Lambda::Function")).find((resource) =>
+      Boolean(resource.Properties?.Environment?.Variables?.INSTANCE_ID)
+    );
+
+    expect(startLambda?.Properties).toMatchObject({
+      Timeout: 900,
+      ReservedConcurrentExecutions: 1,
+    });
+    template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      MaximumEventAgeInSeconds: 3600,
+      MaximumRetryAttempts: 2,
+      DestinationConfig: {
+        OnFailure: {
+          Destination: { "Fn::GetAtt": [Match.stringLikeRegexp("FailureEventSanitizerLambda"), "Arn"] },
+        },
+      },
+    });
+    const tables = Object.values(template.findResources("AWS::DynamoDB::Table"));
+    expect(tables).toHaveLength(2);
+    for (const table of tables) {
+      expect(table.Properties).toMatchObject({
+        BillingMode: "PAY_PER_REQUEST",
+        SSESpecification: { SSEEnabled: true },
+        TimeToLiveSpecification: { AttributeName: "ttlEpochSeconds", Enabled: true },
+      });
+    }
+    expect(tables.map((table) => table.Properties.KeySchema[0].AttributeName).sort()).toEqual([
+      "lockKey",
+      "operationId",
+    ]);
+    const lockTable = tables.find((table) => table.Properties.KeySchema[0].AttributeName === "lockKey");
+    const operationTable = tables.find((table) => table.Properties.KeySchema[0].AttributeName === "operationId");
+    expect(lockTable?.DeletionPolicy).toBe("Delete");
+    expect(lockTable?.UpdateReplacePolicy).toBe("Retain");
+    expect(operationTable?.DeletionPolicy).toBe("Delete");
+    expect(startLambda?.Properties.Environment.Variables).toMatchObject({
+      MC_LIFECYCLE_LOCK_TABLE_NAME: { Ref: expect.stringContaining("LifecycleLockTable") },
+      MC_OPERATION_STATE_TABLE_NAME: { Ref: expect.stringContaining("OperationStateTable") },
+      MC_OPERATION_STATE_RETENTION_DAYS: "30",
+    });
+  });
+
+  it("initializes replacement-safe dual-protocol metadata without mutating the legacy lock", () => {
+    const template = synthesizeStack();
+    template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
+      Protocol: "dual-v1",
+      MarkerVersion: "2",
+      LockTableName: { Ref: Match.stringLikeRegexp("LifecycleLockTable") },
+    });
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const serialized = JSON.stringify(policies);
+    expect(serialized).toContain("dynamodb:UpdateItem");
+    expect(serialized).toContain("LifecycleLockTable");
+    expect(
+      readFileSync(path.resolve(process.cwd(), "infra/src/lambda/MigrateServerActionLock/index.js"), "utf8")
+    ).not.toContain("/minecraft/server-action");
+  });
+
   it("synthesizes all lifecycle EC2 permissions with mutation scope and ownership conditions", () => {
     const template = synthesizeStack();
     const lambdas = template.findResources("AWS::Lambda::Function");
@@ -403,6 +564,14 @@ describe("minecraft-stack lifecycle Lambda IAM contract", () => {
       "ec2:CreateAction": "CreateVolume",
       "aws:RequestTag/McAwsProject": "mc-aws",
     });
+    expect(statementFor("ssm:PutParameter", "server-action-delete-claim/*")).toBeDefined();
+    expect(statementFor("ssm:DeleteParameter", "server-action-delete-claim/*")).toBeDefined();
+    expect(statementFor("ssm:PutParameter", "server-action")).toBeDefined();
+    expect(statementFor("ssm:DeleteParameter", "server-action")).toBeDefined();
+    expect(statementFor("ssm:CancelCommand")?.Resource).toBe("*");
+    const dynamoStatement = statementFor("dynamodb:UpdateItem");
+    expect(JSON.stringify(dynamoStatement?.Resource)).toContain("LifecycleLockTable");
+    expect(JSON.stringify(dynamoStatement?.Resource)).toContain("OperationStateTable");
 
     const mutations = new Set([
       "ec2:StartInstances",
@@ -431,9 +600,193 @@ describe("minecraft-stack lifecycle Lambda IAM contract", () => {
       ]),
     });
   });
+
+  it("keeps first boot on the reviewed AL2023 repository snapshot and records installed package versions", () => {
+    const userData = readFileSync(path.resolve(process.cwd(), "infra/src/ec2/user_data.sh"), "utf8");
+    expect(userData).toContain("/etc/dnf/vars/releasever");
+    expect(userData).toContain('--releasever="$AL2023_RELEASEVER"');
+    expect(userData).toContain("--setopt=metadata_expire=never");
+    expect(userData).toContain("/var/lib/mc-aws/os-package-manifest.txt");
+    expect(userData).not.toMatch(/\bdnf\s+(?:-y\s+)?update\b/);
+  });
 });
 
-describe("minecraft-stack immutable AMI contract", () => {
+describe("minecraft-stack production observability contract", { timeout: synthesisContractTimeout }, () => {
+  it("retains every Lambda/custom-resource log group for 30 days and hardens async failure handling", () => {
+    const template = synthesizeStack();
+    const lambdaFunctions = Object.values(template.findResources("AWS::Lambda::Function"));
+    const logGroups = Object.values(template.findResources("AWS::Logs::LogGroup"));
+
+    expect(lambdaFunctions.length).toBeGreaterThanOrEqual(5);
+    for (const fn of lambdaFunctions) {
+      expect(fn.Properties.LoggingConfig?.LogGroup).toBeDefined();
+    }
+    expect(logGroups.length).toBeGreaterThanOrEqual(lambdaFunctions.length);
+    for (const logGroup of logGroups) {
+      expect(logGroup.Properties.RetentionInDays).toBe(30);
+      expect(logGroup.DeletionPolicy).toBe("Delete");
+      expect(logGroup.UpdateReplacePolicy).toBe("Delete");
+    }
+
+    const queues = Object.values(template.findResources("AWS::SQS::Queue"));
+    expect(queues).toHaveLength(2);
+    for (const queue of queues) {
+      expect(queue.Properties).toMatchObject({
+        MessageRetentionPeriod: 1_209_600,
+        SqsManagedSseEnabled: true,
+      });
+    }
+    template.hasResourceProperties("AWS::Lambda::EventInvokeConfig", {
+      MaximumEventAgeInSeconds: 3600,
+      MaximumRetryAttempts: 2,
+      DestinationConfig: {
+        OnFailure: {
+          Destination: Match.anyValue(),
+        },
+      },
+    });
+    template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
+      LogGroupNames: Match.anyValue(),
+      RetentionInDays: 30,
+      MigrationVersion: "3",
+    });
+    expect(JSON.stringify(template.findResources("AWS::CloudFormation::CustomResource"))).not.toContain(
+      "LogGroupPrefix"
+    );
+    expect(JSON.stringify(template.findResources("AWS::IAM::Policy"))).toContain("logs:PutRetentionPolicy");
+    const lambdaResourcesById = template.findResources("AWS::Lambda::Function");
+    const seedHandlerLogicalId = Object.entries(lambdaResourcesById).find(([, resource]) =>
+      Boolean(resource.Properties?.Environment?.Variables?.PARAM_NAME)
+    )?.[0];
+    const seedProviderFrameworkLogicalId = Object.entries(lambdaResourcesById).find(
+      ([, resource]) =>
+        resource.Properties?.Environment?.Variables?.USER_ON_EVENT_FUNCTION_ARN?.["Fn::GetAtt"]?.[0] ===
+        seedHandlerLogicalId
+    )?.[0];
+    expect(seedProviderFrameworkLogicalId).toBeDefined();
+    const retentionResource = Object.values(template.findResources("AWS::CloudFormation::CustomResource")).find(
+      (resource) => resource.Properties?.MigrationVersion === "3"
+    );
+    expect(JSON.stringify(retentionResource?.Properties.LogGroupNames)).toContain(seedProviderFrameworkLogicalId);
+    const retentionPolicies = Object.values(template.findResources("AWS::IAM::Policy")).filter((resource) =>
+      resource.Properties.PolicyDocument.Statement.some((statement: Record<string, unknown>) =>
+        (Array.isArray(statement.Action) ? statement.Action : [statement.Action]).includes("logs:PutRetentionPolicy")
+      )
+    );
+    expect(retentionPolicies).toHaveLength(1);
+    const retentionPolicyResources = JSON.stringify(
+      retentionPolicies[0].Properties.PolicyDocument.Statement.find((statement: Record<string, unknown>) =>
+        (Array.isArray(statement.Action) ? statement.Action : [statement.Action]).includes("logs:PutRetentionPolicy")
+      )?.Resource
+    );
+    expect(retentionPolicyResources).toContain(seedProviderFrameworkLogicalId);
+    expect(retentionPolicyResources).not.toContain("*");
+    expect(readFileSync(path.resolve(process.cwd(), "infra/src/lambda/RetainLambdaLogs/index.js"), "utf8")).toContain(
+      'event.RequestType === "Delete"'
+    );
+
+    const sanitizer = Object.values(template.findResources("AWS::Lambda::Function")).find((resource) =>
+      Boolean(resource.Properties?.Environment?.Variables?.FAILURE_QUEUE_URL)
+    );
+    expect(sanitizer).toBeDefined();
+    expect(sanitizer?.Properties.DeadLetterConfig?.TargetArn).toBeDefined();
+    const sanitizerSource = readFileSync(
+      path.resolve(process.cwd(), "infra/src/lambda/FailureEventSanitizer/index.js"),
+      "utf8"
+    );
+    for (const forbidden of ["senderEmail", "subject", "body", "content", "responsePayload"]) {
+      expect(sanitizerSource).not.toContain(forbidden);
+    }
+
+    const metricNames = Object.values(template.findResources("AWS::CloudWatch::Alarm")).map(
+      (alarm) => alarm.Properties.MetricName
+    );
+    expect(metricNames).toEqual(
+      expect.arrayContaining([
+        "StatusCheckFailed",
+        "Errors",
+        "LifecycleOperationFailures",
+        "Duration",
+        "Throttles",
+        "AsyncEventAge",
+        "ApproximateNumberOfMessagesVisible",
+      ])
+    );
+  });
+
+  it("creates no surprise alarm subscription and enables explicit scheduled backup hardening", () => {
+    const enabled = synthesizeStack({
+      MC_ALARM_EMAIL: "operator@example.net",
+      MC_SCHEDULED_BACKUP_ENABLED: "true",
+      MC_SCHEDULED_BACKUP_SCHEDULE: "cron(0 5 ? * SUN *)",
+      MC_BACKUP_STALE_AFTER_HOURS: "192",
+    });
+    enabled.hasResourceProperties("AWS::SNS::Subscription", {
+      Protocol: "email",
+      Endpoint: "operator@example.net",
+    });
+    const rules = Object.values(enabled.findResources("AWS::Events::Rule"));
+    expect(rules).toHaveLength(2);
+    expect(rules.map((rule) => rule.Properties.ScheduleExpression)).toEqual(
+      expect.arrayContaining(["cron(0 5 ? * SUN *)", "cron(15 6 * * ? *)"])
+    );
+    const serializedTargets = JSON.stringify(rules.flatMap((rule) => rule.Properties.Targets));
+    expect(serializedTargets).toContain("scheduledBackup");
+    expect(serializedTargets).toContain("backupFreshnessCheck");
+    expect(serializedTargets).toContain("DeadLetterConfig");
+    expect(serializedTargets).toContain("MaximumEventAgeInSeconds");
+
+    const enabledMetricNames = Object.values(enabled.findResources("AWS::CloudWatch::Alarm")).map(
+      (alarm) => alarm.Properties.MetricName
+    );
+    expect(enabledMetricNames).toEqual(expect.arrayContaining(["ScheduledBackupFailure", "ScheduledBackupStale"]));
+    const freshnessAlarm = Object.values(enabled.findResources("AWS::CloudWatch::Alarm")).find(
+      (alarm) => alarm.Properties.MetricName === "ScheduledBackupStale"
+    );
+    expect(freshnessAlarm?.Properties.TreatMissingData).toBe("notBreaching");
+  });
+
+  it("uses exact scheduled-backup IAM and never puts DNS secret values in CloudFormation", () => {
+    const secretSentinel = "dns-secret-must-not-enter-template";
+    const template = synthesizeStack({
+      CLOUDFLARE_ZONE_ID: "zone-id",
+      CLOUDFLARE_MC_DOMAIN: "mc.example.net",
+      CLOUDFLARE_DNS_API_TOKEN: secretSentinel,
+      DUCKDNS_TOKEN: "unused-second-secret",
+    });
+    const lifecycleFunction = Object.entries(template.findResources("AWS::Lambda::Function")).find(([, resource]) =>
+      Boolean(resource.Properties?.Environment?.Variables?.INSTANCE_ID)
+    );
+    const roleLogicalId = lifecycleFunction?.[1].Properties.Role["Fn::GetAtt"][0];
+    const statements = Object.values(template.findResources("AWS::IAM::Policy"))
+      .filter((resource) => resource.Properties.Roles?.some((role: { Ref?: string }) => role.Ref === roleLogicalId))
+      .flatMap((policy) => policy.Properties.PolicyDocument.Statement);
+    const scheduledParameterStatements = statements.filter((statement) =>
+      JSON.stringify(statement.Resource).includes("last-scheduled-backup-success")
+    );
+    expect(scheduledParameterStatements).not.toHaveLength(0);
+    for (const statement of scheduledParameterStatements) {
+      expect(statement.Resource).not.toBe("*");
+      expect(JSON.stringify(statement.Resource)).not.toContain("parameter/minecraft/*");
+    }
+
+    const serialized = JSON.stringify(template.toJSON());
+    expect(serialized).not.toContain(secretSentinel);
+    expect(serialized).not.toContain("unused-second-secret");
+    expect(serialized).not.toContain("CloudflareTokenParam");
+    expect(serialized).not.toContain("DuckDnsTokenParam");
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/cloudflare-api-token",
+      MigrationVersion: "1",
+    });
+    expect(serialized).toContain("AdoptDnsSecureString");
+    expect(readFileSync(path.resolve(process.cwd(), "infra/src/lambda/StartMinecraftServer/ssm.js"), "utf8")).toContain(
+      'error.name === "ParameterNotFound"'
+    );
+  });
+});
+
+describe("minecraft-stack immutable AMI contract", { timeout: synthesisContractTimeout }, () => {
   it("synthesizes the exact configured AMI without a latest-SSM parameter", () => {
     const imageId = `ami-${"a".repeat(17)}`;
     const template = synthesizeStack({ AL2023_ARM64_AMI_ID: imageId }).toJSON();
@@ -451,7 +804,7 @@ describe("minecraft-stack immutable AMI contract", () => {
   });
 });
 
-describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
+describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: synthesisContractTimeout }, () => {
   const getRuntimeIdentity = (template: Template) => {
     const users = template.findResources("AWS::IAM::User");
     const [userLogicalId, user] = Object.entries(users).find(([, resource]) =>
@@ -541,8 +894,12 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
     const putResources = serializedResource("ssm:PutParameter");
     expect(putResources).toContain("email-allowlist");
     expect(putResources).toContain("gdrive-token");
-    expect(putResources).toContain("server-action");
     expect(putResources).toContain("operations/*");
+    expect(putResources).toContain("server-action");
+    expect(putResources).toContain("server-action-delete-claim/*");
+    const lifecycleTables = serializedResource("dynamodb:UpdateItem");
+    expect(lifecycleTables).toContain("LifecycleLockTable");
+    expect(lifecycleTables).toContain("OperationStateTable");
     expect(serializedResource("ce:GetCostAndUsage")).toBe('"*"');
   });
 
@@ -556,6 +913,10 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
       readRuntimeParameters: readFileSync(path.resolve(process.cwd(), "lib/aws/ssm-client.ts"), "utf8"),
       writeRuntimeParameters: readFileSync(path.resolve(process.cwd(), "lib/aws/ssm-client.ts"), "utf8"),
       optionalCostData: readFileSync(path.resolve(process.cwd(), "lib/aws/cost-client.ts"), "utf8"),
+      manageLifecycleState: [
+        readFileSync(path.resolve(process.cwd(), "lib/server-action-lock.ts"), "utf8"),
+        readFileSync(path.resolve(process.cwd(), "lib/aws/dynamodb-operation-store.ts"), "utf8"),
+      ].join("\n"),
     };
     const commandClassByAction: Record<string, string> = {
       "ec2:DescribeInstances": "DescribeInstancesCommand",
@@ -568,6 +929,8 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
       "ssm:GetParametersByPath": "GetParametersByPathCommand",
       "ssm:PutParameter": "PutParameterCommand",
       "ssm:DeleteParameter": "DeleteParameterCommand",
+      "dynamodb:GetItem": "GetItemCommand",
+      "dynamodb:UpdateItem": "UpdateItemCommand",
       "ce:GetCostAndUsage": "GetCostAndUsageCommand",
     };
 
@@ -604,6 +967,7 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", () => {
       writableParameterArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/server-action"],
       deletableParameterArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/server-action"],
       operationParameterPathArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/operations/*"],
+      lifecycleStateTableArns: ["arn:aws:dynamodb:us-west-1:111111111111:table/mc-lifecycle"],
       includeCostExplorer: false,
     });
     const actions = statements.flatMap((statement) => {

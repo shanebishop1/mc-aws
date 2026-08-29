@@ -20,6 +20,21 @@ import type { ParameterStoreEntry } from "./types";
 // Lazy initialization of SSM client
 let _ssmClient: SSMClient | null = null;
 
+const SSM_TERMINAL_FAILURE_STATUSES = new Set([
+  "Cancelled",
+  "TimedOut",
+  "Cancelling",
+  "DeliveryTimedOut",
+  "ExecutionTimedOut",
+  "Failed",
+  "Undeliverable",
+  "Terminated",
+]);
+
+export function isSSMTerminalFailureStatus(status: string | undefined): boolean {
+  return status !== undefined && SSM_TERMINAL_FAILURE_STATUSES.has(status);
+}
+
 function getRegion(): string {
   return env.AWS_REGION || "us-east-1";
 }
@@ -44,10 +59,11 @@ async function checkCommandStatus(commandId: string, instanceId: string | undefi
   const status = invocationResponse.Status;
   const output = invocationResponse.StandardOutputContent || "";
 
-  if (status === "Failed") {
+  if (isSSMTerminalFailureStatus(status)) {
     const errorOutput = invocationResponse.StandardErrorContent || "";
-    console.error(`SSM command failed. Error output: ${errorOutput}`);
-    throw new Error(`SSM command failed: ${errorOutput}`);
+    const failureDetail = errorOutput || `command entered terminal status ${status}`;
+    console.error(`SSM command failed with status ${status}; command output omitted`);
+    throw new Error(`SSM command failed: ${failureDetail}`);
   }
 
   return { status, output };
@@ -89,7 +105,7 @@ async function pollCommandCompletion(
  */
 export async function executeSSMCommand(instanceId: string | undefined, commands: string[]): Promise<string> {
   const resolvedId = await resolveInstanceId(instanceId);
-  console.log(`Executing SSM command on instance ${resolvedId}: ${commands.join(" ")}`);
+  console.log(`Executing ${commands.length} SSM command(s) on managed instance`);
 
   try {
     const sendResponse = await ssm.send(
@@ -107,13 +123,13 @@ export async function executeSSMCommand(instanceId: string | undefined, commands
       throw new Error("Failed to get command ID from SSM response");
     }
 
-    console.log(`SSM command sent with ID: ${commandId}`);
+    console.log("SSM command sent");
 
     const output = await pollCommandCompletion(commandId, instanceId);
-    console.log(`SSM command completed successfully. Final output: ${output}`);
+    console.log("SSM command completed successfully; output omitted");
     return output;
   } catch (error) {
-    console.error("ERROR in executeSSMCommand:", error);
+    console.error("SSM command execution failed");
     throw error;
   }
 }
@@ -130,7 +146,7 @@ export async function listBackups(instanceId?: string): Promise<BackupInfo[]> {
   const resolvedId = await resolveInstanceId(instanceId);
 
   try {
-    console.log(`Listing backups from Google Drive on instance ${resolvedId}...`);
+    console.log("Listing backups from Google Drive on managed instance");
 
     // p - path, s - size, t - modification time
     const command = `rclone lsf ${env.GDRIVE_REMOTE}:${env.GDRIVE_ROOT}/ --format "pst" --separator "|"`;
@@ -153,8 +169,8 @@ export async function listBackups(instanceId?: string): Promise<BackupInfo[]> {
 
     console.log(`Found ${backups.length} backups`);
     return backups;
-  } catch (error) {
-    console.error("Error listing backups:", error);
+  } catch {
+    console.error("Error listing backups");
     return [];
   }
 }

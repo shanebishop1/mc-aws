@@ -1,8 +1,9 @@
 "use client";
 
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { cn } from "@/lib/utils";
-import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { useEffect, useState } from "react";
 
 interface ConfirmationDialogProps {
   isOpen: boolean;
@@ -29,8 +30,8 @@ export const ConfirmationDialog = ({
   variant = "default",
   isLoading = false,
 }: ConfirmationDialogProps) => {
-  const modalRef = useRef<HTMLDivElement>(null);
   const [typedConfirmation, setTypedConfirmation] = useState("");
+  const modalRef = useAccessibleDialog(isOpen, onClose);
 
   // Reset typed confirmation when modal opens/closes
   useEffect(() => {
@@ -38,52 +39,6 @@ export const ConfirmationDialog = ({
       setTypedConfirmation("");
     }
   }, [isOpen]);
-
-  // Focus trap
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !modalRef.current) return;
-
-      const focusableElements = modalRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-
-      if (focusableElements.length === 0) return;
-
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-
-      if (e.shiftKey && document.activeElement === firstElement) {
-        lastElement.focus();
-        e.preventDefault();
-      } else if (!e.shiftKey && document.activeElement === lastElement) {
-        firstElement.focus();
-        e.preventDefault();
-      }
-    };
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isLoading) {
-        onClose();
-      }
-    };
-
-    document.addEventListener("keydown", handleTab);
-    document.addEventListener("keydown", handleEscape);
-
-    // Focus first focusable element when modal opens
-    const firstFocusable = modalRef.current?.querySelector(
-      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-    ) as HTMLElement;
-    firstFocusable?.focus();
-
-    return () => {
-      document.removeEventListener("keydown", handleTab);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [isOpen, onClose, isLoading]);
 
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget && !isLoading) {
@@ -159,7 +114,7 @@ export const ConfirmationDialog = ({
   );
 
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
         <motion.div
           data-testid="confirmation-dialog"
@@ -168,7 +123,7 @@ export const ConfirmationDialog = ({
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
           onClick={handleClickOutside as React.MouseEventHandler<HTMLDivElement>}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-2 sm:items-center sm:p-4"
           // biome-ignore lint/a11y/useSemanticElements: Using motion.div for Framer Motion animations
           role="dialog"
           aria-modal="true"
@@ -177,18 +132,19 @@ export const ConfirmationDialog = ({
         >
           <motion.div
             ref={modalRef}
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-md mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
+            className="relative w-full max-w-md max-h-[calc(100dvh-1rem)] overflow-y-auto bg-cream rounded-sm shadow-xl border border-charcoal/10 sm:max-h-[calc(100dvh-2rem)]"
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading ?? false}
-              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="absolute top-4 right-4 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed disabled:opacity-50 sm:top-6 sm:right-6"
               aria-label="Close dialog"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -196,7 +152,7 @@ export const ConfirmationDialog = ({
               </svg>
             </button>
 
-            <div className="p-8">
+            <div className="p-5 pt-14 sm:p-8">
               {/* Title and Description */}
               <div className="mb-6">
                 <h2
@@ -245,6 +201,6 @@ export const ConfirmationDialog = ({
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </>
   );
 };

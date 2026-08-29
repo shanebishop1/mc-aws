@@ -72,6 +72,30 @@ export const envRuntimeSchema = {
       ci: { level: "optional" },
     }),
   },
+  AL2023_ARM64_AMI_ID: {
+    description: "Exact setup-managed ARM64 Amazon Linux 2023 AMI id",
+    valueType: "string",
+    placeholderValues: ["latest", "ami-placeholder"],
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Deploy input only; omitted from Worker secrets." },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_BOOTSTRAP_PINS_SHA256: {
+    description: "Setup-persisted digest of the reviewed bootstrap artifact pin set",
+    valueType: "string",
+    placeholderValues: ["sha256-placeholder", "replace-with-reviewed-pins-sha256"],
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Deploy provenance only; omitted from Worker secrets." },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
   AWS_ACCOUNT_ID: {
     description: "AWS account identifier",
     valueType: "string",
@@ -87,6 +111,26 @@ export const envRuntimeSchema = {
     valueType: "string",
     ownership: withOwnership({
       worker: { level: "optional" },
+      lambda: { level: "required" },
+      ec2: { level: "forbidden" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_LIFECYCLE_LOCK_TABLE_NAME: {
+    description: "DynamoDB table used for the global lifecycle lock",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "required" },
+      lambda: { level: "required" },
+      ec2: { level: "forbidden" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_OPERATION_STATE_TABLE_NAME: {
+    description: "DynamoDB table used for durable lifecycle operation state",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "required" },
       lambda: { level: "required" },
       ec2: { level: "forbidden" },
       ci: { level: "optional" },
@@ -303,6 +347,30 @@ export const envRuntimeSchema = {
       ci: { level: "optional" },
     }),
   },
+  MC_SCHEDULED_BACKUP_ENABLED: {
+    description: "Whether EventBridge runs conservative unattended Drive backups",
+    valueType: "enum",
+    enumValues: ["true", "false"],
+    defaultValue: "false",
+    ownership: withOwnership({}),
+  },
+  MC_SCHEDULED_BACKUP_SCHEDULE: {
+    description: "EventBridge cron(...) or rate(...) expression for unattended Drive backups",
+    valueType: "string",
+    defaultValue: "cron(0 5 ? * SUN *)",
+    ownership: withOwnership({}),
+  },
+  MC_BACKUP_STALE_AFTER_HOURS: {
+    description: "Hours without a successful scheduled backup before the freshness alarm fires",
+    valueType: "string",
+    defaultValue: "192",
+    ownership: withOwnership({}),
+  },
+  MC_ALARM_EMAIL: {
+    description: "Optional operator email subscribed to the project CloudWatch alarm topic",
+    valueType: "email",
+    ownership: withOwnership({}),
+  },
   AUTH_SECRET: {
     description: "JWT/session signing secret",
     valueType: "string",
@@ -426,12 +494,12 @@ export const envRuntimeSchema = {
     }),
   },
   MC_OPERATION_STATE_RETENTION_DAYS: {
-    description: "Retention window (in days) for durable operation-state records stored in SSM",
+    description: "Retention window (in days) for DynamoDB operation records; legacy SSM records are read-only",
     valueType: "string",
     ownership: withOwnership({
       worker: { level: "optional" },
-      lambda: { level: "optional" },
-      ec2: { level: "optional" },
+      lambda: { level: "required" },
+      ec2: { level: "forbidden" },
       "local-dev": { level: "optional" },
       ci: { level: "optional" },
     }),
@@ -456,6 +524,8 @@ export const workerSecretAllowlist = [
   "AWS_REGION",
   "AWS_ACCOUNT_ID",
   "INSTANCE_ID",
+  "MC_LIFECYCLE_LOCK_TABLE_NAME",
+  "MC_OPERATION_STATE_TABLE_NAME",
   "AWS_COST_EXPLORER_ENABLED",
   "CLOUDFORMATION_STACK_NAME",
   "STACK_NAME",
@@ -640,6 +710,56 @@ const validateSesConfig = (values: Record<string, string | undefined>, issues: E
   }
 };
 
+const validateObservabilityConfig = (
+  values: Record<string, string | undefined>,
+  issues: EnvSchemaValidationIssue[]
+): void => {
+  const schedule = getResolvedString(values, "MC_SCHEDULED_BACKUP_SCHEDULE");
+  if (schedule && !/^(?:cron|rate)\([^\r\n]{1,120}\)$/.test(schedule)) {
+    issues.push(
+      createIssue(
+        "MC_SCHEDULED_BACKUP_SCHEDULE",
+        "invalid",
+        "MC_SCHEDULED_BACKUP_SCHEDULE must be one EventBridge cron(...) or rate(...) expression."
+      )
+    );
+  }
+
+  const staleAfterHours = getResolvedString(values, "MC_BACKUP_STALE_AFTER_HOURS");
+  if (staleAfterHours) {
+    const parsed = Number(staleAfterHours);
+    if (!Number.isSafeInteger(parsed) || parsed < 25 || parsed > 720) {
+      issues.push(
+        createIssue(
+          "MC_BACKUP_STALE_AFTER_HOURS",
+          "invalid",
+          "MC_BACKUP_STALE_AFTER_HOURS must be an integer from 25 through 720."
+        )
+      );
+    }
+  }
+};
+
+const validateImmutablePins = (
+  values: Record<string, string | undefined>,
+  issues: EnvSchemaValidationIssue[]
+): void => {
+  const ami = getResolvedString(values, "AL2023_ARM64_AMI_ID");
+  if (ami && !/^ami-[a-f0-9]{8,17}$/.test(ami)) {
+    issues.push(createIssue("AL2023_ARM64_AMI_ID", "invalid", "AL2023_ARM64_AMI_ID must be an exact AMI id."));
+  }
+  const pinsDigest = getResolvedString(values, "MC_BOOTSTRAP_PINS_SHA256");
+  if (pinsDigest && (!/^[a-f0-9]{64}$/.test(pinsDigest) || /^([a-f0-9])\1{63}$/.test(pinsDigest))) {
+    issues.push(
+      createIssue(
+        "MC_BOOTSTRAP_PINS_SHA256",
+        "invalid",
+        "MC_BOOTSTRAP_PINS_SHA256 must be the setup-persisted reviewed pin-set digest."
+      )
+    );
+  }
+};
+
 const validateRuleAndPresence = ({
   name,
   target,
@@ -757,6 +877,8 @@ export const validateEnvForTarget = (
 
   validateMinecraftDnsConfig(values, issues);
   validateSesConfig(values, issues);
+  validateObservabilityConfig(values, issues);
+  validateImmutablePins(values, issues);
 
   return {
     target,

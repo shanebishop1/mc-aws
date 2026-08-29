@@ -382,7 +382,7 @@ export async function applyScenario(name: string): Promise<void> {
     throw new Error(`Scenario not found: ${name}. Available scenarios: ${Object.keys(scenarios).join(", ")}`);
   }
 
-  console.log(`[SCENARIO] Applying scenario: ${name}`);
+  console.log("[SCENARIO] Applying configured scenario");
   await scenario.apply();
 
   // Track current scenario in state store
@@ -456,7 +456,7 @@ export async function injectFault(config: FaultConfig): Promise<void> {
     await stateStore.setGlobalLatency(config.latency);
   }
 
-  console.log("[SCENARIO] Injected fault for operation: %s", config.operation, config);
+  console.log("[SCENARIO] Injected configured fault");
 }
 
 /**
@@ -467,7 +467,7 @@ export async function injectFault(config: FaultConfig): Promise<void> {
 export async function clearFault(operation: string): Promise<void> {
   const stateStore = getMockStateStore();
   await stateStore.clearOperationFailure(operation);
-  console.log(`[SCENARIO] Cleared fault for operation: ${operation}`);
+  console.log("[SCENARIO] Cleared configured fault");
 }
 
 /**

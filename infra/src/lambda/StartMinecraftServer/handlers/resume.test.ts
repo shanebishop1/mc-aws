@@ -11,6 +11,15 @@ import {
 
 const mocks = vi.hoisted(() => ({
   send: vi.fn(),
+  getOperationExecutionContext: vi.fn(),
+  getOperationState: vi.fn(),
+  updateOperationState: vi.fn(),
+}));
+
+vi.mock("../execution-context.js", () => ({ getOperationExecutionContext: mocks.getOperationExecutionContext }));
+vi.mock("../operation-state.js", () => ({
+  getOperationState: mocks.getOperationState,
+  updateOperationState: mocks.updateOperationState,
 }));
 
 vi.mock("../clients.js", async () => {
@@ -43,6 +52,9 @@ describe("lambda handlers/resume", () => {
     vi.clearAllMocks();
     vi.stubEnv("MC_PROJECT_TAG", "mc-aws");
     vi.stubEnv("MC_STACK_TAG", "MinecraftStack");
+    mocks.getOperationExecutionContext.mockReturnValue(null);
+    mocks.getOperationState.mockResolvedValue(null);
+    mocks.updateOperationState.mockResolvedValue(undefined);
 
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeInstancesCommand) {
@@ -105,6 +117,7 @@ describe("lambda handlers/resume", () => {
 
     const createVolumeCommand = getCommands(CreateVolumeCommand)[0];
     expect(createVolumeCommand.input.SnapshotId).toBe("snap-source123");
+    expect(createVolumeCommand.input.ClientToken).toMatch(/^[a-f0-9]{64}$/);
     expect(createVolumeCommand.input.TagSpecifications?.[0]?.Tags).toEqual(
       expect.arrayContaining([
         { Key: "ReconstructionSourceImageId", Value: "ami-source123" },
@@ -121,6 +134,38 @@ describe("lambda handlers/resume", () => {
     expect(attachCommand).toBeDefined();
     expect(attachCommand.input.InstanceId).toBe("i-resume");
     expect(attachCommand.input.Device).toBe("/dev/xvda");
+  });
+
+  it("persists a stable ClientToken and exact volume identity around CreateVolume", async () => {
+    mocks.getOperationExecutionContext.mockReturnValue({
+      operationId: "op-resume-stable",
+      command: "resume",
+      executionToken: "attempt-1",
+    });
+
+    await handleResume("i-resume");
+
+    const create = getCommands(CreateVolumeCommand)[0];
+    expect(create.input.ClientToken).toMatch(/^[a-f0-9]{64}$/);
+    expect(mocks.updateOperationState).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        resumeVolumeClientToken: create.input.ClientToken,
+        resumeSnapshotId: "snap-source123",
+      })
+    );
+    expect(mocks.updateOperationState).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        resumeVolumeClientToken: create.input.ClientToken,
+        resumeVolumeId: "vol-123",
+      })
+    );
+    expect(mocks.updateOperationState.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.send.mock.invocationCallOrder.find(
+        (_, index) => mocks.send.mock.calls[index][0] instanceof CreateVolumeCommand
+      )!
+    );
   });
 
   it("fails explicitly when source AMI metadata is missing", async () => {

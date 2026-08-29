@@ -3,7 +3,7 @@ import type { ReleaseServerActionLockOptions, ServerActionLock, ServerActionType
 import type { OperationInfo, OperationStatus, OperationType } from "@/lib/types";
 import type { NextRequest } from "next/server";
 
-export type MutatingActionType = OperationType;
+export type MutatingActionType = Exclude<OperationType, "allowlist">;
 
 export interface MutatingActionCommandPayloadByType {
   start: Record<string, never>;
@@ -12,6 +12,7 @@ export interface MutatingActionCommandPayloadByType {
   restore: { backupName: string };
   hibernate: Record<string, never>;
   resume: Record<string, never>;
+  allowlist: { emails: string[] };
 }
 
 export interface MutatingActionCommand<TAction extends MutatingActionType = MutatingActionType> {
@@ -59,6 +60,7 @@ export interface MutatingActionExecutionFailure {
   error: string;
   code?: string;
   cause?: unknown;
+  operationStatus?: OperationStatus;
 }
 
 export type MutatingActionExecutionResult<TData> =
@@ -102,7 +104,7 @@ export function createMutatingActionSuccess<TData>(
 
 export function createMutatingActionFailure(
   error: string,
-  options?: { httpStatus?: number; code?: string; cause?: unknown }
+  options?: { httpStatus?: number; code?: string; cause?: unknown; operationStatus?: OperationStatus }
 ): MutatingActionExecutionFailure {
   return {
     ok: false,
@@ -111,5 +113,6 @@ export function createMutatingActionFailure(
     error,
     code: options?.code,
     cause: options?.cause,
+    ...(options?.operationStatus ? { operationStatus: options.operationStatus } : {}),
   };
 }

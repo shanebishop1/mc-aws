@@ -15,8 +15,11 @@ import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
-import { enforceMutatingRouteThrottle } from "@/lib/mutating-route-throttle";
+import {
+  isMutatingActionPayloadValidationError,
+  parseMutatingActionRequestPayload,
+} from "@/lib/mutating-action-validation";
+import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
   acquireServerActionLock,
@@ -71,7 +74,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     context,
     authenticate: async () => {
       const user = await requireAllowed(context.request);
-      console.log("[START] Action by:", user.email, "role:", user.role);
+      console.log("[START] Authorized action requested");
       return user;
     },
     throttle: async ({ user }) => {
@@ -86,36 +89,16 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         return { allowed: true };
       }
 
-      throttleRetryAfterHeader = throttleResponse.headers.get("Retry-After") ?? undefined;
-      throttleCacheControlHeader = throttleResponse.headers.get("Cache-Control") ?? undefined;
-
-      try {
-        const payload = await throttleResponse.clone().json();
-        const errorMessage =
-          typeof payload === "object" && payload !== null && "error" in payload && typeof payload.error === "string"
-            ? payload.error
-            : "Too many start requests. Please retry shortly.";
-
-        return {
-          allowed: false,
-          httpStatus: throttleResponse.status,
-          code: "throttled",
-          message: errorMessage,
-        };
-      } catch {
-        return {
-          allowed: false,
-          httpStatus: throttleResponse.status,
-          code: "throttled",
-          message: "Too many start requests. Please retry shortly.",
-        };
-      }
+      const throttleFailure = await mapMutatingRouteThrottleFailure(throttleResponse, context.operation.type);
+      throttleRetryAfterHeader = throttleFailure.retryAfterHeader;
+      throttleCacheControlHeader = throttleFailure.cacheControlHeader;
+      return throttleFailure.decision;
     },
     acquireLock: async ({ user }) => {
       await parseMutatingActionRequestPayload(context.request, "start");
 
       resolvedId = await findInstanceId();
-      console.log("[START] Starting server instance:", resolvedId);
+      console.log("[START] Starting managed server instance");
 
       const currentState = await getInstanceState(resolvedId);
       console.log("[START] Current state:", currentState);
@@ -142,6 +125,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         userEmail: user.email,
         instanceId: resolvedId,
         lockId: lock.lockId,
+        fencingToken: lock.fencingToken,
         operationId: context.operation.id,
       });
 
@@ -186,6 +170,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         });
       }
 
+      if (isMutatingActionPayloadValidationError(error)) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: error.code,
+          cause: error,
+        });
+      }
+
       return createMutatingActionFailure("Failed to start server", {
         cause: error,
       });
@@ -197,8 +189,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
       const ownerEmail = user?.email ?? "unknown";
 
-      await releaseServerActionLock(lock.lockId, { action: "start", ownerEmail }).catch((releaseError) => {
-        console.error("[START] Failed to release lock after invoke error:", releaseError);
+      await releaseServerActionLock(lock.lockId, {
+        action: "start",
+        ownerEmail,
+        fencingToken: lock.fencingToken,
+      }).catch(() => {
+        console.error("[START] Failed to release lock after invoke error");
       });
     },
   });

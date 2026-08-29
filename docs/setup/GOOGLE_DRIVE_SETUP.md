@@ -18,11 +18,14 @@ After deployment:
 2. Connect Google Drive.
 3. Create a test backup.
 4. Test restoring that backup and confirm the server data is correct.
+5. Only after both tests pass, set `MC_SCHEDULED_BACKUP_ENABLED=true` (or choose the wizard opt-in) and redeploy if you want unattended backups.
 
 Do not use hibernate until both backup and restore have been tested. Hibernate backs up and then deletes the project-managed root volume; an unverified backup is not a recovery plan.
 
 Authorization stores a persistent refresh token together with the OAuth client secret in an encrypted SSM credential bundle. Treat that bundle as full access to the authorized account's Drive. When Drive is configured, a root-only rclone configuration exists on EC2 after boot and backup or restore operations. Do not copy either into shell commands or other files.
 
 External apps in Testing can receive Drive refresh tokens that expire after seven days. Use an appropriate Google account and move the app to In production when durable unattended backups are required.
+
+The unattended default is Sunday 05:00 UTC with a seven-day target RPO while EC2 is already running and an eight-day staleness alarm. It never starts a stopped or hibernated server merely to make a backup. Missing/expired credentials, stopped EC2, or another lifecycle action causes a safe skip; prolonged skips trigger staleness monitoring. See [Operations Guide](../OPERATIONS_GUIDE.md#scheduled-backup-policy) for schedule, alert, lock, and cost behavior. Monitoring never restores a backup automatically.
 
 The migration bridge does not install Drive helpers on an older EC2 instance. There is no supported in-place Drive rollout for such an instance. Preserve its data, complete the [Existing Deployment Migration](../EXISTING_DEPLOYMENT_MIGRATION.md), and plan a reviewed replacement under the current stack before connecting Drive. Do not copy tokens manually.

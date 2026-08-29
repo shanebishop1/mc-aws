@@ -126,6 +126,7 @@ describe("GET /api/auth/login regression contract", () => {
   });
 
   it("returns redirect throttle response with Retry-After header", async () => {
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     mocks.checkRateLimitMock.mockResolvedValue({
       allowed: false,
       remaining: 0,
@@ -152,5 +153,7 @@ describe("GET /api/auth/login regression contract", () => {
     expect(res.headers.get("location")).toBe("http://localhost/?error=oauth_rate_limited");
     expect(res.headers.get("Retry-After")).toBe("23");
     expect(mocks.cookieStore.set).not.toHaveBeenCalled();
+    expect(warning).toHaveBeenCalledWith("[LOGIN] Rate limit exceeded");
+    expect(warning.mock.calls.flat().join(" ")).not.toContain("198.51.100.24");
   });
 });

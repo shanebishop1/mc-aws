@@ -6,7 +6,7 @@ import { POST } from "./route";
 
 const mocks = vi.hoisted(() => ({
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com", role: "admin" }),
-  acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-stop-123" }),
+  acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-stop-123", fencingToken: 7 }),
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
@@ -20,7 +20,13 @@ const mocks = vi.hoisted(() => ({
     retryAfterHeader: response.headers.get("Retry-After") ?? undefined,
     cacheControlHeader: response.headers.get("Cache-Control") ?? undefined,
   })),
+  invokeLambda: vi.fn().mockResolvedValue(undefined),
 }));
+
+vi.mock("@/lib/aws", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/aws")>("@/lib/aws");
+  return { ...actual, invokeLambda: mocks.invokeLambda };
+});
 
 vi.mock("@/lib/api-auth", () => ({
   requireAdmin: mocks.requireAdmin,
@@ -78,10 +84,11 @@ describe("POST /api/stop", () => {
     expect(body.operation?.status).toBe("accepted");
     expect(body.operation?.id).toContain("stop-");
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
-    expect(mocks.releaseServerActionLock).toHaveBeenCalledWith("lock-stop-123", {
-      action: "stop",
-      ownerEmail: "admin@example.com",
-    });
+    expect(mocks.invokeLambda).toHaveBeenCalledWith(
+      "StartMinecraftServer",
+      expect.objectContaining({ command: "stop", lockId: "lock-stop-123", fencingToken: 7 })
+    );
+    expect(mocks.releaseServerActionLock).not.toHaveBeenCalled();
   });
 
   it("should return 400 when instance is already stopped", async () => {
@@ -106,6 +113,44 @@ describe("POST /api/stop", () => {
     expect(body.success).toBe(false);
     expect(body.error).toContain("already stopped");
     expect(body.operation?.status).toBe("failed");
+  });
+
+  it("keeps the durable stop operation and lock pending when Lambda dispatch is ambiguous", async () => {
+    const { mockEC2Client } = await import("@/tests/mocks/aws");
+    mockEC2Client.send.mockResolvedValueOnce({
+      Reservations: [{ Instances: [{ State: { Name: "running" }, InstanceId: "i-1234" }] }],
+    });
+    mocks.invokeLambda.mockRejectedValueOnce(Object.assign(new Error("socket reset"), { name: "TimeoutError" }));
+
+    const res = await POST(createMockNextRequest("http://localhost/api/stop", { method: "POST" }));
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+
+    expect(res.status).toBe(503);
+    expect(body.operation?.status).toBe("accepted");
+    expect(mocks.releaseServerActionLock).not.toHaveBeenCalled();
+  });
+
+  it("terminalizes and releases when Lambda definitely rejects the event", async () => {
+    const { mockEC2Client } = await import("@/tests/mocks/aws");
+    mockEC2Client.send.mockResolvedValueOnce({
+      Reservations: [{ Instances: [{ State: { Name: "running" }, InstanceId: "i-1234" }] }],
+    });
+    mocks.invokeLambda.mockRejectedValueOnce(
+      Object.assign(new Error("function not found"), {
+        name: "ResourceNotFoundException",
+        $metadata: { httpStatusCode: 404, requestId: "request-id" },
+      })
+    );
+
+    const res = await POST(createMockNextRequest("http://localhost/api/stop", { method: "POST" }));
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+
+    expect(res.status).toBe(500);
+    expect(body.operation?.status).toBe("failed");
+    expect(mocks.releaseServerActionLock).toHaveBeenCalledWith(
+      "lock-stop-123",
+      expect.objectContaining({ action: "stop", fencingToken: 7 })
+    );
   });
 
   it("returns failed operation metadata for auth failures", async () => {
@@ -197,10 +242,10 @@ describe("POST /api/stop", () => {
     const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
     const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
     const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
-    const releaseOrder = mocks.releaseServerActionLock.mock.invocationCallOrder[0];
+    const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
 
     expect(authOrder).toBeLessThan(throttleOrder);
     expect(throttleOrder).toBeLessThan(lockOrder);
-    expect(lockOrder).toBeLessThan(releaseOrder);
+    expect(lockOrder).toBeLessThan(invokeOrder);
   });
 });

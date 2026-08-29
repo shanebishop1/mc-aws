@@ -1,3 +1,11 @@
+import {
+  type HostIdentity,
+  type ReplacementConfirmations,
+  assertCompletedRootSnapshot,
+  assertExactReplacementConfirmations,
+  assertReviewedInstanceReplacementPlan,
+} from "./existing-host-upgrade";
+
 export const LEGACY_RULE_SET_LOGICAL_ID = "MinecraftRuleSet298765D1";
 export const LEGACY_ACTIVATION_LOGICAL_ID = "ActivateRuleSet3E62562C";
 export const INSTANCE_LOGICAL_ID = "MinecraftServerACE914F3";
@@ -46,6 +54,63 @@ export interface OwnershipTagOperations {
   inspect: () => OwnershipInspection;
   createTags: (resourceId: string, tags: Record<string, string>) => void;
   deleteTags: (resourceId: string, tags: Record<string, string>) => void;
+}
+
+export interface WorkerStackOutputs {
+  INSTANCE_ID: string;
+  MC_LIFECYCLE_LOCK_TABLE_NAME: string;
+  MC_OPERATION_STATE_TABLE_NAME: string;
+}
+
+const workerOutputMap = {
+  InstanceId: "INSTANCE_ID",
+  LifecycleLockTableName: "MC_LIFECYCLE_LOCK_TABLE_NAME",
+  OperationStateTableName: "MC_OPERATION_STATE_TABLE_NAME",
+} as const;
+
+export function extractWorkerStackOutputs(outputs: unknown, expectedInstanceId: string): WorkerStackOutputs {
+  if (!Array.isArray(outputs)) throw new Error("CloudFormation stack outputs are missing.");
+  const result: Partial<WorkerStackOutputs> = {};
+  for (const [outputKey, envKey] of Object.entries(workerOutputMap)) {
+    const matches = outputs.filter((entry) => entry?.OutputKey === outputKey);
+    if (matches.length !== 1 || typeof matches[0].OutputValue !== "string" || !matches[0].OutputValue.trim()) {
+      throw new Error(`Expected exactly one nonempty CloudFormation output named ${outputKey}.`);
+    }
+    result[envKey] = matches[0].OutputValue.trim();
+  }
+  if (result.INSTANCE_ID !== expectedInstanceId || !/^i-[a-f0-9]{8,17}$/.test(result.INSTANCE_ID)) {
+    throw new Error("InstanceId output does not match the ownership-proven EC2 instance.");
+  }
+  for (const key of ["MC_LIFECYCLE_LOCK_TABLE_NAME", "MC_OPERATION_STATE_TABLE_NAME"] as const) {
+    if (!/^[A-Za-z0-9_.-]{3,255}$/.test(result[key] ?? "")) {
+      throw new Error(`${key} output is not a valid DynamoDB table name.`);
+    }
+  }
+  return result as WorkerStackOutputs;
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: dotenv duplicate detection and preservation are intentionally one atomic transform.
+export function updateDotenvValues(source: string, updates: WorkerStackOutputs): string {
+  const lines = source.split(/\r?\n/);
+  const positions = new Map<string, number[]>();
+  for (const [index, line] of lines.entries()) {
+    const match = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=/.exec(line);
+    if (match) positions.set(match[1], [...(positions.get(match[1]) ?? []), index]);
+  }
+  for (const key of Object.keys(updates)) {
+    if ((positions.get(key)?.length ?? 0) > 1)
+      throw new Error(`Environment file contains duplicate effective ${key} definitions.`);
+  }
+  for (const [key, value] of Object.entries(updates)) {
+    const position = positions.get(key)?.[0];
+    if (position === undefined) {
+      if (lines.length && lines.at(-1) !== "") lines.push("");
+      lines.push(`${key}=${value}`);
+    } else {
+      lines[position] = `${key}=${value}`;
+    }
+  }
+  return `${lines.join("\n").replace(/\n+$/, "")}\n`;
 }
 
 export interface CloudAssemblyIdentityDocuments {
@@ -1020,7 +1085,15 @@ export function templatesEqual(left: unknown, right: unknown): boolean {
 export function assertStandardDeploymentInstanceSafe(
   liveTemplate: CloudFormationTemplate,
   currentTemplate: CloudFormationTemplate,
-  actualUserData?: Uint8Array
+  actualUserData?: Uint8Array,
+  reviewedReplacement?: {
+    identity: HostIdentity;
+    snapshotId: string;
+    snapshot: JsonRecord;
+    changeSet: JsonRecord;
+    changeSetId: string;
+    confirmations: ReplacementConfirmations;
+  }
 ): void {
   const liveInstance = resource(liveTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
   const currentInstance = resource(currentTemplate, INSTANCE_LOGICAL_ID, "AWS::EC2::Instance");
@@ -1032,6 +1105,35 @@ export function assertStandardDeploymentInstanceSafe(
   }
   if (actualUserData) {
     assertInstanceUserDataTransition(liveTemplate, liveTemplate, actualUserData);
+  }
+  if (reviewedReplacement) {
+    if (
+      liveInstance.Properties?.ImageId !== reviewedReplacement.identity.currentAmiId ||
+      currentInstance.Properties?.ImageId !== reviewedReplacement.identity.targetAmiId
+    ) {
+      throw new Error("Reviewed replacement bypass templates do not match the exact confirmed AMI transition");
+    }
+    if (
+      reviewedReplacement.snapshot.SnapshotId !== reviewedReplacement.snapshotId ||
+      reviewedReplacement.changeSet.ChangeSetId !== reviewedReplacement.changeSetId
+    ) {
+      throw new Error("Reviewed replacement bypass artifact identities do not match their exact confirmations");
+    }
+    assertCompletedRootSnapshot(reviewedReplacement.identity, reviewedReplacement.snapshot);
+    assertReviewedInstanceReplacementPlan(
+      reviewedReplacement.identity,
+      reviewedReplacement.changeSet,
+      INSTANCE_LOGICAL_ID
+    );
+    assertExactReplacementConfirmations(
+      reviewedReplacement.identity,
+      reviewedReplacement.snapshotId,
+      reviewedReplacement.changeSetId,
+      reviewedReplacement.confirmations
+    );
+    return;
+  }
+  if (actualUserData) {
     assertLegacyGithubUserDataDependenciesPreserved(
       adoptActualInstanceUserData(liveTemplate, actualUserData),
       currentTemplate

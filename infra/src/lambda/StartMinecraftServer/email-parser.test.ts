@@ -7,8 +7,10 @@ function createEvent(from: string, subject = "START") {
     Records: [
       {
         Sns: {
+          MessageId: "sns-message-123",
+          Timestamp: "2026-04-13T12:00:00.000Z",
           Message: JSON.stringify({
-            mail: { commonHeaders: { from: [from], subject } },
+            mail: { messageId: "ses-message-123", commonHeaders: { from: [from], subject } },
             receipt: {
               spfVerdict: { status: "PASS" },
               dkimVerdict: { status: "PASS" },
@@ -26,6 +28,8 @@ describe("parseEmailFromEvent", () => {
     expect(parseEmailFromEvent(createEvent("Example User <USER@example.com>"))).toMatchObject({
       senderEmail: "user@example.com",
       subject: "start",
+      eventIdentity: "ses-message-123",
+      requestedAt: "2026-04-13T12:00:00.000Z",
     });
     expect(parseEmailFromEvent(createEvent("USER@example.com"))).toMatchObject({
       senderEmail: "user@example.com",

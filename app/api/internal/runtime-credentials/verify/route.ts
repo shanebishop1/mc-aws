@@ -75,8 +75,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       },
       { headers: { "Cache-Control": "no-store" } }
     );
-  } catch (error) {
-    console.error("[RUNTIME-CREDENTIAL-PROBE] AWS verification failed:", error);
+  } catch {
+    console.error("[RUNTIME-CREDENTIAL-PROBE] AWS verification failed");
     return NextResponse.json({ success: false, error: "AWS runtime credential verification failed" }, { status: 502 });
   }
 }

@@ -66,6 +66,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
             whileTap={{ scale: 0.95 }}
             className={iconButtonClassName}
             title="View on GitHub"
+            aria-label="View project on GitHub"
           >
             <svg className="w-7 h-7" fill="currentColor" viewBox="0 0 24 24">
               <path
@@ -80,12 +81,14 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
             <>
               {/* Costs Button */}
               <motion.button
+                type="button"
                 onClick={handleCostsClick}
                 whileHover={{ scale: 1.1 }}
                 transition={{ duration: 0.1 }}
                 whileTap={{ scale: 0.95 }}
                 className={iconButtonClassName}
                 title="View AWS costs"
+                aria-label="Open cost dashboard"
               >
                 <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -99,12 +102,14 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
 
               {/* Email Management Button */}
               <motion.button
+                type="button"
                 onClick={handleEmailsClick}
                 whileHover={{ scale: 1.1 }}
                 transition={{ duration: 0.1 }}
                 whileTap={{ scale: 0.95 }}
                 className={iconButtonClassName}
                 title="Manage email access"
+                aria-label="Open email management"
               >
                 <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path
@@ -118,12 +123,14 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
 
               {/* AWS Console Button */}
               <motion.button
+                type="button"
                 onClick={handleAwsConsoleClick}
                 whileHover={{ scale: 1.1 }}
                 transition={{ duration: 0.1 }}
                 whileTap={{ scale: 0.95 }}
                 className={iconButtonClassName}
                 title="Open in AWS Console"
+                aria-label="Open AWS Console"
               >
                 <svg className="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path

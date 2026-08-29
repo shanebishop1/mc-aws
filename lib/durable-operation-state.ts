@@ -1,4 +1,10 @@
 import * as aws from "@/lib/aws";
+import {
+  isOperationConditionalFailure,
+  readVersionedOperationRecord,
+  writeVersionedOperationRecord,
+} from "@/lib/aws/dynamodb-operation-store";
+import { LIFECYCLE_LOCK_LEASE_MS, LIFECYCLE_OPERATION_MAX_DURATION_MS } from "@/lib/lifecycle-runtime-budget";
 import type { OperationStatus, OperationType } from "@/lib/types";
 
 const operationStateParamPrefix = "/minecraft/operations";
@@ -15,12 +21,37 @@ const operationTypes: ReadonlySet<OperationType> = new Set([
   "restore",
   "hibernate",
   "resume",
+  "allowlist",
+]);
+const apiOperationTypes: ReadonlySet<OperationType> = new Set([
+  "start",
+  "stop",
+  "backup",
+  "restore",
+  "hibernate",
+  "resume",
+]);
+const emailOperationTypes: ReadonlySet<OperationType> = new Set([
+  "start",
+  "backup",
+  "restore",
+  "hibernate",
+  "resume",
+  "allowlist",
 ]);
 const operationStatusPriority: Record<OperationStatus, number> = {
   accepted: 1,
   running: 2,
   completed: 3,
   failed: 3,
+};
+export type OperationPhase = "validating" | "dispatching" | "dispatched" | "executing" | "terminal";
+const operationPhasePriority: Record<OperationPhase, number> = {
+  validating: 1,
+  dispatching: 2,
+  dispatched: 3,
+  executing: 4,
+  terminal: 5,
 };
 const transitionSources = new Set<OperationStateTransitionSource>(["api", "lambda"]);
 const inMemoryOperationStateStore = new Map<string, string>();
@@ -39,6 +70,7 @@ export interface DurableOperationStateTransition {
 }
 
 export interface DurableOperationState {
+  schemaVersion: 1;
   id: string;
   type: OperationType;
   route: string;
@@ -47,9 +79,28 @@ export interface DurableOperationState {
   updatedAt: string;
   requestedBy?: string;
   lockId?: string;
+  fencingToken?: number;
   instanceId?: string;
   lastError?: string;
   code?: string;
+  phase?: OperationPhase;
+  version?: number;
+  deadlineAt?: string;
+  maxDurationMs?: number;
+  executionToken?: string;
+  executionAttempt?: number;
+  executionClaimedAt?: string;
+  executionLeaseExpiresAt?: string;
+  remoteCommandId?: string;
+  remoteCommandInstanceId?: string;
+  remoteCommandStep?: string;
+  remoteCommandFinal?: boolean;
+  remoteCommandStatus?: string;
+  managedVolumeId?: string;
+  managedVolumeDevice?: string;
+  hibernatePhase?: string;
+  sideEffectCompletedAt?: string;
+  sideEffectKey?: string;
   history: DurableOperationStateTransition[];
 }
 
@@ -62,10 +113,12 @@ export interface PersistDurableOperationStateTransitionInput {
   requestedAt?: string;
   requestedBy?: string;
   lockId?: string;
+  fencingToken?: number;
   instanceId?: string;
   error?: string;
   code?: string;
   timestamp?: string;
+  phase?: OperationPhase;
 }
 
 export interface DurableOperationStateParameterRecord {
@@ -101,6 +154,14 @@ export interface CleanupExpiredDurableOperationStatesResult {
   dryRun: boolean;
 }
 
+export interface ExpireAcceptedDispatchResult {
+  operation: DurableOperationState | null;
+  shouldReleaseLock: boolean;
+}
+
+const acceptedDispatchExpiredCode = "dispatch_expired";
+const acceptedDispatchExpiredMessage = "The operation was not executed before its dispatch lease expired";
+
 function getOperationStateParameterName(operationId: string): string {
   return `${operationStateParamPrefix}/${operationId}`;
 }
@@ -118,17 +179,54 @@ function normalizeOptionalText(value: unknown): string | undefined {
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function parseOperationHistory(value: unknown): DurableOperationStateTransition[] | null {
+  if (!Array.isArray(value)) return value === undefined ? [] : null;
+  const history: DurableOperationStateTransition[] = [];
+  for (const entry of value) {
+    if (!isObject(entry)) return null;
+    const { status, at, source } = entry;
+    if (
+      typeof status !== "string" ||
+      !operationStatuses.has(status as OperationStatus) ||
+      typeof at !== "string" ||
+      !Number.isFinite(Date.parse(at)) ||
+      typeof source !== "string" ||
+      !transitionSources.has(source as OperationStateTransitionSource)
+    ) {
+      return null;
+    }
+    if (entry.error !== undefined && typeof entry.error !== "string") return null;
+    if (entry.code !== undefined && typeof entry.code !== "string") return null;
+    history.push({
+      status: status as OperationStatus,
+      at,
+      source: source as OperationStateTransitionSource,
+      error: normalizeOptionalText(entry.error),
+      code: normalizeOptionalText(entry.code),
+    });
+  }
+  return history.slice(-50);
+}
+
 function parseRetentionDays(value: string | undefined): number | null {
   if (!value) {
     return null;
   }
 
-  const parsed = Number.parseInt(value.trim(), 10);
-  if (!Number.isFinite(parsed) || parsed <= 0) {
+  const normalized = value.trim();
+  if (!/^[1-9][0-9]*$/.test(normalized)) return null;
+  const parsed = Number(normalized);
+  if (!Number.isSafeInteger(parsed) || parsed <= 0 || parsed > 3650) {
     return null;
   }
 
   return parsed;
+}
+
+export function isValidDurableOperationRoute(route: string, type: OperationType): boolean {
+  if (route === `/api/${type}`) return apiOperationTypes.has(type);
+  if (route === `/email/${type}`) return emailOperationTypes.has(type);
+  return route === "/scheduled/backup" && type === "backup";
 }
 
 export function getDurableOperationStateRetentionMs(): number {
@@ -149,6 +247,19 @@ export function getDurableOperationStateRetentionMs(): number {
 
 function isTerminalOperationStatus(status: OperationStatus): boolean {
   return status === "completed" || status === "failed";
+}
+
+function isAcceptedDispatchAwaitingExecutor(operation: DurableOperationState): boolean {
+  return operation.status === "accepted" && (operation.phase === "dispatching" || operation.phase === "dispatched");
+}
+
+export function getAcceptedDispatchExpiryAt(operation: DurableOperationState): string | null {
+  if (!isAcceptedDispatchAwaitingExecutor(operation)) return null;
+  return new Date(Date.parse(operation.updatedAt) + LIFECYCLE_LOCK_LEASE_MS).toISOString();
+}
+
+function isDispatchExpiryFailure(operation: DurableOperationState): boolean {
+  return operation.status === "failed" && operation.code === acceptedDispatchExpiredCode;
 }
 
 function shouldApplyStatusTransition(
@@ -178,6 +289,7 @@ function shouldApplyStatusTransition(
   return operationStatusPriority[next] >= operationStatusPriority[current];
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: One strict parser validates legacy SSM and current DynamoDB payloads identically.
 function parseDurableOperationState(raw: string | null): DurableOperationState | null {
   if (!raw) {
     return null;
@@ -202,39 +314,49 @@ function parseDurableOperationState(raw: string | null): DurableOperationState |
       return null;
     }
 
-    const history: DurableOperationStateTransition[] = Array.isArray(parsed.history)
-      ? parsed.history.flatMap((entry) => {
-          if (!isObject(entry)) {
-            return [];
-          }
+    if (parsed.schemaVersion !== undefined && parsed.schemaVersion !== 1) {
+      return null;
+    }
 
-          const status = entry.status;
-          const at = entry.at;
-          const source = entry.source;
-          if (typeof status !== "string" || typeof at !== "string" || typeof source !== "string") {
-            return [];
-          }
+    if (
+      !Number.isFinite(Date.parse(parsed.requestedAt)) ||
+      !Number.isFinite(Date.parse(parsed.updatedAt)) ||
+      !isValidDurableOperationRoute(parsed.route, parsed.type)
+    ) {
+      return null;
+    }
 
-          if (
-            !operationStatuses.has(status as OperationStatus) ||
-            !transitionSources.has(source as OperationStateTransitionSource)
-          ) {
-            return [];
-          }
+    const history = parseOperationHistory(parsed.history);
+    if (!history) return null;
 
-          return [
-            {
-              status: status as OperationStatus,
-              at,
-              source: source as OperationStateTransitionSource,
-              error: normalizeOptionalText(entry.error),
-              code: normalizeOptionalText(entry.code),
-            },
-          ];
-        })
-      : [];
-
+    const phase = operationPhasePriority[parsed.phase as OperationPhase]
+      ? (parsed.phase as OperationPhase)
+      : parsed.status === "completed" || parsed.status === "failed"
+        ? "terminal"
+        : parsed.status === "running"
+          ? "executing"
+          : "validating";
+    const maxDurationMs =
+      typeof parsed.maxDurationMs === "number" && Number.isSafeInteger(parsed.maxDurationMs) && parsed.maxDurationMs > 0
+        ? parsed.maxDurationMs
+        : LIFECYCLE_OPERATION_MAX_DURATION_MS;
+    const deadlineAt = normalizeOptionalText(parsed.deadlineAt);
+    if (deadlineAt && !Number.isFinite(Date.parse(deadlineAt))) return null;
+    if (parsed.version !== undefined && (!Number.isSafeInteger(parsed.version) || parsed.version < 1)) return null;
+    const executionClaimedAt = normalizeOptionalText(parsed.executionClaimedAt);
+    const executionLeaseExpiresAt = normalizeOptionalText(parsed.executionLeaseExpiresAt);
+    const sideEffectCompletedAt = normalizeOptionalText(parsed.sideEffectCompletedAt);
+    if (executionClaimedAt && !Number.isFinite(Date.parse(executionClaimedAt))) return null;
+    if (executionLeaseExpiresAt && !Number.isFinite(Date.parse(executionLeaseExpiresAt))) return null;
+    if (sideEffectCompletedAt && !Number.isFinite(Date.parse(sideEffectCompletedAt))) return null;
+    if (
+      parsed.executionAttempt !== undefined &&
+      (!Number.isSafeInteger(parsed.executionAttempt) || parsed.executionAttempt < 1)
+    ) {
+      return null;
+    }
     return {
+      schemaVersion: 1,
       id: parsed.id,
       type: parsed.type,
       route: parsed.route,
@@ -246,6 +368,25 @@ function parseDurableOperationState(raw: string | null): DurableOperationState |
       instanceId: normalizeOptionalText(parsed.instanceId),
       lastError: normalizeOptionalText(parsed.lastError),
       code: normalizeOptionalText(parsed.code),
+      phase,
+      version: parsed.version,
+      deadlineAt: deadlineAt ?? new Date(Date.parse(parsed.requestedAt) + maxDurationMs).toISOString(),
+      maxDurationMs,
+      fencingToken: Number.isSafeInteger(parsed.fencingToken) ? parsed.fencingToken : undefined,
+      executionToken: normalizeOptionalText(parsed.executionToken),
+      executionAttempt: Number.isSafeInteger(parsed.executionAttempt) ? parsed.executionAttempt : undefined,
+      executionClaimedAt,
+      executionLeaseExpiresAt,
+      remoteCommandId: normalizeOptionalText(parsed.remoteCommandId),
+      remoteCommandInstanceId: normalizeOptionalText(parsed.remoteCommandInstanceId),
+      remoteCommandStep: normalizeOptionalText(parsed.remoteCommandStep),
+      remoteCommandFinal: typeof parsed.remoteCommandFinal === "boolean" ? parsed.remoteCommandFinal : undefined,
+      remoteCommandStatus: normalizeOptionalText(parsed.remoteCommandStatus),
+      managedVolumeId: normalizeOptionalText(parsed.managedVolumeId),
+      managedVolumeDevice: normalizeOptionalText(parsed.managedVolumeDevice),
+      hibernatePhase: normalizeOptionalText(parsed.hibernatePhase),
+      sideEffectCompletedAt,
+      sideEffectKey: normalizeOptionalText(parsed.sideEffectKey),
       history,
     };
   } catch {
@@ -254,6 +395,12 @@ function parseDurableOperationState(raw: string | null): DurableOperationState |
 }
 
 function shouldUseInMemoryStore(): boolean {
+  // Mock mode uses the provider-backed SSM store so API routes and simulated
+  // Lambda completions observe the same operation record across module reloads.
+  if (process.env.MC_BACKEND_MODE === "mock") {
+    return false;
+  }
+
   if (process.env.NODE_ENV === "test") {
     return true;
   }
@@ -317,6 +464,7 @@ async function listRawOperationStateRecords(): Promise<DurableOperationStatePara
   }));
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Centralized merge rules keep optimistic writers monotonic and consistent.
 function buildNextOperationState(
   existing: DurableOperationState | null,
   input: PersistDurableOperationStateTransitionInput,
@@ -325,8 +473,26 @@ function buildNextOperationState(
   const route = existing?.route ?? input.route ?? `/api/${input.type}`;
   const requestedAt = existing?.requestedAt ?? input.requestedAt ?? now;
   const requestedBy = normalizeOptionalText(input.requestedBy) ?? existing?.requestedBy;
-  const lockId = normalizeOptionalText(input.lockId) ?? existing?.lockId;
+  const lockId = existing?.lockId ?? normalizeOptionalText(input.lockId);
+  const fencingToken =
+    existing?.fencingToken ??
+    (typeof input.fencingToken === "number" && Number.isSafeInteger(input.fencingToken) && input.fencingToken > 0
+      ? input.fencingToken
+      : undefined);
   const instanceId = normalizeOptionalText(input.instanceId) ?? existing?.instanceId;
+  const requestedAtMs = Date.parse(requestedAt);
+  const maxDurationMs = existing?.maxDurationMs ?? LIFECYCLE_OPERATION_MAX_DURATION_MS;
+  const requestedPhase =
+    input.phase ??
+    (input.status === "completed" || input.status === "failed"
+      ? "terminal"
+      : input.status === "running"
+        ? "executing"
+        : "validating");
+  const phase =
+    existing && operationPhasePriority[existing.phase ?? "validating"] > operationPhasePriority[requestedPhase]
+      ? existing.phase
+      : requestedPhase;
 
   const { applyIncomingStatus, nextStatus } = resolveNextStatus(existing, input);
   const normalizedError = normalizeOptionalText(input.error);
@@ -349,6 +515,7 @@ function buildNextOperationState(
   });
 
   return {
+    schemaVersion: 1,
     id: existing?.id ?? input.operationId,
     type: existing?.type ?? input.type,
     route,
@@ -360,7 +527,25 @@ function buildNextOperationState(
     instanceId,
     lastError,
     code,
-    history,
+    phase,
+    deadlineAt: existing?.deadlineAt ?? new Date(requestedAtMs + maxDurationMs).toISOString(),
+    maxDurationMs,
+    fencingToken,
+    executionToken: existing?.executionToken,
+    executionAttempt: existing?.executionAttempt,
+    executionClaimedAt: existing?.executionClaimedAt,
+    executionLeaseExpiresAt: existing?.executionLeaseExpiresAt,
+    remoteCommandId: existing?.remoteCommandId,
+    remoteCommandInstanceId: existing?.remoteCommandInstanceId,
+    remoteCommandStep: existing?.remoteCommandStep,
+    remoteCommandFinal: existing?.remoteCommandFinal,
+    remoteCommandStatus: existing?.remoteCommandStatus,
+    managedVolumeId: existing?.managedVolumeId,
+    managedVolumeDevice: existing?.managedVolumeDevice,
+    hibernatePhase: existing?.hibernatePhase,
+    sideEffectCompletedAt: existing?.sideEffectCompletedAt,
+    sideEffectKey: existing?.sideEffectKey,
+    history: history.slice(-50),
   };
 }
 
@@ -629,8 +814,8 @@ async function runOpportunisticOperationStateCleanup(currentParameterName: strin
           `[OPERATIONS] Retention cleanup deleted ${cleanupResult.deletedCount} stale operation state record(s) older than ${Math.floor(cleanupResult.retentionMs / oneDayMs)} days.`
         );
       }
-    } catch (error) {
-      console.error("[OPERATIONS] Failed to run operation-state retention cleanup:", error);
+    } catch {
+      console.error("[OPERATIONS] Failed to run operation-state retention cleanup");
     } finally {
       opportunisticCleanupInFlight = null;
     }
@@ -639,21 +824,200 @@ async function runOpportunisticOperationStateCleanup(currentParameterName: strin
   await opportunisticCleanupInFlight;
 }
 
-export async function persistDurableOperationStateTransition(
-  input: PersistDurableOperationStateTransitionInput
+async function persistInMemoryOperationStateTransition(
+  input: PersistDurableOperationStateTransitionInput,
+  parameterName: string,
+  now: string
 ): Promise<DurableOperationState> {
-  const now = input.timestamp ?? new Date().toISOString();
-  const parameterName = getOperationStateParameterName(input.operationId);
   const existing = parseDurableOperationState(await readRawOperationState(parameterName));
   const nextState = buildNextOperationState(existing, input, now);
-
   await writeRawOperationState(parameterName, JSON.stringify(nextState));
   await runOpportunisticOperationStateCleanup(parameterName);
   return nextState;
 }
 
+function assertInMemoryOperationStateWritesAllowed(): void {
+  if (!shouldUseInMemoryStore() && process.env.MC_BACKEND_MODE !== "mock") {
+    throw new Error("MC_OPERATION_STATE_TABLE_NAME is required for durable operation state writes");
+  }
+}
+
+export async function persistDurableOperationStateTransition(
+  input: PersistDurableOperationStateTransitionInput
+): Promise<DurableOperationState> {
+  const now = input.timestamp ?? new Date().toISOString();
+  const parameterName = getOperationStateParameterName(input.operationId);
+  if (!process.env.MC_OPERATION_STATE_TABLE_NAME?.trim()) {
+    assertInMemoryOperationStateWritesAllowed();
+    return await persistInMemoryOperationStateTransition(input, parameterName, now);
+  }
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const record = await readVersionedOperationRecord(input.operationId);
+    const legacy = record ? null : parseDurableOperationState(await readRawOperationState(parameterName));
+    const existing = parseDurableOperationState(record?.payload ?? null) ?? legacy;
+    const nextState = buildNextOperationState(existing, input, now);
+    const expectedVersion = record?.version ?? 0;
+    try {
+      const version = await writeVersionedOperationRecord({
+        operationId: input.operationId,
+        expectedVersion,
+        payload: JSON.stringify({ ...nextState, version: expectedVersion + 1 }),
+        status: nextState.status,
+        phase: nextState.phase ?? "validating",
+        updatedAt: nextState.updatedAt,
+        ttlEpochSeconds: Math.floor((Date.now() + getDurableOperationStateRetentionMs()) / 1000),
+      });
+      return { ...nextState, version };
+    } catch (error) {
+      if (!isOperationConditionalFailure(error)) throw error;
+    }
+  }
+  throw new Error(`Operation state contention exceeded retry budget for ${input.operationId}`);
+}
+
+function buildAcceptedDispatchExpiryTransition(
+  operation: DurableOperationState,
+  timestamp: string
+): DurableOperationState {
+  return buildNextOperationState(
+    operation,
+    {
+      operationId: operation.id,
+      type: operation.type,
+      status: "failed",
+      source: "api",
+      timestamp,
+      error: acceptedDispatchExpiredMessage,
+      code: acceptedDispatchExpiredCode,
+      phase: "terminal",
+    },
+    timestamp
+  );
+}
+
+function shouldExpireAcceptedDispatch(operation: DurableOperationState, nowMs: number): boolean {
+  const expiresAt = getAcceptedDispatchExpiryAt(operation);
+  return expiresAt !== null && nowMs >= Date.parse(expiresAt);
+}
+
+function getAcceptedDispatchResultWithoutWrite(
+  operation: DurableOperationState | null,
+  nowMs: number
+): ExpireAcceptedDispatchResult | null {
+  if (operation && shouldExpireAcceptedDispatch(operation, nowMs)) return null;
+  return {
+    operation,
+    shouldReleaseLock: operation ? isDispatchExpiryFailure(operation) : false,
+  };
+}
+
+async function expireAcceptedDispatchInMemory(input: {
+  parameterName: string;
+  nowMs: number;
+  timestamp: string;
+}): Promise<ExpireAcceptedDispatchResult> {
+  assertInMemoryOperationStateWritesAllowed();
+  const existing = parseDurableOperationState(await readRawOperationState(input.parameterName));
+  const resultWithoutWrite = getAcceptedDispatchResultWithoutWrite(existing, input.nowMs);
+  if (resultWithoutWrite) return resultWithoutWrite;
+
+  const expired = buildAcceptedDispatchExpiryTransition(existing as DurableOperationState, input.timestamp);
+  await writeRawOperationState(input.parameterName, JSON.stringify(expired));
+  return { operation: expired, shouldReleaseLock: true };
+}
+
+async function readAcceptedDispatchExpiryCandidate(
+  operationId: string,
+  parameterName: string
+): Promise<{
+  operation: DurableOperationState | null;
+  expectedVersion: number;
+}> {
+  const record = await readVersionedOperationRecord(operationId);
+  const legacy = record ? null : parseDurableOperationState(await readRawOperationState(parameterName));
+  return {
+    operation: parseDurableOperationState(record?.payload ?? null) ?? legacy,
+    expectedVersion: record?.version ?? 0,
+  };
+}
+
+async function tryWriteAcceptedDispatchExpiry(input: {
+  operationId: string;
+  expectedVersion: number;
+  expired: DurableOperationState;
+}): Promise<ExpireAcceptedDispatchResult | null> {
+  try {
+    const version = await writeVersionedOperationRecord({
+      operationId: input.operationId,
+      expectedVersion: input.expectedVersion,
+      payload: JSON.stringify({ ...input.expired, version: input.expectedVersion + 1 }),
+      status: input.expired.status,
+      phase: input.expired.phase ?? "terminal",
+      updatedAt: input.expired.updatedAt,
+      ttlEpochSeconds: Math.floor((Date.now() + getDurableOperationStateRetentionMs()) / 1000),
+    });
+    return { operation: { ...input.expired, version }, shouldReleaseLock: true };
+  } catch (error) {
+    if (isOperationConditionalFailure(error)) return null;
+    throw error;
+  }
+}
+
+async function expireAcceptedDispatchInDynamoDb(input: {
+  operationId: string;
+  parameterName: string;
+  nowMs: number;
+  timestamp: string;
+}): Promise<ExpireAcceptedDispatchResult> {
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const candidate = await readAcceptedDispatchExpiryCandidate(input.operationId, input.parameterName);
+    const resultWithoutWrite = getAcceptedDispatchResultWithoutWrite(candidate.operation, input.nowMs);
+    if (resultWithoutWrite) return resultWithoutWrite;
+
+    const expired = buildAcceptedDispatchExpiryTransition(
+      candidate.operation as DurableOperationState,
+      input.timestamp
+    );
+    const written = await tryWriteAcceptedDispatchExpiry({
+      operationId: input.operationId,
+      expectedVersion: candidate.expectedVersion,
+      expired,
+    });
+    if (written) return written;
+  }
+  throw new Error(`Operation expiry contention exceeded retry budget for ${input.operationId}`);
+}
+
+/**
+ * Conditionally terminalizes an accepted dispatch after the lock lease
+ * boundary. A concurrent Lambda transition wins through the version check and
+ * is re-read rather than overwritten.
+ */
+export async function expireAcceptedDispatchIfDeadlineElapsed(
+  operationId: string,
+  now: Date = new Date()
+): Promise<ExpireAcceptedDispatchResult> {
+  const nowMs = now.getTime();
+  if (!Number.isFinite(nowMs)) throw new Error("Accepted dispatch expiry requires a valid timestamp");
+  const timestamp = now.toISOString();
+  const parameterName = getOperationStateParameterName(operationId);
+  const input = { operationId, parameterName, nowMs, timestamp };
+  return process.env.MC_OPERATION_STATE_TABLE_NAME?.trim()
+    ? await expireAcceptedDispatchInDynamoDb(input)
+    : await expireAcceptedDispatchInMemory(input);
+}
+
 export async function getDurableOperationState(operationId: string): Promise<DurableOperationState | null> {
   const parameterName = getOperationStateParameterName(operationId);
+  if (process.env.MC_OPERATION_STATE_TABLE_NAME?.trim()) {
+    const record = await readVersionedOperationRecord(operationId);
+    if (record) {
+      const parsed = parseDurableOperationState(record.payload);
+      if (!parsed) throw new Error(`Durable operation record ${operationId} is malformed`);
+      return { ...parsed, version: record.version };
+    }
+  }
   return parseDurableOperationState(await readRawOperationState(parameterName));
 }
 

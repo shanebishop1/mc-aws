@@ -26,8 +26,8 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   try {
     // Check admin authorization
     try {
-      const user = await requireAdmin(request);
-      console.log("[COSTS] Admin action by:", user.email);
+      await requireAdmin(request);
+      console.log("[COSTS] Authorized cost read requested");
     } catch (error) {
       if (error instanceof Response) {
         return error as NextResponse<ApiResponse<CostData & { cachedAt?: number }>>;

@@ -6,8 +6,8 @@ import { type NextRequest, NextResponse } from "next/server";
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<PlayersResponse["data"]>>> {
   try {
-    const user = await requireAuth(request);
-    console.log("[PLAYERS] Action by:", user.email);
+    await requireAuth(request);
+    console.log("[PLAYERS] Authorized player-count read requested");
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse<ApiResponse<PlayersResponse["data"]>>;

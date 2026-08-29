@@ -19,14 +19,28 @@ WRANGLER_DEPLOY_CONFIG_FILE=""
 NEXT_BUILD_ENV_FILE=".env.production.local"
 NEXT_BUILD_ENV_BACKUP_FILE=""
 NEXT_BUILD_ENV_PREPARED="0"
-CLOUDFLARE_DEPLOY_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
+CLOUDFLARE_DEPLOY_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
 DEPLOYMENT_MANIFEST_FILE="${MC_AWS_DEPLOYMENT_MANIFEST:-.mc-aws-deployment.json}"
+RECOVERY_RECORD_FILE="${MC_AWS_CLOUDFLARE_RECOVERY_RECORD:-${DEPLOYMENT_MANIFEST_FILE}.cloudflare-recovery.json}"
+RECOVERY_HISTORY_FILE="${RECOVERY_RECORD_FILE}.last"
 CLOUDFLARE_ACCOUNT_ID_VALUE=""
 WORKER_OWNERSHIP_STATE="unknown"
 WORKER_LIVE_DEPLOYMENT_ID=""
+WORKER_LIVE_VERSIONS_JSON="[]"
+WORKER_SECRET_INVENTORY_JSON="[]"
+WORKER_BINDING_INVENTORY_JSON="[]"
+RUNTIME_IAM_USER_NAME=""
+RUNTIME_KEY_INVENTORY_JSON="[]"
 PANEL_ROUTE_OWNERSHIP="unproven"
 PANEL_ROUTE_ID=""
 PANEL_ROUTE_ORIGINAL_SCRIPT=""
+PANEL_ROUTE_PREFLIGHT_JSON="[]"
+PANEL_DNS_PREFLIGHT_STATE="unmanaged"
+PANEL_DNS_PREFLIGHT_JSON="null"
+MUTATION_STARTED="0"
+DEPLOYMENT_SUCCEEDED="0"
+RECOVERY_RUNNING="0"
+CURRENT_DEPLOYMENT_STAGE="preflight"
 
 resolve_env_file() {
   if [[ ! -f "$ENV_FILE" ]]; then
@@ -80,14 +94,33 @@ cleanup_deploy_artifacts() {
   fi
 }
 
-resolve_env_file
+on_deploy_exit() {
+  local status="$?"
+  set +e
+  if [[ "$status" -ne 0 && "$MUTATION_STARTED" == "1" && "$DEPLOYMENT_SUCCEEDED" != "1" && "$RECOVERY_RUNNING" != "1" ]]; then
+    echo ""
+    echo "⚠️  Deployment failed during stage '$CURRENT_DEPLOYMENT_STAGE'; starting recorded recovery." >&2
+    recover_after_deploy_failure || {
+      echo "❌ Automatic recovery is incomplete. Preserve $RECOVERY_RECORD_FILE and follow docs/CLOUDFLARE_DEPLOYMENT_RECOVERY.md." >&2
+    }
+  fi
+  cleanup_deploy_artifacts
+  return "$status"
+}
 
-echo "🧪 Using environment file: $ENV_FILE"
+RECOVERY_PENDING_EARLY="0"
+[[ -e "$RECOVERY_RECORD_FILE" ]] && RECOVERY_PENDING_EARLY="1"
+if [[ "$RECOVERY_PENDING_EARLY" == "0" ]]; then
+  resolve_env_file
+  echo "🧪 Using environment file: $ENV_FILE"
+else
+  echo "🩹 Active recovery record detected before deployment preflight: $RECOVERY_RECORD_FILE"
+fi
 echo ""
 
-trap cleanup_deploy_artifacts EXIT
+trap on_deploy_exit EXIT
 
-if [[ ! -f "$WRANGLER_CONFIG_FILE" ]]; then
+if [[ "$RECOVERY_PENDING_EARLY" == "0" && ! -f "$WRANGLER_CONFIG_FILE" ]]; then
   echo "❌ Error: $WRANGLER_CONFIG_FILE not found (required to determine Worker name)"
   exit 1
 fi
@@ -153,6 +186,204 @@ process.stdout.write(deployment.id);
 '
 }
 
+deployment_versions_from_status_json() {
+  node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+const start = raw.indexOf("{");
+if (start === -1) process.exit(2);
+const deployment = JSON.parse(raw.slice(start));
+if (!Array.isArray(deployment.versions) || deployment.versions.length === 0) process.exit(2);
+const versions = deployment.versions.map(({ version_id, percentage }) => {
+  if (typeof version_id !== "string" || !version_id || typeof percentage !== "number") process.exit(2);
+  return { versionId: version_id, percentage };
+});
+process.stdout.write(JSON.stringify(versions));
+'
+}
+
+current_version_id_from_status_json() {
+  node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+const start = raw.indexOf("{");
+if (start === -1) process.exit(2);
+const deployment = JSON.parse(raw.slice(start));
+const versions = Array.isArray(deployment.versions) ? deployment.versions : [];
+const version = versions.find((entry) => entry.percentage === 100) || (versions.length === 1 ? versions[0] : null);
+if (!version || typeof version.version_id !== "string") process.exit(2);
+process.stdout.write(version.version_id);
+'
+}
+
+sanitize_secret_inventory() {
+  node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+const start = raw.indexOf("[");
+if (start === -1) process.exit(2);
+const entries = JSON.parse(raw.slice(start));
+if (!Array.isArray(entries)) process.exit(2);
+process.stdout.write(JSON.stringify(entries.map((entry) => ({ name: entry.name, type: entry.type })).filter((entry) =>
+  typeof entry.name === "string" && typeof entry.type === "string"
+)));
+'
+}
+
+sanitize_binding_inventory() {
+  node -e '
+const fs = require("node:fs");
+const raw = fs.readFileSync(0, "utf8");
+const start = raw.indexOf("{");
+if (start === -1) process.exit(2);
+const version = JSON.parse(raw.slice(start));
+const candidates = version.resources?.bindings || version.bindings || version.metadata?.bindings || [];
+if (!Array.isArray(candidates)) process.exit(2);
+const allowed = ["name", "type", "namespace_id", "id", "service", "environment"];
+const bindings = candidates.map((binding) => Object.fromEntries(allowed
+  .filter((key) => typeof binding[key] === "string")
+  .map((key) => [key, binding[key]])));
+process.stdout.write(JSON.stringify(bindings));
+'
+}
+
+deployment_stage() {
+  CURRENT_DEPLOYMENT_STAGE="$1"
+  if [[ "$MUTATION_STARTED" == "1" && -f "$RECOVERY_RECORD_FILE" ]]; then
+    update_recovery_progress "$CURRENT_DEPLOYMENT_STAGE"
+  fi
+  if [[ "${MC_AWS_DEPLOY_FAIL_STAGE:-}" == "$CURRENT_DEPLOYMENT_STAGE" ]]; then
+    echo "❌ Injected deployment failure at stage: $CURRENT_DEPLOYMENT_STAGE" >&2
+    return 1
+  fi
+}
+
+write_recovery_record() {
+  RECOVERY_ACCOUNT_ID="$CLOUDFLARE_ACCOUNT_ID_VALUE" \
+  RECOVERY_WORKER_NAME="$WORKER_NAME" \
+  RECOVERY_WORKER_STATE="$WORKER_OWNERSHIP_STATE" \
+  RECOVERY_DEPLOYMENT_ID="${WORKER_LIVE_DEPLOYMENT_ID:-}" \
+  RECOVERY_VERSIONS_JSON="$WORKER_LIVE_VERSIONS_JSON" \
+  RECOVERY_ROUTES_JSON="$PANEL_ROUTE_PREFLIGHT_JSON" \
+  RECOVERY_DNS_STATE="$PANEL_DNS_PREFLIGHT_STATE" \
+  RECOVERY_DNS_JSON="$PANEL_DNS_PREFLIGHT_JSON" \
+  RECOVERY_SECRETS_JSON="$WORKER_SECRET_INVENTORY_JSON" \
+  RECOVERY_BINDINGS_JSON="$WORKER_BINDING_INVENTORY_JSON" \
+  RECOVERY_RUNTIME_USER="$RUNTIME_IAM_USER_NAME" \
+  RECOVERY_RUNTIME_KEYS_JSON="$RUNTIME_KEY_INVENTORY_JSON" \
+  RECOVERY_MODE="$PANEL_HOSTING_MODE" \
+  RECOVERY_WORKERS_DEV="$PANEL_WORKERS_DEV_ENABLED" \
+  RECOVERY_ZONE_ID="${CF_ZONE_ID:-}" \
+  RECOVERY_DOMAIN="${DOMAIN:-}" \
+  RECOVERY_LIFECYCLE_TABLE="$(get_env_value "MC_LIFECYCLE_LOCK_TABLE_NAME")" \
+  RECOVERY_OPERATION_TABLE="$(get_env_value "MC_OPERATION_STATE_TABLE_NAME")" \
+  RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" node <<'NODE'
+const fs = require("node:fs");
+const path = process.env.RECOVERY_RECORD_FILE;
+if (fs.existsSync(path)) throw new Error(`active recovery record already exists: ${path}`);
+const parse = (name) => JSON.parse(process.env[name]);
+const record = {
+  schemaVersion: 1,
+  project: "mc-aws",
+  status: "active",
+  decision: "rollback",
+  stage: "preflight-recorded",
+  createdAt: new Date().toISOString(),
+  cloudflare: {
+    accountId: process.env.RECOVERY_ACCOUNT_ID,
+    worker: {
+      name: process.env.RECOVERY_WORKER_NAME,
+      state: process.env.RECOVERY_WORKER_STATE,
+      deploymentId: process.env.RECOVERY_DEPLOYMENT_ID || null,
+      versions: parse("RECOVERY_VERSIONS_JSON"),
+      secrets: parse("RECOVERY_SECRETS_JSON"),
+      bindings: parse("RECOVERY_BINDINGS_JSON"),
+    },
+    panelHostingMode: process.env.RECOVERY_MODE,
+    workersDevEnabled: process.env.RECOVERY_WORKERS_DEV === "true",
+    zoneId: process.env.RECOVERY_ZONE_ID,
+    domain: process.env.RECOVERY_DOMAIN,
+    routes: parse("RECOVERY_ROUTES_JSON"),
+    dns: { state: process.env.RECOVERY_DNS_STATE, record: parse("RECOVERY_DNS_JSON") },
+    applied: { workerDeploymentId: null, routeId: null, dnsRecordId: null },
+  },
+  runtimeIdentity: {
+    userName: process.env.RECOVERY_RUNTIME_USER,
+    keys: parse("RECOVERY_RUNTIME_KEYS_JSON"),
+    candidateKeyId: null,
+    phase: "baseline",
+  },
+  runtimeConfig: {
+    lifecycleLockTableName: process.env.RECOVERY_LIFECYCLE_TABLE,
+    operationStateTableName: process.env.RECOVERY_OPERATION_TABLE,
+  },
+  limitations: [
+    "Cloudflare secret values are write-only and are not stored in this record.",
+    "Rollback redeploys the recorded immutable Worker version whose secret bindings reference the prior secrets.",
+  ],
+};
+const temporary = `${path}.tmp.${process.pid}`;
+fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+fs.renameSync(temporary, path);
+fs.chmodSync(path, 0o600);
+NODE
+  echo "✅ Durable recovery record written before provider mutation: $RECOVERY_RECORD_FILE"
+}
+
+update_recovery_progress() {
+  local stage="$1"
+  local decision="${2:-}"
+  local worker_deployment_id="${3:-}"
+  local route_id="${4:-}"
+  local dns_record_id="${5:-}"
+  RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" RECOVERY_STAGE="$stage" RECOVERY_DECISION="$decision" \
+    RECOVERY_WORKER_DEPLOYMENT_ID="$worker_deployment_id" RECOVERY_ROUTE_ID="$route_id" \
+    RECOVERY_DNS_RECORD_ID="$dns_record_id" node <<'NODE'
+const fs=require("node:fs"); const path=process.env.RECOVERY_RECORD_FILE; const stat=fs.lstatSync(path);
+if(!stat.isFile()||stat.isSymbolicLink()||stat.nlink!==1||(stat.mode&0o777)!==0o600)throw new Error("unsafe recovery record");
+const record=JSON.parse(fs.readFileSync(path,"utf8"));
+if(record.schemaVersion!==1||record.project!=="mc-aws"||record.status!=="active")throw new Error("inactive recovery record");
+record.stage=process.env.RECOVERY_STAGE;
+if(process.env.RECOVERY_DECISION)record.decision=process.env.RECOVERY_DECISION;
+if(process.env.RECOVERY_WORKER_DEPLOYMENT_ID)record.cloudflare.applied.workerDeploymentId=process.env.RECOVERY_WORKER_DEPLOYMENT_ID;
+if(process.env.RECOVERY_ROUTE_ID)record.cloudflare.applied.routeId=process.env.RECOVERY_ROUTE_ID;
+if(process.env.RECOVERY_DNS_RECORD_ID)record.cloudflare.applied.dnsRecordId=process.env.RECOVERY_DNS_RECORD_ID;
+record.updatedAt=new Date().toISOString(); const temporary=`${path}.tmp.${process.pid}`;
+fs.writeFileSync(temporary,`${JSON.stringify(record,null,2)}\n`,{mode:0o600,flag:"wx"}); fs.renameSync(temporary,path);
+NODE
+}
+
+update_recovery_record() {
+  local status="$1"
+  local stage="$2"
+  RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" RECOVERY_STATUS="$status" RECOVERY_STAGE="$stage" node <<'NODE'
+const fs = require("node:fs");
+const path = process.env.RECOVERY_RECORD_FILE;
+const stat = fs.lstatSync(path);
+if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
+  throw new Error(`unsafe recovery record: ${path}`);
+}
+const record = JSON.parse(fs.readFileSync(path, "utf8"));
+if (record.schemaVersion !== 1 || record.project !== "mc-aws" || record.status !== "active") {
+  throw new Error(`invalid active recovery record: ${path}`);
+}
+record.status = process.env.RECOVERY_STATUS;
+record.stage = process.env.RECOVERY_STAGE;
+record.updatedAt = new Date().toISOString();
+const temporary = `${path}.tmp.${process.pid}`;
+fs.writeFileSync(temporary, `${JSON.stringify(record, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+fs.renameSync(temporary, path);
+NODE
+}
+
+finalize_recovery_record() {
+  local status="$1"
+  update_recovery_record "$status" "$CURRENT_DEPLOYMENT_STAGE"
+  mv "$RECOVERY_RECORD_FILE" "$RECOVERY_HISTORY_FILE"
+  chmod 600 "$RECOVERY_HISTORY_FILE" || true
+  echo "✅ Recovery record finalized: $RECOVERY_HISTORY_FILE"
+}
+
 record_worker_deployment_identity() {
   local deployments_json deployment_id
   deployments_json="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json)" || {
@@ -165,6 +396,7 @@ record_worker_deployment_identity() {
     exit 1
   fi
   manifest cloudflare-deployed --deployment-id "$deployment_id"
+  [[ "$MUTATION_STARTED" == "1" ]] && update_recovery_progress "$CURRENT_DEPLOYMENT_STAGE" "" "$deployment_id"
   echo "✅ Recorded immutable Worker deployment evidence: $deployment_id"
 }
 
@@ -191,11 +423,7 @@ retry() {
 }
 
 get_worker_name() {
-  # Read the Worker name from wrangler.jsonc.
-  # This is a simple extraction that expects a top-level "name": "..." entry.
-  local name
-  name=$(grep -E '^[[:space:]]*"name"[[:space:]]*:[[:space:]]*"[^"]+"' "$WRANGLER_CONFIG_FILE" | head -n 1 | sed -E 's/.*"name"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/' || true)
-  echo "${name:-}"
+  pnpm exec tsx scripts/wrangler-config.ts worker-name "$WRANGLER_CONFIG_FILE"
 }
 
 get_env_value() {
@@ -430,7 +658,9 @@ prepare_wrangler_deploy_config() {
     --kv-id "$runtime_state_snapshot_kv_id" \
     --kv-preview-id "$runtime_state_snapshot_kv_preview_id" \
     --mode "$PANEL_HOSTING_MODE" \
-    --custom-workers-dev "$PANEL_WORKERS_DEV_ENABLED"; then
+    --custom-workers-dev "$PANEL_WORKERS_DEV_ENABLED" \
+    --lifecycle-lock-table "$(get_env_value "MC_LIFECYCLE_LOCK_TABLE_NAME")" \
+    --operation-state-table "$(get_env_value "MC_OPERATION_STATE_TABLE_NAME")"; then
     echo "❌ Error: Failed to prepare runtime-state Wrangler deploy config"
     exit 1
   fi
@@ -463,6 +693,22 @@ prepare_wrangler_deploy_args() {
   done <<< "$args_output"
 }
 
+if [[ "$RECOVERY_PENDING_EARLY" == "1" ]]; then
+  EARLY_RECOVERY_CONTEXT="$(RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" node -e '
+const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync(process.env.RECOVERY_RECORD_FILE,"utf8"));
+if(r.schemaVersion!==1||r.project!=="mc-aws"||r.status!=="active")process.exit(1);
+process.stdout.write([r.cloudflare.worker.name,r.cloudflare.panelHostingMode,r.cloudflare.workersDevEnabled?"true":"false",r.cloudflare.domain,r.cloudflare.zoneId,r.cloudflare.dns.state].join("\t"));
+')" || { echo "❌ Active recovery record is malformed; refusing normal preflight." >&2; exit 1; }
+  IFS=$'\t' read -r WORKER_NAME PANEL_HOSTING_MODE PANEL_WORKERS_DEV_ENABLED DOMAIN CF_ZONE_ID PANEL_DNS_PREFLIGHT_STATE <<< "$EARLY_RECOVERY_CONTEXT"
+  NEXT_PUBLIC_APP_URL="https://${DOMAIN}"
+  ZONE_NAME="$DOMAIN"
+  PANEL_DNS_MANAGEMENT="managed"
+  [[ "$PANEL_DNS_PREFLIGHT_STATE" == "unmanaged" ]] && PANEL_DNS_MANAGEMENT="external"
+  CF_DNS_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN"
+  if [[ -f "$ENV_FILE" && "$PANEL_DNS_MANAGEMENT" == "managed" ]]; then
+    CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
+  fi
+else
 echo "🔍 Validating required secrets..."
 
 # Check if AUTH_SECRET needs to be generated
@@ -556,6 +802,7 @@ if [[ "$PANEL_HOSTING_MODE" == "custom" && -z "$CF_DNS_API_TOKEN" ]]; then
   echo "❌ Error: Custom panel route ownership checks require a Cloudflare API token."
   echo "   Set CLOUDFLARE_PANEL_DNS_API_TOKEN for managed DNS, or export CLOUDFLARE_API_TOKEN for external DNS."
   exit 1
+fi
 fi
 
 cf_api() {
@@ -725,6 +972,81 @@ NODE
 )"
 }
 
+capture_panel_dns_before_deploy() {
+  if [[ "$PANEL_HOSTING_MODE" != "custom" || "$PANEL_DNS_MANAGEMENT" != "managed" ]]; then
+    PANEL_DNS_PREFLIGHT_STATE="unmanaged"
+    PANEL_DNS_PREFLIGHT_JSON="null"
+    return 0
+  fi
+
+  local response record_line record_id record_type record_name record_content record_proxied status
+  response="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${DOMAIN}&per_page=100")" || {
+    echo "❌ Error: Could not inventory panel DNS before deployment" >&2
+    exit 1
+  }
+  if record_line="$(printf '%s' "$response" | cf_parse_dns_record)"; then
+    IFS=$'\t' read -r record_id record_type record_name record_content record_proxied <<< "$record_line"
+    PANEL_DNS_PREFLIGHT_STATE="existing"
+    PANEL_DNS_PREFLIGHT_JSON="$(DNS_ID="$record_id" DNS_TYPE="$record_type" DNS_NAME="$record_name" \
+      DNS_CONTENT="$record_content" DNS_PROXIED="$record_proxied" node -e '
+process.stdout.write(JSON.stringify({
+  id: process.env.DNS_ID, type: process.env.DNS_TYPE, name: process.env.DNS_NAME,
+  content: process.env.DNS_CONTENT, proxied: process.env.DNS_PROXIED === "true",
+}));
+')"
+  else
+    status="$?"
+    [[ "$status" -eq 1 ]] || { echo "❌ Error: Cloudflare returned an invalid panel DNS inventory" >&2; exit 1; }
+    PANEL_DNS_PREFLIGHT_STATE="absent"
+    PANEL_DNS_PREFLIGHT_JSON="null"
+  fi
+}
+
+capture_worker_bindings_and_secrets() {
+  if [[ "$WORKER_OWNERSHIP_STATE" == "absent" ]]; then
+    WORKER_SECRET_INVENTORY_JSON="[]"
+    WORKER_BINDING_INVENTORY_JSON="[]"
+    return 0
+  fi
+  local secrets_json version_ids version_id version_json sanitized_bindings
+  secrets_json="$(wrangler secret list --config /dev/null --name "$WORKER_NAME" --format json)" || exit 1
+  WORKER_SECRET_INVENTORY_JSON="$(printf '%s' "$secrets_json" | sanitize_secret_inventory)" || exit 1
+  version_ids="$(VERSIONS_JSON="$WORKER_LIVE_VERSIONS_JSON" node -e '
+for(const version of JSON.parse(process.env.VERSIONS_JSON)) console.log(version.versionId);
+')" || exit 1
+  WORKER_BINDING_INVENTORY_JSON="[]"
+  while IFS= read -r version_id; do
+    [[ -n "$version_id" ]] || continue
+    version_json="$(wrangler versions view "$version_id" --config /dev/null --name "$WORKER_NAME" --json)" || exit 1
+    sanitized_bindings="$(printf '%s' "$version_json" | sanitize_binding_inventory)" || exit 1
+    WORKER_BINDING_INVENTORY_JSON="$(EXISTING="$WORKER_BINDING_INVENTORY_JSON" BINDINGS="$sanitized_bindings" \
+      VERSION_ID="$version_id" node -e '
+const existing=JSON.parse(process.env.EXISTING); existing.push({versionId:process.env.VERSION_ID,bindings:JSON.parse(process.env.BINDINGS)});
+process.stdout.write(JSON.stringify(existing));
+')" || exit 1
+  done <<< "$version_ids"
+}
+
+capture_runtime_key_identity() {
+  local stack_name runtime_tags access_keys
+  stack_name="${STACK_NAME:-MinecraftStack}"
+  RUNTIME_IAM_USER_NAME="$(AWS_PAGER="" aws cloudformation describe-stacks --stack-name "$stack_name" \
+    --query "Stacks[0].Outputs[?OutputKey=='WorkerRuntimeIamUserName'].OutputValue | [0]" --output text)" || exit 1
+  [[ -n "$RUNTIME_IAM_USER_NAME" && "$RUNTIME_IAM_USER_NAME" != "None" ]] || {
+    echo "❌ Error: Could not resolve the Worker runtime IAM identity before Cloudflare mutation" >&2; exit 1;
+  }
+  runtime_tags="$(AWS_PAGER="" aws iam list-user-tags --user-name "$RUNTIME_IAM_USER_NAME" --output json)" || exit 1
+  printf '%s' "$runtime_tags" | node -e '
+const fs=require("node:fs"); const tags=Object.fromEntries((JSON.parse(fs.readFileSync(0,"utf8")).Tags||[]).map(({Key,Value})=>[Key,Value]));
+if(tags.McAwsProject!=="mc-aws"||tags.McAwsPurpose!=="CloudflareWorkerRuntime")process.exit(1);
+' || { echo "❌ Error: Runtime IAM identity tags do not prove mc-aws ownership" >&2; exit 1; }
+  access_keys="$(AWS_PAGER="" aws iam list-access-keys --user-name "$RUNTIME_IAM_USER_NAME" --output json)" || exit 1
+  RUNTIME_KEY_INVENTORY_JSON="$(printf '%s' "$access_keys" | node -e '
+const fs=require("node:fs"); const keys=JSON.parse(fs.readFileSync(0,"utf8")).AccessKeyMetadata||[];
+process.stdout.write(JSON.stringify(keys.map(({AccessKeyId,Status,CreateDate})=>({accessKeyId:AccessKeyId,status:Status,createDate:CreateDate}))));
+')" || exit 1
+}
+
 ensure_panel_dns() {
   echo "🧭 Ensuring DNS exists for https://${DOMAIN}"
   echo "   (Workers routes do not create DNS records; the hostname must exist + be proxied.)"
@@ -749,6 +1071,15 @@ ensure_panel_dns() {
 
   if record_line="$(printf "%s" "$resp" | cf_parse_dns_record)"; then
     IFS=$'\t' read -r record_id record_type record_name record_content record_proxied <<< "$record_line"
+    local live_dns_json
+    live_dns_json="$(DNS_ID="$record_id" DNS_TYPE="$record_type" DNS_NAME="$record_name" \
+      DNS_CONTENT="$record_content" DNS_PROXIED="$record_proxied" node -e '
+process.stdout.write(JSON.stringify({id:process.env.DNS_ID,type:process.env.DNS_TYPE,name:process.env.DNS_NAME,content:process.env.DNS_CONTENT,proxied:process.env.DNS_PROXIED==="true"}));
+')"
+    if [[ "$PANEL_DNS_PREFLIGHT_STATE" != "existing" || "$live_dns_json" != "$PANEL_DNS_PREFLIGHT_JSON" ]]; then
+      echo "❌ Error: Panel DNS changed after preflight; refusing to overwrite concurrent state" >&2
+      exit 1
+    fi
     local original_proxied="$record_proxied"
     local modified="false"
 
@@ -769,6 +1100,10 @@ ensure_panel_dns() {
   else
     local code="$?"
     if [[ "$code" -eq 1 ]]; then
+      if [[ "$PANEL_DNS_PREFLIGHT_STATE" != "absent" ]]; then
+        echo "❌ Error: Panel DNS disappeared after preflight; refusing concurrent-state mutation" >&2
+        exit 1
+      fi
       echo "➕ No DNS record found for ${DOMAIN}; creating a proxied record..."
       echo "   Note: The origin IP is unused because the Worker handles requests."
 
@@ -797,6 +1132,7 @@ EOF
     fi
   fi
 
+  [[ "$MUTATION_STARTED" == "1" ]] && update_recovery_progress "$CURRENT_DEPLOYMENT_STAGE" "" "" "" "$record_id"
   echo ""
 }
 
@@ -805,7 +1141,8 @@ cf_parse_worker_route() {
   node -e '
 const fs = require("node:fs");
 const expected = process.argv[1];
-const data = JSON.parse(fs.readFileSync(0, "utf8"));
+let data;
+try { data = JSON.parse(fs.readFileSync(0, "utf8")); } catch { process.exit(2); }
 if (data.success !== true || !Array.isArray(data.result)) process.exit(2);
 const route = data.result.find((entry) => entry.pattern === expected);
 if (!route) process.exit(1);
@@ -829,6 +1166,14 @@ capture_panel_route_before_deploy() {
       echo "❌ Error: Worker route inventory returned an unexpected pattern"
       exit 1
     fi
+    if [[ "$route_script" != "$WORKER_NAME" ]]; then
+      echo "❌ Error: Existing route '$pattern' targets '$route_script', not '$WORKER_NAME'." >&2
+      echo "   Automatic replacement of a pre-existing route is unsupported; no provider mutation was attempted." >&2
+      exit 1
+    fi
+    PANEL_ROUTE_PREFLIGHT_JSON="$(ROUTE_ID="$PANEL_ROUTE_ID" ROUTE_PATTERN="$pattern" ROUTE_SCRIPT="$route_script" node -e '
+process.stdout.write(JSON.stringify([{ id: process.env.ROUTE_ID, pattern: process.env.ROUTE_PATTERN, script: process.env.ROUTE_SCRIPT }]));
+')"
     if ! route_state="$(manifest_route_state --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" \
       --script "$route_script")"; then
       echo "❌ Error: Existing Worker route does not match the validated deployment manifest"
@@ -837,12 +1182,14 @@ capture_panel_route_before_deploy() {
     if [[ "$route_state" == "created" ]]; then
       PANEL_ROUTE_OWNERSHIP="created"
     elif [[ "$route_state" == "preexisting" ]]; then
-      PANEL_ROUTE_OWNERSHIP="preexisting"
+      echo "❌ Error: The exact panel route is recorded as pre-existing." >&2
+      echo "   Wrangler may replace its immutable route ID, so this deployment cannot restore it exactly." >&2
+      echo "   Refusing unsupported pre-existing route replacement before any provider mutation." >&2
+      exit 1
     elif [[ "$route_state" == "untracked" ]]; then
-      PANEL_ROUTE_OWNERSHIP="preexisting"
-      PANEL_ROUTE_ORIGINAL_SCRIPT="$route_script"
-      manifest route --zone "$CF_ZONE_ID" --id "$PANEL_ROUTE_ID" --pattern "$pattern" --script "$route_script" \
-        --ownership preexisting --original-script "$route_script"
+      echo "❌ Error: The exact panel route exists but has no project ownership evidence." >&2
+      echo "   Refusing unsupported pre-existing route replacement before any provider mutation." >&2
+      exit 1
     else
       echo "❌ Error: Deployment manifest returned an invalid Worker route ownership state"
       exit 1
@@ -866,6 +1213,7 @@ capture_panel_route_before_deploy() {
       exit 1
     fi
     PANEL_ROUTE_OWNERSHIP="created"
+    PANEL_ROUTE_PREFLIGHT_JSON="[]"
     if [[ "$route_state" == "untracked" ]]; then
       manifest route --zone "$CF_ZONE_ID" --pattern "$pattern" --script "$WORKER_NAME" --ownership created
     fi
@@ -906,6 +1254,251 @@ capture_panel_route_after_deploy() {
     manifest route --zone "$CF_ZONE_ID" --id "$live_route_id" --pattern "$pattern" --script "$WORKER_NAME" --ownership created
   fi
   PANEL_ROUTE_ID="$live_route_id"
+  [[ "$MUTATION_STARTED" == "1" ]] && update_recovery_progress "$CURRENT_DEPLOYMENT_STAGE" "" "" "$live_route_id"
+}
+
+recovery_value() {
+  local selector="$1"
+  RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" node -e '
+const fs = require("node:fs");
+const selector = process.argv[1].split(".");
+let value = JSON.parse(fs.readFileSync(process.env.RECOVERY_RECORD_FILE, "utf8"));
+for (const part of selector) value = value?.[part];
+if (value === undefined) process.exit(2);
+process.stdout.write(typeof value === "string" ? value : JSON.stringify(value));
+' "$selector"
+}
+
+validate_recovery_record() {
+  [[ -f "$RECOVERY_RECORD_FILE" ]] || return 1
+  RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" EXPECTED_ACCOUNT="$CLOUDFLARE_ACCOUNT_ID_VALUE" \
+    EXPECTED_WORKER="$WORKER_NAME" node <<'NODE'
+const fs = require("node:fs");
+const path = process.env.RECOVERY_RECORD_FILE;
+const stat = fs.lstatSync(path);
+if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || (stat.mode & 0o777) !== 0o600) {
+  throw new Error(`recovery record must be an owned regular 0600 file with one link: ${path}`);
+}
+if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("recovery record owner mismatch");
+const record = JSON.parse(fs.readFileSync(path, "utf8"));
+if (record.schemaVersion !== 1 || record.project !== "mc-aws" || record.status !== "active") {
+  throw new Error("unsupported or inactive recovery record");
+}
+if (record.cloudflare?.accountId !== process.env.EXPECTED_ACCOUNT ||
+    record.cloudflare?.worker?.name !== process.env.EXPECTED_WORKER) {
+  throw new Error("recovery record Cloudflare identity mismatch");
+}
+if (!Array.isArray(record.cloudflare.worker.versions) || !Array.isArray(record.cloudflare.routes) ||
+    !Array.isArray(record.runtimeIdentity?.keys)) throw new Error("malformed recovery inventory");
+NODE
+}
+
+run_runtime_rotation() {
+  local mode="$1"
+  VERIFY_URL="$NEXT_PUBLIC_APP_URL" \
+    WORKER_NAME="$WORKER_NAME" \
+    RUNTIME_IAM_USER_NAME="$(recovery_value runtimeIdentity.userName)" \
+    WRANGLER_CONFIG_FILE="${WRANGLER_DEPLOY_CONFIG_FILE:-/dev/null}" \
+    WRANGLER_HOME_DIR="$WRANGLER_HOME_DIR" \
+    CLOUDFLARE_DEPLOY_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" \
+    MC_AWS_CLOUDFLARE_RECOVERY_RECORD="$RECOVERY_RECORD_FILE" \
+    ROTATION_MODE="$mode" bash scripts/rotate-worker-runtime-key.sh
+}
+
+assert_lifecycle_recovery_unblocked() {
+  local ssm_output lifecycle_table dynamo_output
+  if ssm_output="$(AWS_PAGER="" aws ssm get-parameter --name /minecraft/server-action --output json 2>&1)"; then
+    echo "❌ Lifecycle remains blocked by /minecraft/server-action; recovery will not be reported complete." >&2
+    return 1
+  elif [[ "$ssm_output" != *"ParameterNotFound"* ]]; then
+    echo "❌ Could not prove legacy lifecycle lock absence: $ssm_output" >&2
+    return 1
+  fi
+  lifecycle_table="$(recovery_value runtimeConfig.lifecycleLockTableName)" || return 1
+  [[ -n "$lifecycle_table" ]] || return 0
+  dynamo_output="$(AWS_PAGER="" aws dynamodb get-item --table-name "$lifecycle_table" \
+    --key '{"lockKey":{"S":"minecraft-server-lifecycle"}}' --consistent-read --output json)" || return 1
+  if ! printf '%s' "$dynamo_output" | node -e '
+const fs=require("node:fs"); const item=JSON.parse(fs.readFileSync(0,"utf8")).Item;
+if(!item)process.exit(0); if(item.released?.BOOL===true)process.exit(0);
+const lease=Number(item.leaseExpiresAt?.N); if(Number.isFinite(lease)&&lease<Date.now())process.exit(0); process.exit(1);
+'; then
+    echo "❌ DynamoDB lifecycle lease remains active or malformed; recovery remains incomplete." >&2
+    return 1
+  fi
+}
+
+restore_recorded_routes() {
+  [[ "$(recovery_value cloudflare.panelHostingMode)" == "custom" ]] || return 0
+  local prior_routes pattern response route_line route_id route_pattern route_script prior_id prior_script create_response applied_id expected_manifest_id
+  prior_routes="$(recovery_value cloudflare.routes)"
+  applied_id="$(recovery_value cloudflare.applied.routeId)"
+  [[ "$applied_id" != "null" ]] || applied_id=""
+  pattern="${DOMAIN}/*"
+  response="$(cf_api GET "/zones/${CF_ZONE_ID}/workers/routes")" || return 1
+  if [[ "$prior_routes" != "[]" ]]; then
+    prior_id="$(ROUTES_JSON="$prior_routes" node -e 'const r=JSON.parse(process.env.ROUTES_JSON); if(r.length!==1)process.exit(1); process.stdout.write(r[0].id)')" || return 1
+    prior_script="$(ROUTES_JSON="$prior_routes" node -e 'const r=JSON.parse(process.env.ROUTES_JSON); if(r.length!==1)process.exit(1); process.stdout.write(r[0].script)')" || return 1
+    [[ "$prior_script" == "$WORKER_NAME" ]] || return 1
+    expected_manifest_id="${applied_id:-$prior_id}"
+    if route_line="$(printf '%s' "$response" | cf_parse_worker_route "$pattern")"; then
+      IFS=$'\t' read -r route_id route_pattern route_script <<< "$route_line"
+      [[ "$route_script" == "$prior_script" ]] || {
+        echo "❌ Recorded route now targets concurrent state '$route_script'; refusing overwrite." >&2
+        return 1
+      }
+      if [[ -n "$applied_id" && "$route_id" != "$applied_id" ]]; then
+        echo "❌ Live route ID does not match the transaction-journaled route ID; refusing concurrent state." >&2
+        return 1
+      fi
+    else
+      [[ "$?" -eq 1 ]] || return 1
+      create_response="$(cf_api POST "/zones/${CF_ZONE_ID}/workers/routes" "{\"pattern\":\"${pattern}\",\"script\":\"${prior_script}\"}")" || return 1
+      printf '%s' "$create_response" | cf_assert_success >/dev/null || return 1
+      response="$(cf_api GET "/zones/${CF_ZONE_ID}/workers/routes")" || return 1
+      route_line="$(printf '%s' "$response" | cf_parse_worker_route "$pattern")" || return 1
+      IFS=$'\t' read -r route_id route_pattern route_script <<< "$route_line"
+    fi
+    manifest route-recovered --zone "$CF_ZONE_ID" --pattern "$pattern" --script "$prior_script" \
+      --baseline-state present --expected-current-id "$expected_manifest_id" --restored-id "$route_id" || return 1
+    return 0
+  fi
+  if route_line="$(printf '%s' "$response" | cf_parse_worker_route "$pattern")"; then
+    IFS=$'\t' read -r route_id route_pattern route_script <<< "$route_line"
+    if [[ "$route_script" != "$WORKER_NAME" ]]; then
+      echo "❌ Route '$pattern' now targets '$route_script'; refusing to delete concurrent state." >&2
+      return 1
+    fi
+    if [[ -z "$applied_id" || "$route_id" != "$applied_id" ]]; then
+      echo "❌ Unjournaled route exists for an absent baseline; refusing deletion." >&2
+      return 1
+    fi
+    cf_api DELETE "/zones/${CF_ZONE_ID}/workers/routes/${route_id}" | cf_assert_success >/dev/null || return 1
+  else
+    [[ "$?" -eq 1 ]] || return 1
+  fi
+  manifest route-recovered --zone "$CF_ZONE_ID" --pattern "$pattern" --script "$WORKER_NAME" \
+    --baseline-state absent --expected-current-id "${applied_id:-absent}" --restored-id absent || return 1
+}
+
+restore_recorded_dns() {
+  local dns_state dns_json record_id original_proxied response record_line live_id live_type live_name live_content live_proxied expected_dns_identity live_dns_identity applied_dns_id
+  dns_state="$(recovery_value cloudflare.dns.state)"
+  applied_dns_id="$(recovery_value cloudflare.applied.dnsRecordId)"
+  [[ "$applied_dns_id" != "null" ]] || applied_dns_id=""
+  [[ "$dns_state" != "unmanaged" ]] || return 0
+  dns_json="$(recovery_value cloudflare.dns.record)"
+  if [[ "$dns_state" == "existing" ]]; then
+    record_id="$(RECOVERY_DNS_JSON="$dns_json" node -e 'process.stdout.write(JSON.parse(process.env.RECOVERY_DNS_JSON).id)')"
+    original_proxied="$(RECOVERY_DNS_JSON="$dns_json" node -e 'process.stdout.write(String(JSON.parse(process.env.RECOVERY_DNS_JSON).proxied))')"
+    expected_dns_identity="$(RECOVERY_DNS_JSON="$dns_json" node -e 'const r=JSON.parse(process.env.RECOVERY_DNS_JSON); process.stdout.write([r.id,r.type,r.name,r.content].join("\t"))')"
+    response="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records/${record_id}")" || return 1
+    record_line="$(printf '%s' "$response" | cf_parse_dns_record)" || return 1
+    IFS=$'\t' read -r live_id live_type live_name live_content live_proxied <<< "$record_line"
+    live_dns_identity="$(printf '%s\t%s\t%s\t%s' "$live_id" "$live_type" "$live_name" "$live_content")"
+    if [[ "$live_dns_identity" != "$expected_dns_identity" ]]; then
+      echo "❌ Recorded DNS identity/content changed concurrently; refusing proxy restoration." >&2
+      return 1
+    fi
+    cf_api PATCH "/zones/${CF_ZONE_ID}/dns_records/${record_id}" "{\"proxied\":${original_proxied}}" | \
+      cf_assert_success >/dev/null || return 1
+    return 0
+  fi
+  [[ "$dns_state" == "absent" ]] || return 1
+  response="$(cf_api GET "/zones/${CF_ZONE_ID}/dns_records?name=${DOMAIN}&per_page=100")" || return 1
+  if record_line="$(printf '%s' "$response" | cf_parse_dns_record)"; then
+    IFS=$'\t' read -r live_id live_type live_name live_content live_proxied <<< "$record_line"
+    if [[ -z "$applied_dns_id" || "$live_id" != "$applied_dns_id" ]]; then
+      echo "❌ Unjournaled DNS record exists for an absent baseline; refusing deletion." >&2
+      return 1
+    fi
+    if [[ "$live_type" != "A" || "$live_name" != "$DOMAIN" || "$live_content" != "192.0.2.1" || "$live_proxied" != "true" ]]; then
+      echo "❌ Panel DNS now contains non-deployer state; refusing to delete it." >&2
+      return 1
+    fi
+    cf_api DELETE "/zones/${CF_ZONE_ID}/dns_records/${live_id}" | cf_assert_success >/dev/null || return 1
+  else
+    [[ "$?" -eq 1 ]] || return 1
+  fi
+}
+
+rollback_from_recovery_record() {
+  RECOVERY_RUNNING="1"
+  validate_recovery_record || return 1
+  local prior_worker_state version_specs_output rollback_status
+  CF_ZONE_ID="$(recovery_value cloudflare.zoneId)" || return 1
+  DOMAIN="$(recovery_value cloudflare.domain)" || return 1
+  prior_worker_state="$(recovery_value cloudflare.worker.state)" || return 1
+  if [[ "$prior_worker_state" == "existing" ]]; then
+    version_specs_output="$(RECOVERY_RECORD_FILE="$RECOVERY_RECORD_FILE" node -e '
+const fs=require("node:fs"); const r=JSON.parse(fs.readFileSync(process.env.RECOVERY_RECORD_FILE,"utf8"));
+for (const version of r.cloudflare.worker.versions) console.log(`${version.versionId}@${version.percentage}%`);
+')" || return 1
+    local version_specs=()
+    while IFS= read -r spec; do [[ -n "$spec" ]] && version_specs+=("$spec"); done <<< "$version_specs_output"
+    [[ ${#version_specs[@]} -gt 0 ]] || return 1
+    retry 3 wrangler versions deploy "${version_specs[@]}" --config /dev/null --name "$WORKER_NAME" --yes \
+      --message "mc-aws automatic rollback from $CURRENT_DEPLOYMENT_STAGE" || return 1
+    rollback_status="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json)" || return 1
+    WORKER_LIVE_DEPLOYMENT_ID="$(printf '%s' "$rollback_status" | deployment_id_from_status_json)" || return 1
+    manifest cloudflare-deployed --deployment-id "$WORKER_LIVE_DEPLOYMENT_ID" || return 1
+    restore_recorded_routes || return 1
+  elif [[ "$prior_worker_state" == "absent" ]]; then
+    restore_recorded_routes || return 1
+    local current_worker_probe
+    if current_worker_probe="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json 2>&1)"; then
+      wrangler delete "$WORKER_NAME" --config /dev/null --force || return 1
+    elif ! is_worker_not_found_output "$current_worker_probe"; then
+      echo "❌ Error: Could not prove whether the newly created Worker exists during rollback." >&2
+      return 1
+    fi
+  else
+    return 1
+  fi
+  restore_recorded_dns || return 1
+  run_runtime_rotation rollback || return 1
+  assert_lifecycle_recovery_unblocked || return 1
+  CURRENT_DEPLOYMENT_STAGE="rollback-complete"
+  finalize_recovery_record "rolled_back" || return 1
+  echo "✅ Recorded Worker deployment/routes/DNS recovery completed." >&2
+  echo "   Previous secret values were not read; the recorded prior Worker version was redeployed." >&2
+  RECOVERY_RUNNING="0"
+}
+
+recover_pending_deployment() {
+  [[ -e "$RECOVERY_RECORD_FILE" ]] || return 0
+  echo "⚠️  Found unfinished Cloudflare deployment record: $RECOVERY_RECORD_FILE" >&2
+  local decision
+  decision="$(recovery_value decision)" || exit 1
+  if [[ "$decision" == "commit" ]]; then
+    echo "   The commit decision is durable; resuming runtime-key cleanup without baseline rollback." >&2
+    run_runtime_rotation finalize || exit 1
+    record_worker_deployment_identity
+    CURRENT_DEPLOYMENT_STAGE="success"
+    DEPLOYMENT_SUCCEEDED="1"
+    finalize_recovery_record "succeeded" || exit 1
+    echo "   Forward recovery finished. The verified replacement remains deployed." >&2
+  else
+    echo "   Rolling it back before considering a new deployment." >&2
+    rollback_from_recovery_record || exit 1
+    echo "   Recovery finished. Re-run pnpm deploy:cf to start a fresh deployment." >&2
+  fi
+  exit 0
+}
+
+recover_after_deploy_failure() {
+  local decision
+  decision="$(recovery_value decision)" || return 1
+  if [[ "$decision" == "commit" ]]; then
+    echo "⚠️  Commit was already decided; resuming forward runtime-key cleanup instead of rollback." >&2
+    run_runtime_rotation finalize || return 1
+    record_worker_deployment_identity || return 1
+    CURRENT_DEPLOYMENT_STAGE="success"
+    DEPLOYMENT_SUCCEEDED="1"
+    finalize_recovery_record "succeeded"
+    return
+  fi
+  rollback_from_recovery_record
 }
 
 echo "🔐 Checking Cloudflare deployment authentication..."
@@ -943,6 +1536,13 @@ if [[ -z "$CLOUDFLARE_ACCOUNT_ID_VALUE" ]]; then
   exit 1
 fi
 
+recover_pending_deployment
+
+if ! PREFLIGHT_SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
+  echo "❌ Error: Failed to parse approved Worker secrets before provider mutation" >&2
+  exit 1
+fi
+
 worker_probe=""
 if worker_probe="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json 2>&1)"; then
   WORKER_OWNERSHIP_STATE="existing"
@@ -950,8 +1550,13 @@ if worker_probe="$(wrangler --config /dev/null deployments status --name "$WORKE
     echo "❌ Error: Existing Worker returned malformed deployment identity data"
     exit 1
   }
+  WORKER_LIVE_VERSIONS_JSON="$(printf '%s' "$worker_probe" | deployment_versions_from_status_json)" || {
+    echo "❌ Error: Existing Worker returned malformed active-version data"
+    exit 1
+  }
 elif is_worker_not_found_output "$worker_probe"; then
   WORKER_OWNERSHIP_STATE="absent"
+  WORKER_LIVE_VERSIONS_JSON="[]"
 else
   echo "❌ Error: Worker pre-existence could not be proven. Refusing to overwrite code or secrets."
   echo "$worker_probe"
@@ -964,8 +1569,18 @@ echo "✅ Cloudflare ownership inventory recorded in $DEPLOYMENT_MANIFEST_FILE"
 echo ""
 
 capture_panel_route_before_deploy
+capture_panel_dns_before_deploy
+capture_worker_bindings_and_secrets
+capture_runtime_key_identity
+write_recovery_record
+MUTATION_STARTED="1"
+deployment_stage preflight-recorded || exit 1
+
+deployment_stage kv-mutation || exit 1
+ensure_runtime_state_kv_namespace_ids
 
 if [[ "$PANEL_HOSTING_MODE" == "custom" && "$PANEL_DNS_MANAGEMENT" == "managed" ]]; then
+  deployment_stage dns-mutation || exit 1
   ensure_panel_dns
 elif [[ "$PANEL_HOSTING_MODE" == "custom" ]]; then
   echo "🧭 Preserving externally managed panel DNS for ${DOMAIN}; no DNS records will be read, created, modified, or recorded"
@@ -974,8 +1589,6 @@ else
   echo "🧭 Skipping panel DNS checks for workers.dev hosting"
   echo ""
 fi
-
-ensure_runtime_state_kv_namespace_ids
 
 echo "🚀 Deploying to Cloudflare Workers..."
 echo "   Panel mode: $PANEL_HOSTING_MODE"
@@ -1012,6 +1625,7 @@ echo "✅ Build successful"
 echo ""
 
 echo "🌐 Deploying to Cloudflare..."
+deployment_stage worker-mutation || exit 1
 if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
   echo ""
   echo "❌ Error: Failed to deploy to Cloudflare Workers"
@@ -1019,7 +1633,9 @@ if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
 fi
 echo "✅ Deploy successful"
 echo ""
+deployment_stage worker-deployed || exit 1
 capture_panel_route_after_deploy
+deployment_stage route-verified || exit 1
 record_worker_deployment_identity
 
 # Upload secrets from selected deployment env file
@@ -1050,6 +1666,51 @@ prune_obsolete_worker_secrets_bulk() {
   record_worker_deployment_identity
 }
 
+verify_deployed_secret_and_binding_inventory() {
+  local live_secrets expected_entries expected_names deployments_json version_id version_json live_bindings expected_kv_id
+  live_secrets="$(wrangler secret list --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --format json)" || return 1
+  live_secrets="$(printf '%s' "$live_secrets" | sanitize_secret_inventory)" || return 1
+  expected_entries="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")" || return 1
+  expected_names="$(printf '%s' "$expected_entries" | node -e '
+const fs=require("node:fs"); const names=fs.readFileSync(0,"utf8").split(/\r?\n/).filter(Boolean).map((line)=>line.split("\t",1)[0]);
+process.stdout.write(JSON.stringify(names));
+')" || return 1
+  if [[ -z "$(get_env_value "AWS_ACCOUNT_ID")" && -n "$(get_env_value "CDK_DEFAULT_ACCOUNT")" ]]; then
+    expected_names="$(EXPECTED_NAMES="$expected_names" node -e 'const n=JSON.parse(process.env.EXPECTED_NAMES); if(!n.includes("AWS_ACCOUNT_ID"))n.push("AWS_ACCOUNT_ID"); process.stdout.write(JSON.stringify(n))')"
+  fi
+  LIVE_SECRETS="$live_secrets" EXPECTED_NAMES="$expected_names" node -e '
+const live = new Map(JSON.parse(process.env.LIVE_SECRETS).map((entry) => [entry.name, entry.type]));
+for (const name of JSON.parse(process.env.EXPECTED_NAMES)) {
+  if (!live.has(name) || !String(live.get(name)).startsWith("secret")) {
+    console.error(`Missing expected secret binding: ${name}`); process.exit(1);
+  }
+}
+' || return 1
+
+  deployments_json="$(wrangler --config /dev/null deployments status --name "$WORKER_NAME" --json)" || return 1
+  version_id="$(printf '%s' "$deployments_json" | current_version_id_from_status_json)" || return 1
+  version_json="$(wrangler versions view "$version_id" --config /dev/null --name "$WORKER_NAME" --json)" || return 1
+  live_bindings="$(printf '%s' "$version_json" | sanitize_binding_inventory)" || return 1
+  expected_kv_id="$(get_env_value "RUNTIME_STATE_SNAPSHOT_KV_ID")"
+  LIVE_BINDINGS="$live_bindings" EXPECTED_KV_ID="$expected_kv_id" node -e '
+const bindings=JSON.parse(process.env.LIVE_BINDINGS);
+const kv=bindings.find((binding)=>binding.name==="RUNTIME_STATE_SNAPSHOT_KV");
+if (!kv || (kv.namespace_id || kv.id) !== process.env.EXPECTED_KV_ID) {
+  console.error("RUNTIME_STATE_SNAPSHOT_KV binding identity does not match deployment input"); process.exit(1);
+}
+' || return 1
+  EXPECTED_LIFECYCLE_TABLE="$(get_env_value "MC_LIFECYCLE_LOCK_TABLE_NAME")" \
+    EXPECTED_OPERATION_TABLE="$(get_env_value "MC_OPERATION_STATE_TABLE_NAME")" \
+    VERSION_JSON="$version_json" node -e '
+const raw=process.env.VERSION_JSON; const version=JSON.parse(raw.slice(raw.indexOf("{")));
+const bindings=version.resources?.bindings||version.bindings||version.metadata?.bindings||[];
+for(const [name,expected] of [["MC_LIFECYCLE_LOCK_TABLE_NAME",process.env.EXPECTED_LIFECYCLE_TABLE],["MC_OPERATION_STATE_TABLE_NAME",process.env.EXPECTED_OPERATION_TABLE]]) {
+  const binding=bindings.find((item)=>item.name===name);
+  if(!binding||binding.type!=="plain_text"||binding.text!==expected){console.error(`${name} plain-text binding mismatch`);process.exit(1);}
+}
+' || return 1
+}
+
 provider_secret_deletion_patch() {
   case "$(get_env_value "MC_CONNECTION_MODE")" in
     cloudflare)
@@ -1069,10 +1730,8 @@ provider_secret_deletion_patch() {
 }
 
 SECRET_COUNT=0
-if ! SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
-  echo "❌ Error: Failed to parse approved Worker secrets from $ENV_FILE"
-  exit 1
-fi
+SECRET_ENTRIES_OUTPUT="$PREFLIGHT_SECRET_ENTRIES_OUTPUT"
+unset PREFLIGHT_SECRET_ENTRIES_OUTPUT
 while IFS=$'\t' read -r key encoded_value; do
   [[ -z "$key" ]] && continue
   echo ""
@@ -1141,6 +1800,7 @@ else
 fi
 unset LEGACY_SECRET_DELETION_PATCH
 echo ""
+deployment_stage secrets-mutated || exit 1
 
 echo "🔁 Restoring non-secret Worker bindings after secret upload..."
 if ! retry 3 wrangler "${WRANGLER_DEPLOY_ARGS[@]}"; then
@@ -1153,18 +1813,33 @@ echo ""
 capture_panel_route_after_deploy
 record_worker_deployment_identity
 
-echo "🔐 Provisioning dedicated least-privilege AWS runtime credentials..."
-if ! VERIFY_URL="$NEXT_PUBLIC_APP_URL" \
-  WORKER_NAME="$WORKER_NAME" \
-  WRANGLER_CONFIG_FILE="$WRANGLER_DEPLOY_CONFIG_FILE" \
-  WRANGLER_HOME_DIR="$WRANGLER_HOME_DIR" \
-  CLOUDFLARE_DEPLOY_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" \
-  bash scripts/rotate-worker-runtime-key.sh; then
-  echo ""
-  echo "❌ Error: Dedicated Worker runtime credential provisioning/rotation failed"
-  echo "   No previously valid runtime IAM key is revoked until its replacement verifies."
+echo "🔎 Verifying deployed secret names/types and non-secret binding identities..."
+if ! verify_deployed_secret_and_binding_inventory; then
+  echo "❌ Error: Post-deploy Worker secret/binding verification failed" >&2
   exit 1
 fi
+echo "✅ Worker secret/binding inventory verified"
+deployment_stage bindings-verified || exit 1
+
+echo "🔐 Provisioning dedicated least-privilege AWS runtime credentials..."
+deployment_stage runtime-key-verification || exit 1
+if ! run_runtime_rotation prepare; then
+  echo ""
+  echo "❌ Error: Dedicated Worker runtime credential preparation failed"
+  echo "   Every previously valid runtime IAM key remains available for rollback."
+  exit 1
+fi
+deployment_stage runtime-key-prepared || exit 1
+CURRENT_DEPLOYMENT_STAGE="commit-decided"
+update_recovery_progress "$CURRENT_DEPLOYMENT_STAGE" commit
+deployment_stage commit-decided || exit 1
+if ! run_runtime_rotation finalize; then
+  echo "❌ Error: Runtime key cleanup is incomplete after the durable commit decision." >&2
+  echo "   The next deploy run will resume forward cleanup and will not attempt an impossible old-version rollback." >&2
+  exit 1
+fi
+record_worker_deployment_identity
+deployment_stage runtime-key-finalized || exit 1
 echo ""
 
 if [[ "$PANEL_HOSTING_MODE" == "workers_dev" ]]; then
@@ -1174,7 +1849,13 @@ if [[ "$PANEL_HOSTING_MODE" == "workers_dev" ]]; then
   echo ""
 fi
 
-record_worker_deployment_identity
+CURRENT_DEPLOYMENT_STAGE="success"
+DEPLOYMENT_SUCCEEDED="1"
+if ! finalize_recovery_record "succeeded"; then
+  echo "❌ Deployment and runtime verification succeeded, but the local recovery record could not be finalized." >&2
+  echo "   Do not delete $RECOVERY_RECORD_FILE; inspect it before the next run." >&2
+  exit 1
+fi
 
 echo ""
 echo "✅✅✅ Deployment complete! ✅✅✅"

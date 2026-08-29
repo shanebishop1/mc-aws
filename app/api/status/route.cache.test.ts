@@ -131,6 +131,34 @@ describe("GET /api/status cache contract", () => {
     );
   });
 
+  it("lets authenticated smoke probes force a snapshot write before a subsequent read", async () => {
+    getAuthUserMock.mockResolvedValue({ email: "smoke@example.com", role: "allowed" });
+    runtimeStateFixture.seedSnapshot(snapshotCacheKeys.status, {
+      generatedAt: "2026-01-02T03:03:00.000Z",
+      instanceId: "i-stale",
+      displayState: "stopped",
+      hasVolume: false,
+    });
+    const { GET } = await import("./route");
+
+    const refreshResponse = await GET(createMockNextRequest("http://localhost/api/status?refresh=1"));
+    expect(refreshResponse.headers.get("X-Status-Cache")).toBe("MISS");
+    const refreshProbe = refreshResponse.headers.get("X-Status-Refresh-Probe");
+    expect(refreshProbe).toMatch(/^[a-f0-9]{32}$/);
+    expect(findInstanceIdMock).toHaveBeenCalledOnce();
+    expect(runtimeStateFixture.setSnapshotMock).toHaveBeenCalledOnce();
+    expect(runtimeStateFixture.setSnapshotMock).toHaveBeenCalledWith(
+      expect.objectContaining({ value: expect.objectContaining({ refreshProbe }) })
+    );
+
+    const readResponse = await GET(createMockNextRequest("http://localhost/api/status"));
+    expect(readResponse.headers.get("X-Status-Cache")).toBe("HIT");
+    expect(readResponse.headers.get("X-Status-Refresh-Probe")).toBe(refreshProbe);
+    expect(findInstanceIdMock).toHaveBeenCalledOnce();
+    const responseBody = await parseNextResponse<ApiResponse<ServerStatusResponse>>(readResponse);
+    expect(JSON.stringify(responseBody)).not.toContain(refreshProbe);
+  });
+
   it("tolerates bounded snapshot staleness for cache hits", async () => {
     const { GET } = await import("./route");
 

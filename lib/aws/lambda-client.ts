@@ -40,8 +40,8 @@ async function resolveLambdaName(requestedName: string): Promise<string> {
         console.log("[LAMBDA] Resolved StartMinecraftServer ->", resolved);
         return resolved;
       }
-    } catch (error) {
-      console.warn("[LAMBDA] Failed to resolve stack LambdaFunctionName:", error);
+    } catch {
+      console.warn("[LAMBDA] Failed to resolve managed Lambda function name");
     }
 
     _startMinecraftLambdaName = null;
@@ -65,5 +65,11 @@ export async function invokeLambda(
     Payload: JSON.stringify(payload),
   });
 
-  await lambda.send(command);
+  const response = await lambda.send(command);
+  const expectedStatus = invocationType === "Event" ? 202 : 200;
+  if (response.StatusCode !== undefined && response.StatusCode !== expectedStatus) {
+    const error = new Error("Lambda invocation was rejected before dispatch");
+    Object.assign(error, { name: "LambdaInvokeRejectedError", remoteDispatchRejected: true });
+    throw error;
+  }
 }

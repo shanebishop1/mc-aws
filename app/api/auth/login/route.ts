@@ -36,7 +36,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
 
     if (!rateLimit.allowed) {
-      console.warn("[LOGIN] Rate limit exceeded for IP:", clientIp);
+      console.warn("[LOGIN] Rate limit exceeded");
       const response = NextResponse.redirect(new URL("/?error=oauth_rate_limited", request.url));
       response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
       return response;
@@ -96,8 +96,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     console.log("[LOGIN] Redirecting to Google OAuth");
     return NextResponse.redirect(authUrl);
-  } catch (error) {
-    console.error("[LOGIN] Error:", error);
+  } catch {
+    console.error("[LOGIN] OAuth initiation failed");
     return NextResponse.redirect(new URL("/?error=oauth_failed", request.url));
   }
 }

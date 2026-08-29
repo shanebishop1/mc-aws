@@ -1,11 +1,13 @@
 import {
   cleanupExpiredDurableOperationStates,
   getDurableOperationState,
+  getDurableOperationStateRetentionMs,
+  isValidDurableOperationRoute,
   persistDurableOperationStateTransition,
   resetDurableOperationStateStoreForTests,
   selectExpiredDurableOperationStateParameterNames,
 } from "@/lib/durable-operation-state";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 const oneDayMs = 24 * 60 * 60 * 1000;
 
@@ -33,6 +35,23 @@ function buildPersistedOperationStateValue(input: {
 }
 
 describe("durable-operation-state", () => {
+  it("validates API, email, and scheduled schema-v1 operation routes exactly", () => {
+    expect(isValidDurableOperationRoute("/api/backup", "backup")).toBe(true);
+    expect(isValidDurableOperationRoute("/email/allowlist", "allowlist")).toBe(true);
+    expect(isValidDurableOperationRoute("/email/stop", "stop")).toBe(false);
+    expect(isValidDurableOperationRoute("/scheduled/backup", "backup")).toBe(true);
+    expect(isValidDurableOperationRoute("/scheduled/restore", "restore")).toBe(false);
+  });
+
+  it("uses only a strict bounded integer for operation retention", () => {
+    vi.stubEnv("MC_OPERATION_STATE_RETENTION_DAYS", "7");
+    expect(getDurableOperationStateRetentionMs()).toBe(7 * oneDayMs);
+    vi.stubEnv("MC_OPERATION_STATE_RETENTION_DAYS", "7days");
+    expect(getDurableOperationStateRetentionMs()).toBe(30 * oneDayMs);
+    vi.stubEnv("MC_OPERATION_STATE_RETENTION_DAYS", "3651");
+    expect(getDurableOperationStateRetentionMs()).toBe(30 * oneDayMs);
+    vi.unstubAllEnvs();
+  });
   it("persists transition history across running -> accepted -> running -> completed", async () => {
     resetDurableOperationStateStoreForTests();
     const operationId = "resume-123";
@@ -82,6 +101,39 @@ describe("durable-operation-state", () => {
     expect(persisted?.lockId).toBe("lock-resume-123");
     expect(persisted?.instanceId).toBe("i-1234");
     expect(persisted?.history.map((entry) => entry.status)).toEqual(["running", "accepted", "running", "completed"]);
+  });
+
+  it("persists the exact lifecycle lock fencing token with the operation", async () => {
+    resetDurableOperationStateStoreForTests();
+
+    await persistDurableOperationStateTransition({
+      operationId: "backup-fenced",
+      type: "backup",
+      route: "/api/backup",
+      status: "accepted",
+      source: "api",
+      requestedBy: "admin@example.com",
+      lockId: "lock-backup-fenced",
+      fencingToken: 17,
+      phase: "dispatching",
+      timestamp: "2026-04-14T10:00:00.000Z",
+    });
+    await persistDurableOperationStateTransition({
+      operationId: "backup-fenced",
+      type: "backup",
+      status: "accepted",
+      source: "api",
+      lockId: "different-lock",
+      fencingToken: 18,
+      phase: "dispatched",
+      timestamp: "2026-04-14T10:00:01.000Z",
+    });
+
+    await expect(getDurableOperationState("backup-fenced")).resolves.toMatchObject({
+      lockId: "lock-backup-fenced",
+      fencingToken: 17,
+      phase: "dispatched",
+    });
   });
 
   it("does not regress operation status when late accepted update arrives", async () => {

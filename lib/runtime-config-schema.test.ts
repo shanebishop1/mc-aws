@@ -63,6 +63,9 @@ describe("runtime-config-schema", () => {
     });
 
     it("leaves runtime-state kv namespace ids to generated deploy bindings", () => {
+      expect(getEnvVarNamesByRequirement("worker", "required")).toEqual(
+        expect.arrayContaining(["MC_LIFECYCLE_LOCK_TABLE_NAME", "MC_OPERATION_STATE_TABLE_NAME"])
+      );
       expect(getEnvVarNamesByRequirement("worker", "required")).not.toEqual(
         expect.arrayContaining(["RUNTIME_STATE_SNAPSHOT_KV_ID", "RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID"])
       );
@@ -78,6 +81,8 @@ describe("runtime-config-schema", () => {
       const report = validateEnvForTarget(
         {
           AWS_REGION: "us-east-1",
+          MC_LIFECYCLE_LOCK_TABLE_NAME: "lifecycle-lock-table",
+          MC_OPERATION_STATE_TABLE_NAME: "operation-state-table",
           RUNTIME_STATE_SNAPSHOT_KV_ID: "0123456789abcdef0123456789abcdef",
           AUTH_SECRET: "very-secret-value",
           ADMIN_EMAIL: "admin@real-domain.dev",
@@ -89,6 +94,33 @@ describe("runtime-config-schema", () => {
       );
 
       expect(report.issues).toEqual([]);
+    });
+
+    it("validates immutable AMI and bootstrap pin provenance values", () => {
+      expect(
+        validateEnvForTarget(
+          {
+            AL2023_ARM64_AMI_ID: `ami-${"1".repeat(17)}`,
+            MC_BOOTSTRAP_PINS_SHA256: "a1".repeat(32),
+          },
+          "local-dev"
+        ).issues
+      ).toEqual([]);
+
+      expect(
+        validateEnvForTarget(
+          {
+            AL2023_ARM64_AMI_ID: "latest",
+            MC_BOOTSTRAP_PINS_SHA256: "0".repeat(64),
+          },
+          "local-dev"
+        ).issues
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "AL2023_ARM64_AMI_ID", kind: "invalid" }),
+          expect.objectContaining({ name: "MC_BOOTSTRAP_PINS_SHA256", kind: "invalid" }),
+        ])
+      );
     });
 
     it("accepts complete DuckDNS config", () => {
@@ -164,6 +196,36 @@ describe("runtime-config-schema", () => {
         expect.arrayContaining([
           expect.objectContaining({ name: "VERIFIED_SENDER", kind: "missing" }),
           expect.objectContaining({ name: "SES_INBOUND_RECIPIENT", kind: "missing" }),
+        ])
+      );
+    });
+
+    it("validates scheduled backup and alarm configuration", () => {
+      expect(
+        validateEnvForTarget(
+          {
+            MC_SCHEDULED_BACKUP_ENABLED: "true",
+            MC_SCHEDULED_BACKUP_SCHEDULE: "cron(0 5 ? * SUN *)",
+            MC_BACKUP_STALE_AFTER_HOURS: "192",
+            MC_ALARM_EMAIL: "operator@real-domain.dev",
+          },
+          "local-dev"
+        ).issues
+      ).toEqual([]);
+
+      const invalid = validateEnvForTarget(
+        {
+          MC_SCHEDULED_BACKUP_SCHEDULE: "every sunday",
+          MC_BACKUP_STALE_AFTER_HOURS: "24",
+          MC_ALARM_EMAIL: "not-an-email",
+        },
+        "local-dev"
+      );
+      expect(invalid.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "MC_ALARM_EMAIL", kind: "invalid" }),
+          expect.objectContaining({ name: "MC_SCHEDULED_BACKUP_SCHEDULE", kind: "invalid" }),
+          expect.objectContaining({ name: "MC_BACKUP_STALE_AFTER_HOURS", kind: "invalid" }),
         ])
       );
     });

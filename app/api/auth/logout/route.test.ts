@@ -15,6 +15,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@/lib/auth", () => ({
+  SESSION_COOKIE_NAME: "mc_session",
   clearSessionCookie: mocks.clearSessionCookieMock,
 }));
 
@@ -39,5 +40,24 @@ describe("POST /api/auth/logout regression contract", () => {
     expect(mocks.clearSessionCookieMock).toHaveBeenCalledTimes(1);
 
     expectSessionCookieCleared(res.headers.get("set-cookie"));
+  });
+
+  it("rejects a cross-site browser logout without clearing the cookie", async () => {
+    const { POST } = await import("./route");
+    const req = createMockNextRequest("http://localhost:3000/api/auth/logout", {
+      method: "POST",
+      headers: {
+        cookie: "mc_session=session-token",
+        host: "localhost:3000",
+        origin: "https://attacker.example",
+        "sec-fetch-site": "cross-site",
+      },
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(403);
+    await expect(res.json()).resolves.toMatchObject({ error: "Request origin is not allowed" });
+    expect(mocks.clearSessionCookieMock).not.toHaveBeenCalled();
   });
 });

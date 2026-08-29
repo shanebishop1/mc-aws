@@ -65,14 +65,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<AuthMeResp
       return withClearedSessionCookie(NextResponse.json({ authenticated: false }));
     }
 
-    console.log("[AUTH/ME] Valid session - returning user:", payload.email);
+    console.log("[AUTH/ME] Valid session");
     return NextResponse.json({
       authenticated: true,
       email: payload.email,
       role: payload.role,
     });
-  } catch (error) {
-    console.error("[AUTH/ME] Error:", error);
+  } catch {
+    console.error("[AUTH/ME] Session lookup failed");
     return withClearedSessionCookie(NextResponse.json({ authenticated: false }));
   }
 }

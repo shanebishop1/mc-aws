@@ -38,11 +38,11 @@ export async function getStackStatus(stackName = "MinecraftStack"): Promise<Stac
     return Stacks[0];
   } catch (error) {
     if (error instanceof Error && error.name === "ValidationError" && error.message.includes("does not exist")) {
-      console.log(`[CloudFormation] Stack "${stackName}" does not exist.`);
+      console.log("[CloudFormation] Managed stack does not exist");
       return null;
     }
 
-    console.error(`[CloudFormation] Error getting stack status for "${stackName}":`, error);
+    console.error("[CloudFormation] Error getting managed stack status");
     throw error;
   }
 }

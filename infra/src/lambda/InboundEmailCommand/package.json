@@ -1,0 +1,9 @@
+{
+  "name": "inbound-email-command",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-lambda": "^3.1095.0",
+    "@aws-sdk/client-ssm": "^3.1095.0"
+  }
+}

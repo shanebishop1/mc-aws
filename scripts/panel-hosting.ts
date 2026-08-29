@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import dotenv from "dotenv";
+import { readWranglerConfig } from "./wrangler-config";
 
 export const panelHostingModes = ["workers_dev", "custom"] as const;
 export type PanelHostingMode = (typeof panelHostingModes)[number];
@@ -19,12 +20,15 @@ interface PrepareWranglerConfigOptions {
   runtimeStateSnapshotKvPreviewId: string;
   panelHostingMode: PanelHostingMode;
   customWorkersDevEnabled?: boolean;
+  lifecycleLockTableName: string;
+  operationStateTableName: string;
 }
 
 const workerNamePattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
 const workersSubdomainPattern = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.workers\.dev$/;
 const hostnamePattern = /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/;
 const kvNamespaceIdPattern = /^[a-f0-9]{32}$/i;
+const dynamoTableNamePattern = /^[A-Za-z0-9_.-]{3,255}$/;
 
 const parseHttpsOrigin = (rawValue: string, description: string): URL => {
   let url: URL;
@@ -152,15 +156,6 @@ export const buildWranglerDeployArgs = ({
   return args;
 };
 
-const parseWranglerConfig = (sourcePath: string): Record<string, unknown> => {
-  const raw = fs.readFileSync(sourcePath, "utf8");
-  const start = raw.indexOf("{");
-  if (start === -1) {
-    throw new Error("Invalid wrangler config: expected a JSON object.");
-  }
-  return JSON.parse(raw.slice(start)) as Record<string, unknown>;
-};
-
 export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOptions): Record<string, unknown> => {
   if (!panelHostingModes.includes(options.panelHostingMode)) {
     throw new Error("Panel hosting mode must be workers_dev or custom.");
@@ -171,8 +166,14 @@ export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOption
   if (!kvNamespaceIdPattern.test(options.runtimeStateSnapshotKvPreviewId)) {
     throw new Error("RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID must be a 32-character Cloudflare KV namespace id.");
   }
+  if (!dynamoTableNamePattern.test(options.lifecycleLockTableName)) {
+    throw new Error("MC_LIFECYCLE_LOCK_TABLE_NAME must be a valid DynamoDB table name.");
+  }
+  if (!dynamoTableNamePattern.test(options.operationStateTableName)) {
+    throw new Error("MC_OPERATION_STATE_TABLE_NAME must be a valid DynamoDB table name.");
+  }
 
-  const config = parseWranglerConfig(options.sourcePath);
+  const config = readWranglerConfig(options.sourcePath);
   const kvNamespaces = Array.isArray(config.kv_namespaces) ? config.kv_namespaces : [];
   const runtimeBinding = kvNamespaces.find(
     (entry) =>
@@ -186,6 +187,12 @@ export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOption
   runtimeBinding.id = options.runtimeStateSnapshotKvId;
   runtimeBinding.preview_id = options.runtimeStateSnapshotKvPreviewId;
   config.workers_dev = options.panelHostingMode === "workers_dev" ? true : Boolean(options.customWorkersDevEnabled);
+  const vars = config.vars && typeof config.vars === "object" && !Array.isArray(config.vars) ? config.vars : {};
+  config.vars = {
+    ...vars,
+    MC_LIFECYCLE_LOCK_TABLE_NAME: options.lifecycleLockTableName,
+    MC_OPERATION_STATE_TABLE_NAME: options.operationStateTableName,
+  };
 
   fs.writeFileSync(options.outputPath, `${JSON.stringify(config, null, 2)}\n`);
   return config;
@@ -283,6 +290,8 @@ const runCli = (): void => {
       runtimeStateSnapshotKvPreviewId: getArg(args, "--kv-preview-id"),
       panelHostingMode: getArg(args, "--mode") as PanelHostingMode,
       customWorkersDevEnabled: getArg(args, "--custom-workers-dev") === "true",
+      lifecycleLockTableName: getArg(args, "--lifecycle-lock-table"),
+      operationStateTableName: getArg(args, "--operation-state-table"),
     });
     return;
   }

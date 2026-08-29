@@ -77,9 +77,8 @@ async function exchangeCodeForTokens(code: string): Promise<Record<string, strin
   });
 
   if (!tokenResponse.ok) {
-    const errorData = await tokenResponse.json();
-    console.error("[GDRIVE-CALLBACK] Token exchange failed:", errorData);
-    throw new Error(`Token exchange failed: ${errorData.error_description || errorData.error || "Unknown error"}`);
+    console.error("[GDRIVE-CALLBACK] Token exchange failed");
+    throw new Error("Token exchange failed");
   }
 
   return tokenResponse.json();
@@ -133,8 +132,8 @@ async function handleRealOAuth(code: string): Promise<NextResponse> {
 /**
  * Handle OAuth errors from Google
  */
-function handleOAuthError(error: string): NextResponse {
-  console.error("[GDRIVE-CALLBACK] Google OAuth error:", error);
+function handleOAuthError(_error: string): NextResponse {
+  console.error("[GDRIVE-CALLBACK] Google OAuth authorization failed");
   const response = NextResponse.redirect(
     `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("Google OAuth authorization failed")}`,
     302
@@ -159,8 +158,8 @@ function handleMissingCode(): NextResponse {
 /**
  * Handle general errors
  */
-function handleError(error: unknown): NextResponse {
-  console.error("[GDRIVE-CALLBACK] Error:", error);
+function handleError(_error: unknown): NextResponse {
+  console.error("[GDRIVE-CALLBACK] Callback failed");
   const response = NextResponse.redirect(
     `${env.NEXT_PUBLIC_APP_URL}/?gdrive=error&message=${encodeURIComponent("Failed to complete Google Drive setup")}`,
     302
@@ -173,7 +172,7 @@ function handleError(error: unknown): NextResponse {
  * Handle state validation errors
  */
 function handleStateError(message: string): NextResponse {
-  console.error("[GDRIVE-CALLBACK] State validation error:", message);
+  console.error("[GDRIVE-CALLBACK] OAuth state validation failed");
   // Map internal state errors to safe messages
   const safeMessage = message.includes("Missing") ? "Missing OAuth state parameter" : "OAuth state validation failed";
   const response = NextResponse.redirect(
@@ -187,10 +186,7 @@ function handleStateError(message: string): NextResponse {
 export async function GET(request: NextRequest): Promise<NextResponse> {
   // Check admin authorization
   try {
-    const user = await requireAdmin(request);
-    console.log("[GDRIVE-CALLBACK] Admin action by:", user.email);
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
-    void user;
+    await requireAdmin(request);
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse;
@@ -231,7 +227,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
   // Validate state matches
   if (state !== oauthState) {
-    console.error("[GDRIVE-CALLBACK] State mismatch:", { state, oauthState });
+    console.error("[GDRIVE-CALLBACK] OAuth state validation failed");
     return handleStateError("OAuth state mismatch");
   }
 

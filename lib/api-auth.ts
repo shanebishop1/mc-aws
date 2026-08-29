@@ -7,6 +7,7 @@
 
 import { type NextRequest, NextResponse } from "next/server";
 import { SESSION_COOKIE_NAME, verifySession } from "./auth";
+import { enforceCookieMutationSameOrigin } from "./same-origin";
 
 /**
  * User roles for authorization
@@ -24,6 +25,8 @@ export type AuthUser = { email: string; role: UserRole };
  * @returns AuthUser or null if not authenticated
  */
 export async function getAuthUser(request: NextRequest): Promise<AuthUser | null> {
+  enforceCookieMutationSameOrigin(request);
+
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
   if (!token) {
     return null;

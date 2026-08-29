@@ -17,16 +17,16 @@ export const handler = async (event) => {
     const existingValue = existing?.Parameter?.Value || "";
 
     if (existingValue.trim()) {
-      console.log("[SEED_ALLOWLIST] Parameter exists; skipping:", paramName);
+      console.log("[SEED_ALLOWLIST] Managed parameter exists; skipping");
       return { PhysicalResourceId: paramName };
     }
 
     if (!seedValue.trim()) {
-      console.log("[SEED_ALLOWLIST] Parameter empty and seed empty; leaving as-is:", paramName);
+      console.log("[SEED_ALLOWLIST] Managed parameter and seed are empty; leaving as-is");
       return { PhysicalResourceId: paramName };
     }
 
-    console.log("[SEED_ALLOWLIST] Parameter empty; seeding:", paramName);
+    console.log("[SEED_ALLOWLIST] Managed parameter empty; seeding");
     await ssm.send(
       new PutParameterCommand({
         Name: paramName,
@@ -40,12 +40,17 @@ export const handler = async (event) => {
   } catch (error) {
     const errorWithName = error;
     if (errorWithName && errorWithName.name !== "ParameterNotFound") {
-      console.error("[SEED_ALLOWLIST] Failed to check parameter:", error);
+      console.error("[SEED_ALLOWLIST] Failed to check managed parameter");
       throw error;
     }
   }
 
-  console.log("[SEED_ALLOWLIST] Parameter missing; creating:", paramName);
+  if (!seedValue.trim()) {
+    console.log("[SEED_ALLOWLIST] Managed parameter missing and seed empty; leaving absent");
+    return { PhysicalResourceId: paramName };
+  }
+
+  console.log("[SEED_ALLOWLIST] Managed parameter missing; creating");
 
   await ssm.send(
     new PutParameterCommand({

@@ -20,6 +20,9 @@ export const deployOnlyIgnoredSecretNames = new Set([
   "CDK_DEFAULT_ACCOUNT",
   "CDK_DEFAULT_REGION",
   "AL2023_ARM64_AMI_ID",
+  "MC_BOOTSTRAP_PINS_SHA256",
+  "MC_LIFECYCLE_LOCK_TABLE_NAME",
+  "MC_OPERATION_STATE_TABLE_NAME",
   "SES_NOTIFICATIONS_ENABLED",
   "SES_INBOUND_COMMANDS_ENABLED",
   "VERIFIED_SENDER",
@@ -27,6 +30,10 @@ export const deployOnlyIgnoredSecretNames = new Set([
   "SES_INBOUND_RECIPIENT",
   "SES_RECEIPT_RULE_SET_NAME",
   "START_KEYWORD",
+  "MC_ALARM_EMAIL",
+  "MC_SCHEDULED_BACKUP_ENABLED",
+  "MC_SCHEDULED_BACKUP_SCHEDULE",
+  "MC_BACKUP_STALE_AFTER_HOURS",
   "GITHUB_USER",
   "GITHUB_REPO",
   "GITHUB_TOKEN",
@@ -43,6 +50,8 @@ export const deployOnlyIgnoredSecretNames = new Set([
   "CLOUDFLARE_DEPLOY_API_TOKEN",
   "CLOUDFLARE_PANEL_DNS_API_TOKEN",
 ]);
+
+export const deployOnlyWorkerVarNames = new Set(["MC_LIFECYCLE_LOCK_TABLE_NAME", "MC_OPERATION_STATE_TABLE_NAME"]);
 
 export interface WorkerSecretUploadEntry {
   key: string;
@@ -78,6 +87,7 @@ export const buildWorkerSecretUploadEntries = (source: string): WorkerSecretUplo
   }
 
   return workerSecretAllowlist.flatMap((key) => {
+    if (deployOnlyWorkerVarNames.has(key)) return [];
     const value = parsed[key];
     return value ? [{ key, value }] : [];
   });

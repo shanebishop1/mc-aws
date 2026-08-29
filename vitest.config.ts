@@ -7,8 +7,6 @@ export default defineConfig({
   test: {
     environment: "node", // Use node for API route tests
     globals: true,
-    // CDK synthesis contract tests consistently need more than Vitest's 5s default.
-    testTimeout: 15_000,
     include: ["**/*.test.ts", "**/*.test.tsx"],
     exclude: [
       "**/node_modules/**",

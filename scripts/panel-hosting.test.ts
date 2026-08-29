@@ -21,7 +21,7 @@ const createWranglerFixture = (): { sourcePath: string; outputPath: string } => 
   const outputPath = path.join(tempDir, "wrangler.deploy.jsonc");
   fs.writeFileSync(
     sourcePath,
-    `${JSON.stringify({ name: workerName, kv_namespaces: [{ binding: "RUNTIME_STATE_SNAPSHOT_KV", id: "" }] })}\n`
+    `{ // JSONC fixture\n  "name": "${workerName}",\n  "kv_namespaces": [{ "binding": "RUNTIME_STATE_SNAPSHOT_KV", "id": "", }],\n}\n`
   );
   return { sourcePath, outputPath };
 };
@@ -78,9 +78,15 @@ describe("Wrangler panel hosting deployment contract", () => {
       runtimeStateSnapshotKvId: kvId,
       runtimeStateSnapshotKvPreviewId: kvPreviewId,
       panelHostingMode: "workers_dev",
+      lifecycleLockTableName: "mc-aws-lifecycle-lock",
+      operationStateTableName: "mc-aws-operation-state",
     });
 
     expect(config.workers_dev).toBe(true);
+    expect(config.vars).toMatchObject({
+      MC_LIFECYCLE_LOCK_TABLE_NAME: "mc-aws-lifecycle-lock",
+      MC_OPERATION_STATE_TABLE_NAME: "mc-aws-operation-state",
+    });
     expect(buildWranglerDeployArgs({ configPath: outputPath, workerName, panelHostingMode: "workers_dev" })).toEqual([
       "deploy",
       "--config",
@@ -101,6 +107,8 @@ describe("Wrangler panel hosting deployment contract", () => {
         runtimeStateSnapshotKvPreviewId: kvPreviewId,
         panelHostingMode: "custom",
         customWorkersDevEnabled: enabled,
+        lifecycleLockTableName: "mc-aws-lifecycle-lock",
+        operationStateTableName: "mc-aws-operation-state",
       });
 
       expect(config.workers_dev).toBe(enabled);

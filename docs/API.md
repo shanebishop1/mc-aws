@@ -33,6 +33,8 @@ Stop normally remains `accepted`; poll `GET /api/status` until the server state 
 
 Common errors are `400` invalid input/state, `401` no valid cookie, `403` wrong role, `404` missing/disabled route or operation, `409` another action or service not ready, `429` rate limit, and `500` backend failure.
 
+All cookie-authenticated `POST`, `PUT`, `PATCH`, and `DELETE` requests also enforce the canonical app origin and host before authentication, throttling, operation persistence, or lock acquisition. Browser callers must send a matching `Origin`; a missing, malformed, `null`, or cross-site browser origin returns `403`. Controlled non-browser callers may omit `Origin` only when they do not send browser Fetch Metadata headers and still address the canonical host. Read-only `GET` routes and OAuth callbacks are unaffected.
+
 ## Server actions
 
 | Route | Method | Access | Request body |

@@ -25,7 +25,7 @@ describe("scripts/validate-runtime-state-deploy", () => {
 
     fs.writeFileSync(
       path.join(tempDir, "wrangler.jsonc"),
-      `${JSON.stringify(
+      `// Wrangler JSONC fixture\n${JSON.stringify(
         {
           durable_objects: {
             bindings: [
@@ -51,7 +51,7 @@ describe("scripts/validate-runtime-state-deploy", () => {
         },
         null,
         2
-      )}\n`
+      ).replace(/\n}$/, ",\n}")}\n`
     );
 
     fs.writeFileSync(

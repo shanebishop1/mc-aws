@@ -116,7 +116,24 @@ process.stdout.write(status);
   return { result, events };
 }
 
-describe("Worker runtime key rotation", () => {
+describe("Worker runtime key rotation", { timeout: 20_000 }, () => {
+  it("journals every phase, never deletes unclassified inactive keys, and never attempts to reactivate deleted keys", () => {
+    const source = readFileSync(rotationScript, "utf8");
+    for (const phase of [
+      "candidate-created",
+      "candidate-staged",
+      "candidate-verified",
+      "primary-promoted",
+      "prepared",
+      "prior-deactivated",
+      "temporary-secrets-removed",
+      "finalized",
+    ]) {
+      expect(source).toContain(`runtime_journal ${phase}`);
+    }
+    expect(source).toContain("refusing to delete unclassified recovery state");
+    expect(source).not.toContain("--status Active");
+  });
   it("uploads and verifies replacement credentials before revoking the prior runtime key", () => {
     const { result, events } = runRotation();
 
@@ -144,7 +161,7 @@ describe("Worker runtime key rotation", () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}\n${events}`).toBe(0);
     expect(events.match(/mode=candidate/g)).toHaveLength(4);
-    expect(events.match(/mode=primary/g)).toHaveLength(3);
+    expect(events.match(/mode=primary/g)).toHaveLength(4);
     expect(result.stdout).toContain("candidate verification succeeded on attempt 4/4");
     expect(result.stdout).toContain("primary verification succeeded on attempt 2/4");
     expect(`${result.stdout}\n${result.stderr}`).not.toContain("AuthFailure");

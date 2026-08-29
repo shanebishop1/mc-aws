@@ -28,7 +28,7 @@ test.describe("Backup and Restore", () => {
       .click();
 
     // Verify success message (backup is now asynchronous)
-    await expectSuccessMessage(page, /Backup started asynchronously/i);
+    await expectSuccessMessage(page, /Backup completed successfully/i);
   });
 
   test("backup shows Google Drive prompt when not configured", async ({ page }) => {
@@ -126,7 +126,7 @@ test.describe("Backup and Restore", () => {
     await page.getByTestId("restore-confirm").click();
 
     // Verify success message (restore is now asynchronous)
-    await expectSuccessMessage(page, /Restore started asynchronously/i);
+    await expectSuccessMessage(page, /Restore completed successfully/i);
   });
 
   test("restore with manual input when listing fails", async ({ page }) => {
@@ -159,7 +159,7 @@ test.describe("Backup and Restore", () => {
     await page.getByTestId("restore-confirm").click();
 
     // Verify success message
-    await expectSuccessMessage(page, /Restore started asynchronously/i);
+    await expectSuccessMessage(page, /Restore completed successfully/i);
   });
 
   test("restore shows Google Drive prompt when not configured", async ({ page }) => {
@@ -281,7 +281,7 @@ test.describe("Backup and Restore", () => {
     await expect(page.getByTestId("gdrive-setup-prompt")).toBeVisible();
 
     // Click the close button (X)
-    await page.getByRole("button", { name: /close modal/i }).click();
+    await page.getByRole("button", { name: /close google drive setup/i }).click();
 
     // Should show error about needing Google Drive (look for the error toast)
     await expect(page.locator("p.text-sm.text-red-700")).toContainText("Google Drive is required for this operation");
@@ -303,7 +303,7 @@ test.describe("Backup and Restore", () => {
     await expect(page.getByTestId("gdrive-setup-prompt")).toBeVisible();
 
     // Click the close button (X)
-    await page.getByRole("button", { name: /close modal/i }).click();
+    await page.getByRole("button", { name: /close google drive setup/i }).click();
 
     // Should show error about needing Google Drive (look for the error toast)
     await expect(page.locator("p.text-sm.text-red-700")).toContainText("Google Drive is required for this operation");
