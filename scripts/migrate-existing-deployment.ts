@@ -27,6 +27,7 @@ import {
   buildLegacyRetentionTemplate,
   buildPinnedInstanceBridgeTemplate,
   buildRetentionStageTemplate,
+  cloudFormationTemplateTransport,
   decodeInstanceUserDataAttribute,
   establishOwnershipTags,
   extractWorkerStackOutputs,
@@ -310,6 +311,11 @@ function synthesizeCurrentTemplate(identity: StackIdentity, assemblyDirectory: s
   return JSON.parse(readFileSync(path.join(assemblyDirectory, "MinecraftStack.template.json"), "utf8"));
 }
 
+function stackTemplateAssetObjectUrl(assemblyDirectory: string): unknown {
+  const manifest = JSON.parse(readFileSync(path.join(assemblyDirectory, "manifest.json"), "utf8")) as JsonRecord;
+  return manifest.artifacts?.MinecraftStack?.properties?.stackTemplateAssetObjectUrl;
+}
+
 function printInspection(identity: StackIdentity, inspection: OwnershipInspection): void {
   console.log(`StackId: ${identity.stackId}`);
   console.log(`Instance: ${inspection.instanceId} (${inspection.imageId})`);
@@ -541,11 +547,11 @@ function prepareBridge(
       userData
     );
     const templateBody = JSON.stringify(pinnedBridge.template);
-    if (Buffer.byteLength(templateBody, "utf8") > 51_200) {
-      throw new Error(
-        "Bridge template exceeds CloudFormation TemplateBody's 51,200-byte limit; no assets were published."
-      );
-    }
+    const templateTransport = cloudFormationTemplateTransport(
+      identity,
+      stackTemplateAssetObjectUrl(assemblyDirectory),
+      templateBody
+    );
 
     run(
       "pnpm",
@@ -561,13 +567,36 @@ function prepareBridge(
       }
     );
 
+    if (templateTransport.kind === "s3") {
+      const templatePath = requestFile(assemblyDirectory, "bridge-template.json", pinnedBridge.template);
+      const uploaded = aws(identity.region, [
+        "s3api",
+        "put-object",
+        "--bucket",
+        templateTransport.bucket,
+        "--key",
+        templateTransport.key,
+        "--body",
+        templatePath,
+        "--content-type",
+        "application/json",
+        "--checksum-algorithm",
+        "SHA256",
+        "--checksum-sha256",
+        templateTransport.checksumSha256,
+      ]);
+      if (uploaded.ChecksumSHA256 !== templateTransport.checksumSha256) {
+        throw new Error("CloudFormation bridge template upload checksum was not verified.");
+      }
+    }
+
     changeSetName = bridgeChangeSetName();
     const request = {
       StackName: identity.stackId,
       ChangeSetName: changeSetName,
       ChangeSetType: "UPDATE",
       Description: BRIDGE_DESCRIPTION,
-      TemplateBody: templateBody,
+      ...templateTransport.request,
       Parameters: buildChangeSetParameters(pinnedBridge.template, live, pinnedBridge.parameterOverrides),
       Capabilities: ["CAPABILITY_IAM", "CAPABILITY_NAMED_IAM", "CAPABILITY_AUTO_EXPAND"],
       ClientToken: `mc-aws-bridge-${Date.now()}`,
