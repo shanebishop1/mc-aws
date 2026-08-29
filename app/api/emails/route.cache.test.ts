@@ -13,6 +13,9 @@ const {
   getSnapshotMock,
   setSnapshotMock,
   invalidateSnapshotMock,
+  acquireServerActionLockMock,
+  releaseServerActionLockMock,
+  checkRateLimitMock,
   snapshotState,
 } = vi.hoisted(() => {
   return {
@@ -25,9 +28,21 @@ const {
     getSnapshotMock: vi.fn(),
     setSnapshotMock: vi.fn(),
     invalidateSnapshotMock: vi.fn(),
+    acquireServerActionLockMock: vi.fn(),
+    releaseServerActionLockMock: vi.fn(),
+    checkRateLimitMock: vi.fn(),
     snapshotState: { value: null as unknown },
   };
 });
+
+vi.mock("@/lib/server-action-lock", () => ({
+  acquireServerActionLock: acquireServerActionLockMock,
+  releaseServerActionLock: releaseServerActionLockMock,
+}));
+
+vi.mock("@/lib/rate-limit", () => ({
+  checkRateLimit: checkRateLimitMock,
+}));
 
 vi.mock("@/lib/api-auth", () => {
   return {
@@ -70,6 +85,9 @@ describe("emails routes cache contract", () => {
     requireAdminMock.mockResolvedValue({ email: "admin@example.com", role: "admin" });
     getEmailAllowlistMock.mockResolvedValue(["friend@example.com"]);
     updateEmailAllowlistMock.mockResolvedValue(undefined);
+    acquireServerActionLockMock.mockResolvedValue({ lockId: "allowlist-lock", fencingToken: 1 });
+    releaseServerActionLockMock.mockResolvedValue(true);
+    checkRateLimitMock.mockResolvedValue({ allowed: true, remaining: 5, retryAfterSeconds: 0 });
     getAllowedEmailsMock.mockReturnValue([]);
 
     getSnapshotMock.mockImplementation(async () => {

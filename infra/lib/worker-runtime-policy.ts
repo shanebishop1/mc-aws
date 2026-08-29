@@ -15,6 +15,7 @@ export const workerRuntimeAwsCallGraph = {
   runInstanceCommand: ["ssm:SendCommand", "ssm:GetCommandInvocation"],
   readRuntimeParameters: ["ssm:GetParameter", "ssm:GetParametersByPath"],
   writeRuntimeParameters: ["ssm:PutParameter", "ssm:DeleteParameter"],
+  manageLifecycleState: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
   optionalCostData: ["ce:GetCostAndUsage"],
 } as const;
 
@@ -26,6 +27,7 @@ export const workerRuntimeRequiredAwsActions = [
   ...workerRuntimeAwsCallGraph.runInstanceCommand,
   ...workerRuntimeAwsCallGraph.readRuntimeParameters,
   ...workerRuntimeAwsCallGraph.writeRuntimeParameters,
+  ...workerRuntimeAwsCallGraph.manageLifecycleState,
 ] as const;
 
 export interface WorkerRuntimePolicyResources {
@@ -37,6 +39,7 @@ export interface WorkerRuntimePolicyResources {
   writableParameterArns: string[];
   deletableParameterArns: string[];
   operationParameterPathArns: string[];
+  lifecycleStateTableArns: string[];
   includeCostExplorer: boolean;
 }
 
@@ -93,6 +96,11 @@ export function createWorkerRuntimePolicyStatements(resources: WorkerRuntimePoli
       sid: "DeleteRuntimeParameters",
       actions: ["ssm:DeleteParameter"],
       resources: resources.deletableParameterArns,
+    }),
+    new iam.PolicyStatement({
+      sid: "ManageLifecycleState",
+      actions: [...workerRuntimeAwsCallGraph.manageLifecycleState],
+      resources: resources.lifecycleStateTableArns,
     }),
   ];
 

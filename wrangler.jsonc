@@ -37,7 +37,9 @@
       "enabled": true,
       "head_sampling_rate": 1,
       "persist": true,
-      "invocation_logs": true
+      // Keep request URLs out of persisted logs. If invocation logs are enabled
+      // operationally, Cloudflare's Redact query strings control must stay on.
+      "invocation_logs": false
     },
     "traces": {
       "enabled": false,

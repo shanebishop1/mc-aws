@@ -48,6 +48,40 @@ Most failures attempt to restart Minecraft. A partial failure is possible: the a
 
 A restore replaces the server directory from Drive, reapplies the current server profile, and restarts Minecraft. If the restored server does not start, rollback to the prior local directory is attempted; rollback can also fail. Keep an independent backup.
 
+### Scheduled backup policy
+
+`MC_SCHEDULED_BACKUP_ENABLED=false` is the safe default because selecting a Drive folder during setup does not prove that a durable Drive refresh token exists. The setup wizard offers an explicit opt-in. When enabled, the default `cron(0 5 ? * SUN *)` attempts one backup each Sunday at 05:00 UTC. The target recovery-point objective (RPO) is therefore **seven days while the server is running at the scheduled time**. `MC_BACKUP_STALE_AFTER_HOURS=192` raises a freshness alarm after eight days without a successful scheduled backup, allowing one day for investigation.
+
+The scheduler never starts or resumes EC2. It checks for the encrypted Drive credential, requires EC2 to already be `running`, acquires the same DynamoDB lifecycle lock/fencing token used by panel and email actions, writes the same durable operation state, and rechecks instance state before SSM execution. Missing credentials, a stopped/transitional instance, duplicate delivery, or another lifecycle action produces a structured safe-skip log. A long stopped period can therefore exceed the target RPO by design; the staleness alarm detects this but does not wake the server. Success updates `/minecraft/last-scheduled-backup-success`. Failures are logged, metered, recorded as failed operations, and pass through the existing asynchronous/idempotent retry path; durable terminal state prevents a retry from repeating the backup. Unhandled delivery/platform failures can reach the lifecycle failure queue. No monitoring path performs an automatic restore or destructive action.
+
+Change `MC_SCHEDULED_BACKUP_SCHEDULE` only to a valid EventBridge `cron(...)` or `rate(...)` expression and keep `MC_BACKUP_STALE_AFTER_HOURS` longer than the intended interval. Redeploy after changing deploy-time schedule values. Test a manual backup and restore before enabling unattended backups.
+
+## Monitoring and alerts
+
+The stack retains all project Lambda and custom-resource CloudWatch logs for 30 days and deletes those log groups with the stack. Migration updates only the exact CloudFormation-owned legacy function log-group names, never a stack-name wildcard. The encrypted lifecycle failure queue retains sanitized exhausted asynchronous/delivery failures for 14 days. A separate encrypted sanitizer dead-letter queue retains the raw destination envelope if the sanitizer itself exhausts retries, and its depth alarm prevents that terminal failure from being silent. Access that second queue only during restricted incident response because its payload was not sanitized. Both queues are deleted with the stack. Reserved lifecycle concurrency remains one; Lambda retries asynchronous lifecycle events twice with a one-hour maximum age, leaving retry opportunity after a maximum-length 15-minute execution while durable operation IDs and fencing make duplicate delivery safe.
+
+CloudWatch alarms cover:
+
+- EC2 instance/system status-check failures;
+- lifecycle Lambda unhandled errors/timeouts, caught operation failures, 13-minute duration, throttles, and 10-minute asynchronous event age;
+- lifecycle failure-queue depth;
+- failure-sanitizer dead-letter queue depth;
+- scheduled-backup execution failure and staleness when scheduling is enabled.
+
+Every alarm publishes ALARM and OK changes to the project SNS topic. Set `MC_ALARM_EMAIL` only when an operator wants email. Blank means no subscription and no surprise email. When set, AWS sends a **Subscription Confirmation** message; open its confirmation link before relying on alerts. An unconfirmed subscription receives nothing. The `AlarmTopicArn` and `LifecycleFailureQueueUrl` stack outputs locate both resources. Treat queue payloads and logs as operational metadata and do not forward them publicly.
+
+At low volume, EventBridge, Lambda, SQS, SNS email, and SSM request charges should normally be pennies. CloudWatch is the material addition: standard alarms, two custom backup/operation metric families, log ingestion, and 30-day storage are commonly around **$1–3/month**, but region, usage, free tier, and AWS pricing determine the actual amount. Review AWS Pricing and Cost Explorer rather than treating this estimate as a quote.
+
+### Cloudflare production logs
+
+`wrangler.jsonc` keeps persisted Cloudflare observability and invocation logs disabled by default. Before enabling Workers Logs in production, open **Workers & Pages → mc-aws-panel → Observability → Settings**, set **Redact query strings** to **On**, and verify it after deploys or dashboard changes. OAuth callbacks carry short-lived codes and state in their query strings; do not enable invocation logs without this control. The source configuration also leaves `invocation_logs=false` as defense in depth.
+
+For this low-traffic panel, use `head_sampling_rate=1` while investigating or when full security-event coverage is required. If volume or cost requires sampling, set `observability.logs.head_sampling_rate` deliberately, document the chosen rate, and never describe a sample as a complete audit trail. Cloudflare plan controls the Workers Logs retention window: review the current plan and dashboard value before production use (Cloudflare currently documents up to 3 days on Free and 7 days on Paid). Choose the plan that meets the incident-response window, or export sanitized logs to an approved destination with an explicit retention/deletion policy. Recheck query redaction, sampling, destination access, and retention at least quarterly and after plan changes.
+
+### Audit-log limitation
+
+This stack does not create a paid durable CloudTrail trail. AWS CloudTrail **Event History** provides roughly 90 days of regional management events, but it is not a durable archive, does not include every data event, and is insufficient as a long-term forensic control. A future explicit operator choice can add an organization/account trail with a dedicated encrypted S3 bucket, retention/lifecycle policy, optional CloudWatch delivery, and deliberately selected data events. That choice is deferred because it adds storage, KMS/request cost, bucket-retention decisions, and account-wide scope; it is not silently enabled here.
+
 ## Server profiles
 
 See [Server Profiles](SERVER_PROFILES.md) for when profile content is applied and how to validate it.
@@ -65,11 +99,13 @@ This requires the AWS CLI, Session Manager plugin, a signed-in AWS identity allo
 
 ## Deploy changes
 
-Update the panel:
+For an ordinary UI-only release, update the panel:
 
 ```bash
 pnpm deploy:cf
 ```
+
+The deployer creates a durable local recovery record before its first Cloudflare mutation and automatically rolls back an interrupted run before allowing another. Preserve that file and follow [Cloudflare deployment recovery](CLOUDFLARE_DEPLOYMENT_RECOVERY.md) if recovery cannot finish.
 
 Preview infrastructure changes, then deploy only after reviewing replacements and data impact:
 
@@ -80,16 +116,47 @@ pnpm cdk:deploy
 
 Older stacks may require [Legacy Stack Safety Bridge](EXISTING_DEPLOYMENT_MIGRATION.md) instead of a normal deployment.
 
+The standard deploy command loads `.env.production` with the same target-preservation rules as the CDK app, requires an exact account and region, and runs the existing-host safety guard first. A guard refusal occurs before Cloudflare/DuckDNS credentials are changed. After a successful guard, the selected DNS token is sent directly to its SSM `SecureString` parameter through the AWS SDK and is never placed in a process argument or CloudFormation parameter. Do not bypass this orchestrator with a direct `cdk deploy`.
+
+### Lifecycle concurrency migration order
+
+The DynamoDB lifecycle-lock and operation-state rollout is a mixed-version `dual-v1` migration. Deploy it in this order; do not deploy the new Worker before its AWS tables, IAM permissions, Lambda environment, and protocol metadata exist:
+
+1. Quiesce new panel and email lifecycle actions, then run `pnpm cdk:diff`. Refuse unexpected EC2 replacement or destructive table changes. The lifecycle lock table must synthesize `UpdateReplacePolicy: Retain` and `DeletionPolicy: Delete`: replacement rollback stays safe without leaving PII/billing after teardown.
+2. Before a Lambda release depends on a new host helper, run the confirmed `pnpm host:upgrade -- rollout-runtime ...` stage. It takes a legacy-compatible maintenance lock, checks `dual-v1` metadata/current lock state when the table exists, transfers checksum-verified `mc-wait-ready.sh` and the rollout helper through SSM, applies exact bootstrap pins idempotently, and verifies dependency versions, runtime hashes, and readiness. The exact lock is released only after every check succeeds. On partial upgrade it is deliberately non-expiring for practical purposes, so lifecycle operations cannot resume automatically against mixed helpers/dependencies; do not delete it until the old files are restored or a complete reviewed rollout is proven.
+3. Deploy AWS infrastructure with the reviewed non-instance bridge or replacement path. The metadata custom resource initializes `protocol#dual-v1` before the lifecycle Lambda update. The old Worker remains compatible because the rollout preserves `/minecraft/server-action` and `/minecraft/server-action-delete-claim/*`.
+4. Persist `InstanceId`, `LifecycleLockTableName`, and `OperationStateTableName` before any Worker deploy. Fresh setup and host replacement do this automatically. For an existing bridge, run `pnpm migrate:existing -- --region "$MC_AWS_REGION" --stage sync-worker-env --execute --confirm-stack-id "$STACK_ID" --env-file .env.production`, then `pnpm bootstrap:check -- --env-file .env.production`. The table names become validated Wrangler plain-text variables, not Worker secrets; the bootstrap digest is deploy provenance only.
+5. Run Worker environment validation, deploy the Worker, and verify one lifecycle action plus operation polling before reopening mutations.
+
+For rollback, restore the previous Worker version first, while the SSM compatibility lock and its IAM permissions still exist. Quiesce and drain lifecycle deliveries before a reviewed Lambda/CDK rollback; do not apply an old template that deletes bridge metadata, retained lifecycle state, operation state, or SSM compatibility paths while current deliveries can still run. Recovery refuses to report success while either lifecycle lock remains active or malformed.
+
+Paper, rclone, mcstatus, and the AL2023 image never refresh during a routine deployment. Follow [Reviewed Bootstrap and OS Upgrades](BOOTSTRAP_UPGRADES.md) for checksum-verified artifact changes and the intentional OS security-maintenance path.
+
+## Real-environment smoke configuration
+
+The manual **Real-Environment Smoke Verification** workflow uses the protected `real-environment-smoke` GitHub Environment. Configure `SMOKE_BASE_URL` and `SMOKE_SESSION_COOKIE` as environment secrets. Configure `SMOKE_EXPECT_DOMAIN` as an environment variable containing the exact Minecraft DNS hostname, without a scheme or path; an explicit workflow input can override it for a single run. `SMOKE_EXPECT_BACKEND_MODE` and `SMOKE_REQUEST_TIMEOUT_MS` are optional environment variables.
+
+The required S4 check forces an authenticated status snapshot write, then requires the next read to return the same opaque response-header probe from snapshot metadata. It also requires the status domain to exactly match `SMOKE_EXPECT_DOMAIN`. The probe and infrastructure identifiers are never written to the summary. Each request has a bounded timeout, and failures still produce the fixed redacted summary artifact.
+
 ## Operation record cleanup
 
-Operation records under `/minecraft/operations` are eligible for deletion 30 days after their last recorded update by default, regardless of their last status. Automatic cleanup is best-effort and can leave old records when AWS calls fail. Always preview manual cleanup first:
+Current operation records live in the DynamoDB operation-state table and are eligible for deletion 30 days after their last update by default. DynamoDB TTL is eventual; the operator cleanup scans the exact table and conditionally deletes only the version/timestamp it reviewed. Always preview first:
 
 ```bash
 pnpm operations:cleanup -- --dry-run
 pnpm operations:cleanup
 ```
 
-Use `--retention-days=<days>` or `MC_OPERATION_STATE_RETENTION_DAYS` to change the cutoff. A shorter value removes troubleshooting history sooner.
+The command requires `MC_OPERATION_STATE_TABLE_NAME` and a local operator identity with table-scoped `dynamodb:Scan` and `dynamodb:DeleteItem`; these permissions are intentionally not granted to the Worker. Use `--retention-days=<days>` or `MC_OPERATION_STATE_RETENTION_DAYS` to change the cutoff and `--max-deletions=<count>` to bound one run.
+
+During the DynamoDB dual-read migration, legacy PII-bearing SSM records remain readable as fallback. Preview and clean them only after quiescing operations and keeping the required rollback/retention window:
+
+```bash
+pnpm operations:cleanup -- --dry-run --include-legacy-ssm
+pnpm operations:cleanup -- --include-legacy-ssm
+```
+
+`--legacy-ssm-only` is available for a pre-DynamoDB installation. Legacy cleanup additionally needs SSM path read and exact delete permissions. Keep the SSM fallback and runtime IAM until every supported rollback version uses DynamoDB, in-flight operations have drained, and a reviewed dry run shows no required SSM-only record; remove fallback/IAM only in a later staged infrastructure change.
 
 ## Remove the deployment
 

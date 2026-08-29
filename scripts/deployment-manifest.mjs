@@ -53,7 +53,11 @@ function validateManifest(manifest) {
     optional: true,
   });
 
-  assertKeys(manifest.aws, ["accountId", "region", "stack", "instanceId", "runtimeIam", "dlmPolicies"], "manifest.aws");
+  assertKeys(
+    manifest.aws,
+    ["accountId", "region", "stack", "instanceId", "runtimeIam", "dlmPolicies", "ssmParameters"],
+    "manifest.aws"
+  );
   assertString(manifest.aws.accountId, /^\d{12}$/, "manifest.aws.accountId", { optional: true });
   assertString(manifest.aws.region, /^[a-z]{2}(?:-[a-z0-9]+)+-\d$/, "manifest.aws.region", { optional: true });
   if (manifest.aws.stack !== undefined) {
@@ -104,6 +108,39 @@ function validateManifest(manifest) {
     assertKeys(policy.expectedTags, ["McAwsProject", "McAwsStack"], `${path}.expectedTags`);
     if (policy.expectedTags.McAwsProject !== "mc-aws" || policy.expectedTags.McAwsStack !== manifest.aws.stack?.name) {
       fail(`${path}.expectedTags are invalid`);
+    }
+  }
+  if (!Array.isArray(manifest.aws.ssmParameters)) fail("manifest.aws.ssmParameters must be an array");
+  const ssmNames = new Set();
+  for (const [index, parameter] of manifest.aws.ssmParameters.entries()) {
+    const path = `manifest.aws.ssmParameters[${index}]`;
+    assertKeys(
+      parameter,
+      ["name", "type", "createdByProject", "ownership", "observedBeforeSetup", "source", "stackLogicalId"],
+      path
+    );
+    assertString(parameter.name, /^\/minecraft\/[A-Za-z0-9._/-]+(?:\/\*)?$/, `${path}.name`);
+    if (ssmNames.has(parameter.name)) fail(`${path}.name is duplicated`);
+    ssmNames.add(parameter.name);
+    if (!["String", "StringList", "SecureString", "unknown"].includes(parameter.type)) fail(`${path}.type is invalid`);
+    assertBoolean(parameter.createdByProject, `${path}.createdByProject`);
+    if (
+      !ownershipValues.has(parameter.ownership) ||
+      parameter.createdByProject !== (parameter.ownership === "created")
+    ) {
+      fail(`${path}.ownership is invalid`);
+    }
+    if (!["absent", "existing", "unknown"].includes(parameter.observedBeforeSetup)) {
+      fail(`${path}.observedBeforeSetup is invalid`);
+    }
+    if (!["setup-preflight", "exact-stack-resource", "historical-audit", "manual-consent"].includes(parameter.source)) {
+      fail(`${path}.source is invalid`);
+    }
+    assertString(parameter.stackLogicalId, /^(?:[A-Za-z][A-Za-z0-9]{0,254})$/, `${path}.stackLogicalId`, {
+      optional: true,
+    });
+    if (parameter.source === "exact-stack-resource" && !parameter.stackLogicalId) {
+      fail(`${path}.stackLogicalId is required for exact stack-resource evidence`);
     }
   }
 
@@ -225,6 +262,7 @@ function validateManifest(manifest) {
       "pendingFinalRootSnapshot",
       "hibernatedBackupEvidence",
       "googleDriveBackupEvidence",
+      "snapshotCredentialScrub",
     ],
     "manifest.teardown"
   );
@@ -291,6 +329,16 @@ function validateManifest(manifest) {
       fail("Google Drive backup cachedAt is invalid");
     assertString(evidence.observedAt, /^\d{4}-\d{2}-\d{2}T/, "manifest.teardown.googleDriveBackupEvidence.observedAt");
   }
+  if (manifest.teardown.snapshotCredentialScrub !== undefined) {
+    const scrub = manifest.teardown.snapshotCredentialScrub;
+    assertKeys(scrub, ["sourceVolumeId", "completedAt"], "manifest.teardown.snapshotCredentialScrub");
+    assertString(
+      scrub.sourceVolumeId,
+      /^vol-[a-f0-9]{8,17}$/,
+      "manifest.teardown.snapshotCredentialScrub.sourceVolumeId"
+    );
+    assertString(scrub.completedAt, /^\d{4}-\d{2}-\d{2}T/, "manifest.teardown.snapshotCredentialScrub.completedAt");
+  }
 
   const forbidden = /(^|_)(secret|token|password|private.?key|credential)(_|$)/i;
   const forbiddenValue =
@@ -349,7 +397,7 @@ function loadManifest() {
     return {
       schemaVersion: 1,
       project: "mc-aws",
-      aws: { dlmPolicies: [] },
+      aws: { dlmPolicies: [], ssmParameters: [] },
       cloudflare: { routes: [], kvNamespaces: [], panelDnsRecords: [] },
       teardown: { completedResources: [] },
     };
@@ -360,6 +408,11 @@ function loadManifest() {
     manifest = JSON.parse(readFileSync(manifestPath, "utf8"));
   } catch (error) {
     fail(`cannot parse ${manifestPath}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  // Schema-v1 manifests created before SSM ownership tracking are migrated in
+  // memory to an empty/unproven ownership set. No ownership is inferred.
+  if (manifest?.schemaVersion === 1 && manifest?.aws && manifest.aws.ssmParameters === undefined) {
+    manifest.aws.ssmParameters = [];
   }
   validateManifest(manifest);
   return manifest;
@@ -449,6 +502,7 @@ switch (command) {
         observedBeforeSetup: stackState,
       },
       dlmPolicies: manifest.aws.dlmPolicies || [],
+      ssmParameters: manifest.aws.ssmParameters || [],
     };
     if (stackState === "absent") {
       const completed = new Set(manifest.teardown.completedResources);
@@ -475,6 +529,7 @@ switch (command) {
       manifest.teardown.pendingFinalRootSnapshot = undefined;
       manifest.teardown.hibernatedBackupEvidence = undefined;
       manifest.teardown.googleDriveBackupEvidence = undefined;
+      manifest.teardown.snapshotCredentialScrub = undefined;
       manifest.teardown.completedResources = [];
     }
     break;
@@ -494,6 +549,50 @@ switch (command) {
         McAwsPurpose: "CloudflareWorkerRuntime",
         McAwsStack: manifest.aws.stack.name,
       },
+    };
+    break;
+  }
+  case "ssm-observe": {
+    const name = required(args, "name");
+    const state = required(args, "state");
+    const type = args.type || "unknown";
+    if (!/^\/minecraft\/[A-Za-z0-9._/-]+(?:\/\*)?$/.test(name)) fail("invalid SSM ownership name");
+    if (!["absent", "existing"].includes(state)) fail("invalid --state");
+    if (!["String", "StringList", "SecureString", "unknown"].includes(type)) fail("invalid --type");
+    const prior = manifest.aws.ssmParameters?.find((entry) => entry.name === name);
+    if (prior) break;
+    const ownership = state === "absent" ? "created" : "preexisting";
+    upsert(manifest.aws.ssmParameters, (entry) => entry.name === name, {
+      name,
+      type,
+      createdByProject: ownership === "created",
+      ownership,
+      observedBeforeSetup: state,
+      source: "setup-preflight",
+    });
+    break;
+  }
+  case "ssm-stack-resource": {
+    const name = required(args, "name");
+    const type = args.type || "unknown";
+    const logicalId = required(args, "logical-id");
+    if (!/^\/minecraft\/[A-Za-z0-9._/-]+$/.test(name)) fail("invalid SSM ownership name");
+    const prior = manifest.aws.ssmParameters?.find((entry) => entry.name === name);
+    upsert(manifest.aws.ssmParameters, (entry) => entry.name === name, {
+      name,
+      type,
+      createdByProject: true,
+      ownership: "created",
+      observedBeforeSetup: prior?.observedBeforeSetup || "unknown",
+      source: "exact-stack-resource",
+      stackLogicalId: logicalId,
+    });
+    break;
+  }
+  case "snapshot-scrub": {
+    manifest.teardown.snapshotCredentialScrub = {
+      sourceVolumeId: required(args, "volume-id"),
+      completedAt: required(args, "completed-at"),
     };
     break;
   }
@@ -611,6 +710,32 @@ switch (command) {
       originalScript:
         createdByProject || ownership !== "preexisting" ? "" : prior?.originalScript || args["original-script"] || "",
     });
+    break;
+  }
+  case "route-recovered": {
+    const zoneId = required(args, "zone");
+    const pattern = required(args, "pattern");
+    const script = required(args, "script");
+    const baselineState = required(args, "baseline-state");
+    const expectedCurrentId = required(args, "expected-current-id");
+    const restoredId = required(args, "restored-id");
+    const prior = manifest.cloudflare.routes.find((entry) => entry.zoneId === zoneId && entry.pattern === pattern);
+    if (!prior || !prior.createdByProject || prior.ownership !== "created" || !prior.ownershipProven) {
+      fail("route recovery requires a proven project-created manifest route");
+    }
+    const normalizedExpected = expectedCurrentId === "absent" ? "" : expectedCurrentId;
+    if (prior.id !== normalizedExpected || prior.script !== script) {
+      fail("route recovery current manifest identity mismatch");
+    }
+    if (baselineState === "absent") {
+      if (restoredId !== "absent") fail("absent route baseline must restore an absent ID");
+      prior.id = "";
+    } else if (baselineState === "present") {
+      if (!/^[a-f0-9]{32}$/i.test(restoredId)) fail("present route baseline requires a verified restored ID");
+      prior.id = restoredId;
+    } else {
+      fail("invalid route baseline state");
+    }
     break;
   }
   case "dlm": {

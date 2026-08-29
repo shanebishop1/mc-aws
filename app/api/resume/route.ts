@@ -14,7 +14,11 @@ import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { type ResumeRestoreMode, parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
+import {
+  type ResumeRestoreMode,
+  isMutatingActionPayloadValidationError,
+  parseMutatingActionRequestPayload,
+} from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
@@ -66,11 +70,12 @@ async function invokeResumeLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  fencingToken: number,
   operationId: string,
   restoreMode: ResumeRestoreMode,
   backupName?: string
 ): Promise<ResumeResponse> {
-  console.log(`[RESUME] Invoking Lambda for resume on ${instanceId}`);
+  console.log("[RESUME] Invoking resume workflow");
   await invokeLambda("StartMinecraftServer", {
     invocationType: "api",
     command: "resume",
@@ -79,6 +84,7 @@ async function invokeResumeLambda(
     restoreMode,
     args: backupName ? [backupName] : [],
     lockId,
+    fencingToken,
     operationId,
   });
 
@@ -135,7 +141,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     context,
     authenticate: async () => {
       const user = await requireAdmin(context.request);
-      console.log("[RESUME] Admin action by:", user.email);
+      console.log("[RESUME] Authorized action requested");
       return user;
     },
     throttle: async ({ user }) => {
@@ -170,7 +176,15 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking resume action");
       }
 
-      return await invokeResumeLambda(resolvedId, user, lock.lockId, context.operation.id, restoreMode, backupName);
+      return await invokeResumeLambda(
+        resolvedId,
+        user,
+        lock.lockId,
+        lock.fencingToken,
+        context.operation.id,
+        restoreMode,
+        backupName
+      );
     },
     mapError: ({ stage, error }) => {
       if (stage === "auth" && error instanceof Response) {
@@ -194,7 +208,10 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         });
       }
 
-      if (error instanceof Error && isValidationErrorMessage(error.message)) {
+      if (
+        isMutatingActionPayloadValidationError(error) ||
+        (error instanceof Error && isValidationErrorMessage(error.message))
+      ) {
         return createMutatingActionFailure(error.message, {
           httpStatus: 400,
           code: "invalid_payload",
@@ -212,8 +229,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       }
 
       const ownerEmail = user?.email ?? "unknown";
-      await releaseServerActionLock(lock.lockId, { action: "resume", ownerEmail }).catch((releaseError) => {
-        console.error("[RESUME] Failed to release lock after invoke error:", releaseError);
+      await releaseServerActionLock(lock.lockId, {
+        action: "resume",
+        ownerEmail,
+        fencingToken: lock.fencingToken,
+      }).catch(() => {
+        console.error("[RESUME] Failed to release lock after invoke error");
       });
     },
   });

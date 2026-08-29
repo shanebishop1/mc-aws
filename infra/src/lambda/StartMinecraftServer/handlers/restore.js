@@ -12,7 +12,7 @@ import { executeSSMCommand } from "../ssm.js";
  */
 
 export async function handleRestore(instanceId, args, adminEmail) {
-  console.log(`Handling restore command for instance ${instanceId}`);
+  console.log("Handling restore command for managed instance");
 
   try {
     // Ensure instance is running before attempting SSM command
@@ -39,11 +39,11 @@ export async function handleRestore(instanceId, args, adminEmail) {
       command = `/usr/local/bin/mc-restore.sh ${backupArchiveName}`;
     }
 
-    const output = await executeSSMCommand(instanceId, [command]);
+    await executeSSMCommand(instanceId, [command], { step: "restore", finalRemoteStep: true });
     console.log("Step 2 complete: Restore command executed");
 
     const backupDescription = isLatest ? "latest backup" : `backup: ${backupName}`;
-    const message = `Restore completed successfully (${backupDescription}).\n\nOutput:\n${output}`;
+    const message = `Restore completed successfully (${backupDescription}).`;
 
     if (adminEmail) {
       console.log("Step 3: Sending notification email...");

@@ -5,14 +5,17 @@
 
 import { requireAdmin } from "@/lib/api-auth";
 import { formatAuthErrorResponse } from "@/lib/api-error";
-import { findInstanceId, getInstanceState, stopInstance } from "@/lib/aws";
+import { findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
 import { createMutatingActionFailure, createMutatingActionRequestContext } from "@/lib/mutating-action-contract";
 import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
 import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
+import {
+  isMutatingActionPayloadValidationError,
+  parseMutatingActionRequestPayload,
+} from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
@@ -54,7 +57,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     context,
     authenticate: async () => {
       const user = await requireAdmin(context.request);
-      console.log("[STOP] Action by:", user.email, "role:", user.role);
+      console.log("[STOP] Authorized action requested");
       return user;
     },
     throttle: async ({ user }) => {
@@ -78,7 +81,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       await parseMutatingActionRequestPayload(context.request, "stop");
 
       resolvedId = await findInstanceId();
-      console.log("[STOP] Stopping server instance:", resolvedId);
+      console.log("[STOP] Stopping managed server instance");
 
       const currentState = await getInstanceState(resolvedId);
       console.log("[STOP] Current state:", currentState);
@@ -93,13 +96,21 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
       return await acquireServerActionLock("stop", user.email);
     },
-    invoke: async () => {
+    invoke: async ({ user, lock }) => {
       if (!resolvedId) {
         throw new Error("Resolved instance ID is required before invoking stop action");
       }
 
-      console.log("[STOP] Sending stop command...");
-      await stopInstance(resolvedId);
+      console.log("[STOP] Dispatching recoverable stop workflow...");
+      await invokeLambda("StartMinecraftServer", {
+        invocationType: "api",
+        command: "stop",
+        userEmail: user.email,
+        instanceId: resolvedId,
+        lockId: lock.lockId,
+        fencingToken: lock.fencingToken,
+        operationId: context.operation.id,
+      });
 
       return {
         instanceId: resolvedId,
@@ -128,20 +139,30 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         });
       }
 
+      if (isMutatingActionPayloadValidationError(error)) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: error.code,
+          cause: error,
+        });
+      }
+
       return createMutatingActionFailure("Failed to stop server", {
         cause: error,
       });
     },
-    finalize: async ({ lock, user }) => {
-      if (!lock) {
+    finalize: async ({ execution, lock, user }) => {
+      if (execution.ok || !lock) {
         return;
       }
 
       const ownerEmail = user?.email ?? "unknown";
 
-      await releaseServerActionLock(lock.lockId, { action: "stop", ownerEmail }).catch((releaseError) => {
-        console.error("[STOP] Failed to release lock:", releaseError);
-      });
+      await releaseServerActionLock(lock.lockId, { action: "stop", ownerEmail, fencingToken: lock.fencingToken }).catch(
+        () => {
+          console.error("[STOP] Failed to release lock");
+        }
+      );
     },
   });
 

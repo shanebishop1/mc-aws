@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Update configured DNS to point to this EC2 instance's public IP.
-# Runs on EC2 startup and sends email notification via SES when configured.
+# Runs on EC2 startup; lifecycle notifications are owned by Lambda.
 
 set -euo pipefail
 
@@ -21,18 +21,30 @@ done
 get_ssm_parameter() {
   local name="$1"
   local decrypt="${2:-false}"
+  local context="${3:-required DNS configuration state}"
   local decrypt_arg=()
 
   if [[ "$decrypt" == "true" ]]; then
     decrypt_arg=(--with-decryption)
   fi
 
-  aws ssm get-parameter \
+  local output
+  if output=$(aws ssm get-parameter \
     --name "$name" \
     "${decrypt_arg[@]}" \
     --query 'Parameter.Value' \
     --output text \
-    --region "$AWS_REGION" 2>/dev/null || echo ""
+    --region "$AWS_REGION" 2>&1); then
+    printf '%s\n' "$output"
+    return 0
+  fi
+
+  if [[ "$output" == *"ParameterNotFound"* ]]; then
+    return 0
+  fi
+
+  log "ERROR: Failed to read ${context} from SSM parameter $name" >&2
+  return 1
 }
 
 dns_update_cloudflare() {
@@ -130,47 +142,12 @@ DOMAIN=$(get_ssm_parameter /minecraft/cloudflare-domain)
 API_TOKEN=$(get_ssm_parameter /minecraft/cloudflare-api-token true)
 DUCKDNS_DOMAIN=$(get_ssm_parameter /minecraft/duckdns-domain)
 DUCKDNS_TOKEN=$(get_ssm_parameter /minecraft/duckdns-token true)
-VERIFIED_SENDER=$(get_ssm_parameter /minecraft/verified-sender)
-NOTIFICATION_EMAIL=$(get_ssm_parameter /minecraft/notification-email)
-
-# Get sender email if available (set by Lambda when startup is triggered)
-TRIGGERED_BY=$(get_ssm_parameter /minecraft/startup-triggered-by)
-
 if [[ -n "$DUCKDNS_DOMAIN" || -n "$DUCKDNS_TOKEN" ]]; then
   dns_update_duckdns "$PUBLIC_IP" "$DUCKDNS_DOMAIN" "$DUCKDNS_TOKEN"
 elif [[ -n "$ZONE_ID" || -n "$DOMAIN" || -n "$API_TOKEN" ]]; then
   dns_update_cloudflare "$PUBLIC_IP" "$ZONE_ID" "$DOMAIN" "$API_TOKEN"
 else
   log "[DNS] No provider configured; skipping DNS update. Public IP: $PUBLIC_IP"
-fi
-
-# Send consolidated email notification via SES (non-critical)
-if [[ -n "$VERIFIED_SENDER" && -n "$NOTIFICATION_EMAIL" ]]; then
-  log "Sending email notification..."
-  
-  # Build email body with all information
-  EMAIL_SUBJECT="Minecraft Server Started"
-  EMAIL_BODY="Server started at IP: ${PUBLIC_IP}
-DNS updated to: ${PUBLIC_IP}"
-  
-  # Add triggered-by info if available
-  if [[ -n "$TRIGGERED_BY" ]]; then
-    EMAIL_BODY="Startup triggered by: ${TRIGGERED_BY}
-${EMAIL_BODY}"
-  fi
-  
-  aws ses send-email \
-    --from "$VERIFIED_SENDER" \
-    --destination "ToAddresses=$NOTIFICATION_EMAIL" \
-    --message "Subject={Data='${EMAIL_SUBJECT}'},Body={Text={Data='${EMAIL_BODY}'}}" \
-    --region "$AWS_REGION" || log "Warning: Failed to send email notification"
-  
-  # Clean up the trigger parameter after sending notification
-  if [[ -n "$TRIGGERED_BY" ]]; then
-    aws ssm delete-parameter --name /minecraft/startup-triggered-by --region "$AWS_REGION" 2>/dev/null || true
-  fi
-else
-  log "Skipping notification: email not configured"
 fi
 
 # Clear sensitive variables

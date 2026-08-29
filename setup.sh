@@ -227,6 +227,17 @@ ensure_al2023_ami_pin() {
   export AL2023_ARM64_AMI_ID
 }
 
+ensure_bootstrap_artifact_pins() {
+  local pins_sha256
+  if ! pins_sha256="$(run_with_mise pnpm exec tsx scripts/pin-bootstrap-artifacts.ts check \
+    --env-file "$PRODUCTION_ENV_FILE" \
+    --env-file "$LOCAL_ENV_FILE")"; then
+    return 1
+  fi
+  MC_BOOTSTRAP_PINS_SHA256="$pins_sha256"
+  export MC_BOOTSTRAP_PINS_SHA256
+}
+
 resolve_minecraft_connection_mode() {
   case "${MC_CONNECTION_MODE:-}" in
     cloudflare|duckdns|raw_ip)
@@ -313,11 +324,19 @@ print_deployment_preflight() {
   log "  AWS region:  ${CDK_DEFAULT_REGION}"
   log "  Stack:       ${STACK_NAME}"
   log "  EC2:         t4g.medium (ARM), 8 GB encrypted GP3 root volume"
-  log "  AWS:         VPC/networking, EC2/EBS, Lambda, IAM, SSM, and optional SES/SNS resources"
+  log "  AWS:         VPC/networking, EC2/EBS, Lambda, IAM, SSM, CloudWatch alarms/logs, SNS, SQS, and optional schedules/SES"
   log "  Cloudflare:  Worker, runtime-state bindings/KV, secrets, and optional DNS/route resources"
+  log "  Backups:     scheduled Drive backup ${MC_SCHEDULED_BACKUP_ENABLED:-false} (${MC_SCHEDULED_BACKUP_SCHEDULE:-cron(0 5 ? * SUN *)})"
+  if [[ -n "${MC_ALARM_EMAIL:-}" ]]; then
+    log "  Alerts:      SNS confirmation will be required for ${MC_ALARM_EMAIL}"
+  else
+    log "  Alerts:      SNS topic/alarms only; no email subscription configured"
+  fi
   echo ""
   log "Estimated recurring cost (not a quote):"
   log "  Running EC2 is roughly \$0.03–0.04/hour and a stopped 8 GB GP3 volume roughly \$0.75/month."
+  log "  CloudWatch alarms/custom metrics and retained logs can add roughly \$1–3/month at low volume."
+  log "  EventBridge, SNS email, SQS, SSM, and scheduled Lambda requests are usually pennies at this cadence."
   log "  Region, usage, snapshots, data transfer, requests, optional services, and pricing changes add cost."
   echo ""
   log "Teardown: run 'pnpm destroy' to preview, then 'pnpm destroy:execute' after reviewing the inventory."
@@ -395,6 +414,8 @@ maybe_confirm_existing_credentials() {
   fi
   log "  NEXT_PUBLIC_APP_URL=$NEXT_PUBLIC_APP_URL"
   log "  MC_SERVER_PROFILE_DIR=${MC_SERVER_PROFILE_DIR:-auto (server-profile when present, otherwise config)}"
+  log "  MC_SCHEDULED_BACKUP_ENABLED=${MC_SCHEDULED_BACKUP_ENABLED:-false}"
+  log "  MC_ALARM_EMAIL=${MC_ALARM_EMAIL:-not configured}"
   echo ""
 
   if is_tty; then
@@ -485,36 +506,16 @@ main() {
   log "This script will guide you through the initial setup process."
   log "Please ensure you have your AWS credentials and other required information ready."
 
-  maybe_confirm_existing_credentials
-
-  # Step 1: Ensure mise is installed and configured
+  # Step 1: Install the repository-pinned mise binary before reading any
+  # credential-bearing environment file. Never replace this with a curl pipe.
   step "Setting up mise (version manager)"
 
   local mise_install_dir="$HOME/.local/bin"
-  local mise_executable="$mise_install_dir/mise"
-
-  # Check if mise is already available in PATH
-  if command_exists mise; then
-    success "mise is already installed: $(mise --version)"
-  else
-    # Check if mise is installed but not in PATH
-    if [[ -f "$mise_executable" ]]; then
-      info "mise is installed at $mise_executable but not in PATH"
-      info "Adding mise to PATH for this session..."
-      export PATH="$mise_install_dir:$PATH"
-      success "mise is now available: $(mise --version)"
-    else
-      # Install mise
-      info "mise is not installed. Installing now..."
-      log "Running: curl https://mise.run | sh"
-      if curl https://mise.run | sh; then
-        success "mise installed successfully to $mise_install_dir"
-        export PATH="$mise_install_dir:$PATH"
-      else
-        error_exit "Failed to install mise. Please install manually and try again."
-      fi
-    fi
+  if ! env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" bash ./scripts/bootstrap-mise.sh install; then
+    error_exit "Failed to install the checksum-verified repository-pinned mise release. Review config/mise-pins.json and retry."
   fi
+  export PATH="$mise_install_dir:$PATH"
+  success "Verified repository-pinned mise: $(mise --version)"
 
   if ! activate_mise_for_current_shell; then
     error_exit "mise is installed but could not be prepared for this setup session. Restart your terminal and re-run ./setup.sh"
@@ -546,6 +547,10 @@ main() {
     error_exit "CDK CLI is not available. Ensure 'pnpm install --frozen-lockfile' completed successfully, then re-run ./setup.sh"
   fi
   success "AWS CLI + CDK detected"
+
+  # Credential env loading starts only after mise, Node.js, pnpm, dependencies,
+  # and CDK tooling are pinned and verified.
+  maybe_confirm_existing_credentials
 
   # A clean clone must establish player access before collecting credentials or creating cloud resources.
   load_env_file "$PRODUCTION_ENV_FILE" || true
@@ -592,6 +597,12 @@ main() {
   fi
   success "Validated exact ARM64 AL2023 AMI pin: $AL2023_ARM64_AMI_ID"
 
+  step "Validating reviewed bootstrap artifact pins"
+  if ! ensure_bootstrap_artifact_pins; then
+    error_exit "Bootstrap artifact pins are invalid or differ from user_data.sh. Review config/bootstrap-pins.json and use the intentional pnpm bootstrap:upgrade workflow."
+  fi
+  success "Validated and persisted bootstrap pin set: $MC_BOOTSTRAP_PINS_SHA256"
+
   # Step 6: Deploy AWS infrastructure (CDK)
   step "Deploying AWS infrastructure (CDK)"
   export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-$AWS_REGION}"
@@ -614,6 +625,7 @@ main() {
     unset CLOUDFLARE_API_TOKEN
     run_with_mise pnpm exec tsx scripts/migrate-existing-deployment.ts \
       --assert-standard-deploy-safe \
+      --account "$CDK_DEFAULT_ACCOUNT" \
       --stack-name "$STACK_NAME" \
       --region "$CDK_DEFAULT_REGION"
   )
@@ -626,19 +638,64 @@ main() {
     --stack-id "${existing_stack_id:-unknown}"
   success "Local deployment record initialized: $DEPLOYMENT_MANIFEST_FILE"
 
-  cdk_parameters=()
-  if [[ -n "${CLOUDFLARE_DNS_API_TOKEN:-}" ]]; then
-    cdk_parameters+=(--parameters "CloudflareTokenParam=$CLOUDFLARE_DNS_API_TOKEN")
-  fi
-  if [[ -n "${DUCKDNS_TOKEN:-}" ]]; then
-    cdk_parameters+=(--parameters "DuckDnsTokenParam=$DUCKDNS_TOKEN")
-  fi
+  # Record installation ownership before CDK or runtime code can create/overwrite
+  # parameters. Existing observations are monotonic across setup reruns.
+  local ssm_name ssm_metadata ssm_state ssm_type
+  local -a installation_ssm_names=(
+    /minecraft/gdrive-token
+    /minecraft/cloudflare-api-token
+    /minecraft/duckdns-token
+    /minecraft/email-allowlist
+    /minecraft/verified-sender
+    /minecraft/notification-email
+    /minecraft/startup-triggered-by
+    /minecraft/player-count
+    /minecraft/backups-cache
+    /minecraft/last-scheduled-backup-success
+    /minecraft/scheduled-backup-enabled-at
+    /minecraft/server-action
+    /minecraft/resume-pending
+    /minecraft/server-profile-manifest
+    /minecraft/cloudflare-zone-id
+    /minecraft/cloudflare-domain
+    /minecraft/duckdns-domain
+    /minecraft/github-pat
+    /minecraft/github-user
+    /minecraft/github-repo
+  )
+  for ssm_name in "${installation_ssm_names[@]}"; do
+    ssm_metadata="$(aws ssm describe-parameters \
+      --parameter-filters "Key=Name,Option=Equals,Values=$ssm_name" \
+      --query 'Parameters[0].Type' --output text 2>/dev/null || true)"
+    if [[ -n "$ssm_metadata" && "$ssm_metadata" != "None" ]]; then
+      ssm_state="existing"
+      ssm_type="$ssm_metadata"
+    else
+      ssm_state="absent"
+      ssm_type="unknown"
+    fi
+    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs ssm-observe \
+      --name "$ssm_name" --state "$ssm_state" --type "$ssm_type" >/dev/null
+  done
+  for ssm_name in /minecraft/operations /minecraft/server-action-delete-claim; do
+    ssm_metadata="$(aws ssm describe-parameters \
+      --parameter-filters "Key=Path,Option=Recursive,Values=$ssm_name" \
+      --query 'length(Parameters)' --output text 2>/dev/null || true)"
+    [[ "$ssm_metadata" =~ ^[0-9]+$ ]] || error_exit "Could not inventory SSM namespace '$ssm_name' before deployment"
+    [[ "$ssm_metadata" == "0" ]] && ssm_state="absent" || ssm_state="existing"
+    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs ssm-observe \
+      --name "$ssm_name/*" --state "$ssm_state" --type unknown >/dev/null
+  done
+  success "Recorded pre-deployment SSM ownership facts"
 
   print_deployment_preflight
+  if ! run_with_mise pnpm exec tsx scripts/materialize-dns-secrets.ts; then
+    error_exit "Could not materialize the selected DNS credential as an SSM SecureString; secret values were omitted."
+  fi
   (
     cd infra
     unset CLOUDFLARE_API_TOKEN
-    run_with_mise pnpm exec cdk deploy "${cdk_parameters[@]}" --require-approval never
+    run_with_mise pnpm exec cdk deploy "$STACK_NAME" --require-approval never
   )
   success "CDK deployment complete"
 
@@ -649,6 +706,12 @@ main() {
     error_exit "Could not read InstanceId output from CloudFormation stack '$STACK_NAME'"
   fi
   success "INSTANCE_ID=$INSTANCE_ID"
+
+  MC_LIFECYCLE_LOCK_TABLE_NAME="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='LifecycleLockTableName'].OutputValue | [0]" --output text 2>/dev/null || true)"
+  MC_OPERATION_STATE_TABLE_NAME="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='OperationStateTableName'].OutputValue | [0]" --output text 2>/dev/null || true)"
+  if [[ -z "$MC_LIFECYCLE_LOCK_TABLE_NAME" || "$MC_LIFECYCLE_LOCK_TABLE_NAME" == "None" || -z "$MC_OPERATION_STATE_TABLE_NAME" || "$MC_OPERATION_STATE_TABLE_NAME" == "None" ]]; then
+    error_exit "Could not read lifecycle DynamoDB table outputs from CloudFormation stack '$STACK_NAME'"
+  fi
 
   RUNTIME_IAM_USER_NAME="$(aws cloudformation describe-stacks --stack-name "$STACK_NAME" --query "Stacks[0].Outputs[?OutputKey=='WorkerRuntimeIamUserName'].OutputValue | [0]" --output text 2>/dev/null || true)"
   if [[ -z "${RUNTIME_IAM_USER_NAME:-}" || "${RUNTIME_IAM_USER_NAME}" == "None" ]]; then
@@ -667,8 +730,19 @@ main() {
     --instance-id "$INSTANCE_ID" \
     --runtime-user "$RUNTIME_IAM_USER_NAME"
 
+  while IFS=$'\t' read -r ssm_logical_id ssm_name; do
+    [[ -n "$ssm_logical_id" && -n "$ssm_name" ]] || continue
+    ssm_type="$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=Equals,Values=$ssm_name" \
+      --query 'Parameters[0].Type' --output text)"
+    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs ssm-stack-resource \
+      --name "$ssm_name" --type "$ssm_type" --logical-id "$ssm_logical_id" >/dev/null
+  done < <(aws cloudformation list-stack-resources --stack-name "$STACK_ID" \
+    --query 'StackResourceSummaries[?ResourceType==`AWS::SSM::Parameter`].[LogicalResourceId,PhysicalResourceId]' --output text)
+
   # Update env files with INSTANCE_ID for Cloudflare deploy
   write_env_files "INSTANCE_ID" "$INSTANCE_ID"
+  write_env_files "MC_LIFECYCLE_LOCK_TABLE_NAME" "$MC_LIFECYCLE_LOCK_TABLE_NAME"
+  write_env_files "MC_OPERATION_STATE_TABLE_NAME" "$MC_OPERATION_STATE_TABLE_NAME"
 
   # Step 8: Deploy Cloudflare Workers frontend
   step "Deploying Cloudflare Workers frontend"
@@ -694,7 +768,12 @@ main() {
   log "  3. Visit your control panel and sign in with the admin address: ${ADMIN_EMAIL}"
   log "  4. Wait for the already-started server to become ready, then connect to $(minecraft_connection_target)"
   log "  5. Configure and verify Google Drive before using backup, restore, or hibernate"
-  log "  6. Check AWS Billing/Cost Explorer; preview removal at any time with: pnpm destroy"
+  if [[ -n "${MC_ALARM_EMAIL:-}" ]]; then
+    log "  6. Confirm the AWS SNS subscription email sent to ${MC_ALARM_EMAIL}; alerts are silent until confirmed"
+  else
+    log "  6. No alarm email is configured; monitor the project CloudWatch alarms/SNS topic in AWS"
+  fi
+  log "  7. Check AWS Billing/Cost Explorer; preview removal at any time with: pnpm destroy"
   echo ""
 }
 

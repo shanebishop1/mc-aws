@@ -5,10 +5,12 @@
 
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { clearSessionCookie } from "@/lib/auth";
+import { enforceCookieMutationSameOrigin } from "@/lib/same-origin";
 import { type NextRequest, NextResponse } from "next/server";
 
-export async function POST(_request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<NextResponse> {
   try {
+    enforceCookieMutationSameOrigin(request);
     console.log("[LOGOUT] Clearing session");
 
     const cookieOptions = clearSessionCookie();
@@ -27,6 +29,9 @@ export async function POST(_request: NextRequest): Promise<NextResponse> {
 
     return response;
   } catch (error) {
+    if (error instanceof Response) {
+      return error as NextResponse;
+    }
     return formatApiErrorResponse<Record<string, never>>(error, "logout");
   }
 }

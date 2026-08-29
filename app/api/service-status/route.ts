@@ -25,13 +25,13 @@ type CachedServiceStatus = {
  */
 async function checkMinecraftService(instanceId: string): Promise<boolean> {
   try {
-    console.log("[SERVICE-STATUS] Checking Minecraft service status on instance:", instanceId);
+    console.log("[SERVICE-STATUS] Checking Minecraft service status");
     const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
     const isActive = output.trim() === "active";
     console.log("[SERVICE-STATUS] Minecraft service active:", isActive);
     return isActive;
-  } catch (error) {
-    console.error("[SERVICE-STATUS] Failed to check Minecraft service:", error);
+  } catch {
+    console.error("[SERVICE-STATUS] Failed to check Minecraft service");
     return false;
   }
 }
@@ -45,8 +45,8 @@ async function checkInstanceRunning(instanceId: string): Promise<boolean> {
     const isRunning = state === "running";
     console.log("[SERVICE-STATUS] Instance state:", state, "- Running:", isRunning);
     return isRunning;
-  } catch (error) {
-    console.error("[SERVICE-STATUS] Failed to get instance state:", error);
+  } catch {
+    console.error("[SERVICE-STATUS] Failed to get instance state");
     return false;
   }
 }
@@ -54,8 +54,8 @@ async function checkInstanceRunning(instanceId: string): Promise<boolean> {
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServiceStatusResponse>>> {
   try {
     try {
-      const user = await requireAllowed(request);
-      console.log("[SERVICE-STATUS] Access by:", user.email, "role:", user.role);
+      await requireAllowed(request);
+      console.log("[SERVICE-STATUS] Authorized service-status read requested");
     } catch (error) {
       if (error instanceof Response) {
         return error as NextResponse<ApiResponse<ServiceStatusResponse>>;
@@ -79,7 +79,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     // Get instance ID
     const instanceId = await findInstanceId();
-    console.log("[SERVICE-STATUS] Using instance ID:", instanceId);
+    console.log("[SERVICE-STATUS] Using managed instance");
 
     // Check instance state first
     const instanceRunning = await checkInstanceRunning(instanceId);

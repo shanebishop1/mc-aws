@@ -1,4 +1,4 @@
-import { DescribeInstancesCommand, StartInstancesCommand, ec2 } from "./clients.js";
+import { DescribeInstancesCommand, StartInstancesCommand, StopInstancesCommand, ec2 } from "./clients.js";
 import {
   INSTANCE_STATE_MAX_ATTEMPTS,
   INSTANCE_STATE_POLL_INTERVAL_MS,
@@ -12,12 +12,24 @@ export const MAX_POLL_ATTEMPTS = PUBLIC_IP_MAX_ATTEMPTS;
 export const POLL_INTERVAL_MS = PUBLIC_IP_POLL_INTERVAL_MS;
 
 /**
+ * Read the current instance state without changing it.
+ * Scheduled maintenance uses this path so it can never wake a stopped server.
+ */
+export async function getInstanceState(instanceId) {
+  const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
+  const instance = Reservations?.[0]?.Instances?.[0];
+  if (!instance) throw new Error(`Instance ${instanceId} not found`);
+  return instance.State?.Name || "unknown";
+}
+
+/**
  * Check if instance is running, start it if stopped, and wait for running state
  * @param {string} instanceId - The EC2 instance ID
  * @returns {Promise<void>}
  */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: EC2's transitional state machine is kept explicit for crash recovery auditability.
 export async function ensureInstanceRunning(instanceId) {
-  console.log(`Checking instance state for ${instanceId}...`);
+  console.log("Checking managed instance state");
 
   // Get current instance state
   const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
@@ -33,23 +45,25 @@ export async function ensureInstanceRunning(instanceId) {
 
   // If already running, no action needed
   if (currentState === "running") {
-    console.log(`Instance ${instanceId} is already running`);
+    console.log("Managed instance is already running");
     return;
   }
 
   // If stopped, start it
+  let startRequested = false;
   if (currentState === "stopped") {
-    console.log(`Instance ${instanceId} is stopped. Starting it...`);
+    console.log("Managed instance is stopped; starting it");
     await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
-    console.log(`Start command sent for instance ${instanceId}`);
+    startRequested = true;
+    console.log("Start command sent for managed instance");
   } else if (currentState === "stopping" || currentState === "pending") {
-    console.log(`Instance ${instanceId} is in state ${currentState}. Waiting for stable state...`);
+    console.log(`Managed instance is in state ${currentState}; waiting for stable state`);
   } else {
     throw new Error(`Instance ${instanceId} is in unexpected state: ${currentState}`);
   }
 
   // Wait for instance to reach running state
-  console.log(`Waiting for instance ${instanceId} to reach running state...`);
+  console.log("Waiting for managed instance to reach running state");
   let running = false;
   let attempts = 0;
   const maxAttempts = INSTANCE_STATE_MAX_ATTEMPTS;
@@ -70,10 +84,14 @@ export async function ensureInstanceRunning(instanceId) {
 
       if (state === "running") {
         running = true;
-        console.log(`Instance ${instanceId} is now running`);
+        console.log("Managed instance is now running");
+      } else if (state === "stopped" && !startRequested) {
+        console.log("Managed instance finished stopping; starting it now");
+        await ec2.send(new StartInstancesCommand({ InstanceIds: [instanceId] }));
+        startRequested = true;
       }
-    } catch (error) {
-      console.error(`Error checking instance state on attempt ${attempts}:`, error);
+    } catch {
+      console.error(`Error checking managed instance state on attempt ${attempts}`);
     }
   }
 
@@ -82,13 +100,32 @@ export async function ensureInstanceRunning(instanceId) {
   }
 }
 
+/** Stop the managed instance idempotently and wait until EC2 confirms it is stopped. */
+export async function ensureInstanceStopped(instanceId) {
+  let state = await getInstanceState(instanceId);
+  if (state === "stopped") return;
+  if (state === "running" || state === "pending") {
+    await ec2.send(new StopInstancesCommand({ InstanceIds: [instanceId] }));
+  } else if (state !== "stopping") {
+    throw new Error(`Instance ${instanceId} is in unexpected state: ${state}`);
+  }
+  for (let attempt = 1; attempt <= INSTANCE_STATE_MAX_ATTEMPTS; attempt++) {
+    await new Promise((resolve) => setTimeout(resolve, INSTANCE_STATE_POLL_INTERVAL_MS));
+    state = await getInstanceState(instanceId);
+    if (state === "stopped") return;
+  }
+  const error = new Error(`Instance ${instanceId} did not reach stopped state within timeout`);
+  error.retainLifecycleLock = true;
+  throw error;
+}
+
 /**
  * Get the public IP address of an EC2 instance
  * @param {string} instanceId - The EC2 instance ID
  * @returns {Promise<string>} The public IP address
  */
 export async function getPublicIp(instanceId) {
-  console.log(`Polling for public IP address for instance: ${instanceId}`);
+  console.log("Polling for managed instance public IP address");
 
   for (let attempt = 1; attempt <= MAX_POLL_ATTEMPTS; attempt++) {
     console.log(`Polling attempt ${attempt}/${MAX_POLL_ATTEMPTS}...`);
@@ -100,7 +137,7 @@ export async function getPublicIp(instanceId) {
     await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
   }
 
-  console.error(`Failed to obtain public IP for instance ${instanceId} after ${MAX_POLL_ATTEMPTS} attempts.`);
+  console.error(`Failed to obtain managed instance public IP after ${MAX_POLL_ATTEMPTS} attempts`);
   throw new Error("Timed out waiting for public IP address.");
 }
 
@@ -115,7 +152,7 @@ async function pollInstanceForIp(instanceId, attempt) {
     const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
 
     if (!Reservations?.length || !Reservations[0].Instances?.length) {
-      console.warn(`DescribeInstances response structure unexpected or empty for instance ${instanceId}.`);
+      console.warn("DescribeInstances response structure unexpected or empty for managed instance");
       return {};
     }
 
@@ -123,15 +160,15 @@ async function pollInstanceForIp(instanceId, attempt) {
     const publicIp = inst.PublicIpAddress;
     const instanceState = inst.State?.Name;
 
-    console.log(`Instance state: ${instanceState}, Public IP: ${publicIp}`);
+    console.log(`Instance state: ${instanceState}, public IP assigned: ${Boolean(publicIp)}`);
 
     if (publicIp) {
-      console.log(`Public IP found: ${publicIp}`);
+      console.log("Managed instance public IP found");
       return { ip: publicIp };
     }
 
     if (["terminated", "shutting-down"].includes(instanceState)) {
-      console.error(`Instance ${instanceId} entered terminal state ${instanceState} while waiting for IP.`);
+      console.error(`Managed instance entered terminal state ${instanceState} while waiting for IP`);
       return { error: new Error(`Instance entered unexpected state: ${instanceState}`) };
     }
 
@@ -146,13 +183,13 @@ async function pollInstanceForIp(instanceId, attempt) {
         return {};
       }
 
-      console.error(`Instance ${instanceId} entered unexpected state ${instanceState} while waiting for IP.`);
+      console.error(`Managed instance entered unexpected state ${instanceState} while waiting for IP`);
       return { error: new Error(`Instance entered unexpected state: ${instanceState}`) };
     }
 
     return {};
   } catch (describeError) {
-    console.error(`Error describing instance ${instanceId} on attempt ${attempt}:`, describeError);
+    console.error(`Error describing managed instance on attempt ${attempt}`);
     if (attempt >= MAX_POLL_ATTEMPTS) {
       return { error: new Error(`Failed to describe instance after ${attempt} attempts: ${describeError.message}`) };
     }

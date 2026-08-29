@@ -67,8 +67,8 @@ export async function getInstanceState(instanceId?: string): Promise<ServerState
     }
 
     return ServerState.Unknown;
-  } catch (error) {
-    console.error("Error getting instance state:", error);
+  } catch {
+    console.error("Error getting managed instance state");
     return ServerState.Unknown;
   }
 }
@@ -151,14 +151,14 @@ export async function getPublicIp(instanceId: string, timeoutSeconds = 300): Pro
   const publicIp: string | null = null;
   let attempts = 0;
 
-  console.log(`Polling for public IP address for instance: ${instanceId} (timeout: ${timeoutSeconds}s)`);
+  console.log(`Polling for managed instance public IP (timeout: ${timeoutSeconds}s)`);
 
   while (!publicIp && Date.now() - startTime < timeoutMs) {
     attempts++;
     try {
       const { publicIp: ip, state } = await getInstanceDetails(instanceId);
 
-      console.log(`Polling attempt ${attempts}: state=${state}, ip=${ip || "not assigned"}`);
+      console.log(`Public IP polling attempt ${attempts}: state=${state}, assigned=${Boolean(ip)}`);
 
       if (ip) {
         return ip;
@@ -171,7 +171,7 @@ export async function getPublicIp(instanceId: string, timeoutSeconds = 300): Pro
       if (Date.now() - startTime >= timeoutMs) {
         throw new Error(`Failed to get public IP after ${attempts} attempts: ${error}`);
       }
-      console.error(`Error on attempt ${attempts}:`, error);
+      console.error(`Public IP polling attempt ${attempts} failed`);
     }
 
     if (!publicIp) {
@@ -187,7 +187,7 @@ export async function getPublicIp(instanceId: string, timeoutSeconds = 300): Pro
  */
 export async function startInstance(instanceId?: string) {
   const resolvedId = await resolveInstanceId(instanceId);
-  console.log(`Sending start command for instance ${resolvedId}`);
+  console.log("Sending start command for managed instance");
   await ec2.send(new StartInstancesCommand({ InstanceIds: [resolvedId] }));
 }
 
@@ -196,6 +196,6 @@ export async function startInstance(instanceId?: string) {
  */
 export async function stopInstance(instanceId?: string) {
   const resolvedId = await resolveInstanceId(instanceId);
-  console.log(`Sending stop command for instance ${resolvedId}`);
+  console.log("Sending stop command for managed instance");
   await ec2.send(new StopInstancesCommand({ InstanceIds: [resolvedId] }));
 }

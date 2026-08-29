@@ -1,4 +1,5 @@
 import {
+  MutatingActionPayloadValidationError,
   normalizeAndSanitizeBackupName,
   normalizeMutatingActionArgs,
   normalizeMutatingActionType,
@@ -42,29 +43,49 @@ describe("mutating-action-validation", () => {
       await expect(parseOptionalMutatingJsonBody(request)).resolves.toEqual({ backupName: "nightly" });
     });
 
-    it("returns empty object for invalid, empty, or non-object JSON bodies", async () => {
-      const invalidRequest = createMockNextRequest("http://localhost/api/backup", {
-        method: "POST",
-        body: "{invalid",
-      });
+    it("returns an empty object only for an absent or empty body", async () => {
       const emptyRequest = createMockNextRequest("http://localhost/api/backup", {
         method: "POST",
         body: "",
+      });
+      const whitespaceRequest = createMockNextRequest("http://localhost/api/backup", {
+        method: "POST",
+        body: "  \n ",
+      });
+
+      await expect(parseOptionalMutatingJsonBody(emptyRequest)).resolves.toEqual({});
+      await expect(parseOptionalMutatingJsonBody(whitespaceRequest)).resolves.toEqual({});
+    });
+
+    it("throws typed validation errors for malformed and non-object JSON", async () => {
+      const invalidRequest = createMockNextRequest("http://localhost/api/backup", {
+        method: "POST",
+        body: "{invalid",
       });
       const arrayRequest = createMockNextRequest("http://localhost/api/backup", {
         method: "POST",
         body: JSON.stringify(["nightly"]),
       });
 
-      await expect(parseOptionalMutatingJsonBody(invalidRequest)).resolves.toEqual({});
-      await expect(parseOptionalMutatingJsonBody(emptyRequest)).resolves.toEqual({});
-      await expect(parseOptionalMutatingJsonBody(arrayRequest)).resolves.toEqual({});
+      await expect(parseOptionalMutatingJsonBody(invalidRequest)).rejects.toMatchObject({
+        name: "MutatingActionPayloadValidationError",
+        code: "invalid_payload",
+        reason: "malformed_json",
+      });
+      await expect(parseOptionalMutatingJsonBody(arrayRequest)).rejects.toMatchObject({
+        name: "MutatingActionPayloadValidationError",
+        code: "invalid_payload",
+        reason: "non_object_json",
+      });
+      await expect(parseOptionalMutatingJsonBody(arrayRequest)).rejects.toBeInstanceOf(
+        MutatingActionPayloadValidationError
+      );
     });
   });
 
   describe("normalizeAndSanitizeBackupName", () => {
-    it("prefers backupName over legacy name and trims values", () => {
-      expect(normalizeAndSanitizeBackupName({ backupName: "  new-name  ", name: "old-name" })).toBe("new-name");
+    it("supports either backup name alias and trims values", () => {
+      expect(normalizeAndSanitizeBackupName({ backupName: "  new-name  " })).toBe("new-name");
       expect(normalizeAndSanitizeBackupName({ name: "  legacy-name  " })).toBe("legacy-name");
     });
 
@@ -77,6 +98,14 @@ describe("mutating-action-validation", () => {
       expect(() => normalizeAndSanitizeBackupName({ backupName: "bad;rm -rf /" })).toThrow(
         "Backup name contains invalid characters"
       );
+    });
+
+    it("rejects present non-string aliases and conflicting aliases", () => {
+      expect(() => normalizeAndSanitizeBackupName({ backupName: 42 })).toThrow("backupName must be a string");
+      expect(() => normalizeAndSanitizeBackupName({ backupName: "one", name: "two" })).toThrow(
+        "backupName and name must not conflict"
+      );
+      expect(normalizeAndSanitizeBackupName({ backupName: "same", name: " same " })).toBe("same");
     });
   });
 
@@ -137,6 +166,67 @@ describe("mutating-action-validation", () => {
       });
 
       await expect(parseMutatingActionRequestPayload(request, "hibernate")).resolves.toEqual({});
+    });
+
+    it.each([
+      ["start", { instanceId: "i-attacker" }],
+      ["stop", { backupName: "unexpected" }],
+      ["backup", { restoreMode: "latest" }],
+      ["restore", { extra: true }],
+      ["hibernate", { mode: "fresh" }],
+    ] as const)("rejects fields inappropriate for %s", async (action, body) => {
+      const request = createMockNextRequest(`http://localhost/api/${action}`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+
+      await expect(parseMutatingActionRequestPayload(request, action)).rejects.toMatchObject({
+        code: "invalid_payload",
+        reason: "unknown_field",
+      });
+    });
+
+    it("rejects wrong-typed fields and conflicting resume aliases", async () => {
+      const wrongType = createMockNextRequest("http://localhost/api/resume", {
+        method: "POST",
+        body: JSON.stringify({ backupName: null }),
+      });
+      const conflict = createMockNextRequest("http://localhost/api/resume", {
+        method: "POST",
+        body: JSON.stringify({ restoreMode: "fresh", mode: "latest" }),
+      });
+
+      await expect(parseMutatingActionRequestPayload(wrongType, "resume")).rejects.toMatchObject({
+        reason: "invalid_field_type",
+      });
+      await expect(parseMutatingActionRequestPayload(conflict, "resume")).rejects.toMatchObject({
+        reason: "conflicting_aliases",
+      });
+    });
+
+    it.each([{ backupName: "" }, { backupName: "   " }, { name: "" }, { name: "\n\t" }])(
+      "rejects an explicitly blank restore backup alias: %j",
+      async (body) => {
+        const request = createMockNextRequest("http://localhost/api/restore", {
+          method: "POST",
+          body: JSON.stringify(body),
+        });
+
+        await expect(parseMutatingActionRequestPayload(request, "restore")).rejects.toMatchObject({
+          message: "Backup name cannot be empty",
+          reason: "invalid_field_value",
+        });
+      }
+    );
+
+    it("continues to treat an omitted restore backup name as latest", async () => {
+      const request = createMockNextRequest("http://localhost/api/restore", {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      await expect(parseMutatingActionRequestPayload(request, "restore")).resolves.toEqual({
+        backupName: undefined,
+      });
     });
   });
 });

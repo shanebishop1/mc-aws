@@ -36,7 +36,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     });
 
     if (!rateLimit.allowed) {
-      console.warn("[CALLBACK] Rate limit exceeded for IP:", clientIp);
+      console.warn("[CALLBACK] Rate limit exceeded");
       const response = NextResponse.redirect(new URL("/?error=oauth_rate_limited", request.url));
       response.headers.set("Retry-After", String(rateLimit.retryAfterSeconds));
       return response;
@@ -65,7 +65,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     // Validate state matches
     if (state !== oauthState) {
-      console.error("[CALLBACK] State mismatch:", { state, oauthState });
+      console.error("[CALLBACK] OAuth state validation failed");
       return NextResponse.redirect(new URL("/?error=oauth_state_mismatch", request.url));
     }
 
@@ -88,8 +88,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     try {
       tokens = await google.validateAuthorizationCode(code, codeVerifier);
       console.log("[CALLBACK] Token exchange successful");
-    } catch (error) {
-      console.error("[CALLBACK] Token exchange failed:", error);
+    } catch {
+      console.error("[CALLBACK] Token exchange failed");
       return NextResponse.redirect(new URL("/?error=oauth_token_failed", request.url));
     }
 
@@ -114,8 +114,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
       userinfo = (await userInfoResponse.json()) as GoogleUserInfo;
       console.log("[CALLBACK] Userinfo fetched successfully");
-    } catch (error) {
-      console.error("[CALLBACK] Userinfo fetch failed:", error);
+    } catch {
+      console.error("[CALLBACK] Userinfo fetch failed");
       return NextResponse.redirect(new URL("/?error=oauth_userinfo_failed", request.url));
     }
 
@@ -125,7 +125,7 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       return NextResponse.redirect(new URL("/?error=oauth_userinfo_failed", request.url));
     }
 
-    console.log("[CALLBACK] Creating session for email:", email);
+    console.log("[CALLBACK] Creating authenticated session");
 
     // Create JWT session
     const token = await createSession(email);
@@ -175,8 +175,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
     console.log("[CALLBACK] Session created and OAuth cookies cleared");
     return response;
-  } catch (error) {
-    console.error("[CALLBACK] Unexpected error:", error);
+  } catch {
+    console.error("[CALLBACK] Unexpected OAuth callback error");
     return NextResponse.redirect(new URL("/?error=oauth_failed", request.url));
   }
 }

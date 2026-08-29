@@ -50,7 +50,7 @@ export async function sendNotification(to, subject, body) {
   try {
     await ses.send(new SendEmailCommand(emailParams));
     console.log("Successfully sent notification email.");
-  } catch (emailError) {
-    console.error("Error sending email via SES:", emailError);
+  } catch {
+    console.error("Error sending notification via SES");
   }
 }

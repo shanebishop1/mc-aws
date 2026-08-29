@@ -69,8 +69,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
 
   // Require authentication for mutations
   try {
-    const user = await requireAllowed(request);
-    console.log("[MOCK-CONTROL] Fault inject by:", user.email, "role:", user.role);
+    await requireAllowed(request);
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse<ApiResponse<unknown>>;
@@ -89,7 +88,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    console.log("[MOCK-CONTROL] Injecting fault for operation:", operation, body);
+    console.log("[MOCK-CONTROL] Injecting configured fault");
 
     // Apply fault injection
     await injectFault({
@@ -132,8 +131,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
 
   // Require authentication for mutations
   try {
-    const user = await requireAllowed(request);
-    console.log("[MOCK-CONTROL] Fault clear by:", user.email, "role:", user.role);
+    await requireAllowed(request);
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse<ApiResponse<unknown>>;
@@ -147,7 +145,7 @@ export async function DELETE(request: NextRequest): Promise<NextResponse<ApiResp
 
     if (operation) {
       // Clear specific operation fault
-      console.log("[MOCK-CONTROL] Clearing fault for operation:", operation);
+      console.log("[MOCK-CONTROL] Clearing configured fault");
       await clearFault(operation);
       await getMockStateStore().persistNow();
       await invalidateMockControlSnapshots();

@@ -49,6 +49,45 @@ test.describe("Server Operations", () => {
     await expect(page.getByText(/stopping/i)).toBeVisible();
   });
 
+  test("reports stop completion only after status reaches stopped", async ({ page }) => {
+    test.setTimeout(60_000);
+    await setupRunningScenario(page);
+    await page.goto("/");
+    await waitForPageLoad(page);
+    const stopButton = page.getByRole("button", { name: /stop server/i });
+    await expect(stopButton).toBeVisible({ timeout: 15_000 });
+    await page.route("**/api/stop", async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          operation: { schemaVersion: 1, id: "stop-status-only", type: "stop", status: "accepted" },
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    });
+    await page.route("**/api/status", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          data: {
+            state: "stopped",
+            instanceId: "i-test",
+            hasVolume: true,
+            lastUpdated: new Date().toISOString(),
+          },
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    });
+
+    await stopButton.click();
+    await expect(page.getByText("Stop completed successfully.", { exact: true })).toBeVisible();
+  });
+
   test("hibernate requires confirmation", async ({ page }) => {
     await setupRunningScenario(page);
     await page.goto("/");
@@ -138,7 +177,7 @@ test.describe("Server Operations", () => {
     await expect(page.getByText(/Select Backup/i)).toBeVisible();
 
     // Wait for backups to load
-    await expect(page.getByRole("button", { name: /minecraft-backup-/i }).first()).toBeVisible({ timeout: 5000 });
+    await expect(page.getByRole("button", { name: /minecraft-backup-/i }).first()).toBeVisible({ timeout: 10000 });
 
     // Select a backup (first one)
     await page
@@ -168,8 +207,8 @@ test.describe("Server Operations", () => {
     const modal = page.getByTestId("resume-modal");
     await expect(modal).toBeVisible();
 
-    // Click close button (SVG icon with no accessible name)
-    await modal.locator("button.absolute.top-6.right-6").click();
+    // Click the named close button
+    await page.getByRole("button", { name: "Close resume dialog" }).click();
 
     // Modal should close
     await expect(modal).not.toBeVisible();
@@ -211,6 +250,210 @@ test.describe("Server Operations", () => {
 
     // Should show starting state (wait for it to appear)
     await expect(page.getByText(/starting\.\.\./i)).toBeVisible({ timeout: 5000 });
+  });
+
+  test("polls operation status and reports asynchronous start failure", async ({ page }) => {
+    await setupStoppedScenario(page);
+    await page.route("**/api/start", async (route) => {
+      await route.fulfill({
+        status: 202,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          operation: { schemaVersion: 1, id: "start-e2e-failure", type: "start", status: "accepted" },
+          data: { message: "Start accepted" },
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    });
+    await page.route("**/api/operations/start-e2e-failure", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          data: {
+            schemaVersion: 1,
+            id: "start-e2e-failure",
+            type: "start",
+            route: "/api/start",
+            status: "failed",
+            requestedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            lastError: "Instance failed health checks",
+            history: [],
+          },
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await waitForPageLoad(page);
+    await page.getByRole("button", { name: /start server/i }).click();
+
+    await expect(page.getByText("Failed: Instance failed health checks", { exact: true })).toBeVisible();
+    await expect(page.getByRole("button", { name: /start server/i })).toBeEnabled();
+    await expect(page.getByText("Start completed successfully.")).not.toBeVisible();
+  });
+
+  test("continues polling when a 503 preserves an accepted operation", async ({ page }) => {
+    await setupStoppedScenario(page);
+    await page.route("**/api/start", async (route) => {
+      await route.fulfill({
+        status: 503,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: false,
+          error: "Remote dispatch could not be confirmed",
+          operation: { id: "start-unconfirmed", type: "start", status: "accepted" },
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    });
+    await page.route("**/api/operations/start-unconfirmed", async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          success: true,
+          data: {
+            schemaVersion: 1,
+            id: "start-unconfirmed",
+            type: "start",
+            route: "/api/start",
+            status: "completed",
+            requestedAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+          },
+          timestamp: new Date().toISOString(),
+        }),
+      });
+    });
+
+    await page.goto("/");
+    await waitForPageLoad(page);
+    await page.getByRole("button", { name: /start server/i }).click();
+
+    await expect(page.getByText("Start completed successfully.")).toBeVisible();
+    await expect(page.getByText(/Failed: Remote dispatch could not be confirmed/)).not.toBeVisible();
+  });
+
+  for (const scenario of [
+    { name: "terminal failure", expected: "Failed: Accepted operation failed", status: 200 },
+    { name: "authorization failure", expected: "Failed: Your session expired. Please sign in again.", status: 401 },
+    { name: "timeout", expected: "Failed: Operation timed out while waiting for completion", status: 200 },
+  ] as const) {
+    test(`recovers from accepted-503 polling ${scenario.name} without an unhandled rejection`, async ({ page }) => {
+      await setupStoppedScenario(page);
+      const pageErrors: Error[] = [];
+      page.on("pageerror", (error) => pageErrors.push(error));
+      await page.route("**/api/start", async (route) => {
+        await route.fulfill({
+          status: 503,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: false,
+            error: "Remote dispatch could not be confirmed",
+            operation: { id: "start-poll-recovery", type: "start", status: "accepted" },
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      });
+      await page.route("**/api/operations/start-poll-recovery", async (route) => {
+        if (scenario.status === 401) {
+          await route.fulfill({
+            status: 401,
+            contentType: "application/json",
+            body: JSON.stringify({ success: false, error: "Authentication required" }),
+          });
+          return;
+        }
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true,
+            data: {
+              schemaVersion: 1,
+              id: "start-poll-recovery",
+              type: "start",
+              route: "/api/start",
+              status: "failed",
+              requestedAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+              lastError: "Accepted operation failed",
+            },
+            timestamp: new Date().toISOString(),
+          }),
+        });
+      });
+
+      await page.goto("/");
+      await waitForPageLoad(page);
+      if (scenario.name === "timeout") {
+        await page.evaluate(() => {
+          let now = Date.now();
+          Date.now = () => {
+            now += 18 * 60 * 1000;
+            return now;
+          };
+        });
+      }
+      await page.getByRole("button", { name: /start server/i }).click();
+
+      await expect(page.getByText(scenario.expected, { exact: true })).toBeVisible();
+      await expect(page.getByRole("button", { name: /start server/i })).toBeEnabled();
+      expect(pageErrors).toEqual([]);
+    });
+  }
+
+  test("does not begin operation polling when the page unmounts during the action POST", async ({ page }) => {
+    await setupStoppedScenario(page);
+    let operationPolls = 0;
+    await page.route("**/api/start", async (route) => {
+      await new Promise((resolve) => setTimeout(resolve, 300));
+      await route
+        .fulfill({
+          status: 202,
+          contentType: "application/json",
+          body: JSON.stringify({
+            success: true,
+            operation: { schemaVersion: 1, id: "start-after-unmount", type: "start", status: "accepted" },
+            timestamp: new Date().toISOString(),
+          }),
+        })
+        .catch(() => undefined);
+    });
+    await page.route("**/api/operations/start-after-unmount", async (route) => {
+      operationPolls += 1;
+      await route.fulfill({ status: 500, body: "unexpected poll" });
+    });
+
+    await page.goto("/");
+    await waitForPageLoad(page);
+    const postStarted = page.waitForRequest("**/api/start");
+    await page.getByRole("button", { name: /start server/i }).click();
+    await postStarted;
+    await page.goto("about:blank");
+    await page.waitForTimeout(600);
+
+    expect(operationPolls).toBe(0);
+  });
+
+  test("keeps the resume dialog close control reachable at 320 by 568", async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 568 });
+    await setupHibernatedScenario(page);
+    await page.goto("/");
+    await waitForPageLoad(page);
+    await page.getByRole("button", { name: /^resume$/i }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Resume World" });
+    const closeButton = page.getByRole("button", { name: "Close resume dialog" });
+    await expect(dialog).toBeVisible();
+    await expect(closeButton).toBeInViewport();
+    await closeButton.click();
+    await expect(dialog).not.toBeVisible();
   });
 
   test("shows loading state during stop operation", async ({ page }) => {

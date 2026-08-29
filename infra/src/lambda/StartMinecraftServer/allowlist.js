@@ -40,7 +40,7 @@ export async function updateAllowlist(emails) {
       Overwrite: true,
     })
   );
-  console.log(`Updated allowlist with ${emails.length} emails:`, emails);
+  console.log(`Updated allowlist with ${emails.length} entries`);
 }
 
 /**

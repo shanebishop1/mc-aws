@@ -133,7 +133,7 @@ mv -Tf -- "$SETUP_ROOT/.runtime-current" "$SETUP_ROOT/runtime"
 ln -sfn "$(basename -- "$profile_release")" "$SETUP_ROOT/.profile-current"
 mv -Tf -- "$SETUP_ROOT/.profile-current" "$SETUP_ROOT/profile"
 
-for script in check-mc-idle.sh mc-rclone-config.sh mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh update-dns.sh mc-profile-install.sh mc-stop.sh; do
+for script in check-mc-idle.sh mc-rclone-config.sh mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh mc-wait-ready.sh mc-runtime-rollout.sh update-dns.sh mc-profile-install.sh mc-stop.sh; do
   install -o root -g root -m 0755 "$SETUP_ROOT/runtime/$script" "/usr/local/bin/$script"
 done
 install -o root -g root -m 0644 "$SETUP_ROOT/runtime/minecraft.service" /etc/systemd/system/minecraft.service

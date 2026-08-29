@@ -87,4 +87,20 @@ describe("Worker secret upload entries", () => {
     expect(entries).toContainEqual({ key: "AUTH_SECRET", value: "selected-file-secret" });
     expect(entries.some(({ key }) => key === "AL2023_ARM64_AMI_ID")).toBe(false);
   });
+
+  it("accepts bootstrap provenance and emits DynamoDB table names only as deploy-config vars", () => {
+    const entries = buildWorkerSecretUploadEntries(
+      [
+        "AUTH_SECRET=selected-file-secret",
+        `MC_BOOTSTRAP_PINS_SHA256=${"a1".repeat(32)}`,
+        "MC_LIFECYCLE_LOCK_TABLE_NAME=mc-aws-lifecycle-lock",
+        "MC_OPERATION_STATE_TABLE_NAME=mc-aws-operation-state",
+      ].join("\n")
+    );
+
+    expect(entries).toContainEqual({ key: "AUTH_SECRET", value: "selected-file-secret" });
+    expect(entries.some(({ key }) => key === "MC_BOOTSTRAP_PINS_SHA256")).toBe(false);
+    expect(entries.some(({ key }) => key === "MC_LIFECYCLE_LOCK_TABLE_NAME")).toBe(false);
+    expect(entries.some(({ key }) => key === "MC_OPERATION_STATE_TABLE_NAME")).toBe(false);
+  });
 });

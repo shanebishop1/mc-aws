@@ -25,6 +25,9 @@ interface MockState {
   stack: boolean;
   stackId: string;
   stackDescribeCount: number;
+  stackSsmParameters: string[];
+  lifecycleLockTableName: string;
+  lifecycleLockTable: boolean;
   stackFinalFailure: boolean;
   deletedStackDescribable: boolean;
   replaceStackAfterInventory: boolean;
@@ -52,7 +55,12 @@ interface MockState {
   snapshotCreateCount: number;
   snapshotCreateFails: boolean;
   snapshotWaitFails: boolean;
+  rcloneCredentialPresent: boolean;
+  serverDataPresent: boolean;
+  credentialScrubFails: boolean;
+  instanceUserData: string;
   backupCache: { backups: unknown[]; cachedAt: number };
+  ssmParameters: Record<string, { type: "String" | "SecureString"; value: string }>;
   dlm: Array<{ PolicyId: string; Tags: Record<string, string> }>;
   failStackDeleteWaitOnce: boolean;
   stackDeleteWaitFailureConsumed?: boolean;
@@ -75,6 +83,9 @@ const baseState = (): MockState => ({
   stack: true,
   stackId,
   stackDescribeCount: 0,
+  stackSsmParameters: [],
+  lifecycleLockTableName: "",
+  lifecycleLockTable: false,
   stackFinalFailure: false,
   deletedStackDescribable: false,
   replaceStackAfterInventory: false,
@@ -106,7 +117,37 @@ const baseState = (): MockState => ({
   snapshotCreateCount: 0,
   snapshotCreateFails: false,
   snapshotWaitFails: false,
-  backupCache: { backups: [{ name: "backup-before-hibernate" }], cachedAt: 1_769_000_000_000 },
+  rcloneCredentialPresent: true,
+  serverDataPresent: true,
+  credentialScrubFails: false,
+  instanceUserData: "#!/bin/bash\n",
+  backupCache: { backups: [{ name: "backup-before-hibernate" }], cachedAt: Date.now() },
+  ssmParameters: {
+    "/minecraft/gdrive-token": { type: "SecureString", value: "credential-envelope" },
+    "/minecraft/backups-cache": { type: "String", value: "backup-cache" },
+    "/minecraft/last-scheduled-backup-success": { type: "String", value: "2026-08-23T05:00:00.000Z" },
+    "/minecraft/scheduled-backup-enabled-at": { type: "String", value: "2026-08-16T05:00:00.000Z" },
+    "/minecraft/email-allowlist": { type: "String", value: "owner@example.invalid" },
+    "/minecraft/player-count": { type: "String", value: "0" },
+    "/minecraft/operations/start-1769000000000-11111111-2222-4333-8444-555555555555": {
+      type: "String",
+      value: "operation-state",
+    },
+    "/minecraft/operations/email-0123456789abcdef0123456789abcdef01234567": {
+      type: "String",
+      value: "email-operation-state",
+    },
+    "/minecraft/operations/email-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee": {
+      type: "String",
+      value: "email-operation-state-without-event-id",
+    },
+    "/minecraft/server-action": { type: "String", value: "pii-bearing-lock" },
+    "/minecraft/server-action-delete-claim/current": { type: "String", value: "pii-bearing-hint" },
+    "/minecraft/server-action-delete-claim/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee": {
+      type: "String",
+      value: "pii-bearing-transition",
+    },
+  },
   dlm: [],
   failStackDeleteWaitOnce: false,
   instanceWriteGeneration: 0,
@@ -131,7 +172,15 @@ const baseManifest = () => ({
         McAwsStack: "MinecraftStack",
       },
     },
-    dlmPolicies: [],
+    dlmPolicies: [] as Array<Record<string, unknown>>,
+    ssmParameters: Object.entries(baseState().ssmParameters).map(([name, parameter]) => ({
+      name,
+      type: parameter.type,
+      createdByProject: true,
+      ownership: "created",
+      observedBeforeSetup: "absent",
+      source: "setup-preflight",
+    })),
   },
   cloudflare: {
     accountId: cloudflareAccountId,
@@ -186,6 +235,14 @@ if (tool === "aws") {
     if (!state.stack && state.deletedStackDescribable && requested === state.stackId) output({ Stacks: [{ StackId: state.stackId, StackStatus: "DELETE_COMPLETE" }] });
     else if (!state.stack || (requested.startsWith("arn:") && requested !== state.stackId)) fail("ValidationError: Stack does not exist");
     else output({ Stacks: [{ StackId: state.stackId }] });
+  } else if (service === "cloudformation" && command === "list-stack-resources") {
+    if (!state.stack) fail("ValidationError: Stack does not exist");
+    output({ StackResourceSummaries: [
+      ...state.stackSsmParameters.map((PhysicalResourceId, index) => ({
+      LogicalResourceId: "SsmParameter" + index, ResourceType: "AWS::SSM::Parameter", PhysicalResourceId,
+      })),
+      ...(state.lifecycleLockTableName ? [{ LogicalResourceId: "LifecycleLockTableABC123", ResourceType: "AWS::DynamoDB::Table", PhysicalResourceId: state.lifecycleLockTableName }] : []),
+    ] });
   } else if (service === "cloudformation" && command === "delete-stack") {
     const requested = args[args.indexOf("--stack-name") + 1];
     if (!state.stack || requested !== state.stackId) fail("ValidationError: Stack does not exist");
@@ -226,8 +283,12 @@ if (tool === "aws") {
     if (!policy) fail("ResourceNotFoundException"); output({ Policy: policy });
   } else if (service === "dlm" && command === "delete-lifecycle-policy") {
     const id = args[args.indexOf("--policy-id") + 1]; state.dlm = state.dlm.filter((item) => item.PolicyId !== id); mutate("dlm:delete:" + id);
-  } else if (service === "ec2" && command === "describe-volumes") output({ Volumes: state.volumes });
-  else if (service === "ec2" && command === "describe-snapshots") {
+  } else if (service === "ec2" && command === "describe-volumes") {
+    const requested = args.includes("--volume-ids") ? args[args.indexOf("--volume-ids") + 1] : undefined;
+    const volumes = requested ? state.volumes.filter((volume) => volume.VolumeId === requested) : state.volumes;
+    if (requested && volumes.length === 0) fail("InvalidVolume.NotFound");
+    output({ Volumes: volumes });
+  } else if (service === "ec2" && command === "describe-snapshots") {
     const requested = args.includes("--snapshot-ids") ? args[args.indexOf("--snapshot-ids") + 1] : undefined;
     output({ Snapshots: requested ? state.snapshots.filter((item) => item.SnapshotId === requested) : state.snapshots });
   } else if (service === "ec2" && command === "create-snapshot") {
@@ -266,11 +327,49 @@ if (tool === "aws") {
         { Key: "McAwsProject", Value: "mc-aws" }, { Key: "McAwsStack", Value: "MinecraftStack" },
         { Key: "aws:cloudformation:stack-id", Value: state.stackId },
       ] }] }] });
-  } else if (service === "ssm" && command === "get-parameter") output({ Parameter: { Value: JSON.stringify(state.backupCache) } });
+  } else if (service === "ec2" && command === "describe-instance-attribute") {
+    output({ InstanceId: instanceId, UserData: { Value: Buffer.from(state.instanceUserData).toString("base64") } });
+  } else if (service === "ec2" && command === "delete-volume") {
+    const id = args[args.indexOf("--volume-id") + 1];
+    state.volumes = state.volumes.filter((volume) => volume.VolumeId !== id); mutate("ec2:delete-volume:" + id);
+  } else if (service === "ssm" && command === "describe-parameters") {
+    const filter = args[args.indexOf("--parameter-filters") + 1] || "";
+    const exactName = filter.startsWith("Key=Name,Option=Equals,Values=") ? filter.slice("Key=Name,Option=Equals,Values=".length) : undefined;
+    const entries = Object.entries(state.ssmParameters).filter(([Name]) => !exactName || Name === exactName);
+    if (exactName && args.includes("--query")) output(entries.map(([Name]) => Name).join("\t"));
+    else output(entries.map(([Name, item]) => ({ Name, Type: item.type })));
+  } else if (service === "ssm" && command === "get-parameter") {
+    const name = args[args.indexOf("--name") + 1];
+    const item = state.ssmParameters[name];
+    if (!item) fail("ParameterNotFound");
+    if (args.includes("--query")) output(name);
+    else if (name === "/minecraft/backups-cache") { mutate("ssm:read-backup-evidence"); output({ Parameter: { Name: name, Type: item.type, Value: JSON.stringify(state.backupCache) } }); }
+    else output({ Parameter: { Name: name, Type: item.type, Value: item.value } });
+  } else if (service === "ssm" && command === "delete-parameter") {
+    const name = args[args.indexOf("--name") + 1];
+    if (!state.ssmParameters[name]) fail("ParameterNotFound");
+    delete state.ssmParameters[name]; mutate("ssm:delete-parameter:" + name);
+  } else if (service === "dynamodb" && command === "describe-table") {
+    if (!state.lifecycleLockTable) fail("ResourceNotFoundException");
+    output({ Table: { TableName: state.lifecycleLockTableName, TableArn: "arn:aws:dynamodb:us-east-1:" + accountId + ":table/" + state.lifecycleLockTableName } });
+  } else if (service === "dynamodb" && command === "list-tags-of-resource") {
+    output({ Tags: [{ Key: "McAwsProject", Value: "mc-aws" }, { Key: "McAwsStack", Value: "MinecraftStack" }, { Key: "McAwsPurpose", Value: "LifecycleLock" }] });
+  } else if (service === "dynamodb" && command === "delete-table") {
+    state.lifecycleLockTable = false; mutate("dynamodb:delete-table:" + state.lifecycleLockTableName);
+  } else if (service === "dynamodb" && command === "wait") {
+    if (state.lifecycleLockTable) fail("WaiterError: table still exists");
+  }
   else if (service === "ssm" && command === "send-command") {
-    mutate("ssm:quiesce-minecraft"); output({ Command: { CommandId: "11111111-2222-4333-8444-555555555555" } });
+    const serialized = args[args.indexOf("--parameters") + 1] || "";
+    mutate("ssm:quiesce-minecraft");
+    if (serialized.includes("rclone.conf")) {
+      mutate("ssm:scrub-rclone");
+      if (!state.credentialScrubFails) state.rcloneCredentialPresent = false;
+      save();
+    }
+    output({ Command: { CommandId: "11111111-2222-4333-8444-555555555555" } });
   } else if (service === "ssm" && command === "wait") {
-    if (state.ssmCommandFails) fail("WaiterError: command failed");
+    if (state.ssmCommandFails || state.credentialScrubFails) fail("WaiterError: command failed");
   } else if (service === "ssm" && command === "get-command-invocation") {
     output({ CommandId: "11111111-2222-4333-8444-555555555555", InstanceId: instanceId, Status: state.ssmCommandFails ? "Failed" : "Success" });
   }
@@ -365,14 +464,34 @@ afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
 });
 
-const confirmation = `destroy MinecraftStack in ${accountId}/us-east-1\n`;
+const standardConfirmation = `destroy MinecraftStack in ${accountId}/us-east-1\n`;
+const driveConfirmation = `drive backup directly verified for ${stackId}\n`;
+const confirmation = `${standardConfirmation}${driveConfirmation}`;
 
-describe("ownership-aware destroy", () => {
+describe("ownership-aware destroy", { timeout: 60_000 }, () => {
   it("defaults to live dry-run with no mutation", () => {
     const harness = makeHarness();
     const result = harness.run();
     expect(result.status).toBe(0);
     expect(result.stdout).toContain("DRY RUN (default)");
+    expect(result.stdout).toContain("/minecraft/gdrive-token [SecureString; credential; ownership=created;");
+    expect(result.stdout).toContain("/minecraft/email-allowlist [String; pii; ownership=created;");
+    expect(result.stdout).toContain(
+      "/minecraft/last-scheduled-backup-success [String; runtime-state; ownership=created;"
+    );
+    expect(result.stdout).toContain(
+      "/minecraft/scheduled-backup-enabled-at [String; runtime-state; ownership=created;"
+    );
+    expect(result.stdout).toContain(
+      "/minecraft/operations/email-0123456789abcdef0123456789abcdef01234567 [String; pii; ownership=created;"
+    );
+    expect(result.stdout).toContain(
+      "/minecraft/operations/email-aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee [String; pii; ownership=created;"
+    );
+    expect(result.stdout).toContain("/minecraft/server-action-delete-claim/current [String; pii; ownership=created;");
+    expect(result.stdout).toContain(
+      "/minecraft/server-action-delete-claim/aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee [String; pii; ownership=created;"
+    );
     expect(harness.readState().mutations).toEqual([]);
   });
 
@@ -383,12 +502,199 @@ describe("ownership-aware destroy", () => {
     expect(result.stdout).toContain("Data preservation:    google-drive");
     expect(harness.readState().mutations.some((entry) => entry.startsWith("ec2:create-snapshot"))).toBe(false);
     expect(harness.readState().mutations).toContain(`cloudformation:stack-deleted:${stackId}`);
+    expect(harness.readState().mutations).toContain("ssm:delete-parameter:/minecraft/gdrive-token");
+    expect(harness.readState().ssmParameters).toEqual({});
+    expect(result.stdout).toContain("No project SSM parameters remain under /minecraft");
     expect((harness.readManifest().teardown as Record<string, unknown>).googleDriveBackupEvidence).toMatchObject({
       parameterName: "/minecraft/backups-cache",
       backupCount: 1,
-      cacheCachedAt: 1_769_000_000_000,
+      cacheCachedAt: expect.any(Number),
     });
   }, 20_000);
+
+  it("retains only the Drive credential when explicitly requested for migration", () => {
+    const harness = makeHarness();
+    const result = harness.run(["--execute", "--retain-gdrive-token-for-migration"], confirmation);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(harness.readState().ssmParameters).toEqual({
+      "/minecraft/gdrive-token": { type: "SecureString", value: "credential-envelope" },
+    });
+    expect(result.stdout).toContain("Security residual: retained credential /minecraft/gdrive-token");
+  }, 20_000);
+
+  it("preserves and blocks on an SSM path outside the exact project allowlist", () => {
+    const harness = makeHarness({
+      ssmParameters: {
+        ...baseState().ssmParameters,
+        "/minecraft/unreviewed-secret": { type: "SecureString", value: "do-not-delete" },
+      },
+    });
+    const result = harness.run(["--execute"], confirmation);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("ownership is not proven");
+    expect(harness.readState().mutations).toEqual([]);
+    expect(harness.readState().ssmParameters["/minecraft/unreviewed-secret"]).toBeDefined();
+  });
+
+  it("requires installation ownership or exact-name consent for familiar SSM credentials", () => {
+    const removeOwnership = (manifest: ReturnType<typeof baseManifest>) => {
+      manifest.aws.ssmParameters = [];
+    };
+    const unproven = makeHarness(
+      { ssmParameters: { "/minecraft/gdrive-token": baseState().ssmParameters["/minecraft/gdrive-token"] } },
+      removeOwnership
+    );
+    const blocked = unproven.run();
+    expect(blocked.status).not.toBe(0);
+    expect(blocked.stderr).toContain("ownership is not proven");
+    expect(blocked.stdout).toContain("ownership=unproven");
+
+    const consented = makeHarness(
+      { ssmParameters: { "/minecraft/gdrive-token": baseState().ssmParameters["/minecraft/gdrive-token"] } },
+      removeOwnership
+    );
+    const allowedDryRun = consented.run(["--consent-delete-ssm", "/minecraft/gdrive-token"]);
+    expect(allowedDryRun.status, `${allowedDryRun.stdout}\n${allowedDryRun.stderr}`).toBe(0);
+    expect(allowedDryRun.stdout).toContain("delete-consented");
+    expect(consented.readState().mutations).toEqual([]);
+  }, 20_000);
+
+  it("migrates exact native stack-resource identity without inferring custom/runtime ownership", () => {
+    const parameterName = "/minecraft/server-profile-manifest";
+    const harness = makeHarness(
+      {
+        stackSsmParameters: [parameterName],
+        ssmParameters: { [parameterName]: { type: "String", value: "profile" } },
+      },
+      (manifest) => {
+        manifest.aws.ssmParameters = [];
+      }
+    );
+    const result = harness.run();
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      `${parameterName} [String; runtime-state; ownership=created; evidence=exact-stack-resource] => delete`
+    );
+  });
+
+  it("classifies legacy GitHub parameters and blocks while live user data depends on them", () => {
+    const githubPat = { type: "SecureString" as const, value: "legacy-pat" };
+    const harness = makeHarness(
+      {
+        instanceUserData: "#!/bin/bash\naws ssm get-parameter --name /minecraft/github-pat\n",
+        ssmParameters: { ...baseState().ssmParameters, "/minecraft/github-pat": githubPat },
+      },
+      (manifest) => {
+        manifest.aws.ssmParameters.push({
+          name: "/minecraft/github-pat",
+          type: "SecureString",
+          createdByProject: true,
+          ownership: "created",
+          observedBeforeSetup: "absent",
+          source: "setup-preflight",
+        });
+      }
+    );
+    const result = harness.run();
+    expect(result.status).not.toBe(0);
+    expect(result.stdout).toContain("legacy-credential");
+    expect(result.stdout).toContain("revoke the PAT in GitHub");
+    expect(result.stderr).toContain("user data still depends on legacy GitHub SSM parameters");
+  });
+
+  it("blocks absent-stack cleanup without durable preservation or a second exact confirmation", () => {
+    const blocked = makeHarness({ stack: false, rootVolume: false, volumes: [] });
+    const dryRun = blocked.run();
+    expect(dryRun.status).not.toBe(0);
+    expect(dryRun.stderr).toContain("no durable final-data-preservation record exists");
+
+    const confirmed = makeHarness({ stack: false, rootVolume: false, volumes: [] });
+    const dataPhrase = `data preservation independently verified for ${stackId}\n`;
+    const result = confirmed.run(["--execute", "--confirm-absent-stack-data"], `${standardConfirmation}${dataPhrase}`);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+  }, 20_000);
+
+  it.each([
+    "/minecraft/operations/email-not-a-hash",
+    "/minecraft/operations/start-1769000000000-not-a-uuid",
+    "/minecraft/server-action-delete-claim/not-a-uuid",
+    "/minecraft/server-action-delete-claim/current/extra",
+  ])("rejects malformed runtime path %s", (parameterName) => {
+    const harness = makeHarness({
+      ssmParameters: {
+        ...baseState().ssmParameters,
+        [parameterName]: { type: "String", value: "preserve" },
+      },
+    });
+    const result = harness.run();
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `ownership is not proven; preserve it or pass explicit exact-name consent: ${parameterName}`
+    );
+    expect(harness.readState().mutations).toEqual([]);
+  });
+
+  it("passes backup preservation before Cloudflare, KV, DNS, DLM, and IAM cleanup", () => {
+    const policyId = "policy-aaaaaaaa";
+    const harness = makeHarness(
+      {
+        routes: [{ id: routeId, pattern: "panel.example.com/*", script: "mc-aws-panel" }],
+        dns: [{ id: dnsId, zoneId, type: "A", name: "panel.example.com", content: "192.0.2.1", proxied: true }],
+        dlm: [{ PolicyId: policyId, Tags: { McAwsProject: "mc-aws", McAwsStack: "MinecraftStack" } }],
+      },
+      (manifest) => {
+        manifest.cloudflare.panelHosting = { mode: "custom", workersDevEnabled: false };
+        manifest.cloudflare.routes = [
+          {
+            zoneId,
+            id: routeId,
+            pattern: "panel.example.com/*",
+            script: "mc-aws-panel",
+            createdByProject: true,
+            ownershipProven: true,
+            ownership: "created",
+            originalScript: "",
+          },
+        ];
+        manifest.cloudflare.panelDnsRecords = [
+          {
+            zoneId,
+            id: dnsId,
+            name: "panel.example.com",
+            type: "A",
+            content: "192.0.2.1",
+            proxied: true,
+            createdByProject: true,
+            modifiedByProject: false,
+            ownership: "created",
+          },
+        ];
+        manifest.aws.dlmPolicies = [
+          {
+            id: policyId,
+            createdByProject: true,
+            ownership: "created",
+            expectedTags: { McAwsProject: "mc-aws", McAwsStack: "MinecraftStack" },
+          },
+        ];
+      }
+    );
+    const result = harness.run(["--execute"], confirmation);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const mutations = harness.readState().mutations;
+    const gateIndex = mutations.indexOf("ssm:read-backup-evidence");
+    expect(gateIndex).toBeGreaterThanOrEqual(0);
+    for (const irreversible of [
+      `cf:route-delete:${routeId}`,
+      "wrangler:worker-delete",
+      `wrangler:kv-delete:${kvId}`,
+      `cf:dns-delete:${dnsId}`,
+      `dlm:delete:${policyId}`,
+      "iam:delete-key:AKIAOWNEDRUNTIMEKEY",
+    ]) {
+      expect(mutations.indexOf(irreversible), irreversible).toBeGreaterThan(gateIndex);
+    }
+  }, 25_000);
 
   it("accepts exact DELETE_COMPLETE stack history and current Wrangler 10007 Worker absence", () => {
     const harness = makeHarness({ deletedStackDescribable: true, workerNotFoundCode: 10007 });
@@ -398,10 +704,15 @@ describe("ownership-aware destroy", () => {
   }, 20_000);
 
   it("creates, waits for, verifies, and records a final root snapshot before exact StackId deletion", () => {
-    const harness = makeHarness();
+    const harness = makeHarness({ instanceState: "running" });
     const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     const state = harness.readState();
+    expect(state.rcloneCredentialPresent).toBe(false);
+    expect(state.serverDataPresent).toBe(true);
+    expect(state.mutations.indexOf("ssm:scrub-rclone")).toBeLessThan(
+      state.mutations.indexOf(`ec2:create-snapshot:${snapshotId}`)
+    );
     expect(state.mutations).toContain(`ec2:create-snapshot:${snapshotId}`);
     expect(state.mutations.indexOf(`ec2:create-snapshot:${snapshotId}`)).toBeLessThan(
       state.mutations.findIndex((entry) => entry === `cloudformation:delete-stack:${stackId}`)
@@ -415,8 +726,26 @@ describe("ownership-aware destroy", () => {
     });
   }, 20_000);
 
+  it("aborts snapshot creation when reusable credential scrubbing fails", () => {
+    const harness = makeHarness({ instanceState: "running", credentialScrubFails: true });
+    const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
+    expect(result.status).not.toBe(0);
+    expect(harness.readState().rcloneCredentialPresent).toBe(true);
+    expect(harness.readState().serverDataPresent).toBe(true);
+    expect(harness.readState().mutations.some((entry) => entry.startsWith("ec2:create-snapshot"))).toBe(false);
+    expect(harness.readState().mutations.some((entry) => entry.startsWith("cloudformation:delete-stack"))).toBe(false);
+  }, 20_000);
+
+  it("refuses to snapshot an already-stopped root without durable scrub evidence", () => {
+    const harness = makeHarness();
+    const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("no durable credential-scrub evidence");
+    expect(harness.readState().mutations.some((entry) => entry.startsWith("ec2:create-snapshot"))).toBe(false);
+  });
+
   it("blocks stack deletion when final snapshot creation fails", () => {
-    const harness = makeHarness({ snapshotCreateFails: true });
+    const harness = makeHarness({ instanceState: "running", snapshotCreateFails: true });
     const result = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("blocking CloudFormation stack deletion");
@@ -462,7 +791,7 @@ describe("ownership-aware destroy", () => {
   );
 
   it("resumes a failed snapshot wait without creating a duplicate snapshot", () => {
-    const harness = makeHarness({ snapshotWaitFails: true });
+    const harness = makeHarness({ instanceState: "running", snapshotWaitFails: true });
     const first = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(first.status).not.toBe(0);
     expect(harness.readState().mutations.filter((entry) => entry.startsWith("ec2:create-snapshot"))).toHaveLength(1);
@@ -484,12 +813,12 @@ describe("ownership-aware destroy", () => {
     const harness = makeHarness({
       rootVolume: false,
       volumes: [],
-      backupCache: { backups: [], cachedAt: 1_769_000_000_000 },
+      backupCache: { backups: [], cachedAt: Date.now() },
     });
     const result = harness.run(["--execute"], confirmation);
     expect(result.status).not.toBe(0);
-    expect(result.stderr).toContain("requires non-empty backup cache evidence with a valid cachedAt");
-    expect(harness.readState().mutations.some((entry) => entry.startsWith("cloudformation:delete-stack"))).toBe(false);
+    expect(result.stderr).toContain("requires non-empty backup cache evidence refreshed within the last 24 hours");
+    expect(harness.readState().mutations).toEqual(["ssm:read-backup-evidence"]);
 
     const invalidTimestamp = makeHarness({
       rootVolume: false,
@@ -498,7 +827,23 @@ describe("ownership-aware destroy", () => {
     });
     const invalidResult = invalidTimestamp.run(["--execute"], confirmation);
     expect(invalidResult.status).not.toBe(0);
-    expect(invalidResult.stderr).toContain("valid cachedAt");
+    expect(invalidResult.stderr).toContain("refreshed within the last 24 hours");
+  }, 20_000);
+
+  it("rejects stale backup-cache evidence and missing direct Drive confirmation", () => {
+    const stale = makeHarness({
+      backupCache: { backups: [{ name: "old-backup" }], cachedAt: Date.now() - 25 * 60 * 60 * 1000 },
+    });
+    const staleResult = stale.run(["--execute"], confirmation);
+    expect(staleResult.status).not.toBe(0);
+    expect(staleResult.stderr).toContain("refreshed within the last 24 hours");
+    expect(stale.readState().mutations).toEqual(["ssm:read-backup-evidence"]);
+
+    const unconfirmed = makeHarness();
+    const unconfirmedResult = unconfirmed.run(["--execute"], standardConfirmation);
+    expect(unconfirmedResult.status).not.toBe(0);
+    expect(unconfirmedResult.stderr).toContain("Direct Google Drive verification confirmation did not match");
+    expect(unconfirmed.readState().mutations).toEqual([]);
   }, 20_000);
 
   it("records existing backup evidence when hibernated and performs no EBS snapshot", () => {
@@ -509,9 +854,65 @@ describe("ownership-aware destroy", () => {
     expect((harness.readManifest().teardown as Record<string, unknown>).googleDriveBackupEvidence).toMatchObject({
       parameterName: "/minecraft/backups-cache",
       backupCount: 1,
-      cacheCachedAt: 1_769_000_000_000,
+      cacheCachedAt: expect.any(Number),
     });
   }, 20_000);
+
+  it("deletes an exact detached reconstructed root only after Drive evidence", () => {
+    const detached = {
+      VolumeId: volumeId,
+      State: "available",
+      Attachments: [],
+      Tags: [
+        { Key: "McAwsProject", Value: "mc-aws" },
+        { Key: "McAwsStack", Value: "MinecraftStack" },
+        { Key: "McAwsManagedRoot", Value: "true" },
+        { Key: "McAwsInstanceId", Value: instanceId },
+      ],
+    };
+    const harness = makeHarness({ rootVolume: false, volumes: [detached] });
+    const result = harness.run(["--execute"], confirmation);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const mutations = harness.readState().mutations;
+    expect(mutations.indexOf("ssm:read-backup-evidence")).toBeLessThan(
+      mutations.indexOf(`ec2:delete-volume:${volumeId}`)
+    );
+  }, 20_000);
+
+  it("deletes an exactly identified legacy retained lifecycle lock table only after stack deletion", () => {
+    const tableName = "MinecraftStack-LifecycleLockTable-ABC123";
+    const harness = makeHarness({ lifecycleLockTableName: tableName, lifecycleLockTable: true });
+    const result = harness.run(["--execute"], confirmation);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    const mutations = harness.readState().mutations;
+    expect(mutations.indexOf(`cloudformation:stack-deleted:${stackId}`)).toBeLessThan(
+      mutations.indexOf(`dynamodb:delete-table:${tableName}`)
+    );
+    expect(harness.readState().lifecycleLockTable).toBe(false);
+  }, 20_000);
+
+  it("blocks an ambiguous detached root and refuses offline snapshot scrubbing", () => {
+    const detached = {
+      VolumeId: volumeId,
+      State: "available",
+      Attachments: [],
+      Tags: [
+        { Key: "McAwsProject", Value: "mc-aws" },
+        { Key: "McAwsStack", Value: "MinecraftStack" },
+        { Key: "McAwsManagedRoot", Value: "true" },
+      ],
+    };
+    const ambiguous = makeHarness({ rootVolume: false, volumes: [detached] });
+    expect(ambiguous.run().stderr).toContain("detached managed root volume candidates are ambiguous");
+
+    const exact = makeHarness({
+      rootVolume: false,
+      volumes: [{ ...detached, Tags: [...detached.Tags, { Key: "McAwsInstanceId", Value: instanceId }] }],
+    });
+    const result = exact.run(["--execute", "--retain-final-snapshot"], confirmation);
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cannot be credential-scrubbed offline");
+  }, 15_000);
 
   it("accepts exact HTTP 404/81044 DNS absence but rejects other 404 bodies", () => {
     const addOwnedDns = (manifest: ReturnType<typeof baseManifest>) => {
@@ -534,7 +935,7 @@ describe("ownership-aware destroy", () => {
     const rejected = makeHarness({ dnsMissingCode: 10000 }, addOwnedDns).run();
     expect(rejected.status).not.toBe(0);
     expect(rejected.stderr).toContain("unexpected error");
-  });
+  }, 15_000);
 
   it("deletes exact owned route and DNS identities", () => {
     const harness = makeHarness(
@@ -652,13 +1053,13 @@ describe("ownership-aware destroy", () => {
     const stack = makeHarness({ stackId: replacementStackId }).run();
     expect(stack.status).not.toBe(0);
     expect(stack.stderr).toContain("stack ID does not match");
-  });
+  }, 15_000);
 
   it("revalidates IAM tags and exact stack identity before destructive AWS mutations", () => {
     const iamHarness = makeHarness({ changeIamTagsAfterInventory: true });
     const iamResult = iamHarness.run(["--execute"], confirmation);
     expect(iamResult.status).not.toBe(0);
-    expect(iamResult.stderr).toContain("immediately before access-key revocation");
+    expect(iamResult.stderr).toContain("before final data preservation");
     expect(iamHarness.readState().mutations.some((entry) => entry.startsWith("iam:"))).toBe(false);
 
     const stackHarness = makeHarness({ replaceStackAfterInventory: true });
@@ -690,7 +1091,7 @@ describe("ownership-aware destroy", () => {
   });
 
   it("creates a fresh snapshot after stack deletion failure and remains idempotent", () => {
-    const harness = makeHarness({ failStackDeleteWaitOnce: true });
+    const harness = makeHarness({ instanceState: "running", failStackDeleteWaitOnce: true });
     const first = harness.run(["--execute", "--retain-final-snapshot"], confirmation);
     expect(first.status).not.toBe(0);
     expect(harness.readState().mutations.filter((entry) => entry.startsWith("ec2:create-snapshot"))).toEqual([
@@ -732,7 +1133,15 @@ describe("ownership-aware destroy", () => {
   }, 50_000);
 
   it("cleans up an exactly tagged runtime IAM orphan after the stack is already absent", () => {
-    const harness = makeHarness({ stack: false, rootVolume: false, volumes: [] });
+    const harness = makeHarness({ stack: false, rootVolume: false, volumes: [] }, (manifest) => {
+      manifest.teardown.completedResources = ["final-data-preservation"];
+      manifest.teardown.googleDriveBackupEvidence = {
+        parameterName: "/minecraft/backups-cache",
+        backupCount: 1,
+        cacheCachedAt: 1_769_000_000_000,
+        observedAt: "2026-01-01T00:00:00Z",
+      };
+    });
     const result = harness.run(["--execute"], confirmation);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(harness.readState().mutations).toEqual(

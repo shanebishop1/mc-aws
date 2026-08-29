@@ -3,6 +3,7 @@
  * Returns the current server state and details
  */
 
+import { randomBytes } from "node:crypto";
 import { getAuthUser } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { findInstanceId, getInstanceDetails } from "@/lib/aws";
@@ -26,6 +27,7 @@ type CachedStatusSnapshot = {
   displayState: ServerState;
   publicIp?: string;
   hasVolume: boolean;
+  refreshProbe?: string;
 };
 
 function mapEc2StateToServerState(state: string | undefined): ServerState {
@@ -83,11 +85,13 @@ function buildStatusPayload(
 function buildStatusResponse(
   payload: ApiResponse<ServerStatusResponse>,
   user: import("@/lib/api-auth").AuthUser | null,
-  cacheStatus: "HIT" | "MISS"
+  cacheStatus: "HIT" | "MISS",
+  refreshProbe?: string
 ): NextResponse<ApiResponse<ServerStatusResponse>> {
   const headers = new Headers();
   headers.set("Vary", "Cookie");
   headers.set("X-Status-Cache", cacheStatus);
+  if (user && refreshProbe) headers.set("X-Status-Refresh-Probe", refreshProbe);
 
   if (user) {
     headers.set("Cache-Control", "private, no-store");
@@ -109,9 +113,18 @@ function buildStatusErrorResponse(error: unknown): NextResponse<ApiResponse<Serv
   return response;
 }
 
+function shouldForceStatusRefresh(request: NextRequest, authenticated: boolean): boolean {
+  return authenticated && request.nextUrl.searchParams.get("refresh") === "1";
+}
+
+function createRefreshProbe(forceRefresh: boolean): string | undefined {
+  return forceRefresh ? randomBytes(16).toString("hex") : undefined;
+}
+
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServerStatusResponse>>> {
   const user = await getAuthUser(request);
-  console.log("[STATUS] Access by:", user?.email ?? "anonymous");
+  const forceRefresh = shouldForceStatusRefresh(request, Boolean(user));
+  console.log(user ? "[STATUS] Authenticated status read" : "[STATUS] Anonymous status read");
 
   if (!IS_TEST_ENV) {
     const clientIp = getClientIp(request.headers);
@@ -140,7 +153,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
   try {
     const runtimeStateAdapter = await getRuntimeStateAdapterAsync();
 
-    if (!IS_TEST_ENV) {
+    if (!IS_TEST_ENV && !forceRefresh) {
       const cachedSnapshotResult = await runtimeStateAdapter.getSnapshot<CachedStatusSnapshot>({
         key: snapshotCacheKeys.status,
       });
@@ -155,7 +168,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
         });
 
         const payload = buildStatusPayload(cachedSnapshotResult.data.value, user);
-        return buildStatusResponse(payload, user, "HIT");
+        return buildStatusResponse(payload, user, "HIT", cachedSnapshotResult.data.value.refreshProbe);
       }
 
       if (!cachedSnapshotResult.ok) {
@@ -172,7 +185,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     // Always resolve instance ID server-side - do not trust caller input
     const instanceId = await findInstanceId();
-    console.log("[STATUS] Getting server status for instance:", instanceId);
+    console.log("[STATUS] Getting managed server status");
 
     const { blockDeviceMappings, publicIp, state: ec2State } = await getInstanceDetails(instanceId);
     const state = mapEc2StateToServerState(ec2State);
@@ -187,6 +200,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       displayState,
       publicIp,
       hasVolume,
+      refreshProbe: createRefreshProbe(forceRefresh),
     };
 
     if (!IS_TEST_ENV) {
@@ -197,6 +211,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
       });
 
       if (!writeSnapshotResult.ok) {
+        snapshot.refreshProbe = undefined;
         emitRuntimeStateTelemetry({
           operation: "status.snapshot-cache",
           outcome: "FALLBACK",
@@ -219,7 +234,7 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     const payload = buildStatusPayload(snapshot, user);
 
-    return buildStatusResponse(payload, user, "MISS");
+    return buildStatusResponse(payload, user, "MISS", snapshot.refreshProbe);
   } catch (error) {
     emitRuntimeStateTelemetry({
       operation: "status.snapshot-cache",

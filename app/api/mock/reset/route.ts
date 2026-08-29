@@ -29,8 +29,7 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
 
   // Require authentication for mutations
   try {
-    const user = await requireAllowed(_request);
-    console.log("[MOCK-CONTROL] Reset by:", user.email, "role:", user.role);
+    await requireAllowed(_request);
   } catch (error) {
     if (error instanceof Response) {
       return error as NextResponse<ApiResponse<unknown>>;

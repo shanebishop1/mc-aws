@@ -4,15 +4,18 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { ensureInstanceRunningMock, executeSSMCommandMock, getParameterMock, putParameterMock } = vi.hoisted(() => ({
-  ensureInstanceRunningMock: vi.fn(),
-  executeSSMCommandMock: vi.fn(),
-  getParameterMock: vi.fn(),
-  putParameterMock: vi.fn(),
-}));
+const { ensureInstanceRunningMock, getInstanceStateMock, executeSSMCommandMock, getParameterMock, putParameterMock } =
+  vi.hoisted(() => ({
+    ensureInstanceRunningMock: vi.fn(),
+    getInstanceStateMock: vi.fn(),
+    executeSSMCommandMock: vi.fn(),
+    getParameterMock: vi.fn(),
+    putParameterMock: vi.fn(),
+  }));
 
 vi.mock("../ec2.js", () => ({
   ensureInstanceRunning: ensureInstanceRunningMock,
+  getInstanceState: getInstanceStateMock,
 }));
 
 vi.mock("../ssm.js", () => ({
@@ -31,6 +34,7 @@ describe("handleRefreshBackups", () => {
     executeSSMCommandMock.mockResolvedValue("");
     putParameterMock.mockResolvedValue(undefined);
     getParameterMock.mockResolvedValue(null);
+    getInstanceStateMock.mockResolvedValue("running");
   });
 
   it("writes pending before work and ready on successful completion", async () => {
@@ -73,6 +77,16 @@ describe("handleRefreshBackups", () => {
     expect(command).toContain("/usr/local/bin/mc-rclone-config.sh");
     expect(command).toContain("mc-rclone-config.sh'\"'\"' >/dev/null");
     expect(command.indexOf("mc-rclone-config.sh")).toBeLessThan(command.indexOf(" lsf"));
+  });
+
+  it("does not start EC2 when no-start refresh observes a stopped instance", async () => {
+    getInstanceStateMock.mockResolvedValueOnce("stopped");
+
+    await expect(handleRefreshBackups("i-abc123", { requireAlreadyRunning: true })).rejects.toMatchObject({
+      name: "ScheduledBackupInstanceNotRunning",
+    });
+    expect(ensureInstanceRunningMock).not.toHaveBeenCalled();
+    expect(executeSSMCommandMock).not.toHaveBeenCalled();
   });
 
   it("keeps nested shell metacharacters and single quotes in the Drive path as data", () => {

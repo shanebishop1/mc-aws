@@ -33,8 +33,9 @@ pnpm docs:check
 Also run checks relevant to the changed surface:
 
 - Browser/mock flows: `pnpm exec playwright install chromium`, then `pnpm test:e2e:mock`.
-- Production UI/runtime: `pnpm build`. CI also performs a clean OpenNext build.
+- Production UI/runtime: `pnpm build:production:check`. This removes prior Next.js output and builds with the same credential-free fixture values as CI. It explicitly overrides mock-mode settings, so you do not need to rename or edit a mock `.env.local`. CI also performs a clean OpenNext build.
 - Infrastructure: run affected contract tests. CI performs a clean CDK synth with its required test context. Never deploy merely to validate a pull request.
+- Bootstrap or dependency pins: follow [Reviewed Bootstrap and OS Upgrades](docs/BOOTSTRAP_UPGRADES.md); never introduce floating artifact URLs or regenerate lockfiles implicitly.
 - Shell: run `bash -n <changed-shell-file>` for every changed Bash file.
 - Cloudflare preview: use `pnpm preview:cf` only for an intentional manual preview; it is long-running.
 

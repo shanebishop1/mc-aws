@@ -14,6 +14,16 @@ const mocks = vi.hoisted(() => ({
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
   requireAllowed: vi.fn().mockResolvedValue({ email: "test@example.com", role: "admin" }),
   enforceMutatingRouteThrottle: vi.fn().mockResolvedValue(null),
+  mapMutatingRouteThrottleFailure: vi.fn(async (response: Response, operation: string) => ({
+    decision: {
+      allowed: false,
+      httpStatus: response.status,
+      code: "throttled",
+      message: `Too many ${operation} requests. Please retry shortly.`,
+    },
+    retryAfterHeader: response.headers.get("Retry-After") ?? undefined,
+    cacheControlHeader: response.headers.get("Cache-Control") ?? undefined,
+  })),
 }));
 
 vi.mock("@/lib/aws", () => ({
@@ -35,6 +45,7 @@ vi.mock("@/lib/server-action-lock", () => ({
 
 vi.mock("@/lib/mutating-route-throttle", () => ({
   enforceMutatingRouteThrottle: mocks.enforceMutatingRouteThrottle,
+  mapMutatingRouteThrottleFailure: mocks.mapMutatingRouteThrottleFailure,
 }));
 
 describe("POST /api/start", () => {
@@ -166,7 +177,7 @@ describe("POST /api/start", () => {
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
-  it("should ignore instanceId from request body and use server-side resolution", async () => {
+  it("should reject instanceId from request body instead of trusting or ignoring it", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Stopped);
 
@@ -176,23 +187,11 @@ describe("POST /api/start", () => {
     });
     const res = await POST(req);
 
-    expect(res.status).toBe(202);
+    expect(res.status).toBe(400);
     const body = await parseNextResponse<ApiResponse<StartServerResponse>>(res);
-    expect(body.success).toBe(true);
-    // Should use the server-side resolved ID, not the caller-provided one
-    expect(body.data?.instanceId).toBe("i-1234");
-
-    expect(mocks.invokeLambda).toHaveBeenCalledWith(
-      "StartMinecraftServer",
-      expect.objectContaining({
-        invocationType: "api",
-        command: "start",
-        userEmail: "test@example.com",
-        instanceId: "i-1234", // Server-side resolved ID
-        lockId: "lock-start-123",
-        operationId: body.operation?.id,
-      })
-    );
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("instanceId is not allowed for start requests");
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
   it("should handle lambda invocation failures", async () => {
@@ -203,17 +202,14 @@ describe("POST /api/start", () => {
     const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
     const res = await POST(req);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Failed to start server");
-    expect(body.operation?.status).toBe("failed");
+    expect(body.error).toContain("Remote dispatch could not be confirmed");
+    expect(body.operation?.status).toBe("accepted");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
-    expect(mocks.releaseServerActionLock).toHaveBeenCalledWith("lock-start-123", {
-      action: "start",
-      ownerEmail: "test@example.com",
-    });
+    expect(mocks.releaseServerActionLock).not.toHaveBeenCalled();
   });
 
   it("runs shared lifecycle stages in order on success", async () => {

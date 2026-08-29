@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   AttachVolumeCommand,
   CreateVolumeCommand,
@@ -8,6 +9,8 @@ import {
   DetachVolumeCommand,
   ec2,
 } from "../clients.js";
+import { getOperationExecutionContext } from "../execution-context.js";
+import { getOperationState, updateOperationState } from "../operation-state.js";
 import {
   VOLUME_ATTACH_MAX_ATTEMPTS,
   VOLUME_ATTACH_POLL_INTERVAL_MS,
@@ -21,7 +24,7 @@ import {
  * @returns {Promise<void>}
  */
 export async function handleResume(instanceId) {
-  console.log(`Checking if instance ${instanceId} needs volume restoration...`);
+  console.log("Checking if managed instance needs volume restoration");
 
   const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
   if (!Reservations?.length || !Reservations[0].Instances?.length) {
@@ -36,11 +39,11 @@ export async function handleResume(instanceId) {
     (mapping) => mapping.DeviceName === rootDeviceName && mapping.Ebs?.VolumeId
   );
   if (attachedRootVolume) {
-    console.log(`Instance ${instanceId} already has a root volume. Skipping resume.`);
+    console.log("Managed instance already has a root volume; skipping reconstruction");
     return;
   }
 
-  console.log(`Instance ${instanceId} has no volumes. Proceeding with hibernation recovery...`);
+  console.log("Managed instance has no volumes; proceeding with recovery");
 
   const az = instance.Placement?.AvailabilityZone;
   if (!az) throw new Error(`Could not determine availability zone for instance ${instanceId}`);
@@ -49,13 +52,13 @@ export async function handleResume(instanceId) {
   if (!imageId) throw new Error(`Could not determine source AMI for instance ${instanceId}`);
 
   const snapshotId = await resolvePinnedRootSnapshot(instanceId, imageId, rootDeviceName);
-  const volumeId = await createAndAttachVolume(instanceId, az, imageId, snapshotId);
+  await createAndAttachVolume(instanceId, az, imageId, snapshotId, rootDeviceName);
 
-  console.log(`Successfully restored volume ${volumeId} for instance ${instanceId}`);
+  console.log("Successfully restored managed volume");
 }
 
 async function resolvePinnedRootSnapshot(instanceId, imageId, rootDeviceName) {
-  console.log(`Resolving reconstruction source from instance AMI ${imageId} (root device: ${rootDeviceName})...`);
+  console.log("Resolving pinned reconstruction source");
   const response = await ec2.send(
     new DescribeImagesCommand({
       ImageIds: [imageId],
@@ -80,51 +83,96 @@ async function resolvePinnedRootSnapshot(instanceId, imageId, rootDeviceName) {
     throw new Error(`Could not resolve root snapshot for source AMI ${imageId} and device ${rootDeviceName}`);
   }
 
-  console.log(`Using pinned root snapshot ${snapshotId} from source AMI ${imageId}`);
+  console.log("Using pinned root reconstruction source");
   return snapshotId;
 }
 
-async function createAndAttachVolume(instanceId, az, sourceImageId, snapshotId) {
-  console.log("Creating new 8GB GP3 volume from snapshot...");
-  const createResponse = await ec2.send(
-    new CreateVolumeCommand({
-      AvailabilityZone: az,
-      SnapshotId: snapshotId,
-      VolumeType: "gp3",
-      Size: 8,
-      Encrypted: true,
-      TagSpecifications: [
-        {
-          ResourceType: "volume",
-          Tags: [
-            { Key: "Name", Value: "MinecraftServerVolume" },
-            { Key: "Backup", Value: "weekly" },
-            { Key: "McAwsProject", Value: requiredOwnershipTag("MC_PROJECT_TAG") },
-            { Key: "McAwsStack", Value: requiredOwnershipTag("MC_STACK_TAG") },
-            { Key: "McAwsInstanceId", Value: instanceId },
-            { Key: "McAwsManagedRoot", Value: "true" },
-            { Key: "McAwsReconstructed", Value: "true" },
-            { Key: "ReconstructionSourceImageId", Value: sourceImageId },
-            { Key: "ReconstructionSourceSnapshotId", Value: snapshotId },
-          ],
-        },
-      ],
-    })
-  );
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Durable create identity and rollback policy must remain one auditable side-effect boundary.
+async function createAndAttachVolume(instanceId, az, sourceImageId, snapshotId, rootDeviceName) {
+  const context = getOperationExecutionContext();
+  const operation = context ? await getOperationState(context.operationId) : null;
+  const clientToken = createHash("sha256")
+    .update(`${context?.operationId || "standalone"}\0${instanceId}\0${snapshotId}\0${rootDeviceName}`)
+    .digest("hex");
+  if (operation?.resumeVolumeClientToken && operation.resumeVolumeClientToken !== clientToken) {
+    throw new Error("Resume reconstruction identity changed for the current operation");
+  }
+  if (context) {
+    await updateOperationState({
+      operationId: context.operationId,
+      command: context.command,
+      status: "running",
+      phase: "executing",
+      expectedExecutionToken: context.executionToken,
+      resumeVolumeClientToken: clientToken,
+      resumeSnapshotId: snapshotId,
+    });
+  }
 
-  const volumeId = createResponse.VolumeId;
-  if (!volumeId) throw new Error("Failed to create volume");
+  console.log("Creating new 8GB GP3 volume from snapshot...");
+  let volumeId = operation?.resumeVolumeId;
+  if (!volumeId) {
+    const createResponse = await ec2.send(
+      new CreateVolumeCommand({
+        AvailabilityZone: az,
+        SnapshotId: snapshotId,
+        ClientToken: clientToken,
+        VolumeType: "gp3",
+        Size: 8,
+        Encrypted: true,
+        TagSpecifications: [
+          {
+            ResourceType: "volume",
+            Tags: [
+              { Key: "Name", Value: "MinecraftServerVolume" },
+              { Key: "Backup", Value: "weekly" },
+              { Key: "McAwsProject", Value: requiredOwnershipTag("MC_PROJECT_TAG") },
+              { Key: "McAwsStack", Value: requiredOwnershipTag("MC_STACK_TAG") },
+              { Key: "McAwsInstanceId", Value: instanceId },
+              { Key: "McAwsManagedRoot", Value: "true" },
+              { Key: "McAwsReconstructed", Value: "true" },
+              { Key: "ReconstructionSourceImageId", Value: sourceImageId },
+              { Key: "ReconstructionSourceSnapshotId", Value: snapshotId },
+            ],
+          },
+        ],
+      })
+    );
+    volumeId = createResponse.VolumeId;
+    if (!volumeId) throw new Error("Failed to create volume");
+    if (context) {
+      try {
+        await updateOperationState({
+          operationId: context.operationId,
+          command: context.command,
+          status: "running",
+          phase: "executing",
+          expectedExecutionToken: context.executionToken,
+          resumeVolumeClientToken: clientToken,
+          resumeVolumeId: volumeId,
+          resumeSnapshotId: snapshotId,
+        });
+      } catch (error) {
+        error.retainLifecycleLock = true;
+        throw error;
+      }
+    }
+  }
 
   try {
     await waitForVolumeAvailable(volumeId);
-    await attachVolumeToInstance(volumeId, instanceId);
+    await attachVolumeToInstance(volumeId, instanceId, rootDeviceName);
   } catch (originalError) {
+    if (context) {
+      originalError.retainLifecycleLock = true;
+      throw originalError;
+    }
     try {
       await cleanupCreatedVolume(volumeId, instanceId);
     } catch (cleanupError) {
       const original = toError(originalError);
       const cleanup = toError(cleanupError);
-      console.error(`Cleanup failed; retaining reconstructed volume ${volumeId}: ${cleanup.message}`);
+      console.error("Cleanup failed; retaining reconstructed volume");
       throw new Error(`${original.message}. Cleanup failed; retained volume ${volumeId}: ${cleanup.message}`, {
         cause: original,
       });
@@ -150,7 +198,7 @@ async function waitForVolumeAvailable(volumeId) {
   for (let attempt = 1; attempt <= VOLUME_AVAILABLE_MAX_ATTEMPTS; attempt++) {
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
     if (response.Volumes?.[0]?.State === "available") {
-      console.log(`Volume ${volumeId} is now available`);
+      console.log("Managed volume is now available");
       return;
     }
     console.log(
@@ -161,13 +209,13 @@ async function waitForVolumeAvailable(volumeId) {
   throw new Error(`Volume ${volumeId} did not become available within timeout`);
 }
 
-async function attachVolumeToInstance(volumeId, instanceId) {
-  console.log(`Attaching volume ${volumeId} to instance ${instanceId} at /dev/xvda...`);
+async function attachVolumeToInstance(volumeId, instanceId, rootDeviceName) {
+  console.log("Attaching managed volume");
   await ec2.send(
     new AttachVolumeCommand({
       VolumeId: volumeId,
       InstanceId: instanceId,
-      Device: "/dev/xvda",
+      Device: rootDeviceName,
     })
   );
 
@@ -176,7 +224,7 @@ async function attachVolumeToInstance(volumeId, instanceId) {
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
     const attachment = response.Volumes?.[0]?.Attachments?.find((candidate) => candidate.InstanceId === instanceId);
     if (attachment?.State === "attached") {
-      console.log(`Volume ${volumeId} is now attached`);
+      console.log("Managed volume is now attached");
       return;
     }
     console.log(
@@ -188,13 +236,13 @@ async function attachVolumeToInstance(volumeId, instanceId) {
 }
 
 async function cleanupCreatedVolume(volumeId, instanceId) {
-  console.log(`Rolling back reconstructed volume ${volumeId}...`);
+  console.log("Rolling back reconstructed volume");
 
   for (let attempt = 1; attempt <= VOLUME_AVAILABLE_MAX_ATTEMPTS; attempt++) {
     const response = await ec2.send(new DescribeVolumesCommand({ VolumeIds: [volumeId] }));
     const volume = response.Volumes?.[0];
     if (!volume) {
-      console.log(`Reconstructed volume ${volumeId} no longer exists`);
+      console.log("Reconstructed volume no longer exists");
       return;
     }
 
@@ -210,13 +258,13 @@ async function cleanupCreatedVolume(volumeId, instanceId) {
       await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId, InstanceId: instanceId }));
       await waitForVolumeDetached(volumeId);
       await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
-      console.log(`Rolled back reconstructed volume ${volumeId}`);
+      console.log("Rolled back reconstructed volume");
       return;
     }
 
     if (volume.State === "available") {
       await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
-      console.log(`Rolled back reconstructed volume ${volumeId}`);
+      console.log("Rolled back reconstructed volume");
       return;
     }
 

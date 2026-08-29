@@ -20,8 +20,8 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
   try {
     // Check admin authorization
     try {
-      const user = await requireAdmin(_request);
-      console.log("[CONFIG] Admin action by:", user.email);
+      await requireAdmin(_request);
+      console.log("[CONFIG] Authorized configuration read requested");
     } catch (error) {
       if (error instanceof Response) {
         return error as NextResponse<ApiResponse<AwsConfigResponse>>;
@@ -36,8 +36,8 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
     let instanceId: string | null = null;
     try {
       instanceId = await findInstanceId();
-    } catch (error) {
-      console.warn("[CONFIG] Could not find instance ID:", error);
+    } catch {
+      console.warn("[CONFIG] Could not resolve the managed instance");
       // Silently fail - link is optional
     }
 

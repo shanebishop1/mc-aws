@@ -3,19 +3,28 @@ import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as cdk from "aws-cdk-lib";
+import * as cloudwatch from "aws-cdk-lib/aws-cloudwatch";
+import * as cloudwatchActions from "aws-cdk-lib/aws-cloudwatch-actions";
+import * as dynamodb from "aws-cdk-lib/aws-dynamodb";
 import * as ec2 from "aws-cdk-lib/aws-ec2";
+import * as events from "aws-cdk-lib/aws-events";
+import * as eventsTargets from "aws-cdk-lib/aws-events-targets";
 import * as iam from "aws-cdk-lib/aws-iam";
 import * as lambda from "aws-cdk-lib/aws-lambda";
+import * as lambdaDestinations from "aws-cdk-lib/aws-lambda-destinations";
+import * as logs from "aws-cdk-lib/aws-logs";
 import * as s3assets from "aws-cdk-lib/aws-s3-assets";
 import * as ses from "aws-cdk-lib/aws-ses";
 import * as sesActions from "aws-cdk-lib/aws-ses-actions";
 import * as sns from "aws-cdk-lib/aws-sns";
 import * as subscriptions from "aws-cdk-lib/aws-sns-subscriptions";
+import * as sqs from "aws-cdk-lib/aws-sqs";
 import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 
 import * as ssm from "aws-cdk-lib/aws-ssm";
 import { resolveServerProfileDirectory, validateServerProfile } from "../../lib/server-profile";
+import { createLambdaDeploymentCode } from "./lambda-assets";
 import { quotePosixShellArgument } from "./posix-shell";
 import { createWorkerRuntimePolicyStatements } from "./worker-runtime-policy";
 
@@ -27,9 +36,7 @@ export class MinecraftStack extends cdk.Stack {
     const driveRoot = process.env.GDRIVE_ROOT || "mc-backups";
     const cloudflareZoneId = process.env.CLOUDFLARE_ZONE_ID?.trim() ?? "";
     const cloudflareDomain = process.env.CLOUDFLARE_MC_DOMAIN?.trim() ?? "";
-    const cloudflareToken = (process.env.CLOUDFLARE_DNS_API_TOKEN || "").trim();
     const duckdnsDomain = process.env.DUCKDNS_DOMAIN?.trim() ?? "";
-    const duckdnsToken = process.env.DUCKDNS_TOKEN?.trim() ?? "";
     const lifecycleProjectTag = "mc-aws";
     const lifecycleStackTag = this.stackName;
     const readOptionalBoolean = (name: string): boolean => {
@@ -47,6 +54,16 @@ export class MinecraftStack extends cdk.Stack {
     const sesReceiptRuleSetName = (process.env.SES_RECEIPT_RULE_SET_NAME ?? "").trim();
     const startKeyword = (process.env.START_KEYWORD ?? "").trim();
     const al2023Arm64AmiId = (process.env.AL2023_ARM64_AMI_ID ?? "").trim();
+    const alarmEmail = (process.env.MC_ALARM_EMAIL ?? "").trim().toLowerCase();
+    const scheduledBackupEnabled = readOptionalBoolean("MC_SCHEDULED_BACKUP_ENABLED");
+    const scheduledBackupExpression = (process.env.MC_SCHEDULED_BACKUP_SCHEDULE ?? "").trim() || "cron(0 5 ? * SUN *)";
+    const backupStaleAfterHoursText = (process.env.MC_BACKUP_STALE_AFTER_HOURS ?? "").trim() || "192";
+    const backupStaleAfterHours = Number(backupStaleAfterHoursText);
+    const operationRetentionDaysText = (process.env.MC_OPERATION_STATE_RETENTION_DAYS ?? "").trim() || "30";
+    const operationRetentionDays = Number(operationRetentionDaysText);
+    const metricNamespace = `McAws/${this.stackName}`;
+    const dnsMode = duckdnsDomain ? "duckdns" : cloudflareDomain ? "cloudflare" : "raw_ip";
+    const dnsHostname = duckdnsDomain ? `${duckdnsDomain}.duckdns.org` : cloudflareDomain;
 
     if (!/^ami-[a-f0-9]{8,17}$/.test(al2023Arm64AmiId)) {
       throw new Error(
@@ -64,38 +81,43 @@ export class MinecraftStack extends cdk.Stack {
         "Inbound SES commands require SES_INBOUND_RECIPIENT, SES_RECEIPT_RULE_SET_NAME, and START_KEYWORD."
       );
     }
+    if (alarmEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(alarmEmail)) {
+      throw new Error("MC_ALARM_EMAIL must be a valid email address when set.");
+    }
+    if (!/^(?:cron|rate)\([^\r\n]{1,120}\)$/.test(scheduledBackupExpression)) {
+      throw new Error("MC_SCHEDULED_BACKUP_SCHEDULE must be one EventBridge cron(...) or rate(...) expression.");
+    }
+    if (!Number.isSafeInteger(backupStaleAfterHours) || backupStaleAfterHours < 25 || backupStaleAfterHours > 720) {
+      throw new Error("MC_BACKUP_STALE_AFTER_HOURS must be an integer from 25 through 720.");
+    }
+    if (!Number.isSafeInteger(operationRetentionDays) || operationRetentionDays < 1 || operationRetentionDays > 3650) {
+      throw new Error("MC_OPERATION_STATE_RETENTION_DAYS must be an integer between 1 and 3650");
+    }
+    const cloudflareDnsConfigured = Boolean(cloudflareZoneId || cloudflareDomain);
+    const duckDnsConfigured = Boolean(duckdnsDomain);
+    if (cloudflareDnsConfigured && (!cloudflareZoneId || !cloudflareDomain)) {
+      throw new Error("Cloudflare DNS requires both CLOUDFLARE_ZONE_ID and CLOUDFLARE_MC_DOMAIN.");
+    }
+    if (cloudflareDnsConfigured && duckDnsConfigured) {
+      throw new Error("Configure either Cloudflare DNS or DuckDNS, not both.");
+    }
 
-    const createSecureStringParameter = (id: string, parameterName: string, valueParameter: cdk.CfnParameter) => {
-      new cr.AwsCustomResource(this, id, {
-        installLatestAwsSdk: false,
-        onUpdate: {
-          service: "SSM",
-          action: "putParameter",
-          parameters: {
-            Name: parameterName,
-            Value: valueParameter.valueAsString,
-            Type: "SecureString",
-            Overwrite: true,
-          },
-          physicalResourceId: cr.PhysicalResourceId.of(id),
-        },
-        onDelete: {
-          service: "SSM",
-          action: "deleteParameter",
-          parameters: {
-            Name: parameterName,
-          },
-        },
-        policy: cr.AwsCustomResourcePolicy.fromStatements([
-          new iam.PolicyStatement({
-            actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
-            resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter${parameterName}`],
-          }),
-        ]),
+    const createProjectLogGroup = (id: string) => {
+      const logGroup = new logs.LogGroup(this, id, {
+        retention: logs.RetentionDays.ONE_MONTH,
+        removalPolicy: cdk.RemovalPolicy.DESTROY,
       });
+      cdk.Tags.of(logGroup).add("McAwsProject", lifecycleProjectTag);
+      cdk.Tags.of(logGroup).add("McAwsStack", lifecycleStackTag);
+      return logGroup;
     };
 
     // 0.5 Optional DNS provider SSM parameters for EC2 DNS updates.
+    // DNS credentials are pre-materialized with `pnpm dns:secrets:materialize`
+    // at the fixed SecureString paths before synthesis/deployment.
+    // CloudFormation has no native AWS::SSM::Parameter SecureString resource type, and
+    // resolving a NoEcho/dynamic reference into custom-resource properties would expose
+    // the plaintext value to that provider event. This stack therefore never accepts it.
     if (cloudflareZoneId) {
       new ssm.StringParameter(this, "CloudflareZoneId", {
         parameterName: "/minecraft/cloudflare-zone-id",
@@ -112,19 +134,6 @@ export class MinecraftStack extends cdk.Stack {
       });
     }
 
-    if (cloudflareToken) {
-      const cloudflareTokenParam = new cdk.CfnParameter(this, "CloudflareTokenParam", {
-        type: "String",
-        description: "Cloudflare API Token for DNS updates",
-        noEcho: true,
-      });
-      createSecureStringParameter(
-        "CloudflareTokenSecureParam",
-        "/minecraft/cloudflare-api-token",
-        cloudflareTokenParam
-      );
-    }
-
     if (duckdnsDomain) {
       new ssm.StringParameter(this, "DuckDnsDomain", {
         parameterName: "/minecraft/duckdns-domain",
@@ -133,13 +142,45 @@ export class MinecraftStack extends cdk.Stack {
       });
     }
 
-    if (duckdnsToken) {
-      const duckDnsTokenParam = new cdk.CfnParameter(this, "DuckDnsTokenParam", {
-        type: "String",
-        description: "DuckDNS token for DNS updates",
-        noEcho: true,
+    const dnsSecretAdoptionResources: cdk.CustomResource[] = [];
+    const dnsSecureParameterNames = [
+      ...(cloudflareDnsConfigured ? ["/minecraft/cloudflare-api-token"] : []),
+      ...(duckDnsConfigured ? ["/minecraft/duckdns-token"] : []),
+    ];
+    if (dnsSecureParameterNames.length > 0) {
+      const adoptionLogGroup = createProjectLogGroup("AdoptDnsSecureStringLambdaLogGroup");
+      const adoptionLambda = new lambda.Function(this, "AdoptDnsSecureStringLambda", {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        handler: "index.handler",
+        code: createLambdaDeploymentCode(
+          "AdoptDnsSecureString",
+          path.join(__dirname, "../src/lambda/AdoptDnsSecureString")
+        ),
+        timeout: cdk.Duration.seconds(30),
+        logGroup: adoptionLogGroup,
       });
-      createSecureStringParameter("DuckDnsTokenSecureParam", "/minecraft/duckdns-token", duckDnsTokenParam);
+      adoptionLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter"],
+          resources: dnsSecureParameterNames.map(
+            (name) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`
+          ),
+        })
+      );
+      adoptionLambda.addPermission("CloudFormationInvokeDnsSecretAdoption", {
+        principal: new iam.ServicePrincipal("cloudformation.amazonaws.com"),
+        sourceAccount: this.account,
+      });
+      const adoptParameter = (id: string, parameterName: string) => {
+        const resource = new cdk.CustomResource(this, id, {
+          resourceType: "Custom::AWS",
+          serviceToken: adoptionLambda.functionArn,
+          properties: { ParameterName: parameterName, MigrationVersion: "1" },
+        });
+        dnsSecretAdoptionResources.push(resource);
+      };
+      if (cloudflareDnsConfigured) adoptParameter("CloudflareTokenSecureParam", "/minecraft/cloudflare-api-token");
+      if (duckDnsConfigured) adoptParameter("DuckDnsTokenSecureParam", "/minecraft/duckdns-token");
     }
 
     // 1. VPC
@@ -241,9 +282,6 @@ sys.stdout.buffer.write(output.getvalue())`,
       "/minecraft/cloudflare-api-token",
       "/minecraft/duckdns-domain",
       "/minecraft/duckdns-token",
-      "/minecraft/verified-sender",
-      "/minecraft/notification-email",
-      "/minecraft/startup-triggered-by",
     ];
     const ec2EncryptedParameters = [
       "/minecraft/gdrive-token",
@@ -264,13 +302,6 @@ sys.stdout.buffer.write(output.getvalue())`,
         resources: [ec2ParameterArn("/minecraft/player-count")],
       })
     );
-    ec2Role.addToPolicy(
-      new iam.PolicyStatement({
-        actions: ["ssm:DeleteParameter"],
-        resources: [ec2ParameterArn("/minecraft/startup-triggered-by")],
-      })
-    );
-
     // Add permission to decrypt only the exact SecureString parameters read by root-owned helpers.
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
@@ -344,6 +375,7 @@ sys.stdout.buffer.write(output.getvalue())`,
       ],
     });
     instance.node.addDependency(profileManifestParameter);
+    for (const dnsSecretAdoption of dnsSecretAdoptionResources) instance.node.addDependency(dnsSecretAdoption);
 
     // Propagate ownership tags to the initial root volume so lifecycle operations can prove ownership.
     const cfnInstance = instance.node.defaultChild as ec2.CfnInstance;
@@ -353,13 +385,109 @@ sys.stdout.buffer.write(output.getvalue())`,
     cdk.Tags.of(instance).add("McAwsStack", lifecycleStackTag);
     cdk.Tags.of(instance).add("McAwsManagedRoot", "true");
 
+    const lifecycleLockTable = new dynamodb.Table(this, "LifecycleLockTable", {
+      partitionKey: { name: "lockKey", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "ttlEpochSeconds",
+      // Deletion and replacement intentionally differ below: teardown must not
+      // orphan PII-bearing lock state, while a replacement must retain the old
+      // table for the mixed-version rollback window.
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    const lifecycleLockCfnTable = lifecycleLockTable.node.defaultChild as dynamodb.CfnTable;
+    lifecycleLockCfnTable.cfnOptions.updateReplacePolicy = cdk.CfnDeletionPolicy.RETAIN;
+    cdk.Tags.of(lifecycleLockTable).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(lifecycleLockTable).add("McAwsStack", lifecycleStackTag);
+    cdk.Tags.of(lifecycleLockTable).add("McAwsPurpose", "LifecycleLock");
+
+    const operationStateTable = new dynamodb.Table(this, "OperationStateTable", {
+      partitionKey: { name: "operationId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "ttlEpochSeconds",
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    cdk.Tags.of(operationStateTable).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(operationStateTable).add("McAwsStack", lifecycleStackTag);
+    cdk.Tags.of(operationStateTable).add("McAwsPurpose", "OperationState");
+
+    // Initialize replacement-safe DynamoDB metadata. The mixed-version bridge
+    // continues using the old-format SSM lock until a later reviewed cutover.
+    const migrateLockLambdaLogGroup = createProjectLogGroup("MigrateServerActionLockLambdaLogGroup");
+    const migrateLockLambda = new lambda.Function(this, "MigrateServerActionLockLambda", {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: "index.handler",
+      code: createLambdaDeploymentCode(
+        "MigrateServerActionLock",
+        path.join(__dirname, "../src/lambda/MigrateServerActionLock")
+      ),
+      timeout: cdk.Duration.minutes(1),
+      logGroup: migrateLockLambdaLogGroup,
+    });
+    migrateLockLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+        resources: [lifecycleLockTable.tableArn],
+      })
+    );
+    const migrateLockProviderLogGroup = createProjectLogGroup("MigrateServerActionLockProviderLogGroup");
+    const migrateLockProvider = new cr.Provider(this, "MigrateServerActionLockProvider", {
+      onEventHandler: migrateLockLambda,
+      logGroup: migrateLockProviderLogGroup,
+    });
+    const migrateLockResource = new cdk.CustomResource(this, "MigrateServerActionLock", {
+      serviceToken: migrateLockProvider.serviceToken,
+      properties: { Protocol: "dual-v1", MarkerVersion: "2", LockTableName: lifecycleLockTable.tableName },
+    });
+
     // 5. Lambda Function to Start Server
     // Story 1.1 runtime budget alignment:
     // - Mutating flows now budget up to ~12 minutes in worst-case chained paths (resume + restore).
     // - Keep timeout at Lambda maximum to avoid premature termination of legitimate long-running operations.
-    // - Disable async retries to avoid duplicate non-idempotent mutating actions.
+    // - Stable operation identities make async retries idempotent.
+    // - Reserved concurrency is the final process-level serialization boundary for API, schedule, and sanitized email ingress.
     const startMinecraftLambdaTimeout = cdk.Duration.minutes(15);
-    const startMinecraftLambdaMaxEventAge = cdk.Duration.minutes(15);
+    // One 15-minute execution must leave enough event age for both configured retries.
+    const startMinecraftLambdaMaxEventAge = cdk.Duration.hours(1);
+    const lifecycleFailureQueue = new sqs.Queue(this, "LifecycleFailureQueue", {
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(14),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    cdk.Tags.of(lifecycleFailureQueue).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(lifecycleFailureQueue).add("McAwsStack", lifecycleStackTag);
+
+    // The sanitizer receives the raw Lambda destination envelope. Keep its own
+    // terminal failures separate from the sanitized operational queue so they
+    // cannot be mistaken for sanitized records, and alarm on any retained item.
+    const failureSanitizerDeadLetterQueue = new sqs.Queue(this, "FailureSanitizerDeadLetterQueue", {
+      encryption: sqs.QueueEncryption.SQS_MANAGED,
+      enforceSSL: true,
+      retentionPeriod: cdk.Duration.days(14),
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    cdk.Tags.of(failureSanitizerDeadLetterQueue).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(failureSanitizerDeadLetterQueue).add("McAwsStack", lifecycleStackTag);
+
+    const failureSanitizerLogGroup = createProjectLogGroup("FailureEventSanitizerLambdaLogGroup");
+    const failureSanitizerLambda = new lambda.Function(this, "FailureEventSanitizerLambda", {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: "index.handler",
+      code: createLambdaDeploymentCode(
+        "FailureEventSanitizer",
+        path.join(__dirname, "../src/lambda/FailureEventSanitizer")
+      ),
+      environment: { FAILURE_QUEUE_URL: lifecycleFailureQueue.queueUrl },
+      timeout: cdk.Duration.seconds(30),
+      maxEventAge: startMinecraftLambdaMaxEventAge,
+      retryAttempts: 2,
+      deadLetterQueue: failureSanitizerDeadLetterQueue,
+      deadLetterQueueEnabled: true,
+      logGroup: failureSanitizerLogGroup,
+    });
+    lifecycleFailureQueue.grantSendMessages(failureSanitizerLambda);
 
     const adminEmail = (process.env.ADMIN_EMAIL || "").trim().toLowerCase();
     const allowedEmails = (process.env.ALLOWED_EMAILS || "")
@@ -381,38 +509,43 @@ sys.stdout.buffer.write(output.getvalue())`,
         stringValue: notificationEmail,
         description: "Email address for server notifications",
       });
-
-      const senderIdentityArn = `arn:aws:ses:${this.region}:${this.account}:identity/${verifiedSender}`;
-      ec2Role.addToPolicy(
-        new iam.PolicyStatement({
-          effect: iam.Effect.ALLOW,
-          actions: ["ses:SendEmail", "ses:SendRawEmail"],
-          resources: [senderIdentityArn],
-        })
-      );
     }
 
+    const startLambdaLogGroup = createProjectLogGroup("StartMinecraftLambdaLogGroup");
     const startLambda = new lambda.Function(this, "StartMinecraftLambda", {
       runtime: lambda.Runtime.NODEJS_24_X,
       handler: "index.handler",
-      code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/StartMinecraftServer")),
+      code: createLambdaDeploymentCode(
+        "StartMinecraftServer",
+        path.join(__dirname, "../src/lambda/StartMinecraftServer")
+      ),
       environment: {
         INSTANCE_ID: instance.instanceId,
         VERIFIED_SENDER: sesNotificationsEnabled ? verifiedSender : "",
-        START_KEYWORD: sesInboundCommandsEnabled ? startKeyword : "",
         SES_INBOUND_COMMANDS_ENABLED: String(sesInboundCommandsEnabled),
         NOTIFICATION_EMAIL: sesNotificationsEnabled ? notificationEmail : "",
         ADMIN_EMAIL: (process.env.ADMIN_EMAIL || "").trim().toLowerCase(),
-        ALLOWED_EMAILS: allowedEmails.join(","),
         GDRIVE_REMOTE: driveRemote,
         GDRIVE_ROOT: driveRoot,
         MC_PROJECT_TAG: lifecycleProjectTag,
         MC_STACK_TAG: lifecycleStackTag,
+        MC_LIFECYCLE_LOCK_TABLE_NAME: lifecycleLockTable.tableName,
+        MC_OPERATION_STATE_TABLE_NAME: operationStateTable.tableName,
+        MC_OPERATION_STATE_RETENTION_DAYS: String(operationRetentionDays),
+        MC_DNS_MODE: dnsMode,
+        MC_DNS_HOSTNAME: dnsHostname,
+        MC_METRIC_NAMESPACE: metricNamespace,
+        MC_BACKUP_STALE_AFTER_HOURS: String(backupStaleAfterHours),
       },
       timeout: startMinecraftLambdaTimeout,
       maxEventAge: startMinecraftLambdaMaxEventAge,
-      retryAttempts: 0,
+      retryAttempts: 2,
+      // The destination processor strips request/response payload data before SQS.
+      onFailure: new lambdaDestinations.LambdaDestination(failureSanitizerLambda),
+      reservedConcurrentExecutions: 1,
+      logGroup: startLambdaLogGroup,
     });
+    startLambda.node.addDependency(migrateLockResource);
 
     // Dedicated Cloudflare Worker runtime identity. Access keys are deliberately
     // not CloudFormation resources: setup creates them in memory and uploads
@@ -433,7 +566,6 @@ sys.stdout.buffer.write(output.getvalue())`,
       parameterArn("/minecraft/backups-cache"),
       parameterArn("/minecraft/gdrive-token"),
       serverActionArn,
-      serverActionClaimArn,
       operationPathArn,
       operationChildrenArn,
     ];
@@ -457,21 +589,24 @@ sys.stdout.buffer.write(output.getvalue())`,
         writableParameterArns,
         deletableParameterArns,
         operationParameterPathArns: [operationPathArn, operationChildrenArn],
+        lifecycleStateTableArns: [lifecycleLockTable.tableArn, operationStateTable.tableArn],
         includeCostExplorer,
       }),
     });
     workerRuntimePolicy.attachToUser(workerRuntimeUser);
 
     // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
+    const seedEmailAllowlistLambdaLogGroup = createProjectLogGroup("SeedEmailAllowlistLambdaLogGroup");
     const seedEmailAllowlistLambda = new lambda.Function(this, "SeedEmailAllowlistLambda", {
       runtime: lambda.Runtime.NODEJS_24_X,
       handler: "index.handler",
-      code: lambda.Code.fromAsset(path.join(__dirname, "../src/lambda/SeedEmailAllowlist")),
+      code: createLambdaDeploymentCode("SeedEmailAllowlist", path.join(__dirname, "../src/lambda/SeedEmailAllowlist")),
       environment: {
         PARAM_NAME: "/minecraft/email-allowlist",
         SEED_VALUE: emailAllowlistSeed,
       },
       timeout: cdk.Duration.seconds(30),
+      logGroup: seedEmailAllowlistLambdaLogGroup,
     });
 
     seedEmailAllowlistLambda.addToRolePolicy(
@@ -481,11 +616,13 @@ sys.stdout.buffer.write(output.getvalue())`,
       })
     );
 
+    const seedEmailAllowlistProviderLogGroup = createProjectLogGroup("SeedEmailAllowlistProviderLogGroup");
     const seedEmailAllowlistProvider = new cr.Provider(this, "SeedEmailAllowlistProvider", {
       onEventHandler: seedEmailAllowlistLambda,
+      logGroup: seedEmailAllowlistProviderLogGroup,
     });
 
-    new cdk.CustomResource(this, "SeedEmailAllowlist", {
+    const seedEmailAllowlistResource = new cdk.CustomResource(this, "SeedEmailAllowlist", {
       serviceToken: seedEmailAllowlistProvider.serviceToken,
     });
 
@@ -494,6 +631,18 @@ sys.stdout.buffer.write(output.getvalue())`,
       new iam.PolicyStatement({
         actions: ["ec2:StartInstances", "ec2:StopInstances", "ec2:AttachVolume", "ec2:DetachVolume"],
         resources: [`arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`],
+      })
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
+        resources: [serverActionArn, serverActionClaimArn],
+      })
+    );
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+        resources: [lifecycleLockTable.tableArn, operationStateTable.tableArn],
       })
     );
     startLambda.addToRolePolicy(
@@ -572,19 +721,11 @@ sys.stdout.buffer.write(output.getvalue())`,
     if (sesNotificationsEnabled) {
       startLambda.addToRolePolicy(
         new iam.PolicyStatement({
-          actions: ["ses:SendEmail", "ses:SendRawEmail"],
+          actions: ["ses:SendEmail"],
           resources: [`arn:aws:ses:${this.region}:${this.account}:identity/${verifiedSender}`],
         })
       );
     }
-
-    // Grant Lambda permission to read/write email allowlist in SSM
-    startLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["ssm:GetParameter", "ssm:PutParameter"],
-        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`],
-      })
-    );
 
     // Grant Lambda permission to read/write backups cache in SSM
     startLambda.addToRolePolicy(
@@ -594,15 +735,35 @@ sys.stdout.buffer.write(output.getvalue())`,
       })
     );
 
-    // Grant Lambda permission to manage server-action lock and durable operation state parameters
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/gdrive-token`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/last-scheduled-backup-success`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/scheduled-backup-enabled-at`,
+        ],
+      })
+    );
+
+    startLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:PutParameter"],
+        resources: [
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/last-scheduled-backup-success`,
+          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/scheduled-backup-enabled-at`,
+        ],
+      })
+    );
+
+    // Startup trigger and resume marker remain exact SSM coordination records.
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
         actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
         resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/startup-triggered-by`,
           `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/resume-pending`,
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/operations/*`,
         ],
       })
     );
@@ -619,16 +780,244 @@ sys.stdout.buffer.write(output.getvalue())`,
     );
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ssm:GetCommandInvocation"],
+        actions: ["ssm:GetCommandInvocation", "ssm:CancelCommand"],
         resources: ["*"],
       })
     );
 
+    const alarmTopic = new sns.Topic(this, "ProjectAlarmTopic", {
+      displayName: `${this.stackName} operator alarms`,
+      enforceSSL: true,
+    });
+    cdk.Tags.of(alarmTopic).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(alarmTopic).add("McAwsStack", lifecycleStackTag);
+    if (alarmEmail) {
+      // CloudFormation creates a PendingConfirmation subscription. AWS sends the
+      // confirmation request; alerts are not delivered until the operator accepts it.
+      alarmTopic.addSubscription(new subscriptions.EmailSubscription(alarmEmail));
+    }
+    const alarmAction = new cloudwatchActions.SnsAction(alarmTopic);
+    const addOperatorAlarm = (alarm: cloudwatch.Alarm) => {
+      alarm.addAlarmAction(alarmAction);
+      alarm.addOkAction(alarmAction);
+      cdk.Tags.of(alarm).add("McAwsProject", lifecycleProjectTag);
+      cdk.Tags.of(alarm).add("McAwsStack", lifecycleStackTag);
+      return alarm;
+    };
+
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "MinecraftInstanceStatusCheckAlarm", {
+        alarmDescription: "Minecraft EC2 instance or system status checks are failing; see docs/OPERATIONS_GUIDE.md.",
+        metric: new cloudwatch.Metric({
+          namespace: "AWS/EC2",
+          metricName: "StatusCheckFailed",
+          dimensionsMap: { InstanceId: instance.instanceId },
+          period: cdk.Duration.minutes(1),
+          statistic: "Sum",
+        }),
+        evaluationPeriods: 2,
+        datapointsToAlarm: 2,
+        threshold: 0,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "LifecycleLambdaErrorsAlarm", {
+        alarmDescription: "The lifecycle Lambda returned an unhandled error or timed out.",
+        metric: startLambda.metricErrors({ period: cdk.Duration.minutes(5), statistic: "Sum" }),
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    const lifecycleOperationFailureFilter = new logs.MetricFilter(this, "LifecycleOperationFailureMetricFilter", {
+      logGroup: startLambdaLogGroup,
+      metricNamespace,
+      metricName: "LifecycleOperationFailures",
+      filterPattern: logs.FilterPattern.anyTerm("LIFECYCLE_OPERATION_FAILED"),
+      metricValue: "1",
+    });
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "LifecycleOperationFailuresAlarm", {
+        alarmDescription:
+          "A lifecycle action failed after invocation; inspect its durable operation record and Lambda logs.",
+        metric: lifecycleOperationFailureFilter.metric({ period: cdk.Duration.minutes(5), statistic: "Sum" }),
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "LifecycleLambdaDurationAlarm", {
+        alarmDescription: "A lifecycle invocation exceeded 13 minutes and is approaching the 15-minute timeout.",
+        metric: startLambda.metricDuration({ period: cdk.Duration.minutes(5), statistic: "Maximum" }),
+        evaluationPeriods: 1,
+        threshold: cdk.Duration.minutes(13).toMilliseconds(),
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "LifecycleLambdaThrottlesAlarm", {
+        alarmDescription: "Lifecycle work was throttled; reserved concurrency intentionally remains one.",
+        metric: startLambda.metricThrottles({ period: cdk.Duration.minutes(5), statistic: "Sum" }),
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "LifecycleAsyncEventAgeAlarm", {
+        alarmDescription: "Lifecycle asynchronous work has waited at least ten minutes in Lambda's internal queue.",
+        metric: new cloudwatch.Metric({
+          namespace: "AWS/Lambda",
+          metricName: "AsyncEventAge",
+          dimensionsMap: { FunctionName: startLambda.functionName },
+          period: cdk.Duration.minutes(5),
+          statistic: "Maximum",
+        }),
+        evaluationPeriods: 1,
+        threshold: cdk.Duration.minutes(10).toMilliseconds(),
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "LifecycleFailureQueueDepthAlarm", {
+        alarmDescription: "At least one lifecycle invocation or scheduled delivery exhausted retries and needs review.",
+        metric: lifecycleFailureQueue.metricApproximateNumberOfMessagesVisible({
+          period: cdk.Duration.minutes(5),
+          statistic: "Maximum",
+        }),
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+    addOperatorAlarm(
+      new cloudwatch.Alarm(this, "FailureSanitizerDeadLetterQueueDepthAlarm", {
+        alarmDescription:
+          "Failure sanitizer exhausted retries; its raw lifecycle destination envelope requires restricted review.",
+        metric: failureSanitizerDeadLetterQueue.metricApproximateNumberOfMessagesVisible({
+          period: cdk.Duration.minutes(5),
+          statistic: "Maximum",
+        }),
+        evaluationPeriods: 1,
+        threshold: 1,
+        comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+      })
+    );
+
+    if (scheduledBackupEnabled) {
+      const scheduledBackupRule = new events.Rule(this, "ScheduledDriveBackupRule", {
+        description: "Back up to Drive only when the Minecraft instance is already running.",
+        schedule: events.Schedule.expression(scheduledBackupExpression),
+      });
+      scheduledBackupRule.addTarget(
+        new eventsTargets.LambdaFunction(startLambda, {
+          event: events.RuleTargetInput.fromObject({
+            invocationType: "scheduledBackup",
+            eventId: events.EventField.eventId,
+            scheduledAt: events.EventField.time,
+          }),
+          deadLetterQueue: lifecycleFailureQueue,
+          maxEventAge: startMinecraftLambdaMaxEventAge,
+          retryAttempts: 2,
+        })
+      );
+
+      const backupFreshnessRule = new events.Rule(this, "ScheduledBackupFreshnessRule", {
+        description: "Emit a daily heartbeat indicating whether the latest scheduled backup exceeds its RPO window.",
+        schedule: events.Schedule.cron({ minute: "15", hour: "6" }),
+      });
+      backupFreshnessRule.addTarget(
+        new eventsTargets.LambdaFunction(startLambda, {
+          event: events.RuleTargetInput.fromObject({
+            invocationType: "backupFreshnessCheck",
+            eventId: events.EventField.eventId,
+            scheduledAt: events.EventField.time,
+          }),
+          deadLetterQueue: lifecycleFailureQueue,
+          maxEventAge: startMinecraftLambdaMaxEventAge,
+          retryAttempts: 2,
+        })
+      );
+
+      addOperatorAlarm(
+        new cloudwatch.Alarm(this, "ScheduledBackupFailuresAlarm", {
+          alarmDescription: "An automated Drive backup failed while the server was running.",
+          metric: new cloudwatch.Metric({
+            namespace: metricNamespace,
+            metricName: "ScheduledBackupFailure",
+            period: cdk.Duration.minutes(5),
+            statistic: "Sum",
+          }),
+          evaluationPeriods: 1,
+          threshold: 1,
+          comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+          treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        })
+      );
+      addOperatorAlarm(
+        new cloudwatch.Alarm(this, "ScheduledBackupStalenessAlarm", {
+          alarmDescription: `No scheduled Drive backup has succeeded within the configured ${backupStaleAfterHours}-hour RPO window.`,
+          metric: new cloudwatch.Metric({
+            namespace: metricNamespace,
+            metricName: "ScheduledBackupStale",
+            period: cdk.Duration.days(1),
+            statistic: "Maximum",
+          }),
+          evaluationPeriods: 1,
+          threshold: 1,
+          comparisonOperator: cloudwatch.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+          // The first evaluator invocation establishes and emits a fresh baseline.
+          // Missing data before that first datapoint must not page the operator.
+          treatMissingData: cloudwatch.TreatMissingData.NOT_BREACHING,
+        })
+      );
+    }
+
+    let inboundEmailLambda: lambda.Function | undefined;
     if (sesInboundCommandsEnabled) {
       const startTopic = new sns.Topic(this, "MinecraftStartTopic", {
         displayName: "Minecraft inbound email command trigger",
       });
-      startTopic.addSubscription(new subscriptions.LambdaSubscription(startLambda));
+      const inboundEmailLogGroup = createProjectLogGroup("InboundEmailCommandLambdaLogGroup");
+      inboundEmailLambda = new lambda.Function(this, "InboundEmailCommandLambda", {
+        runtime: lambda.Runtime.NODEJS_24_X,
+        handler: "index.handler",
+        code: createLambdaDeploymentCode(
+          "InboundEmailCommand",
+          path.join(__dirname, "../src/lambda/InboundEmailCommand")
+        ),
+        environment: {
+          LIFECYCLE_FUNCTION_NAME: startLambda.functionName,
+          EXPECTED_TOPIC_ARN: startTopic.topicArn,
+          EXPECTED_RECIPIENT: sesInboundRecipient,
+          START_KEYWORD: startKeyword,
+          ADMIN_EMAIL: adminEmail,
+          ALLOWED_EMAILS: allowedEmails.join(","),
+        },
+        timeout: cdk.Duration.seconds(30),
+        maxEventAge: cdk.Duration.minutes(5),
+        retryAttempts: 2,
+        logGroup: inboundEmailLogGroup,
+      });
+      startLambda.grantInvoke(inboundEmailLambda);
+      inboundEmailLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["ssm:GetParameter", "ssm:PutParameter"],
+          resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/email-allowlist`],
+        })
+      );
+      const inboundSubscription = startTopic.addSubscription(new subscriptions.LambdaSubscription(inboundEmailLambda));
+      inboundSubscription.node.addDependency(seedEmailAllowlistResource);
 
       // The rule set is account-wide SES configuration owned by the operator. Importing
       // it ensures this stack creates and deletes only its own receipt rule.
@@ -646,10 +1035,82 @@ sys.stdout.buffer.write(output.getvalue())`,
       });
     }
 
+    // Existing service-created /aws/lambda/<function-name> groups cannot be adopted
+    // by the new explicit LogGroup resources. Update only exact CloudFormation-owned
+    // function names; a stack-name prefix could include unrelated same-prefix stacks.
+    const seedEmailAllowlistProviderFunctionName = cdk.Stack.of(this).splitArn(
+      seedEmailAllowlistProvider.serviceToken,
+      cdk.ArnFormat.COLON_RESOURCE_NAME
+    ).resourceName;
+    if (!seedEmailAllowlistProviderFunctionName) {
+      throw new Error("Could not resolve the exact SeedEmailAllowlist provider framework Lambda name");
+    }
+    const legacyOwnedLambdaLogGroupNames = [
+      migrateLockLambda,
+      failureSanitizerLambda,
+      startLambda,
+      seedEmailAllowlistLambda,
+      ...(inboundEmailLambda ? [inboundEmailLambda] : []),
+    ]
+      .map((fn) => `/aws/lambda/${fn.functionName}`)
+      .concat(`/aws/lambda/${seedEmailAllowlistProviderFunctionName}`);
+    const retentionMigrationLogGroup = createProjectLogGroup("RetainLambdaLogsLambdaLogGroup");
+    const retentionMigrationLambda = new lambda.Function(this, "RetainLambdaLogsLambda", {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: "index.handler",
+      code: createLambdaDeploymentCode("RetainLambdaLogs", path.join(__dirname, "../src/lambda/RetainLambdaLogs")),
+      timeout: cdk.Duration.minutes(1),
+      logGroup: retentionMigrationLogGroup,
+    });
+    retentionMigrationLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:DescribeLogGroups"],
+        resources: ["*"],
+      })
+    );
+    retentionMigrationLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["logs:PutRetentionPolicy"],
+        resources: legacyOwnedLambdaLogGroupNames.map(
+          (name) => `arn:aws:logs:${this.region}:${this.account}:log-group:${name}`
+        ),
+      })
+    );
+    const retentionMigrationProviderLogGroup = createProjectLogGroup("RetainLambdaLogsProviderLogGroup");
+    const retentionMigrationProvider = new cr.Provider(this, "RetainLambdaLogsProvider", {
+      onEventHandler: retentionMigrationLambda,
+      logGroup: retentionMigrationProviderLogGroup,
+    });
+    const retentionMigrationResource = new cdk.CustomResource(this, "RetainLambdaLogs", {
+      serviceToken: retentionMigrationProvider.serviceToken,
+      properties: { LogGroupNames: legacyOwnedLambdaLogGroupNames, RetentionInDays: 30, MigrationVersion: "3" },
+    });
+    for (const dependency of [migrateLockLambda, failureSanitizerLambda, startLambda, seedEmailAllowlistLambda]) {
+      retentionMigrationResource.node.addDependency(dependency);
+    }
+    retentionMigrationResource.node.addDependency(seedEmailAllowlistProvider);
+    if (inboundEmailLambda) retentionMigrationResource.node.addDependency(inboundEmailLambda);
+
     // Outputs
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "LambdaFunctionName", {
       value: startLambda.functionName,
+    });
+    new cdk.CfnOutput(this, "LifecycleLockTableName", { value: lifecycleLockTable.tableName });
+    new cdk.CfnOutput(this, "OperationStateTableName", { value: operationStateTable.tableName });
+    new cdk.CfnOutput(this, "AlarmTopicArn", {
+      description: "SNS topic used by project CloudWatch alarms; email delivery requires subscription confirmation.",
+      value: alarmTopic.topicArn,
+    });
+    new cdk.CfnOutput(this, "LifecycleFailureQueueUrl", {
+      description:
+        "Encrypted 14-day queue containing sanitized lifecycle failure records and scheduled delivery events.",
+      value: lifecycleFailureQueue.queueUrl,
+    });
+    new cdk.CfnOutput(this, "FailureSanitizerDeadLetterQueueUrl", {
+      description:
+        "Restricted raw-envelope queue for terminal sanitizer failures; investigate whenever its depth alarm fires.",
+      value: failureSanitizerDeadLetterQueue.queueUrl,
     });
     new cdk.CfnOutput(this, "WorkerRuntimeIamUserName", {
       description: "Dedicated least-privilege IAM user for the Cloudflare Worker runtime (never a human deploy user)",

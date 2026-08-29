@@ -105,7 +105,6 @@ export async function checkRateLimit({
             route,
             code: counterResult.error.code,
             retryable: counterResult.error.retryable,
-            key,
           });
           return failClosedRateLimitResult();
         }
@@ -123,7 +122,6 @@ export async function checkRateLimit({
           route,
           code: counterResult.error.code,
           retryable: counterResult.error.retryable,
-          key,
         });
         return fallbackRateLimitResult(limit);
       }
@@ -142,7 +140,6 @@ export async function checkRateLimit({
         route,
         code: counterResult.error.code,
         retryable: counterResult.error.retryable,
-        key,
       });
       return failClosedRateLimitResult();
     }
@@ -166,7 +163,7 @@ export async function checkRateLimit({
     }
 
     return normalizedResult;
-  } catch (error) {
+  } catch {
     if (failClosed) {
       emitRuntimeStateTelemetry({
         operation: "rate-limit.increment-counter",
@@ -180,8 +177,6 @@ export async function checkRateLimit({
 
       console.warn("[RATE-LIMIT] Unexpected counter backend error, denying request", {
         route,
-        key,
-        error,
       });
       return failClosedRateLimitResult();
     }
@@ -197,8 +192,6 @@ export async function checkRateLimit({
 
     console.warn("[RATE-LIMIT] Unexpected counter backend error, allowing request", {
       route,
-      key,
-      error,
     });
     return fallbackRateLimitResult(limit);
   }

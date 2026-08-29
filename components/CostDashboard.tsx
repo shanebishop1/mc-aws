@@ -2,8 +2,9 @@
 
 import { CostBreakdownTable } from "@/components/cost";
 import { LuxuryButton } from "@/components/ui/Button";
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { useCostData } from "@/hooks/useCostData";
-import { AnimatePresence, motion } from "framer-motion";
+import { motion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 interface CostDashboardProps {
@@ -15,6 +16,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
   const { costData, cachedAt, isLoading, error, isStale, setError, fetchCosts, refresh } = useCostData();
   // Show confirmation only if no cached data exists
   const [showConfirmation, setShowConfirmation] = useState(!costData);
+  const dialogRef = useAccessibleDialog(isOpen, onClose);
 
   // Update showConfirmation when costData loads from localStorage
   useEffect(() => {
@@ -41,7 +43,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
   };
 
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (e.target === e.currentTarget) {
+    if (e.target === e.currentTarget && !isLoading) {
       onClose();
     }
   };
@@ -52,7 +54,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
   };
 
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
         <motion.div
           data-testid="cost-dashboard"
@@ -61,22 +63,30 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
           onClick={handleClickOutside}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-2 sm:items-center sm:p-4"
         >
           {/* Modal Container */}
           <motion.div
+            ref={dialogRef}
+            // biome-ignore lint/a11y/useSemanticElements: Framer Motion does not expose a motion.dialog element.
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="cost-dashboard-title"
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-2xl mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
+            className="relative w-full max-w-2xl max-h-[calc(100dvh-1rem)] overflow-y-auto bg-cream rounded-sm shadow-xl border border-charcoal/10 sm:max-h-[calc(100dvh-2rem)]"
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading}
-              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed"
+              data-dialog-initial-focus
+              aria-label="Close cost dashboard"
+              className="absolute top-4 right-4 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed sm:top-6 sm:right-6"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M6 18L18 6M6 6l12 12" />
@@ -89,11 +99,13 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
               animate={{ opacity: 1 }}
               exit={{ opacity: 0 }}
               transition={{ duration: 0.2 }}
-              className="p-8"
+              className="p-5 pt-14 sm:p-8"
             >
               {/* Header */}
               <div className="text-center mb-8">
-                <h2 className="font-serif text-2xl italic text-charcoal mb-2">Cost Dashboard</h2>
+                <h2 id="cost-dashboard-title" className="font-serif text-2xl italic text-charcoal mb-2">
+                  Cost Dashboard
+                </h2>
                 <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
                   AWS costs for your Minecraft server
                 </p>
@@ -151,7 +163,9 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
                   animate={{ opacity: 1, y: 0 }}
                   className="mb-6 p-4 bg-red-50 border border-red-200 rounded-sm"
                 >
-                  <p className="font-sans text-xs text-red-800 text-center">{error}</p>
+                  <p role="alert" aria-live="assertive" className="font-sans text-xs text-red-800 text-center">
+                    {error}
+                  </p>
                 </motion.div>
               )}
 
@@ -217,6 +231,6 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </>
   );
 };

@@ -1,8 +1,9 @@
 "use client";
 
+import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
 import { cn } from "@/lib/utils";
-import { AnimatePresence, motion } from "framer-motion";
-import { useEffect, useRef, useState } from "react";
+import { motion } from "framer-motion";
+import { useEffect, useLayoutEffect, useState } from "react";
 
 interface BackupDialogProps {
   isOpen: boolean;
@@ -19,61 +20,20 @@ const generateDefaultBackupName = (): string => {
 };
 
 export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: BackupDialogProps) => {
-  const modalRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
   const [backupName, setBackupName] = useState("");
+  const modalRef = useAccessibleDialog(isOpen, onClose);
 
   // Reset and set default name when modal opens
   useEffect(() => {
     if (isOpen) {
       const defaultName = generateDefaultBackupName();
       setBackupName(defaultName);
-      // Focus the input after a short delay to ensure it's rendered
-      setTimeout(() => {
-        inputRef.current?.focus();
-      }, 50);
     }
   }, [isOpen]);
 
-  // Focus trap
-  useEffect(() => {
-    if (!isOpen) return;
-
-    const handleTab = (e: KeyboardEvent) => {
-      if (e.key !== "Tab" || !modalRef.current) return;
-
-      const focusableElements = modalRef.current.querySelectorAll<HTMLElement>(
-        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])'
-      );
-
-      if (focusableElements.length === 0) return;
-
-      const firstElement = focusableElements[0];
-      const lastElement = focusableElements[focusableElements.length - 1];
-
-      if (e.shiftKey && document.activeElement === firstElement) {
-        lastElement.focus();
-        e.preventDefault();
-      } else if (!e.shiftKey && document.activeElement === lastElement) {
-        firstElement.focus();
-        e.preventDefault();
-      }
-    };
-
-    const handleEscape = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !isLoading) {
-        onClose();
-      }
-    };
-
-    document.addEventListener("keydown", handleTab);
-    document.addEventListener("keydown", handleEscape);
-
-    return () => {
-      document.removeEventListener("keydown", handleTab);
-      document.removeEventListener("keydown", handleEscape);
-    };
-  }, [isOpen, onClose, isLoading]);
+  useLayoutEffect(() => {
+    if (isOpen && isLoading) modalRef.current?.focus();
+  }, [isLoading, isOpen, modalRef]);
 
   const handleClickOutside = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.target === e.currentTarget && !isLoading) {
@@ -89,7 +49,7 @@ export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: 
   const isConfirmDisabled = isLoading || !backupName.trim();
 
   return (
-    <AnimatePresence>
+    <>
       {isOpen && (
         <motion.div
           data-testid="backup-dialog"
@@ -98,7 +58,7 @@ export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: 
           exit={{ opacity: 0 }}
           transition={{ duration: 0.2 }}
           onClick={handleClickOutside as React.MouseEventHandler<HTMLDivElement>}
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+          className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-black/40 p-2 sm:items-center sm:p-4"
           // biome-ignore lint/a11y/useSemanticElements: Using motion.div for Framer Motion animations
           role="dialog"
           aria-modal="true"
@@ -107,18 +67,19 @@ export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: 
         >
           <motion.div
             ref={modalRef}
+            tabIndex={-1}
             initial={{ opacity: 0, scale: 0.95, y: 20 }}
             animate={{ opacity: 1, scale: 1, y: 0 }}
             exit={{ opacity: 0, scale: 0.95, y: 20 }}
             transition={{ duration: 0.3, ease: "easeOut" }}
-            className="relative w-full max-w-md mx-4 bg-cream rounded-sm shadow-xl border border-charcoal/10"
+            className="relative w-full max-w-md max-h-[calc(100dvh-1rem)] overflow-y-auto bg-cream rounded-sm shadow-xl border border-charcoal/10 sm:max-h-[calc(100dvh-2rem)]"
           >
             {/* Close Button */}
             <button
               type="button"
               onClick={onClose}
               disabled={isLoading}
-              className="absolute top-6 right-6 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed disabled:opacity-50"
+              className="absolute top-4 right-4 text-charcoal/40 hover:text-charcoal transition-colors z-10 disabled:cursor-not-allowed disabled:opacity-50 sm:top-6 sm:right-6"
               aria-label="Close dialog"
             >
               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -126,7 +87,7 @@ export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: 
               </svg>
             </button>
 
-            <div className="p-8">
+            <div className="p-5 pt-14 sm:p-8">
               {/* Title and Description */}
               <div className="mb-6">
                 <h2 id="dialog-title" className="font-serif text-2xl italic mb-3 text-charcoal">
@@ -146,7 +107,7 @@ export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: 
                   Backup Name
                 </label>
                 <input
-                  ref={inputRef}
+                  data-dialog-initial-focus
                   id="backup-name"
                   type="text"
                   value={backupName}
@@ -219,6 +180,6 @@ export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: 
           </motion.div>
         </motion.div>
       )}
-    </AnimatePresence>
+    </>
   );
 };

@@ -14,23 +14,57 @@ bootstrap_failed() {
 trap bootstrap_failed EXIT
 
 readonly MC_VERSION="1.21.11"
+readonly PAPER_BUILD="132"
+readonly PAPER_URL="https://fill-data.papermc.io/v1/objects/5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba/paper-1.21.11-132.jar"
+readonly PAPER_SHA256="5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba"
+readonly RCLONE_VERSION="1.71.2"
+readonly RCLONE_URL="https://downloads.rclone.org/v1.71.2/rclone-v1.71.2-linux-arm64.zip"
+readonly RCLONE_SHA256="e2e2efc7ed143026352d60216ef0d46d3fa4fe9d647eff1bd929e6fea498e6f1"
+readonly MCSTATUS_VERSION="12.0.2"
+readonly MCSTATUS_URL="https://files.pythonhosted.org/packages/d3/eb/ede21d01d19e957573c88ff685401341a02ab595b4dba9a4a41fd382676c/mcstatus-12.0.2-py3-none-any.whl"
+readonly MCSTATUS_SHA256="b2ee5ff189a4ebf255c658e3983b3e2c74a1e0d222d3e74cfe04c2b4f64f66e6"
+readonly ASYNCIO_DGRAM_VERSION="2.2.0"
+readonly ASYNCIO_DGRAM_URL="https://files.pythonhosted.org/packages/61/00/cb33d8a9ebad87c9507262b131c92659bcf62975320b7feb9acdfb260ba0/asyncio_dgram-2.2.0-py3-none-any.whl"
+readonly ASYNCIO_DGRAM_SHA256="7afe5a587d1d57908c7a02fe84c785f075d3fb59b555039a6ff8aead28622743"
+readonly DNSPYTHON_VERSION="2.7.0"
+readonly DNSPYTHON_URL="https://files.pythonhosted.org/packages/68/1b/e0a87d256e40e8c888847551b20a017a6b98139178505dc7ffb96f04e954/dnspython-2.7.0-py3-none-any.whl"
+readonly DNSPYTHON_SHA256="b4c34b7d10b51bcc3a5071e7b8dee77939f1e878477eeecc965e9835f63c6c86"
+readonly MC_BOOTSTRAP_PINS_SHA256="4caf08790154b32ae4d9948e9829b95811146022d30325e5fed2406881527bdd"
 readonly PROFILE_MANIFEST_PARAMETER="/minecraft/server-profile-manifest"
 readonly RESUME_PENDING_PARAMETER="/minecraft/resume-pending"
 readonly BOOTSTRAP_MARKER="/var/lib/mc-aws/bootstrap-complete"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 
-dnf update -y
-rpm --import https://yum.corretto.aws/corretto.key
-curl --fail --location --proto '=https' --tlsv1.2 --output /etc/yum.repos.d/corretto.repo https://yum.corretto.aws/corretto.repo
-dnf install -y java-21-amazon-corretto-devel unzip python3 python3-pip cronie screen jq
+# The reviewed AMI is the OS patch boundary. Its releasever points at an immutable
+# AL2023 repository snapshot; pass it explicitly so bootstrap cannot follow a later
+# repository release if host/global DNF configuration changes. Package NEVRAs within
+# that AWS snapshot remain upstream-controlled and are recorded below for diagnosis.
+readonly AL2023_RELEASEVER="$(tr -d '[:space:]' < /etc/dnf/vars/releasever)"
+[[ "$AL2023_RELEASEVER" =~ ^2023\.[0-9]+\.[0-9]+$ ]] || { log "ERROR: reviewed AL2023 AMI has an invalid releasever"; exit 1; }
+dnf install -y --releasever="$AL2023_RELEASEVER" --setopt=install_weak_deps=False --setopt=metadata_expire=never \
+  java-21-amazon-corretto-devel unzip python3 python3-pip cronie screen jq
 command -v aws >/dev/null 2>&1 || { log "ERROR: pinned AL2023 image does not provide the AWS CLI"; exit 1; }
+install -d -o root -g root -m 0755 /var/lib/mc-aws
+{
+  printf 'releasever %s\n' "$AL2023_RELEASEVER"
+  rpm -q --qf '%{NAME} %{VERSION}-%{RELEASE}.%{ARCH}\n' \
+    java-21-amazon-corretto-devel unzip python3 python3-pip cronie screen jq | LC_ALL=C sort
+} > /var/lib/mc-aws/os-package-manifest.txt
+chmod 0644 /var/lib/mc-aws/os-package-manifest.txt
 systemctl enable --now crond
-python3 -m pip install mcstatus
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/mcstatus.whl "$MCSTATUS_URL"
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/asyncio-dgram.whl "$ASYNCIO_DGRAM_URL"
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/dnspython.whl "$DNSPYTHON_URL"
+printf '%s  %s\n' "$MCSTATUS_SHA256" /tmp/mcstatus.whl | sha256sum --check --status
+printf '%s  %s\n' "$ASYNCIO_DGRAM_SHA256" /tmp/asyncio-dgram.whl | sha256sum --check --status
+printf '%s  %s\n' "$DNSPYTHON_SHA256" /tmp/dnspython.whl | sha256sum --check --status
+python3 -m pip install --no-index --no-deps /tmp/asyncio-dgram.whl /tmp/dnspython.whl /tmp/mcstatus.whl
 
-curl --fail --location --proto '=https' --tlsv1.2 --output /tmp/rclone.zip https://downloads.rclone.org/rclone-current-linux-arm64.zip
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/rclone.zip "$RCLONE_URL"
+printf '%s  %s\n' "$RCLONE_SHA256" /tmp/rclone.zip | sha256sum --check --status
 unzip -q /tmp/rclone.zip -d /tmp/rclone
-install -o root -g root -m 0755 /tmp/rclone/rclone-*/rclone /usr/local/bin/rclone
+install -o root -g root -m 0755 "/tmp/rclone/rclone-v${RCLONE_VERSION}-linux-arm64/rclone" /usr/local/bin/rclone
 
 id minecraft >/dev/null 2>&1 || useradd -m -r minecraft
 install -d -o minecraft -g minecraft -m 0755 /opt/minecraft/server
@@ -106,15 +140,22 @@ chmod 0755 "$bootstrap/runtime/mc-profile-install.sh"
 "$bootstrap/runtime/mc-profile-install.sh" --bootstrap
 
 readonly PAPER_USER_AGENT="mc-aws/1.0"
-builds="$(curl --fail --silent --show-error --location --retry 3 -H "User-Agent: ${PAPER_USER_AGENT}" "https://fill.papermc.io/v3/projects/paper/versions/${MC_VERSION}/builds")"
-paper_url="$(jq -r 'first(.[] | select(.channel == "STABLE") | .downloads."server:default".url) // empty' <<<"$builds")"
-[[ "$paper_url" == https://* ]] || { log "ERROR: no stable Paper build"; exit 1; }
-curl --fail --location --proto '=https' --tlsv1.2 --retry 3 -H "User-Agent: ${PAPER_USER_AGENT}" "$paper_url" -o /tmp/paper.jar
+log "Installing reviewed Paper ${MC_VERSION} build ${PAPER_BUILD}"
+curl --fail --location --proto '=https' --tlsv1.2 --retry 3 -H "User-Agent: ${PAPER_USER_AGENT}" "$PAPER_URL" -o /tmp/paper.jar
+printf '%s  %s\n' "$PAPER_SHA256" /tmp/paper.jar | sha256sum --check --status || { log "ERROR: Paper checksum mismatch"; exit 1; }
 install -o minecraft -g minecraft -m 0644 /tmp/paper.jar /opt/minecraft/server/paper.jar
 printf '%s\n' 'eula=true' > /opt/minecraft/server/eula.txt
 chown minecraft:minecraft /opt/minecraft/server/eula.txt
 
 /usr/local/bin/mc-rclone-config.sh --bootstrap
+{
+  printf 'pins %s\n' "$MC_BOOTSTRAP_PINS_SHA256"
+  printf 'paper %s\n' "$(sha256sum /opt/minecraft/server/paper.jar | cut -d ' ' -f 1)"
+  printf 'rclone %s\n' "$(sha256sum /usr/local/bin/rclone | cut -d ' ' -f 1)"
+  printf 'mc-wait-ready %s\n' "$(sha256sum /usr/local/bin/mc-wait-ready.sh | cut -d ' ' -f 1)"
+  printf 'mc-runtime-rollout %s\n' "$(sha256sum /usr/local/bin/mc-runtime-rollout.sh | cut -d ' ' -f 1)"
+} > /var/lib/mc-aws/runtime-hashes.sha256
+chmod 0644 /var/lib/mc-aws/runtime-hashes.sha256
 systemctl daemon-reload
 systemctl enable minecraft.service minecraft-dns.service
 touch "$BOOTSTRAP_MARKER"

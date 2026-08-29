@@ -36,6 +36,65 @@ afterEach(() => {
 });
 
 describe("deployment ownership manifest transitions", () => {
+  it("records monotonic SSM pre-existing and installation-created ownership facts", () => {
+    const test = harness();
+    expect(
+      test.run([
+        "aws-init",
+        "--account",
+        account,
+        "--region",
+        region,
+        "--stack",
+        stack,
+        "--stack-state",
+        "absent",
+        "--stack-id",
+        "unknown",
+      ]).status
+    ).toBe(0);
+    expect(
+      test.run(["ssm-observe", "--name", "/minecraft/gdrive-token", "--state", "absent", "--type", "unknown"]).status
+    ).toBe(0);
+    expect(
+      test.run(["ssm-observe", "--name", "/minecraft/gdrive-token", "--state", "existing", "--type", "SecureString"])
+        .status
+    ).toBe(0);
+    expect(
+      test.run(["ssm-observe", "--name", "/minecraft/github-pat", "--state", "existing", "--type", "SecureString"])
+        .status
+    ).toBe(0);
+    const records = (test.read().aws as { ssmParameters: Array<Record<string, unknown>> }).ssmParameters;
+    expect(records).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          name: "/minecraft/gdrive-token",
+          ownership: "created",
+          observedBeforeSetup: "absent",
+        }),
+        expect.objectContaining({
+          name: "/minecraft/github-pat",
+          ownership: "preexisting",
+          observedBeforeSetup: "existing",
+        }),
+      ])
+    );
+    const override = test.run([
+      "ssm-stack-resource",
+      "--name",
+      "/minecraft/github-pat",
+      "--type",
+      "SecureString",
+      "--logical-id",
+      "LegacyPat",
+    ]);
+    expect(override.status).toBe(0);
+    const migrated = (test.read().aws as { ssmParameters: Array<Record<string, unknown>> }).ssmParameters;
+    expect(migrated).toContainEqual(
+      expect.objectContaining({ name: "/minecraft/github-pat", ownership: "created", source: "exact-stack-resource" })
+    );
+  });
+
   it("refuses to adopt a same-name existing stack without immutable prior identity", () => {
     const test = harness();
     const result = test.run([
@@ -341,6 +400,77 @@ describe("deployment ownership manifest transitions", () => {
         "b".repeat(32),
       ]).status
     ).toBe(0);
+  });
+
+  it("restores route manifest identity to absent or a verified recreated immutable ID", () => {
+    const test = harness();
+    const zone = "a".repeat(32);
+    const first = "b".repeat(32);
+    const replacement = "c".repeat(32);
+    const recreated = "d".repeat(32);
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        zone,
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "created",
+      ]).status
+    ).toBe(0);
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        zone,
+        "--id",
+        first,
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "created",
+      ]).status
+    ).toBe(0);
+    expect(
+      test.run([
+        "route",
+        "--zone",
+        zone,
+        "--id",
+        replacement,
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--ownership",
+        "created",
+        "--replaces-id",
+        first,
+      ]).status
+    ).toBe(0);
+    expect(
+      test.run([
+        "route-recovered",
+        "--zone",
+        zone,
+        "--pattern",
+        "panel.example.com/*",
+        "--script",
+        "mc-aws-panel",
+        "--baseline-state",
+        "present",
+        "--expected-current-id",
+        replacement,
+        "--restored-id",
+        recreated,
+      ]).status
+    ).toBe(0);
+    expect((test.read().cloudflare as { routes: Array<{ id: string }> }).routes[0].id).toBe(recreated);
   });
 
   it("rejects a replacement when --replaces-id does not match the manifest", () => {

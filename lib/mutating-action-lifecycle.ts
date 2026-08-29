@@ -1,4 +1,5 @@
 import { persistDurableOperationStateTransition } from "@/lib/durable-operation-state";
+import type { OperationPhase } from "@/lib/durable-operation-state";
 import {
   type MutatingActionExecutionFailure,
   type MutatingActionExecutionResult,
@@ -95,52 +96,93 @@ async function persistLifecycleOperationState(input: {
   status: OperationStatus;
   userEmail?: string;
   lockId?: string;
+  fencingToken?: number;
   instanceId?: string;
   error?: string;
   code?: string;
+  phase?: OperationPhase;
 }): Promise<void> {
-  try {
-    await persistDurableOperationStateTransition({
-      operationId: input.context.operation.id,
-      type: input.context.action,
-      route: input.context.route,
-      requestedAt: input.context.requestedAt,
-      status: input.status,
-      source: "api",
-      requestedBy: input.userEmail,
-      lockId: input.lockId,
-      instanceId: input.instanceId,
-      error: input.error,
-      code: input.code,
-    });
-  } catch (error) {
-    console.error("[MUTATING-ACTION] Failed to persist durable operation state:", error);
-  }
+  await persistDurableOperationStateTransition({
+    operationId: input.context.operation.id,
+    type: input.context.action,
+    route: input.context.route,
+    requestedAt: input.context.requestedAt,
+    status: input.status,
+    source: "api",
+    requestedBy: input.userEmail,
+    lockId: input.lockId,
+    fencingToken: input.fencingToken,
+    instanceId: input.instanceId,
+    error: input.error,
+    code: input.code,
+    phase: input.phase,
+  });
 }
 
+async function persistFinalLifecycleOperationState<TInvokeData>(input: {
+  authenticated: boolean;
+  context: MutatingActionRequestContext;
+  user: unknown;
+  lock?: ServerActionLock;
+  invokeResult?: TInvokeData;
+  execution: MutatingActionExecutionResult<TInvokeData>;
+  retainLifecycleLock: boolean;
+}): Promise<void> {
+  if (!input.authenticated) {
+    return;
+  }
+
+  await persistLifecycleOperationState({
+    context: input.context,
+    status: input.retainLifecycleLock ? "accepted" : input.execution.ok ? input.execution.status : "failed",
+    userEmail: getUserEmail(input.user),
+    lockId: input.lock?.lockId,
+    fencingToken: input.lock?.fencingToken,
+    instanceId: getInstanceIdFromInvokeResult(input.invokeResult),
+    error: input.retainLifecycleLock || input.execution.ok ? undefined : input.execution.error,
+    code: input.retainLifecycleLock || input.execution.ok ? undefined : input.execution.code,
+    phase: input.retainLifecycleLock ? "dispatching" : input.execution.ok ? "dispatched" : "terminal",
+  });
+}
+
+function isAmbiguousRemoteDispatch(
+  stage: Exclude<MutatingActionLifecycleStage, "finalize">,
+  lock: ServerActionLock | undefined,
+  error: unknown
+): boolean {
+  if (stage !== "invoke" || lock === undefined) return false;
+  if ((error as { remoteDispatchRejected?: unknown })?.remoteDispatchRejected === true) return false;
+  const httpStatusCode = (error as { $metadata?: { httpStatusCode?: unknown } })?.$metadata?.httpStatusCode;
+  return !Number.isInteger(httpStatusCode);
+}
+
+function shouldRunFinalizer(terminalPersistenceFailed: boolean, retainLifecycleLock: boolean): boolean {
+  return !terminalPersistenceFailed && !retainLifecycleLock;
+}
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keep remote dispatch ambiguity, durable state, and lock finalization in one auditable transaction.
 export async function runMutatingActionLifecycle<TUser, TInvokeData, TFinalizeData>(
   options: MutatingActionLifecycleOptions<TUser, TInvokeData, TFinalizeData>
 ): Promise<MutatingActionLifecycleOutcome<TUser, TInvokeData, TFinalizeData>> {
   const { context } = options;
 
-  await persistLifecycleOperationState({
-    context,
-    status: "running",
-  });
-
   let stage: Exclude<MutatingActionLifecycleStage, "finalize"> = "auth";
   let user: TUser | undefined;
+  let authenticated = false;
   let lock: ServerActionLock | undefined;
   let invokeResult: TInvokeData | undefined;
   let execution: MutatingActionExecutionResult<TInvokeData>;
+  let retainLifecycleLock = false;
 
   try {
     user = await options.authenticate(context);
+    authenticated = true;
 
     await persistLifecycleOperationState({
       context,
-      status: "running",
+      status: "accepted",
       userEmail: getUserEmail(user),
+      phase: "validating",
     });
 
     stage = "throttle";
@@ -155,6 +197,15 @@ export async function runMutatingActionLifecycle<TUser, TInvokeData, TFinalizeDa
       stage = "lock";
       lock = await options.acquireLock({ context, user });
 
+      await persistLifecycleOperationState({
+        context,
+        status: "accepted",
+        userEmail: getUserEmail(user),
+        lockId: lock.lockId,
+        fencingToken: lock.fencingToken,
+        phase: "dispatching",
+      });
+
       stage = "invoke";
       invokeResult = await options.invoke({ context, user, lock });
 
@@ -167,6 +218,10 @@ export async function runMutatingActionLifecycle<TUser, TInvokeData, TFinalizeDa
         }) ?? createMutatingActionSuccess(invokeResult);
     }
   } catch (error) {
+    // Once remote dispatch begins, transport failures cannot prove that the
+    // mutation was not accepted. Keep the operation retryable and the lease
+    // occupied rather than publishing a contradictory terminal failure.
+    retainLifecycleLock = isAmbiguousRemoteDispatch(stage, lock, error);
     execution =
       options.mapError?.({
         stage,
@@ -178,39 +233,61 @@ export async function runMutatingActionLifecycle<TUser, TInvokeData, TFinalizeDa
       createMutatingActionFailure("Failed to process mutating action", {
         cause: error,
       });
+    if (retainLifecycleLock) {
+      execution = createMutatingActionFailure(
+        "Remote dispatch could not be confirmed. The operation remains pending until its lease expires.",
+        {
+          httpStatus: 503,
+          code: "dispatch_unresolved",
+          cause: error,
+          operationStatus: "accepted",
+        }
+      );
+    }
   }
 
   let finalizeResult: TFinalizeData | undefined;
   let finalizeError: unknown;
+  let terminalPersistenceFailed = false;
 
   try {
-    finalizeResult = await options.finalize({
+    await persistFinalLifecycleOperationState({
+      authenticated,
       context,
       user,
       lock,
       invokeResult,
       execution,
+      retainLifecycleLock,
     });
   } catch (error) {
     finalizeError = error;
-
-    if (execution.ok) {
-      execution = createMutatingActionFailure("Failed to finalize mutating action", {
-        code: "finalize_failed",
-        cause: error,
-      });
-    }
+    terminalPersistenceFailed = true;
+    execution = createMutatingActionFailure("Failed to persist mutating action state", {
+      code: "operation_state_persist_failed",
+      cause: error,
+    });
   }
 
-  await persistLifecycleOperationState({
-    context,
-    status: execution.ok ? execution.status : "failed",
-    userEmail: getUserEmail(user),
-    lockId: lock?.lockId,
-    instanceId: getInstanceIdFromInvokeResult(invokeResult),
-    error: execution.ok ? undefined : execution.error,
-    code: execution.ok ? undefined : execution.code,
-  });
+  if (shouldRunFinalizer(terminalPersistenceFailed, retainLifecycleLock)) {
+    try {
+      finalizeResult = await options.finalize({
+        context,
+        user,
+        lock,
+        invokeResult,
+        execution,
+      });
+    } catch (error) {
+      finalizeError = error;
+      if (execution.ok) {
+        execution = createMutatingActionFailure("Failed to finalize mutating action", {
+          code: "finalize_failed",
+          cause: error,
+        });
+      }
+    }
+  }
 
   return {
     completedStage: "finalize",

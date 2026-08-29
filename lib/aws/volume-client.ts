@@ -29,16 +29,14 @@ async function waitForVolumeDetached(volumeId: string, maxAttempts = 30): Promis
       const volume = volumeResponse.Volumes?.[0];
       const attachmentState = volume?.Attachments?.[0]?.State;
 
-      console.log(
-        `Volume ${volumeId} attachment state poll (attempt ${detachAttempts}/${maxAttempts}): ${attachmentState}`
-      );
+      console.log(`Volume attachment state poll (attempt ${detachAttempts}/${maxAttempts}): ${attachmentState}`);
 
       if (!attachmentState || attachmentState === "detached") {
         detached = true;
-        console.log(`Volume ${volumeId} is now detached`);
+        console.log("Managed volume is now detached");
       }
-    } catch (error) {
-      console.error(`Error checking volume attachment state for ${volumeId}:`, error);
+    } catch {
+      console.error("Error checking managed volume attachment state");
     }
   }
 
@@ -50,7 +48,7 @@ async function waitForVolumeDetached(volumeId: string, maxAttempts = 30): Promis
  */
 export async function detachAndDeleteVolumes(instanceId?: string): Promise<void> {
   const resolvedId = instanceId || (await findInstanceId());
-  console.log(`Detaching and deleting volumes for instance ${resolvedId}...`);
+  console.log("Detaching and deleting managed instance volumes");
 
   const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [resolvedId] }));
 
@@ -69,20 +67,20 @@ export async function detachAndDeleteVolumes(instanceId?: string): Promise<void>
     }
 
     try {
-      console.log(`Detaching volume ${volumeId}...`);
+      console.log("Detaching managed volume");
       await ec2.send(new DetachVolumeCommand({ VolumeId: volumeId }));
-      console.log(`Detach command sent for volume ${volumeId}, waiting for detachment...`);
+      console.log("Detach command sent; waiting for managed volume detachment");
 
       const detached = await waitForVolumeDetached(volumeId);
       if (!detached) {
         throw new Error(`Volume ${volumeId} did not detach within timeout`);
       }
 
-      console.log(`Deleting volume ${volumeId}...`);
+      console.log("Deleting managed volume");
       await ec2.send(new DeleteVolumeCommand({ VolumeId: volumeId }));
-      console.log(`Volume ${volumeId} deleted successfully`);
+      console.log("Managed volume deleted successfully");
     } catch (error) {
-      console.error(`Error detaching/deleting volume ${volumeId}:`, error);
+      console.error("Error detaching or deleting managed volume");
       throw error;
     }
   }
@@ -103,13 +101,13 @@ async function waitForVolumeAvailable(volumeId: string, maxAttempts = 60): Promi
       const volume = volumeResponse.Volumes?.[0];
       if (volume?.State === "available") {
         volumeAvailable = true;
-        console.log(`Volume ${volumeId} is now available`);
+        console.log("Managed volume is now available");
       } else {
         console.log(`Volume state: ${volume?.State}. Waiting... (attempt ${attempts}/${maxAttempts})`);
         await new Promise((resolve) => setTimeout(resolve, 5000));
       }
-    } catch (error) {
-      console.error(`Error checking volume status on attempt ${attempts}:`, error);
+    } catch {
+      console.error(`Error checking managed volume status on attempt ${attempts}`);
       await new Promise((resolve) => setTimeout(resolve, 5000));
     }
   }
@@ -121,7 +119,7 @@ async function waitForVolumeAvailable(volumeId: string, maxAttempts = 60): Promi
 
 async function waitForVolumeAttached(
   volumeId: string,
-  instanceId: string | undefined,
+  _instanceId: string | undefined,
   maxAttempts = 60
 ): Promise<void> {
   let attachmentComplete = false;
@@ -136,13 +134,13 @@ async function waitForVolumeAttached(
       const attachment = volumeResponse.Volumes?.[0]?.Attachments?.[0];
       if (attachment?.State === "attached") {
         attachmentComplete = true;
-        console.log(`Volume ${volumeId} is now attached to instance ${instanceId}`);
+        console.log("Managed volume is now attached");
       } else {
         console.log(`Attachment state: ${attachment?.State}. Waiting... (attempt ${attempts}/${maxAttempts})`);
         await new Promise((resolve) => setTimeout(resolve, 2000));
       }
-    } catch (error) {
-      console.error(`Error checking attachment status on attempt ${attempts}:`, error);
+    } catch {
+      console.error(`Error checking attachment status on attempt ${attempts}`);
       await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
@@ -163,9 +161,7 @@ async function resolveResumeRootSource(
   imageId: string,
   rootDeviceName: string
 ): Promise<ResumeRootSource> {
-  console.log(
-    `[RESUME] Resolving reconstruction source from instance AMI ${imageId} (root device: ${rootDeviceName})...`
-  );
+  console.log("[RESUME] Resolving pinned reconstruction source");
 
   const imagesResponse = await ec2.send(
     new DescribeImagesCommand({
@@ -202,16 +198,16 @@ async function resolveResumeRootSource(
  */
 export async function handleResume(instanceId?: string) {
   const resolvedId = instanceId || (await findInstanceId());
-  console.log(`Checking if instance ${resolvedId} needs volume restoration...`);
+  console.log("Checking if the managed instance needs volume restoration");
 
   const { blockDeviceMappings, az, instance } = await getInstanceDetails(resolvedId);
 
   if (blockDeviceMappings.length > 0) {
-    console.log(`Instance ${resolvedId} already has ${blockDeviceMappings.length} volume(s). Skipping resume.`);
+    console.log(`Managed instance already has ${blockDeviceMappings.length} volume(s); skipping reconstruction`);
     return;
   }
 
-  console.log(`Instance ${resolvedId} has no volumes. Proceeding with hibernation recovery...`);
+  console.log("Managed instance has no volumes; proceeding with hibernation recovery");
 
   if (!az) {
     throw new Error(`Could not determine availability zone for instance ${resolvedId}`);
@@ -228,7 +224,7 @@ export async function handleResume(instanceId?: string) {
   }
 
   const resumeSource = await resolveResumeRootSource(resolvedId, sourceImageId, rootDeviceName);
-  console.log(`[RESUME] Using pinned root snapshot ${resumeSource.snapshotId} from source AMI ${resumeSource.imageId}`);
+  console.log("[RESUME] Using pinned root reconstruction source");
 
   console.log("Creating new 8GB GP3 volume from snapshot...");
   const createVolumeResponse = await ec2.send(
@@ -256,11 +252,11 @@ export async function handleResume(instanceId?: string) {
   if (!volumeId) {
     throw new Error("Failed to create volume");
   }
-  console.log(`Volume created: ${volumeId}`);
+  console.log("Managed volume created");
 
   await waitForVolumeAvailable(volumeId);
 
-  console.log(`Attaching volume ${volumeId} to instance ${resolvedId} at /dev/xvda...`);
+  console.log("Attaching managed volume");
   await ec2.send(
     new AttachVolumeCommand({
       VolumeId: volumeId,
@@ -271,5 +267,5 @@ export async function handleResume(instanceId?: string) {
 
   await waitForVolumeAttached(volumeId, resolvedId);
 
-  console.log(`Successfully restored volume for instance ${resolvedId}`);
+  console.log("Successfully restored managed volume");
 }

@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 type CheckId = "S1" | "S2" | "S3" | "S4" | "S5";
 type CheckStatus = "pass" | "fail" | "skipped";
@@ -20,6 +21,7 @@ interface SmokeConfig {
   sessionCookie: string;
   expectedBackendMode: "aws" | "mock";
   expectedDomain: string;
+  requestTimeoutMs: number;
   enableOptionalEnvironmentProbe: boolean;
   requireOptionalEnvironmentProbe: boolean;
   summaryOutputPath: string | null;
@@ -56,12 +58,48 @@ const getBooleanEnv = (name: string, defaultValue: boolean): boolean => {
     return false;
   }
 
-  throw new Error(`Invalid boolean value for ${name}: ${raw}`);
+  throw new Error(`Invalid boolean value for ${name}.`);
+};
+
+const getBoundedIntegerEnv = (name: string, defaultValue: number, minimum: number, maximum: number): number => {
+  const raw = process.env[name]?.trim();
+  if (!raw) return defaultValue;
+  const value = Number(raw);
+  if (!Number.isSafeInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum}.`);
+  }
+  return value;
 };
 
 const getRoutingHint = (results: CheckResult[]): RoutingHint | "none" => {
   const failed = results.find((result) => result.status === "fail" && result.routingHint);
   return failed?.routingHint ?? "none";
+};
+
+const checkSignalNames: Record<CheckId, string> = {
+  S1: "authenticated",
+  S2: "real backend",
+  S3: "service",
+  S4: "runtime binding",
+  S5: "optional environment",
+};
+
+const fixedSignal = (result: CheckResult): string => {
+  const outcome = result.status === "pass" ? "passed" : result.status === "fail" ? "failed" : "skipped";
+  return `${checkSignalNames[result.id]} contract ${outcome}`;
+};
+
+const fixedFailureHint = (result: CheckResult): string => {
+  if (result.status === "pass") return "-";
+  if (result.status === "skipped") return "Optional contract was not required or an earlier required contract failed.";
+  const hints: Record<CheckId, string> = {
+    S1: "Verify smoke credentials and required workflow configuration.",
+    S2: "Check backend mode, AWS authentication, and status dependencies.",
+    S3: "Check read-only SSM permissions and service-status wiring.",
+    S4: "Check runtime-state bindings and runtime configuration.",
+    S5: "The optional environment contract is configured as required.",
+  };
+  return hints[result.id];
 };
 
 const toCookieHeader = (rawCookieValue: string): string => {
@@ -86,22 +124,23 @@ const parseJsonResponse = async (response: Response): Promise<unknown> => {
   }
 };
 
-const buildSummary = (config: SmokeConfig, results: CheckResult[]): string => {
-  const hasRequiredFailure = results.filter((result) => result.id !== "S5").some((result) => result.status !== "pass");
+export const buildSummary = (results: CheckResult[]): string => {
+  // A failed S5 is emitted only when SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE=true;
+  // a non-blocking S5 failure is represented as skipped.
+  const hasRequiredFailure = results.some(
+    (result) => result.status === "fail" || (result.id !== "S5" && result.status !== "pass")
+  );
   const overallVerdict = hasRequiredFailure ? "FAIL" : "PASS";
-  const runTimestamp = new Date().toISOString();
   const routingHint = getRoutingHint(results);
 
   const rows = results.map((result) => {
-    return `| ${result.id} | ${result.status} | ${result.primarySignal} | ${result.failureHint} |`;
+    return `| ${result.id} | ${result.status} | ${fixedSignal(result)} | ${fixedFailureHint(result)} |`;
   });
 
   return [
     "## Real-environment smoke summary",
     "",
     `- Overall verdict: **${overallVerdict}**`,
-    `- Environment: **${config.environmentLabel}**`,
-    `- Timestamp: **${runTimestamp}**`,
     `- Failure routing hint: **${routingHint}**`,
     "",
     "| Check | Status | Primary signal | Failure hint |",
@@ -137,9 +176,7 @@ const writeArtifactSummary = (summary: string, summaryOutputPath: string | null)
 const loadConfig = (): SmokeConfig => {
   const rawExpectedBackendMode = process.env.SMOKE_EXPECT_BACKEND_MODE?.trim().toLowerCase() ?? "aws";
   if (rawExpectedBackendMode !== "aws" && rawExpectedBackendMode !== "mock") {
-    throw new Error(
-      `SMOKE_EXPECT_BACKEND_MODE must be either \"aws\" or \"mock\". Received: ${rawExpectedBackendMode}`
-    );
+    throw new Error('SMOKE_EXPECT_BACKEND_MODE must be either "aws" or "mock".');
   }
 
   return {
@@ -147,7 +184,8 @@ const loadConfig = (): SmokeConfig => {
     environmentLabel: getRequiredEnv("SMOKE_ENVIRONMENT_LABEL"),
     sessionCookie: toCookieHeader(getRequiredEnv("SMOKE_SESSION_COOKIE")),
     expectedBackendMode: rawExpectedBackendMode,
-    expectedDomain: process.env.SMOKE_EXPECT_DOMAIN?.trim() ?? "",
+    expectedDomain: getRequiredEnv("SMOKE_EXPECT_DOMAIN").toLowerCase(),
+    requestTimeoutMs: getBoundedIntegerEnv("SMOKE_REQUEST_TIMEOUT_MS", 15_000, 100, 120_000),
     enableOptionalEnvironmentProbe: getBooleanEnv("SMOKE_ENABLE_S5_ENVIRONMENT_PROBE", false),
     requireOptionalEnvironmentProbe: getBooleanEnv("SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE", false),
     summaryOutputPath: process.env.SMOKE_SUMMARY_OUTPUT_PATH?.trim() || null,
@@ -165,6 +203,7 @@ const fetchSmoke = async (
       Accept: "application/json",
       "User-Agent": "mc-aws-real-smoke-workflow/1.0",
     },
+    signal: AbortSignal.timeout(config.requestTimeoutMs),
   });
 
   const parsed = await parseJsonResponse(response);
@@ -179,18 +218,14 @@ const fetchSmoke = async (
 };
 
 const validateDomainSignal = (data: Record<string, unknown>, expectedDomain: string): void => {
-  if (!expectedDomain) {
-    return;
-  }
-
   const domain = data.domain;
-  if (typeof domain === "string" && domain.length > 0 && domain !== expectedDomain) {
-    throw new Error(`Domain mismatch. Expected ${expectedDomain} but got ${domain}.`);
+  if (typeof domain !== "string" || domain.trim().toLowerCase() !== expectedDomain) {
+    throw new Error("Configured domain does not match the status response.");
   }
 };
 
 const finalizeSmokeRun = (config: SmokeConfig, results: CheckResult[]): number => {
-  const summary = buildSummary(config, results);
+  const summary = buildSummary(results);
   appendStepSummary(summary);
   writeArtifactSummary(summary, config.summaryOutputPath);
 
@@ -246,16 +281,15 @@ const runS1 = async (config: SmokeConfig): Promise<CheckResult> => {
       id: "S1",
       label: "Environment/auth bootstrap sanity",
       status: "pass",
-      primarySignal: `Auth probe succeeded for ${email} (${role})`,
+      primarySignal: "authenticated contract passed",
       failureHint: "-",
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown auth bootstrap failure";
+  } catch {
     return {
       id: "S1",
       label: "Environment/auth bootstrap sanity",
       status: "fail",
-      primarySignal: message,
+      primarySignal: "authenticated contract failed",
       failureHint: "Verify smoke auth secret/cookie and required workflow env values.",
       routingHint: "credentials/config",
     };
@@ -282,23 +316,22 @@ const runS2 = async (config: SmokeConfig): Promise<CheckResult> => {
 
     const appearsMock = instanceId.toLowerCase().includes("mock");
     if (config.expectedBackendMode === "aws" && appearsMock) {
-      throw new Error(`/api/status indicates mock backend instance id (${instanceId}).`);
+      throw new Error("Status response indicates the mock backend.");
     }
 
     return {
       id: "S2",
       label: "Real backend status read",
       status: "pass",
-      primarySignal: `/api/status success with instanceId=${instanceId}`,
+      primarySignal: "real backend contract passed",
       failureHint: "-",
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown /api/status failure";
+  } catch {
     return {
       id: "S2",
       label: "Real backend status read",
       status: "fail",
-      primarySignal: message,
+      primarySignal: "real backend contract failed",
       failureHint: "Check backend mode, AWS auth, and status route runtime dependencies.",
       routingHint: "service/runtime",
     };
@@ -328,16 +361,15 @@ const runS3 = async (config: SmokeConfig): Promise<CheckResult> => {
       id: "S3",
       label: "Safe operation path verification",
       status: "pass",
-      primarySignal: `/api/service-status success (instanceRunning=${instanceRunning}, serviceActive=${serviceActive})`,
+      primarySignal: "service contract passed",
       failureHint: "-",
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown /api/service-status failure";
+  } catch {
     return {
       id: "S3",
       label: "Safe operation path verification",
       status: "fail",
-      primarySignal: message,
+      primarySignal: "service contract failed",
       failureHint: "Check read-only SSM permissions and service-status path wiring.",
       routingHint: "service/runtime",
     };
@@ -346,7 +378,7 @@ const runS3 = async (config: SmokeConfig): Promise<CheckResult> => {
 
 const runS4 = async (config: SmokeConfig): Promise<CheckResult> => {
   try {
-    const firstStatus = await fetchSmoke(config, "/api/status");
+    const firstStatus = await fetchSmoke(config, "/api/status?refresh=1");
     const secondStatus = await fetchSmoke(config, "/api/status");
     const stackStatus = await fetchSmoke(config, "/api/stack-status");
 
@@ -361,10 +393,18 @@ const runS4 = async (config: SmokeConfig): Promise<CheckResult> => {
       throw new Error("/api/status payload missing data object for binding probe.");
     }
 
-    const cacheSignal = secondStatus.response.headers.get("x-status-cache") ?? "";
-    if (cacheSignal !== "HIT" && cacheSignal !== "MISS") {
+    const writeSignal = firstStatus.response.headers.get("x-status-cache") ?? "";
+    const readSignal = secondStatus.response.headers.get("x-status-cache") ?? "";
+    const writeProbe = firstStatus.response.headers.get("x-status-refresh-probe") ?? "";
+    const readProbe = secondStatus.response.headers.get("x-status-refresh-probe") ?? "";
+    if (
+      writeSignal !== "MISS" ||
+      readSignal !== "HIT" ||
+      !/^[a-f0-9]{32}$/.test(writeProbe) ||
+      readProbe !== writeProbe
+    ) {
       throw new Error(
-        `/api/status missing runtime-state cache signal header (x-status-cache=${cacheSignal || "absent"}).`
+        `/api/status did not prove a runtime-state write/read round trip (refresh=${writeSignal || "absent"}, read=${readSignal || "absent"}).`
       );
     }
 
@@ -378,16 +418,15 @@ const runS4 = async (config: SmokeConfig): Promise<CheckResult> => {
       id: "S4",
       label: "Runtime-state + DNS/binding health probe",
       status: "pass",
-      primarySignal: `Runtime-state probe succeeded (x-status-cache=${cacheSignal}, stack-status=ok)`,
+      primarySignal: "runtime binding contract passed",
       failureHint: "-",
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown runtime-state/binding failure";
+  } catch {
     return {
       id: "S4",
       label: "Runtime-state + DNS/binding health probe",
       status: "fail",
-      primarySignal: message,
+      primarySignal: "runtime binding contract failed",
       failureHint: "Check runtime-state bindings/migrations and domain/runtime config consistency.",
       routingHint: "runtime-state/deploy",
     };
@@ -400,7 +439,7 @@ const runS5 = async (config: SmokeConfig): Promise<CheckResult> => {
       id: "S5",
       label: "Optional backup/environment read probe",
       status: "skipped",
-      primarySignal: "SMOKE_ENABLE_S5_ENVIRONMENT_PROBE=false",
+      primarySignal: "optional environment contract skipped",
       failureHint: "Optional probe intentionally disabled.",
     };
   }
@@ -418,25 +457,24 @@ const runS5 = async (config: SmokeConfig): Promise<CheckResult> => {
     }
 
     const totalCost = (data as Record<string, unknown>).totalCost;
-    if (typeof totalCost !== "number") {
-      throw new Error("/api/costs missing numeric totalCost.");
+    if (typeof totalCost !== "string" || totalCost.trim().length === 0) {
+      throw new Error("/api/costs missing string totalCost.");
     }
 
     return {
       id: "S5",
       label: "Optional backup/environment read probe",
       status: "pass",
-      primarySignal: `/api/costs success (totalCost=${totalCost})`,
+      primarySignal: "optional environment contract passed",
       failureHint: "-",
     };
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown optional probe failure";
+  } catch {
     if (config.requireOptionalEnvironmentProbe) {
       return {
         id: "S5",
         label: "Optional backup/environment read probe",
         status: "fail",
-        primarySignal: message,
+        primarySignal: "optional environment contract failed",
         failureHint: "Optional probe marked required by SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE=true.",
         routingHint: "service/runtime",
       };
@@ -446,7 +484,7 @@ const runS5 = async (config: SmokeConfig): Promise<CheckResult> => {
       id: "S5",
       label: "Optional backup/environment read probe",
       status: "skipped",
-      primarySignal: `probe failed (non-blocking): ${message}`,
+      primarySignal: "optional environment contract skipped",
       failureHint: "Optional probe failed but is configured as non-blocking.",
     };
   }
@@ -459,25 +497,25 @@ const fallbackConfig = (): SmokeConfig => {
     sessionCookie: "redacted",
     expectedBackendMode: "aws",
     expectedDomain: "",
+    requestTimeoutMs: 15_000,
     enableOptionalEnvironmentProbe: false,
     requireOptionalEnvironmentProbe: false,
     summaryOutputPath: process.env.SMOKE_SUMMARY_OUTPUT_PATH?.trim() || null,
   };
 };
 
-const runSmoke = async (): Promise<number> => {
+export const runSmoke = async (): Promise<number> => {
   const results: CheckResult[] = [];
 
   let config: SmokeConfig;
   try {
     config = loadConfig();
-  } catch (error) {
-    const message = error instanceof Error ? error.message : "Unknown configuration error";
+  } catch {
     results.push({
       id: "S1",
       label: "Environment/auth bootstrap sanity",
       status: "fail",
-      primarySignal: message,
+      primarySignal: "authenticated contract failed",
       failureHint: "Populate required smoke env/secrets (base URL, environment label, session cookie).",
       routingHint: "credentials/config",
     });
@@ -505,8 +543,10 @@ const runSmoke = async (): Promise<number> => {
   return finalizeSmokeRun(config, results);
 };
 
-void runSmoke().then((exitCode) => {
-  if (exitCode !== 0) {
-    process.exitCode = exitCode;
-  }
-});
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  void runSmoke().then((exitCode) => {
+    if (exitCode !== 0) {
+      process.exitCode = exitCode;
+    }
+  });
+}

@@ -36,12 +36,25 @@ export interface ApiResponse<T = unknown> {
 
 export type OperationStatus = "accepted" | "running" | "completed" | "failed";
 
-export type OperationType = "start" | "stop" | "backup" | "restore" | "hibernate" | "resume";
+export type OperationType = "start" | "stop" | "backup" | "restore" | "hibernate" | "resume" | "allowlist";
 
 export interface OperationInfo {
   id: string;
   type: OperationType;
   status: OperationStatus;
+}
+
+export interface OperationStatusData extends OperationInfo {
+  schemaVersion: 1;
+  route: string;
+  requestedAt: string;
+  updatedAt: string;
+  lastError?: string;
+  code?: string;
+  phase?: "validating" | "dispatching" | "dispatched" | "executing" | "terminal";
+  deadlineAt?: string;
+  maxDurationMs?: number;
+  dispatchExpiresAt?: string;
 }
 
 export interface StartServerResponse {

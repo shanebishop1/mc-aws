@@ -1,5 +1,6 @@
-import { ensureInstanceRunning } from "../ec2.js";
+import { ensureInstanceRunning, getInstanceState } from "../ec2.js";
 import { quotePosixShellArgument } from "../posix-shell.js";
+import { BACKUPS_REFRESH_SSM_MAX_ATTEMPTS, BACKUPS_REFRESH_SSM_TIMEOUT_SECONDS } from "../runtime-budgets.js";
 import { executeSSMCommand, getParameter, putParameter } from "../ssm.js";
 
 const BACKUPS_CACHE_PARAM = "/minecraft/backups-cache";
@@ -22,8 +23,8 @@ function buildListBackupsCommand(
  * @param {string} instanceId - The EC2 instance ID
  * @returns {Promise<string>} The result message
  */
-async function handleRefreshBackups(instanceId) {
-  console.log(`Handling refreshBackups command for instance ${instanceId}`);
+async function handleRefreshBackups(instanceId, options = {}) {
+  console.log("Handling refreshBackups command for managed instance");
 
   const previous = await readPreviousCache();
   const startedAt = Date.now();
@@ -40,9 +41,17 @@ async function handleRefreshBackups(instanceId) {
   );
 
   try {
-    // Ensure instance is running before attempting SSM command
     console.log("Step 1: Ensuring instance is running...");
-    await ensureInstanceRunning(instanceId);
+    if (options.requireAlreadyRunning) {
+      const state = await getInstanceState(instanceId);
+      if (state !== "running") {
+        const error = new Error(`Backup cache refresh requires a running instance; current state is ${state}`);
+        error.name = "ScheduledBackupInstanceNotRunning";
+        throw error;
+      }
+    } else {
+      await ensureInstanceRunning(instanceId);
+    }
     console.log("Step 1 complete: Instance is running");
 
     const gdriveRemote = process.env.GDRIVE_REMOTE;
@@ -52,7 +61,7 @@ async function handleRefreshBackups(instanceId) {
       throw new Error("Google Drive config not set (GDRIVE_REMOTE or GDRIVE_ROOT missing)");
     }
 
-    console.log(`Listing backups from Google Drive (${gdriveRemote}:${gdriveRoot})...`);
+    console.log("Listing backups from configured Google Drive location");
 
     // p - path, s - size, t - modification time
     // RCLONE_CONFIG must be set because SSM runs as root, not the minecraft user.
@@ -61,7 +70,12 @@ async function handleRefreshBackups(instanceId) {
     // - `rclone lsf` doesn't support `--sort` on older rclone versions, so sort in shell.
     // - Use `bash -lc` with `pipefail` so rclone failures don't get masked by `head`.
     const command = buildListBackupsCommand(gdriveRemote, gdriveRoot);
-    const output = await executeSSMCommand(instanceId, [command]);
+    const output = await executeSSMCommand(instanceId, [command], {
+      maxAttempts: BACKUPS_REFRESH_SSM_MAX_ATTEMPTS,
+      timeoutSeconds: BACKUPS_REFRESH_SSM_TIMEOUT_SECONDS,
+      step: "refresh-backups",
+      finalRemoteStep: true,
+    });
 
     // Parse output - each line is name|size|date
     const backups = output

@@ -3,8 +3,8 @@
  * Tests EC2 state transitions, SSM commands, cost fixtures, and stack operations
  */
 
-import type { ServerState } from "@/lib/types";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ServerState } from "@/lib/types";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { mockProvider } from "./mock-provider";
 import { getMockStateStore, resetMockStateStore } from "./mock-state-store";
 
@@ -15,12 +15,23 @@ interface PersistedOperationTransition {
 
 interface PersistedOperationState {
   status: string;
+  instanceId?: string;
+  executionToken?: string;
   lastError?: string;
   code?: string;
   history: PersistedOperationTransition[];
 }
 
-function buildAcceptedOperationState(operationId: string, type: string): string {
+function buildAcceptedOperationState(
+  operationId: string,
+  type: string,
+  identity: {
+    lockId?: string;
+    fencingToken?: number;
+    requestedBy?: string;
+    instanceId?: string | null;
+  } = {}
+): string {
   const now = new Date().toISOString();
   return JSON.stringify({
     id: operationId,
@@ -29,9 +40,10 @@ function buildAcceptedOperationState(operationId: string, type: string): string 
     status: "accepted",
     requestedAt: now,
     updatedAt: now,
-    requestedBy: "admin@example.com",
-    lockId: "lock-123",
-    instanceId: "i-mock1234567890abcdef",
+    requestedBy: identity.requestedBy ?? "admin@example.com",
+    lockId: identity.lockId ?? "lock-123",
+    fencingToken: identity.fencingToken ?? 1,
+    instanceId: identity.instanceId === null ? undefined : (identity.instanceId ?? "i-mock1234567890abcdef"),
     history: [
       {
         status: "accepted",
@@ -56,6 +68,10 @@ describe("Mock Provider Core", () => {
   beforeEach(() => {
     // Reset the mock state store before each test for isolation
     resetMockStateStore();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   describe("EC2 State Transitions", () => {
@@ -509,6 +525,35 @@ describe("Mock Provider Core", () => {
       expect(value).toBe("new-value");
     });
 
+    it("redacts SecureString values from putParameter diagnostics", async () => {
+      const secret = "oauth-token-never-log-9f8472";
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await mockProvider.putParameter("/minecraft/test-secret", secret, "SecureString", false);
+
+      const output = JSON.stringify(logSpy.mock.calls);
+      expect(output).not.toContain(secret);
+      expect(output).not.toContain("oauth-token-never-log");
+      expect(output).toContain("/minecraft/test-secret");
+      expect(output).toContain("SecureString");
+      expect(output).toContain("[REDACTED]");
+      expect(await getMockStateStore().getParameter("/minecraft/test-secret")).toBe(secret);
+      logSpy.mockRestore();
+    });
+
+    it("preserves ordinary String values and useful putParameter diagnostics", async () => {
+      const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+
+      await mockProvider.putParameter("/minecraft/display-name", "Friendly Server", "String", true);
+
+      const output = JSON.stringify(logSpy.mock.calls);
+      expect(output).toContain("/minecraft/display-name");
+      expect(output).toContain("Friendly Server");
+      expect(output).toContain("String");
+      expect(await getMockStateStore().getParameter("/minecraft/display-name")).toBe("Friendly Server");
+      logSpy.mockRestore();
+    });
+
     it("should delete parameter", async () => {
       const stateStore = getMockStateStore();
       await stateStore.setParameter("/minecraft/delete-me", "value");
@@ -554,11 +599,18 @@ describe("Mock Provider Core", () => {
 
       await stateStore.setParameter(
         `/minecraft/operations/${operationId}`,
-        buildAcceptedOperationState(operationId, "backup")
+        buildAcceptedOperationState(operationId, "backup", { instanceId: null })
       );
       await stateStore.setParameter(
         "/minecraft/server-action",
-        JSON.stringify({ lockId, action: "backup", ownerEmail: "admin@example.com" })
+        JSON.stringify({
+          lockId,
+          fencingToken: 1,
+          action: "backup",
+          ownerEmail: "admin@example.com",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
       );
 
       await mockProvider.invokeLambda("StartMinecraftServer", {
@@ -567,6 +619,7 @@ describe("Mock Provider Core", () => {
         userEmail: "admin@example.com",
         instanceId: "i-mock1234567890abcdef",
         lockId,
+        fencingToken: 1,
         operationId,
       });
 
@@ -574,6 +627,7 @@ describe("Mock Provider Core", () => {
 
       const operation = await readOperationState(operationId);
       expect(operation.status).toBe("completed");
+      expect(operation.instanceId).toBe("i-mock1234567890abcdef");
       expect(operation.history.map((entry) => `${entry.source}:${entry.status}`)).toEqual([
         "api:accepted",
         "lambda:running",
@@ -582,6 +636,101 @@ describe("Mock Provider Core", () => {
 
       const lock = await stateStore.getParameter("/minecraft/server-action");
       expect(lock).toBeNull();
+    });
+
+    it("rejects a conflicting operation instance ID without consuming transport faults", async () => {
+      const stateStore = getMockStateStore();
+      const operationId = "backup-conflicting-instance";
+      const lockId = "lock-conflicting-instance";
+      await stateStore.setParameter(
+        `/minecraft/operations/${operationId}`,
+        buildAcceptedOperationState(operationId, "backup", { lockId, instanceId: "i-different-instance" })
+      );
+      const lock = JSON.stringify({
+        lockId,
+        fencingToken: 1,
+        action: "backup",
+        ownerEmail: "admin@example.com",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      await stateStore.setParameter("/minecraft/server-action", lock);
+      await stateStore.setOperationFailure("invokeLambda", {
+        failNext: true,
+        alwaysFail: false,
+        errorCode: "MockTransportFailure",
+        errorMessage: "Ambiguous mock transport failure",
+      });
+      const backupCount = (await stateStore.getBackups()).length;
+
+      await expect(
+        mockProvider.invokeLambda("StartMinecraftServer", {
+          command: "backup",
+          userEmail: "admin@example.com",
+          instanceId: "i-mock1234567890abcdef",
+          lockId,
+          fencingToken: 1,
+          operationId,
+        })
+      ).resolves.toBeUndefined();
+
+      expect(await readOperationState(operationId)).toMatchObject({
+        status: "accepted",
+        instanceId: "i-different-instance",
+      });
+      expect((await stateStore.getBackups()).length).toBe(backupCount);
+      expect(await stateStore.getParameter("/minecraft/server-action")).toBe(lock);
+      expect(await stateStore.getOperationFailure("invokeLambda")).toMatchObject({ failNext: true });
+    });
+
+    it("throws invokeLambda transport faults before claim and retains accepted operation and lock", async () => {
+      const stateStore = getMockStateStore();
+      const operationId = "backup-transport-failure";
+      const lockId = "lock-transport-failure";
+      await stateStore.setParameter(
+        `/minecraft/operations/${operationId}`,
+        buildAcceptedOperationState(operationId, "backup", { lockId, instanceId: null })
+      );
+      const lock = JSON.stringify({
+        lockId,
+        fencingToken: 1,
+        action: "backup",
+        ownerEmail: "admin@example.com",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      await stateStore.setParameter("/minecraft/server-action", lock);
+      await stateStore.setOperationFailure("invokeLambda", {
+        failNext: true,
+        alwaysFail: false,
+        errorCode: "MockTransportFailure",
+        errorMessage: "Ambiguous mock transport failure",
+      });
+      const payload = {
+        command: "backup",
+        userEmail: "admin@example.com",
+        instanceId: "i-mock1234567890abcdef",
+        lockId,
+        fencingToken: 1,
+        operationId,
+      };
+      const backupCount = (await stateStore.getBackups()).length;
+
+      await expect(mockProvider.invokeLambda("StartMinecraftServer", payload)).rejects.toThrow(
+        "Ambiguous mock transport failure"
+      );
+
+      expect(await readOperationState(operationId)).toMatchObject({
+        status: "accepted",
+        executionToken: expect.stringMatching(/^transport-/),
+      });
+      expect((await stateStore.getBackups()).length).toBe(backupCount);
+      expect(await stateStore.getParameter("/minecraft/server-action")).toBe(lock);
+      expect(await stateStore.getOperationFailure("invokeLambda")).toBeUndefined();
+
+      await expect(mockProvider.invokeLambda("StartMinecraftServer", payload)).resolves.toBeUndefined();
+      expect((await stateStore.getBackups()).length).toBe(backupCount);
+      expect((await readOperationState(operationId)).status).toBe("accepted");
     });
 
     it("persists failed transition when async mock command errors", async () => {
@@ -595,7 +744,14 @@ describe("Mock Provider Core", () => {
       );
       await stateStore.setParameter(
         "/minecraft/server-action",
-        JSON.stringify({ lockId, action: "start", ownerEmail: "admin@example.com" })
+        JSON.stringify({
+          lockId,
+          fencingToken: 1,
+          action: "start",
+          ownerEmail: "admin@example.com",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
       );
       await stateStore.setOperationFailure("startInstance", {
         failNext: true,
@@ -611,6 +767,7 @@ describe("Mock Provider Core", () => {
           userEmail: "admin@example.com",
           instanceId: "i-mock1234567890abcdef",
           lockId,
+          fencingToken: 1,
           operationId,
         })
       ).resolves.toBeUndefined();
@@ -627,6 +784,263 @@ describe("Mock Provider Core", () => {
 
       const lock = await stateStore.getParameter("/minecraft/server-action");
       expect(lock).toBeNull();
+    });
+
+    it.each(["backup", "hibernate", "resume"] as const)(
+      "claims concurrent duplicate %s deliveries exactly once and ignores post-terminal duplicates",
+      async (command) => {
+        vi.useFakeTimers();
+        const stateStore = getMockStateStore();
+        const operationId = `${command}-concurrent`;
+        const lockId = `lock-${command}-concurrent`;
+        if (command === "hibernate") await stateStore.updateInstanceState(ServerState.Running);
+        if (command === "resume") await stateStore.setHasVolume(false);
+        await stateStore.setParameter(
+          `/minecraft/operations/${operationId}`,
+          buildAcceptedOperationState(operationId, command, { lockId })
+        );
+        await stateStore.setParameter(
+          "/minecraft/server-action",
+          JSON.stringify({
+            lockId,
+            fencingToken: 1,
+            action: command,
+            ownerEmail: " Admin@Example.com ",
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          })
+        );
+        const payload = {
+          command,
+          userEmail: "ADMIN@example.com",
+          instanceId: "i-mock1234567890abcdef",
+          lockId,
+          fencingToken: 1,
+          operationId,
+        };
+        const backupCount = (await stateStore.getBackups()).length;
+
+        await Promise.all([
+          mockProvider.invokeLambda("StartMinecraftServer", payload),
+          mockProvider.invokeLambda("StartMinecraftServer", payload),
+        ]);
+
+        const expectedBackupCount = command === "resume" ? backupCount : backupCount + 1;
+        expect((await stateStore.getBackups()).length).toBe(expectedBackupCount);
+        expect((await readOperationState(operationId)).executionToken).toEqual(expect.any(String));
+        await vi.advanceTimersByTimeAsync(3_500);
+        expect((await readOperationState(operationId)).status).toBe("completed");
+        if (command === "hibernate") {
+          expect(await mockProvider.getInstanceState()).toBe(ServerState.Hibernating);
+        } else if (command === "resume") {
+          expect(await mockProvider.getInstanceState()).toBe(ServerState.Running);
+        }
+
+        await mockProvider.invokeLambda("StartMinecraftServer", payload);
+        await vi.advanceTimersByTimeAsync(3_500);
+        expect((await stateStore.getBackups()).length).toBe(expectedBackupCount);
+        expect((await readOperationState(operationId)).status).toBe("completed");
+      }
+    );
+
+    it.each(["backup", "hibernate", "resume"] as const)(
+      "rejects stale %s deliveries without side effects",
+      async (command) => {
+        const stateStore = getMockStateStore();
+        const operationId = `${command}-stale`;
+        const lockId = `lock-${command}`;
+        if (command === "hibernate") await stateStore.updateInstanceState(ServerState.Running);
+        if (command === "resume") await stateStore.setHasVolume(false);
+        await stateStore.setParameter(
+          `/minecraft/operations/${operationId}`,
+          buildAcceptedOperationState(operationId, command, { lockId, fencingToken: 1 })
+        );
+        await stateStore.setParameter(
+          "/minecraft/server-action",
+          JSON.stringify({
+            lockId,
+            fencingToken: 2,
+            action: command,
+            ownerEmail: "admin@example.com",
+            createdAt: new Date().toISOString(),
+            expiresAt: new Date(Date.now() + 60_000).toISOString(),
+          })
+        );
+        const before = await stateStore.getState();
+
+        await mockProvider.invokeLambda("StartMinecraftServer", {
+          command,
+          userEmail: "admin@example.com",
+          instanceId: "i-mock1234567890abcdef",
+          lockId,
+          fencingToken: 1,
+          operationId,
+        });
+
+        const after = await stateStore.getState();
+        expect(after.backups).toEqual(before.backups);
+        expect(after.instance).toEqual(before.instance);
+        expect((await readOperationState(operationId)).status).toBe("accepted");
+      }
+    );
+
+    it("prevents a stale delayed completion from terminalizing or releasing a newer owner", async () => {
+      vi.useFakeTimers();
+      const stateStore = getMockStateStore();
+      const operationId = "backup-stale-completion";
+      await stateStore.setParameter(
+        `/minecraft/operations/${operationId}`,
+        buildAcceptedOperationState(operationId, "backup", { lockId: "lock-old" })
+      );
+      await stateStore.setParameter(
+        "/minecraft/server-action",
+        JSON.stringify({
+          lockId: "lock-old",
+          fencingToken: 1,
+          action: "backup",
+          ownerEmail: "admin@example.com",
+          createdAt: new Date().toISOString(),
+          expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        })
+      );
+      await mockProvider.invokeLambda("StartMinecraftServer", {
+        command: "backup",
+        userEmail: "admin@example.com",
+        instanceId: "i-mock1234567890abcdef",
+        lockId: "lock-old",
+        fencingToken: 1,
+        operationId,
+      });
+      const claimed = JSON.parse((await stateStore.getParameter(`/minecraft/operations/${operationId}`))!) as Record<
+        string,
+        unknown
+      >;
+      const newerOperation = {
+        ...claimed,
+        lockId: "lock-new",
+        fencingToken: 2,
+        status: "running",
+        executionToken: "new-execution-winner",
+      };
+      await stateStore.setParameter(`/minecraft/operations/${operationId}`, JSON.stringify(newerOperation));
+      const newerLock = JSON.stringify({
+        lockId: "lock-new",
+        fencingToken: 2,
+        action: "backup",
+        ownerEmail: "admin@example.com",
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      });
+      await stateStore.setParameter("/minecraft/server-action", newerLock);
+
+      await vi.advanceTimersByTimeAsync(600);
+
+      const operation = await readOperationState(operationId);
+      expect(operation).toMatchObject({ status: "running", executionToken: "new-execution-winner" });
+      expect(await stateStore.getParameter("/minecraft/server-action")).toBe(newerLock);
+    });
+  });
+
+  describe("Atomic lifecycle parity", () => {
+    it("allows one atomic lock winner and fences stale release", async () => {
+      const stateStore = getMockStateStore();
+      const now = Date.now();
+      const candidate = (lockId: string) => ({
+        lockId,
+        action: "backup",
+        ownerEmail: "admin@example.com",
+        createdAt: new Date(now).toISOString(),
+        expiresAt: new Date(now + 90 * 60 * 1000).toISOString(),
+      });
+
+      const [first, second] = await Promise.all([
+        stateStore.acquireLifecycleLock(candidate("lock-a"), now),
+        stateStore.acquireLifecycleLock(candidate("lock-b"), now),
+      ]);
+      const winner = [first, second].find((result) => result.acquired)?.lock;
+      expect([first, second].filter((result) => result.acquired)).toHaveLength(1);
+      expect(winner?.fencingToken).toBe(1);
+      await expect(
+        stateStore.releaseLifecycleLock({ lockId: winner!.lockId, fencingToken: winner!.fencingToken - 1 })
+      ).resolves.toBe(false);
+      expect(await stateStore.getParameter("/minecraft/server-action")).not.toBeNull();
+    });
+
+    it("executes mock hibernate and resume volume/state side effects under fenced ownership", async () => {
+      vi.useFakeTimers();
+      try {
+        const stateStore = getMockStateStore();
+        await stateStore.updateInstanceState("running" as ServerState);
+        const now = Date.now();
+        const hibernateLock = await stateStore.acquireLifecycleLock(
+          {
+            lockId: "lock-hibernate",
+            action: "hibernate",
+            ownerEmail: "admin@example.com",
+            createdAt: new Date(now).toISOString(),
+            expiresAt: new Date(now + 90 * 60 * 1000).toISOString(),
+          },
+          now
+        );
+        await stateStore.setParameter(
+          "/minecraft/operations/op-hibernate",
+          buildAcceptedOperationState("op-hibernate", "hibernate", {
+            lockId: "lock-hibernate",
+            fencingToken: hibernateLock.lock!.fencingToken,
+          })
+        );
+        const backupCount = (await stateStore.getBackups()).length;
+
+        await mockProvider.invokeLambda("StartMinecraftServer", {
+          invocationType: "api",
+          command: "hibernate",
+          userEmail: "admin@example.com",
+          instanceId: "i-mock1234567890abcdef",
+          lockId: "lock-hibernate",
+          fencingToken: hibernateLock.lock!.fencingToken,
+          operationId: "op-hibernate",
+        });
+        await vi.advanceTimersByTimeAsync(3500);
+
+        expect(await mockProvider.getInstanceState()).toBe(ServerState.Hibernating);
+        expect((await stateStore.getBackups()).length).toBe(backupCount + 1);
+        expect((await readOperationState("op-hibernate")).status).toBe("completed");
+
+        const resumeNow = Date.now();
+        const resumeLock = await stateStore.acquireLifecycleLock(
+          {
+            lockId: "lock-resume",
+            action: "resume",
+            ownerEmail: "admin@example.com",
+            createdAt: new Date(resumeNow).toISOString(),
+            expiresAt: new Date(resumeNow + 90 * 60 * 1000).toISOString(),
+          },
+          resumeNow
+        );
+        await stateStore.setParameter(
+          "/minecraft/operations/op-resume",
+          buildAcceptedOperationState("op-resume", "resume", {
+            lockId: "lock-resume",
+            fencingToken: resumeLock.lock!.fencingToken,
+          })
+        );
+        await mockProvider.invokeLambda("StartMinecraftServer", {
+          invocationType: "api",
+          command: "resume",
+          userEmail: "admin@example.com",
+          instanceId: "i-mock1234567890abcdef",
+          lockId: "lock-resume",
+          fencingToken: resumeLock.lock!.fencingToken,
+          operationId: "op-resume",
+        });
+        await vi.advanceTimersByTimeAsync(3500);
+
+        expect(await mockProvider.getInstanceState()).toBe(ServerState.Running);
+        expect(await stateStore.hasVolume()).toBe(true);
+        expect((await readOperationState("op-resume")).status).toBe("completed");
+      } finally {
+        vi.useRealTimers();
+      }
     });
   });
 

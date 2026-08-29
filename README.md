@@ -48,6 +48,7 @@ Run a Minecraft server on AWS without paying to leave it running all the time. F
 - Google sign-in with admin and allowed-user roles
 - Cloudflare, DuckDNS, or raw-IP Minecraft connections
 - Google Drive backup and restore
+- Optional unattended backups with freshness and failure alarms
 - Optional SES notifications and authenticated email commands
 
 ## Why?
@@ -64,7 +65,7 @@ This project is the middle path. The server runs on AWS, friends can start it fr
 | Stopped | The EBS root volume remains attached | about `$0.75/month` for the default 8 GB volume |
 | Running | EC2 compute while people play | about `$0.03-0.04/hour` for the default instance |
 
-These are rough examples, not quotes. Backups, snapshots, data transfer, logs, requests, optional services, taxes, and provider pricing can add cost.
+These are rough examples, not quotes. Backups, snapshots, data transfer, logs, requests, optional services, taxes, and provider pricing can add cost. The production alarms and 30-day log retention are enabled even when scheduled backups are disabled; at low volume, CloudWatch is commonly the largest addition at roughly `$1–3/month`. Scheduled backups add EventBridge, Lambda, SSM, Drive traffic, logs, and custom backup metrics when enabled. Region, usage, free tier, and current provider pricing determine the actual amount.
 
 On-demand hosting providers can be a better fit if you want less setup. The reason to use this project is not just small idle-cost savings. The reason is control.
 

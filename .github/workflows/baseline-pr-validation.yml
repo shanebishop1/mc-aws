@@ -51,6 +51,9 @@ jobs:
       - name: Run TypeScript typecheck
         run: pnpm typecheck
 
+      - name: Statically check deployed Lambda JavaScript contracts
+        run: pnpm lambda:check
+
       - name: Run unit and contract tests
         run: pnpm test
 
@@ -112,11 +115,15 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
+      MC_BACKEND_MODE: aws
+      ENABLE_DEV_LOGIN: ""
       AUTH_SECRET: ci-only-auth-secret-not-used-outside-builds
       ADMIN_EMAIL: ci@example.invalid
       GOOGLE_CLIENT_ID: ci-client-id
       GOOGLE_CLIENT_SECRET: ci-client-secret
       NEXT_PUBLIC_APP_URL: https://ci.example.invalid
+      MC_LIFECYCLE_LOCK_TABLE_NAME: ci-lifecycle-lock-table
+      MC_OPERATION_STATE_TABLE_NAME: ci-operation-state-table
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -140,10 +147,7 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Run clean Next.js production build
-        run: |
-          set -euo pipefail
-          rm -rf .next
-          pnpm build
+        run: pnpm build:production:check
 
       - name: Run clean OpenNext Cloudflare build
         run: |
@@ -155,9 +159,11 @@ jobs:
             --source wrangler.jsonc \
             --output "$ci_wrangler_config" \
             --kv-id 00000000000000000000000000000000 \
-            --kv-preview-id 11111111111111111111111111111111 \
-            --mode workers_dev \
-            --custom-workers-dev true
+             --kv-preview-id 11111111111111111111111111111111 \
+             --mode workers_dev \
+             --custom-workers-dev true \
+             --lifecycle-lock-table ci-lifecycle-lock-table \
+             --operation-state-table ci-operation-state-table
           pnpm exec opennextjs-cloudflare build --config "$ci_wrangler_config"
 
       - name: Verify builds did not modify the checkout
@@ -231,7 +237,18 @@ jobs:
         # from being copied into the public Actions log.
         env:
           MC_ALLOW_EMPTY_WHITELIST: "true"
+          SES_INBOUND_COMMANDS_ENABLED: "true"
+          SES_INBOUND_RECIPIENT: "commands@example.invalid"
+          SES_RECEIPT_RULE_SET_NAME: "ci-existing-rule-set"
+          START_KEYWORD: "ci-start-keyword"
+          CLOUDFLARE_ZONE_ID: "ci-zone-id"
+          CLOUDFLARE_MC_DOMAIN: "mc.example.invalid"
         run: pnpm cdk:synth --quiet --no-lookups
+
+      - name: Audit exact synthesized Lambda deployment artifacts
+        env:
+          MC_REQUIRE_ALL_LAMBDA_ASSETS: "true"
+        run: pnpm lambda:assets:audit infra/cdk.out
 
       - name: Validate tracked shell syntax
         run: |
@@ -268,14 +285,6 @@ jobs:
 
       - name: Audit root production dependencies
         run: pnpm audit --prod --audit-level high
-
-      - name: Audit SeedEmailAllowlist production dependencies
-        working-directory: infra/src/lambda/SeedEmailAllowlist
-        run: npm audit --omit=dev --audit-level=high
-
-      - name: Audit StartMinecraftServer production dependencies
-        working-directory: infra/src/lambda/StartMinecraftServer
-        run: npm audit --omit=dev --audit-level=high
 
       - name: Verify audits did not modify the checkout
         if: always()

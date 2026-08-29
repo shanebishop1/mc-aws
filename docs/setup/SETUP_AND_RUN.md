@@ -12,7 +12,7 @@ You need:
 - a Cloudflare account with Workers enabled; a custom domain is optional
 - a Google OAuth **Web application** client ID and secret
 
-When `mise` is missing, setup downloads the current installer from `https://mise.run` over HTTPS and runs it, then uses `mise` for the repository-pinned Node.js and pnpm versions. Install and inspect `mise` yourself before setup if you do not want that remote installer path. Setup does not activate `mise` in the calling shell.
+Before reading `.env.production` or any other credential file, setup uses a cleared environment to download the exact platform binary in [`config/mise-pins.json`](../../config/mise-pins.json), verifies its reviewed SHA-256, verifies its version output, and installs it at `~/.local/bin/mise`. It never runs a mutable curl pipe. Review the pin with `bash scripts/bootstrap-mise.sh review`; an intentional pin change is installed only with `pnpm mise:upgrade -- --confirm '<exact review output>'`. Setup does not activate `mise` in the calling shell.
 
 Review the required account guides:
 
@@ -91,6 +91,7 @@ The wizard asks for:
 - Minecraft address: Cloudflare DNS, DuckDNS, or raw public IP
 - panel host: `workers.dev` or a custom Cloudflare hostname
 - optional SES and Google Drive settings
+- optional CloudWatch alarm email and explicit weekly Drive-backup opt-in
 
 An EC2 key pair is optional, but port 22 is blocked by default. Leave it blank and use AWS Systems Manager Session Manager.
 
@@ -118,8 +119,9 @@ After setup completes:
 2. Open the printed panel URL and sign in as `ADMIN_EMAIL`.
 3. Wait for the instance to report running, then check Minecraft service readiness in the panel.
 4. If using Drive, connect it in the panel, create a test backup, and restore that backup.
-5. Connect using the displayed address and confirm the server works.
-6. Check AWS Billing and Cost Explorer.
+5. If `MC_ALARM_EMAIL` is set, accept AWS's SNS **Subscription Confirmation** email; alerts are not delivered before confirmation.
+6. Connect using the displayed address and confirm the server works.
+7. Check AWS Billing and Cost Explorer.
 
 Use the web panel for production mutations. The repository's `scripts/server-cli.ts` sends no authentication, so its start/stop/backup/restore commands do not work against authenticated production routes.
 
@@ -131,6 +133,8 @@ Hibernate backs up, stops the instance, and deletes the project-managed root vol
 
 Any cost examples are estimates, not quotes. Actual charges depend on region, instance and storage pricing, snapshots, data transfer, request volume, optional SES/Cloudflare services, taxes, free-tier eligibility, and pricing changes.
 
+The production monitoring baseline adds 30-day CloudWatch log retention, standard alarms, custom operation/backup metrics, an SNS alarm topic, and an encrypted 14-day failure queue. At low volume these are commonly around $1–3/month, principally CloudWatch charges. Optional weekly backup and daily freshness schedules usually add pennies in EventBridge/Lambda/SSM requests and do not start stopped EC2 capacity. See [Operations Guide](../OPERATIONS_GUIDE.md#monitoring-and-alerts) for thresholds, retention, RPO, and the explicit CloudTrail limitation.
+
 ## Updates and teardown
 
 Redeploy the Cloudflare Worker and rotate its AWS runtime key:
@@ -139,7 +143,7 @@ Redeploy the Cloudflare Worker and rotate its AWS runtime key:
 AWS_PROFILE=<profile> mise exec -- pnpm deploy:cf
 ```
 
-This requires the matching `.mc-aws-deployment.json`, `.env.production`, AWS session, and Cloudflare authentication described in [Cloudflare Prerequisite](CLOUDFLARE_SETUP.md).
+This requires the matching `.mc-aws-deployment.json`, `.env.production`, AWS session, and Cloudflare authentication described in [Cloudflare Prerequisite](CLOUDFLARE_SETUP.md). An interrupted run is recovered before a new deployment; preserve the active record and see [Cloudflare deployment recovery](../CLOUDFLARE_DEPLOYMENT_RECOVERY.md).
 
 Review infrastructure changes before deployment:
 
@@ -147,6 +151,10 @@ Review infrastructure changes before deployment:
 AWS_PROFILE=<profile> mise exec -- pnpm cdk:diff
 AWS_PROFILE=<profile> mise exec -- pnpm cdk:deploy
 ```
+
+These ordinary commands intentionally refuse an existing-host AMI/UserData replacement. For AMI, bootstrap-pin, helper, or OS security maintenance, use [Reviewed Bootstrap and OS Upgrades](../BOOTSTRAP_UPGRADES.md). UserData is launch-only and is never described as an existing-host update mechanism.
+
+`pnpm cdk:deploy` loads the same preferred deployment file as the CDK app (`.env.production`, falling back to `.env.local`) while preserving explicit non-empty `CDK_DEFAULT_ACCOUNT` and `CDK_DEFAULT_REGION` shell overrides. It verifies that the active AWS caller, region, stack, and synthesized CDK environment agree before any DNS credential write. Only after that guard succeeds does it write the selected Cloudflare or DuckDNS token directly to SSM as a `SecureString`; token values are never added to CDK or AWS CLI arguments. `setup.sh` also waits for the explicit `DEPLOY` confirmation before this write.
 
 Preview teardown:
 

@@ -1,0 +1,8 @@
+{
+  "name": "adopt-dns-secure-string",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.1095.0"
+  }
+}

@@ -4,9 +4,10 @@
  * This provider does NOT initialize any AWS SDK clients
  */
 
+import { randomUUID } from "node:crypto";
 import type { Stack } from "@aws-sdk/client-cloudformation";
 import { type CostData, type OperationStatus, type OperationType, ServerState } from "../types";
-import { getMockStateStore } from "./mock-state-store";
+import { type MockState, getMockStateStore } from "./mock-state-store";
 import type { AwsProvider, BackupInfo, InstanceDetails, ParameterStoreEntry, PlayerCount } from "./types";
 
 // Re-export scenario engine functions for convenience
@@ -35,9 +36,9 @@ async function applyFaultInjection(operation: string): Promise<void> {
 
   // Check for operation-specific failure
   const failureConfig = await stateStore.getOperationFailure(operation);
-  console.log(`[MOCK-FAULT] Checking operation ${operation}, failureConfig:`, failureConfig);
+  console.log("[MOCK-FAULT] Checking configured operation fault");
   if (failureConfig?.failNext || failureConfig?.alwaysFail) {
-    console.log(`[MOCK-FAULT] Throwing error for ${operation}:`, failureConfig.errorMessage);
+    console.log("[MOCK-FAULT] Injecting configured operation failure");
     if (failureConfig.failNext) {
       await stateStore.clearOperationFailure(operation);
     }
@@ -66,14 +67,9 @@ const operationTypes: ReadonlySet<OperationType> = new Set([
   "restore",
   "hibernate",
   "resume",
+  "allowlist",
 ]);
 const transitionSources = new Set<MockOperationStateTransitionSource>(["api", "lambda"]);
-const operationStatusPriority: Record<OperationStatus, number> = {
-  accepted: 1,
-  running: 2,
-  completed: 3,
-  failed: 3,
-};
 
 type MockOperationStateTransitionSource = "api" | "lambda";
 
@@ -94,25 +90,14 @@ interface MockOperationState {
   updatedAt: string;
   requestedBy?: string;
   lockId?: string;
+  fencingToken?: number;
   instanceId?: string;
+  phase?: "validating" | "dispatching" | "dispatched" | "executing" | "terminal";
+  executionAttempt?: number;
+  executionToken?: string;
   lastError?: string;
   code?: string;
   history: MockOperationStateTransition[];
-}
-
-interface PersistMockOperationStateTransitionInput {
-  operationId?: string;
-  type?: string;
-  status: OperationStatus;
-  source: MockOperationStateTransitionSource;
-  route?: string;
-  requestedAt?: string;
-  requestedBy?: string;
-  lockId?: string;
-  instanceId?: string;
-  error?: string;
-  code?: string;
-  timestamp?: string;
 }
 
 function getOperationStateParameterName(operationId: string): string {
@@ -130,37 +115,6 @@ function normalizeOptionalText(value: unknown): string | undefined {
 
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function isTerminalOperationStatus(status: OperationStatus): boolean {
-  return status === "completed" || status === "failed";
-}
-
-function shouldApplyStatusTransition(
-  existing: MockOperationState | null,
-  next: OperationStatus,
-  source: MockOperationStateTransitionSource
-): boolean {
-  if (!existing) {
-    return true;
-  }
-
-  const current = existing.status;
-
-  if (current === next) {
-    return true;
-  }
-
-  if (isTerminalOperationStatus(current)) {
-    return false;
-  }
-
-  if (current === "running" && next === "accepted") {
-    const latestSource = existing.history.at(-1)?.source;
-    return latestSource === "api" && source === "api";
-  }
-
-  return operationStatusPriority[next] >= operationStatusPriority[current];
 }
 
 function parseOperationState(raw: string | null): MockOperationState | null {
@@ -228,7 +182,11 @@ function parseOperationState(raw: string | null): MockOperationState | null {
       updatedAt: parsed.updatedAt,
       requestedBy: normalizeOptionalText(parsed.requestedBy),
       lockId: normalizeOptionalText(parsed.lockId),
+      fencingToken: Number.isSafeInteger(parsed.fencingToken) ? parsed.fencingToken : undefined,
       instanceId: normalizeOptionalText(parsed.instanceId),
+      phase: parsed.phase,
+      executionAttempt: Number.isSafeInteger(parsed.executionAttempt) ? parsed.executionAttempt : undefined,
+      executionToken: normalizeOptionalText(parsed.executionToken),
       lastError: normalizeOptionalText(parsed.lastError),
       code: normalizeOptionalText(parsed.code),
       history,
@@ -287,120 +245,27 @@ function buildNextTransitionHistory(input: {
   return history;
 }
 
-function resolveLastErrorMetadata(input: {
-  existing: MockOperationState | null;
-  applyIncomingStatus: boolean;
-  nextStatus: OperationStatus;
-  error?: string;
-  code?: string;
-}): {
-  lastError?: string;
-  code?: string;
-} {
-  if (!input.applyIncomingStatus) {
-    return {
-      lastError: input.existing?.lastError,
-      code: input.existing?.code,
-    };
-  }
-
-  if (input.nextStatus !== "failed") {
-    return {
-      lastError: undefined,
-      code: undefined,
-    };
-  }
-
-  return {
-    lastError: input.error ?? input.existing?.lastError ?? "Operation failed",
-    code: input.code ?? input.existing?.code,
-  };
-}
-
-async function persistMockOperationStateTransition(input: PersistMockOperationStateTransitionInput): Promise<void> {
-  const operationId = normalizeOptionalText(input.operationId);
-  const type = normalizeOptionalText(input.type);
-  if (!operationId || !type) {
-    return;
-  }
-
-  if (
-    !operationTypes.has(type as OperationType) ||
-    !operationStatuses.has(input.status) ||
-    !transitionSources.has(input.source)
-  ) {
-    return;
-  }
-
-  const stateStore = getMockStateStore();
-  const now = input.timestamp ?? new Date().toISOString();
-  const parameterName = getOperationStateParameterName(operationId);
-  const existing = parseOperationState(await stateStore.getParameter(parameterName));
-  const route = existing?.route ?? input.route ?? `/api/${type}`;
-  const requestedAt = existing?.requestedAt ?? input.requestedAt ?? now;
-  const requestedBy = normalizeOptionalText(input.requestedBy) ?? existing?.requestedBy;
-  const lockId = normalizeOptionalText(input.lockId) ?? existing?.lockId;
-  const instanceId = normalizeOptionalText(input.instanceId) ?? existing?.instanceId;
-
-  const currentStatus = existing?.status ?? input.status;
-  const applyIncomingStatus = shouldApplyStatusTransition(existing, input.status, input.source);
-  const nextStatus = applyIncomingStatus ? input.status : currentStatus;
-  const normalizedError = normalizeOptionalText(input.error);
-  const normalizedCode = normalizeOptionalText(input.code);
-  const history = buildNextTransitionHistory({
-    existingHistory: existing?.history ?? [],
-    applyIncomingStatus,
-    nextStatus,
-    source: input.source,
-    now,
-    error: normalizedError,
-    code: normalizedCode,
-  });
-  const { lastError, code } = resolveLastErrorMetadata({
-    existing,
-    applyIncomingStatus,
-    nextStatus,
-    error: normalizedError,
-    code: normalizedCode,
-  });
-
-  const nextState: MockOperationState = {
-    id: existing?.id ?? operationId,
-    type: existing?.type ?? (type as OperationType),
-    route,
-    status: nextStatus,
-    requestedAt,
-    updatedAt: now,
-    requestedBy,
-    lockId,
-    instanceId,
-    lastError,
-    code,
-    history,
-  };
-
-  await stateStore.setParameter(parameterName, JSON.stringify(nextState), "String");
-}
-
-async function persistMockOperationStateTransitionSafely(
-  input: PersistMockOperationStateTransitionInput
-): Promise<void> {
-  try {
-    await persistMockOperationStateTransition(input);
-  } catch (error) {
-    console.error("[MOCK] Failed to persist operation state transition:", error);
-  }
-}
-
 type MockStateStore = ReturnType<typeof getMockStateStore>;
 
 interface MockLambdaCommandContext {
   lockId?: string;
+  fencingToken?: number;
   command?: string;
   operationId?: string;
   userEmail?: string;
   instanceId?: string;
   operationType?: OperationType;
+}
+
+interface ClaimedMockLambdaCommandContext extends MockLambdaCommandContext {
+  lockId: string;
+  fencingToken: number;
+  command: string;
+  operationId: string;
+  userEmail: string;
+  instanceId: string;
+  operationType: OperationType;
+  executionToken: string;
 }
 
 function includesCommand(commandString: string, ...terms: string[]): boolean {
@@ -451,6 +316,9 @@ function parseMockLambdaCommand(payload: unknown): MockLambdaCommandContext {
 
   return {
     lockId: normalizeOptionalText(parsedPayload?.lockId),
+    fencingToken: Number.isSafeInteger(parsedPayload?.fencingToken)
+      ? (parsedPayload?.fencingToken as number)
+      : undefined,
     command,
     operationId: normalizeOptionalText(parsedPayload?.operationId),
     userEmail: normalizeOptionalText(parsedPayload?.userEmail),
@@ -459,97 +327,400 @@ function parseMockLambdaCommand(payload: unknown): MockLambdaCommandContext {
   };
 }
 
-async function persistMockLambdaTransition(
-  context: MockLambdaCommandContext,
-  status: OperationStatus,
-  error?: unknown
-): Promise<void> {
-  if (!context.operationType || !context.operationId) {
-    return;
-  }
+function normalizeOwner(value: unknown): string | undefined {
+  return normalizeOptionalText(value)?.toLowerCase();
+}
 
-  const isFailure = status === "failed";
-  const errorMessage = isFailure
-    ? error instanceof Error
-      ? error.message
-      : "Mock lambda operation failed"
-    : undefined;
-  await persistMockOperationStateTransitionSafely({
-    operationId: context.operationId,
-    type: context.operationType,
-    status,
-    source: "lambda",
-    requestedBy: context.userEmail,
-    lockId: context.lockId,
-    instanceId: context.instanceId,
-    error: errorMessage,
-    code: isFailure ? "lambda_execution_failed" : undefined,
+function parseCurrentLifecycleLock(raw: string | undefined): {
+  lockId: string;
+  fencingToken: number;
+  action: string;
+  ownerEmail: string;
+  expiresAt: string;
+} | null {
+  if (!raw) return null;
+  try {
+    const lock = JSON.parse(raw) as Record<string, unknown>;
+    const lockId = normalizeOptionalText(lock.lockId);
+    const action = normalizeOptionalText(lock.action);
+    const ownerEmail = normalizeOwner(lock.ownerEmail);
+    const expiresAt = normalizeOptionalText(lock.expiresAt);
+    if (
+      !lockId ||
+      !action ||
+      !ownerEmail ||
+      !expiresAt ||
+      !Number.isSafeInteger(lock.fencingToken) ||
+      !Number.isFinite(Date.parse(expiresAt))
+    ) {
+      return null;
+    }
+    return { lockId, action, ownerEmail, expiresAt, fencingToken: lock.fencingToken as number };
+  } catch {
+    return null;
+  }
+}
+
+function hasExactLambdaIdentity(
+  operation: MockOperationState,
+  context: ClaimedMockLambdaCommandContext | Omit<ClaimedMockLambdaCommandContext, "executionToken">
+): boolean {
+  return (
+    operation.id === context.operationId &&
+    operation.type === context.operationType &&
+    operation.lockId === context.lockId &&
+    operation.fencingToken === context.fencingToken &&
+    normalizeOwner(operation.requestedBy) === context.userEmail &&
+    operation.instanceId === context.instanceId
+  );
+}
+
+function hasClaimableLambdaIdentity(
+  operation: MockOperationState,
+  context: Omit<ClaimedMockLambdaCommandContext, "executionToken">
+): boolean {
+  return (
+    operation.id === context.operationId &&
+    operation.type === context.operationType &&
+    operation.lockId === context.lockId &&
+    operation.fencingToken === context.fencingToken &&
+    normalizeOwner(operation.requestedBy) === context.userEmail &&
+    (operation.instanceId === undefined || operation.instanceId === context.instanceId)
+  );
+}
+
+function hasExactCurrentLifecycleLock(
+  raw: string | undefined,
+  context: ClaimedMockLambdaCommandContext | Omit<ClaimedMockLambdaCommandContext, "executionToken">
+): boolean {
+  const lock = parseCurrentLifecycleLock(raw);
+  return Boolean(
+    lock &&
+      lock.lockId === context.lockId &&
+      lock.fencingToken === context.fencingToken &&
+      lock.action === context.command &&
+      lock.ownerEmail === context.userEmail &&
+      Date.parse(lock.expiresAt) > Date.now()
+  );
+}
+
+function writeOperationState(state: MockState, operation: MockOperationState): void {
+  state.ssm.parameters[getOperationStateParameterName(operation.id)] = {
+    value: JSON.stringify(operation),
+    type: "String",
+    lastModified: operation.updatedAt,
+  };
+}
+
+async function consumeMockLambdaTransportFault(
+  context: Omit<ClaimedMockLambdaCommandContext, "executionToken">,
+  stateStore: MockStateStore
+): Promise<{ eligible: boolean; error?: Error; latencyMs: number }> {
+  return stateStore.transact((state) => {
+    if (!hasExactCurrentLifecycleLock(state.ssm.parameters["/minecraft/server-action"]?.value, context)) {
+      return { eligible: false, latencyMs: 0 };
+    }
+    const operation = parseOperationState(
+      state.ssm.parameters[getOperationStateParameterName(context.operationId)]?.value ?? null
+    );
+    if (
+      !operation ||
+      !hasClaimableLambdaIdentity(operation, context) ||
+      operation.status !== "accepted" ||
+      operation.executionToken
+    ) {
+      return { eligible: false, latencyMs: 0 };
+    }
+
+    const failure = state.faults.operationFailures.get("invokeLambda");
+    if (!failure?.failNext && !failure?.alwaysFail) {
+      return { eligible: true, latencyMs: state.faults.globalLatencyMs };
+    }
+    if (failure.failNext) state.faults.operationFailures.delete("invokeLambda");
+
+    // Preserve accepted/dispatching state and the lifecycle lock for ambiguous
+    // transport failure, while fencing duplicate delivery of this operation.
+    writeOperationState(state, { ...operation, executionToken: `transport-${randomUUID()}` });
+    const error = new Error(failure.errorMessage || "Mock invokeLambda error");
+    (error as Error & { name: string }).name = failure.errorCode || "invokeLambdaError";
+    return { eligible: true, error, latencyMs: state.faults.globalLatencyMs };
   });
 }
 
-async function releaseMockLambdaLockIfOwned(lockId: string | undefined, stateStore: MockStateStore): Promise<void> {
-  if (!lockId) {
-    return;
+async function claimMockLambdaOperation(
+  context: MockLambdaCommandContext,
+  stateStore: MockStateStore
+): Promise<ClaimedMockLambdaCommandContext | null> {
+  const userEmail = normalizeOwner(context.userEmail);
+  if (
+    !context.lockId ||
+    !Number.isSafeInteger(context.fencingToken) ||
+    !context.command ||
+    !context.operationId ||
+    !context.instanceId ||
+    !context.operationType ||
+    !userEmail
+  ) {
+    return null;
   }
 
-  const lockRaw = await stateStore.getParameter("/minecraft/server-action");
-  if (!lockRaw) {
-    return;
-  }
-
-  try {
-    const parsedLock = JSON.parse(lockRaw) as { lockId?: string };
-    if (parsedLock.lockId !== lockId) {
-      return;
+  const identity = {
+    ...context,
+    lockId: context.lockId,
+    fencingToken: context.fencingToken as number,
+    command: context.command,
+    operationId: context.operationId,
+    userEmail,
+    instanceId: context.instanceId,
+    operationType: context.operationType,
+  };
+  const executionToken = randomUUID();
+  return stateStore.transact((state) => {
+    if (!hasExactCurrentLifecycleLock(state.ssm.parameters["/minecraft/server-action"]?.value, identity)) {
+      return null;
     }
-  } catch {
-    return;
-  }
+    const operation = parseOperationState(
+      state.ssm.parameters[getOperationStateParameterName(identity.operationId)]?.value ?? null
+    );
+    if (
+      !operation ||
+      !hasClaimableLambdaIdentity(operation, identity) ||
+      operation.status !== "accepted" ||
+      operation.executionToken
+    ) {
+      return null;
+    }
 
-  await mockProvider.deleteParameter("/minecraft/server-action");
+    const now = new Date().toISOString();
+    const claimed: MockOperationState = {
+      ...operation,
+      instanceId: identity.instanceId,
+      status: "running",
+      updatedAt: now,
+      phase: "executing",
+      executionAttempt: (operation.executionAttempt ?? 0) + 1,
+      executionToken,
+      lastError: undefined,
+      code: undefined,
+      history: buildNextTransitionHistory({
+        existingHistory: operation.history,
+        applyIncomingStatus: true,
+        nextStatus: "running",
+        source: "lambda",
+        now,
+      }),
+    };
+    writeOperationState(state, claimed);
+    return { ...identity, executionToken };
+  });
 }
 
-async function finalizeMockLambdaCommand(
-  context: MockLambdaCommandContext,
+function getClaimedOperation(state: MockState, context: ClaimedMockLambdaCommandContext): MockOperationState | null {
+  if (!hasExactCurrentLifecycleLock(state.ssm.parameters["/minecraft/server-action"]?.value, context)) {
+    return null;
+  }
+  const operation = parseOperationState(
+    state.ssm.parameters[getOperationStateParameterName(context.operationId)]?.value ?? null
+  );
+  if (
+    !operation ||
+    !hasExactLambdaIdentity(operation, context) ||
+    operation.status !== "running" ||
+    operation.executionToken !== context.executionToken
+  ) {
+    return null;
+  }
+  return operation;
+}
+
+async function mutateIfMockLambdaClaimed(
+  context: ClaimedMockLambdaCommandContext,
   stateStore: MockStateStore,
-  commandName: string
-): Promise<void> {
-  try {
-    await releaseMockLambdaLockIfOwned(context.lockId, stateStore);
-    await persistMockLambdaTransition(context, "completed");
-    console.log(`[MOCK] Cleared server-action lock after ${commandName} completion`);
-  } catch (error) {
-    await persistMockLambdaTransition(context, "failed", error);
-    console.error(`[MOCK] Failed to finalize ${commandName} operation:`, error);
+  mutate: (state: MockState) => void
+): Promise<boolean> {
+  return stateStore.transact((state) => {
+    if (!getClaimedOperation(state, context)) return false;
+    mutate(state);
+    return true;
+  });
+}
+
+async function finalizeClaimedMockLambdaOperation(
+  context: ClaimedMockLambdaCommandContext,
+  stateStore: MockStateStore,
+  status: "completed" | "failed",
+  error?: unknown,
+  mutate?: (state: MockState) => void
+): Promise<boolean> {
+  return stateStore.transact((state) => {
+    const operation = getClaimedOperation(state, context);
+    if (!operation) return false;
+    mutate?.(state);
+    const now = new Date().toISOString();
+    const errorMessage =
+      status === "failed" ? (error instanceof Error ? error.message : "Mock lambda operation failed") : undefined;
+    const code = status === "failed" ? "lambda_execution_failed" : undefined;
+    writeOperationState(state, {
+      ...operation,
+      status,
+      updatedAt: now,
+      phase: "terminal",
+      lastError: errorMessage,
+      code,
+      history: buildNextTransitionHistory({
+        existingHistory: operation.history,
+        applyIncomingStatus: true,
+        nextStatus: status,
+        source: "lambda",
+        now,
+        error: errorMessage,
+        code,
+      }),
+    });
+    Reflect.deleteProperty(state.ssm.parameters, "/minecraft/server-action");
+    return true;
+  });
+}
+
+function applyMockInstanceTransition(state: MockState, newState: ServerState): void {
+  state.instance.state = newState;
+  state.instance.lastUpdated = new Date().toISOString();
+  if (newState === ServerState.Running && !state.instance.publicIp) {
+    state.instance.publicIp = "203.0.113.42";
+  } else if (newState !== ServerState.Running) {
+    state.instance.publicIp = undefined;
+  }
+}
+
+function setMockVolumePresence(state: MockState, hasVolume: boolean): void {
+  state.instance.hasVolume = hasVolume;
+  state.instance.lastUpdated = new Date().toISOString();
+  if (hasVolume && !state.instance.blockDeviceMappings?.length) {
+    state.instance.blockDeviceMappings = [
+      {
+        deviceName: "/dev/sda1",
+        volumeId: `vol-mock${Date.now().toString(16)}`,
+        status: "attached",
+        deleteOnTermination: true,
+      },
+    ];
+  } else if (!hasVolume) {
+    state.instance.blockDeviceMappings = [];
   }
 }
 
 function scheduleMockLambdaCommandCompletion(
-  context: MockLambdaCommandContext,
+  context: ClaimedMockLambdaCommandContext,
   stateStore: MockStateStore,
   delayMs: number,
-  commandName: string
+  commandName: string,
+  mutate?: (state: MockState) => void
 ): void {
-  const completeTimeout = setTimeout(() => finalizeMockLambdaCommand(context, stateStore, commandName), delayMs);
+  const completeTimeout = setTimeout(() => {
+    void finalizeClaimedMockLambdaOperation(context, stateStore, "completed", undefined, mutate)
+      .then((finalized) => {
+        if (finalized) console.log(`[MOCK] Finalized ${commandName} and cleared its server-action lock`);
+      })
+      .catch(() => console.error(`[MOCK] Failed to finalize ${commandName} operation`));
+  }, delayMs);
   stateStore.registerTimeout(completeTimeout);
 }
 
-async function runMockLambdaCommand(context: MockLambdaCommandContext, stateStore: MockStateStore): Promise<void> {
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: The command dispatch keeps each claimed side effect and its fenced completion in one auditable location.
+async function runMockLambdaCommand(
+  context: ClaimedMockLambdaCommandContext,
+  stateStore: MockStateStore
+): Promise<void> {
   try {
     if (context.command === "start") {
-      console.log("[MOCK] Simulating async start by triggering startInstance");
-      await mockProvider.startInstance(context.instanceId);
-      scheduleMockLambdaCommandCompletion(context, stateStore, PENDING_DELAY_MS + 500, "start");
+      await applyFaultInjection("startInstance");
+      const started = await mutateIfMockLambdaClaimed(context, stateStore, (state) => {
+        if (state.instance.state === ServerState.Running) return;
+        if (state.instance.state !== ServerState.Stopped) {
+          throw new Error(`Cannot start instance in state: ${state.instance.state}`);
+        }
+        applyMockInstanceTransition(state, ServerState.Pending);
+      });
+      if (started) {
+        scheduleMockLambdaCommandCompletion(context, stateStore, PENDING_DELAY_MS + 500, "start", (state) =>
+          applyMockInstanceTransition(state, ServerState.Running)
+        );
+      }
       return;
     }
 
-    if (context.operationType && typeof context.command === "string") {
-      scheduleMockLambdaCommandCompletion(context, stateStore, 500, context.command);
+    if (context.command === "stop") {
+      await applyFaultInjection("stopInstance");
+      const stopped = await mutateIfMockLambdaClaimed(context, stateStore, (state) => {
+        if (state.instance.state === ServerState.Stopped) return;
+        if (state.instance.state !== ServerState.Running) {
+          throw new Error(`Cannot stop instance in state: ${state.instance.state}`);
+        }
+        applyMockInstanceTransition(state, ServerState.Stopping);
+      });
+      if (stopped) {
+        scheduleMockLambdaCommandCompletion(context, stateStore, STOPPING_DELAY_MS + 500, "stop", (state) =>
+          applyMockInstanceTransition(state, ServerState.Stopped)
+        );
+      }
+      return;
     }
+
+    if (context.command === "backup") {
+      const backedUp = await mutateIfMockLambdaClaimed(context, stateStore, (state) => {
+        state.backups.push({
+          name: `mock-${context.operationId}.tar.gz`,
+          date: new Date().toISOString(),
+          size: "2.0 GB",
+        });
+        state.backups.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+      });
+      if (backedUp) scheduleMockLambdaCommandCompletion(context, stateStore, 500, "backup");
+      return;
+    }
+
+    if (context.command === "hibernate") {
+      await applyFaultInjection("stopInstance");
+      const hibernating = await mutateIfMockLambdaClaimed(context, stateStore, (state) => {
+        state.backups.push({
+          name: `mock-${context.operationId}.tar.gz`,
+          date: new Date().toISOString(),
+          size: "2.0 GB",
+        });
+        state.backups.sort((a, b) => Date.parse(b.date) - Date.parse(a.date));
+        if (state.instance.state === ServerState.Running) {
+          applyMockInstanceTransition(state, ServerState.Stopping);
+        }
+      });
+      if (hibernating) {
+        scheduleMockLambdaCommandCompletion(context, stateStore, STOPPING_DELAY_MS + 500, "hibernate", (state) => {
+          applyMockInstanceTransition(state, ServerState.Stopped);
+          setMockVolumePresence(state, false);
+        });
+      }
+      return;
+    }
+
+    if (context.command === "resume") {
+      await applyFaultInjection("startInstance");
+      const resuming = await mutateIfMockLambdaClaimed(context, stateStore, (state) => {
+        setMockVolumePresence(state, true);
+        if (state.instance.state === ServerState.Stopped) {
+          applyMockInstanceTransition(state, ServerState.Pending);
+        }
+      });
+      if (resuming) {
+        scheduleMockLambdaCommandCompletion(context, stateStore, PENDING_DELAY_MS + 500, "resume", (state) =>
+          applyMockInstanceTransition(state, ServerState.Running)
+        );
+      }
+      return;
+    }
+
+    scheduleMockLambdaCommandCompletion(context, stateStore, 500, context.command);
   } catch (error) {
-    await persistMockLambdaTransition(context, "failed", error);
-    await releaseMockLambdaLockIfOwned(context.lockId, stateStore);
-    console.error("[MOCK] Async lambda command failed:", error);
+    await finalizeClaimedMockLambdaOperation(context, stateStore, "failed", error);
+    console.error("[MOCK] Async lambda command failed");
   }
 }
 
@@ -569,7 +740,7 @@ export const mockProvider: AwsProvider = {
 
   resolveInstanceId: async (instanceId?: string): Promise<string> => {
     await applyFaultInjection("resolveInstanceId");
-    console.log("[MOCK] resolveInstanceId called with:", instanceId);
+    console.log("[MOCK] resolveInstanceId called");
     if (instanceId) {
       return instanceId;
     }
@@ -580,8 +751,8 @@ export const mockProvider: AwsProvider = {
 
   getInstanceState: async (instanceId?: string): Promise<ServerState> => {
     await applyFaultInjection("getInstanceState");
-    const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
-    console.log("[MOCK] getInstanceState called for:", resolvedId);
+    await mockProvider.resolveInstanceId(instanceId);
+    console.log("[MOCK] getInstanceState called");
     const stateStore = getMockStateStore();
     const instance = await stateStore.getInstance();
 
@@ -596,8 +767,8 @@ export const mockProvider: AwsProvider = {
 
   getInstanceDetails: async (instanceId?: string): Promise<InstanceDetails> => {
     await applyFaultInjection("getInstanceDetails");
-    const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
-    console.log("[MOCK] getInstanceDetails called for:", resolvedId);
+    await mockProvider.resolveInstanceId(instanceId);
+    console.log("[MOCK] getInstanceDetails called");
     const stateStore = getMockStateStore();
     const instance = await stateStore.getInstance();
 
@@ -615,14 +786,14 @@ export const mockProvider: AwsProvider = {
 
   startInstance: async (instanceId?: string): Promise<void> => {
     await applyFaultInjection("startInstance");
-    const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
-    console.log(`[MOCK] Sending start command for instance ${resolvedId}`);
+    await mockProvider.resolveInstanceId(instanceId);
+    console.log("[MOCK] Sending start command for managed instance");
     const stateStore = getMockStateStore();
 
     // Check current state
     const currentState = await stateStore.getInstance();
     if (currentState.state === "running") {
-      console.log(`[MOCK] Instance ${resolvedId} is already running`);
+      console.log("[MOCK] Managed instance is already running");
       return;
     }
 
@@ -631,12 +802,12 @@ export const mockProvider: AwsProvider = {
     }
 
     // Transition to pending state
-    console.log(`[MOCK] Instance ${resolvedId} transitioning to pending state`);
+    console.log("[MOCK] Managed instance transitioning to pending state");
     await stateStore.updateInstanceState(ServerState.Pending);
 
     // Simulate AWS delay before transitioning to running
     const timeout = setTimeout(async () => {
-      console.log(`[MOCK] Instance ${resolvedId} transitioning to running state`);
+      console.log("[MOCK] Managed instance transitioning to running state");
       await stateStore.updateInstanceState(ServerState.Running);
     }, PENDING_DELAY_MS);
     stateStore.registerTimeout(timeout);
@@ -644,14 +815,14 @@ export const mockProvider: AwsProvider = {
 
   stopInstance: async (instanceId?: string): Promise<void> => {
     await applyFaultInjection("stopInstance");
-    const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
-    console.log(`[MOCK] Sending stop command for instance ${resolvedId}`);
+    await mockProvider.resolveInstanceId(instanceId);
+    console.log("[MOCK] Sending stop command for managed instance");
     const stateStore = getMockStateStore();
 
     // Check current state
     const currentState = await stateStore.getInstance();
     if (currentState.state === "stopped") {
-      console.log(`[MOCK] Instance ${resolvedId} is already stopped`);
+      console.log("[MOCK] Managed instance is already stopped");
       return;
     }
 
@@ -660,12 +831,12 @@ export const mockProvider: AwsProvider = {
     }
 
     // Transition to stopping state
-    console.log(`[MOCK] Instance ${resolvedId} transitioning to stopping state`);
+    console.log("[MOCK] Managed instance transitioning to stopping state");
     await stateStore.updateInstanceState(ServerState.Stopping);
 
     // Simulate AWS delay before transitioning to stopped
     const timeout = setTimeout(async () => {
-      console.log(`[MOCK] Instance ${resolvedId} transitioning to stopped state`);
+      console.log("[MOCK] Managed instance transitioning to stopped state");
       await stateStore.updateInstanceState(ServerState.Stopped);
     }, STOPPING_DELAY_MS);
     stateStore.registerTimeout(timeout);
@@ -673,7 +844,7 @@ export const mockProvider: AwsProvider = {
 
   getPublicIp: async (instanceId: string, timeoutSeconds = 300): Promise<string> => {
     await applyFaultInjection("getPublicIp");
-    console.log(`[MOCK] Getting public IP address for instance: ${instanceId} (timeout: ${timeoutSeconds}s)`);
+    console.log(`[MOCK] Getting managed instance public IP (timeout: ${timeoutSeconds}s)`);
 
     // Check instance state before polling - throw error immediately if stopped
     const details = await mockProvider.getInstanceDetails(instanceId);
@@ -690,7 +861,7 @@ export const mockProvider: AwsProvider = {
     }
 
     // Poll for IP assignment
-    console.log(`[MOCK] Polling for public IP address for instance: ${instanceId}`);
+    console.log("[MOCK] Polling for managed instance public IP");
     const startTime = Date.now();
     const timeoutMs = timeoutSeconds * 1000;
     let attempts = 0;
@@ -714,7 +885,7 @@ export const mockProvider: AwsProvider = {
         if (Date.now() - startTime >= timeoutMs) {
           throw new Error(`Failed to get public IP after ${attempts} attempts: ${error}`);
         }
-        console.error(`[MOCK] Error on attempt ${attempts}:`, error);
+        console.error(`[MOCK] Error on attempt ${attempts}`);
       }
 
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
@@ -725,7 +896,7 @@ export const mockProvider: AwsProvider = {
 
   waitForInstanceRunning: async (instanceId: string, timeoutSeconds = 300): Promise<void> => {
     await applyFaultInjection("waitForInstanceRunning");
-    console.log(`[MOCK] waitForInstanceRunning called for: ${instanceId}, timeout: ${timeoutSeconds}s`);
+    console.log(`[MOCK] waitForInstanceRunning called with timeout ${timeoutSeconds}s`);
     const startTime = Date.now();
     const timeoutMs = timeoutSeconds * 1000;
 
@@ -734,7 +905,7 @@ export const mockProvider: AwsProvider = {
       const { state } = details;
 
       if (state === "running") {
-        console.log(`[MOCK] Instance ${instanceId} is now running`);
+        console.log("[MOCK] Managed instance is now running");
         return;
       }
 
@@ -750,7 +921,7 @@ export const mockProvider: AwsProvider = {
 
   waitForInstanceStopped: async (instanceId: string, timeoutSeconds = 300): Promise<void> => {
     await applyFaultInjection("waitForInstanceStopped");
-    console.log(`[MOCK] waitForInstanceStopped called for: ${instanceId}, timeout: ${timeoutSeconds}s`);
+    console.log(`[MOCK] waitForInstanceStopped called with timeout ${timeoutSeconds}s`);
     const startTime = Date.now();
     const timeoutMs = timeoutSeconds * 1000;
 
@@ -759,7 +930,7 @@ export const mockProvider: AwsProvider = {
       const { state } = details;
 
       if (state === "stopped") {
-        console.log(`[MOCK] Instance ${instanceId} is now stopped`);
+        console.log("[MOCK] Managed instance is now stopped");
         return;
       }
 
@@ -776,8 +947,8 @@ export const mockProvider: AwsProvider = {
   // EC2 - Volume Management
   detachAndDeleteVolumes: async (instanceId?: string): Promise<void> => {
     await applyFaultInjection("detachAndDeleteVolumes");
-    const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
-    console.log(`[MOCK] Detaching and deleting volumes for instance ${resolvedId}...`);
+    await mockProvider.resolveInstanceId(instanceId);
+    console.log("[MOCK] Detaching and deleting managed volumes");
     const stateStore = getMockStateStore();
 
     const instance = await stateStore.getInstance();
@@ -791,15 +962,15 @@ export const mockProvider: AwsProvider = {
         continue;
       }
 
-      console.log(`[MOCK] Detaching volume ${volumeId}...`);
+      console.log("[MOCK] Detaching managed volume");
       // Simulate detachment delay
       await new Promise((resolve) => setTimeout(resolve, 500));
-      console.log(`[MOCK] Volume ${volumeId} detached`);
+      console.log("[MOCK] Managed volume detached");
 
-      console.log(`[MOCK] Deleting volume ${volumeId}...`);
+      console.log("[MOCK] Deleting managed volume");
       // Simulate deletion delay
       await new Promise((resolve) => setTimeout(resolve, 500));
-      console.log(`[MOCK] Volume ${volumeId} deleted successfully`);
+      console.log("[MOCK] Managed volume deleted successfully");
     }
 
     // Remove volumes from instance state
@@ -810,59 +981,54 @@ export const mockProvider: AwsProvider = {
   handleResume: async (instanceId?: string): Promise<void> => {
     await applyFaultInjection("handleResume");
     const resolvedId = instanceId || (await mockProvider.resolveInstanceId());
-    console.log(`[MOCK] Checking if instance ${resolvedId} needs volume restoration...`);
+    console.log("[MOCK] Checking if managed instance needs volume restoration");
     const stateStore = getMockStateStore();
 
     const instance = await stateStore.getInstance();
     const blockDeviceMappings = instance.blockDeviceMappings || [];
 
     if (blockDeviceMappings.length > 0) {
-      console.log(
-        `[MOCK] Instance ${resolvedId} already has ${blockDeviceMappings.length} volume(s). Skipping resume.`
-      );
+      console.log(`[MOCK] Managed instance already has ${blockDeviceMappings.length} volume(s); skipping resume`);
       return;
     }
 
-    console.log(`[MOCK] Instance ${resolvedId} has no volumes. Proceeding with hibernation recovery...`);
+    console.log("[MOCK] Managed instance has no volumes; proceeding with recovery");
 
     if (!instance.availabilityZone) {
       throw new Error(`Could not determine availability zone for instance ${resolvedId}`);
     }
 
-    const amiId = "ami-mock1234567890abcdef";
-    console.log(`[MOCK] Using pinned source AMI: ${amiId}`);
+    console.log("[MOCK] Using pinned source AMI");
 
-    const snapshotId = "snap-mock1234567890abcdef";
-    console.log(`[MOCK] Using pinned root snapshot: ${snapshotId}`);
+    console.log("[MOCK] Using pinned root snapshot");
 
     console.log("[MOCK] Creating new 8GB GP3 volume from snapshot...");
-    const volumeId = `vol-mock${Date.now().toString(16)}`;
-    console.log(`[MOCK] Volume created: ${volumeId}`);
+    console.log("[MOCK] Managed volume created");
 
     // Simulate volume creation delay
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log(`[MOCK] Volume ${volumeId} is now available`);
+    console.log("[MOCK] Managed volume is now available");
 
-    console.log(`[MOCK] Attaching volume ${volumeId} to instance ${resolvedId} at /dev/xvda...`);
+    console.log("[MOCK] Attaching managed volume");
 
     // Simulate attachment delay
     await new Promise((resolve) => setTimeout(resolve, 1000));
-    console.log(`[MOCK] Volume ${volumeId} is now attached to instance ${resolvedId}`);
+    console.log("[MOCK] Managed volume is now attached");
 
     // Update instance state to reflect new volume
     await stateStore.setHasVolume(true);
-    console.log(`[MOCK] Successfully restored volume for instance ${resolvedId}`);
+    console.log("[MOCK] Successfully restored managed volume");
   },
 
   // SSM - Command Execution
-  executeSSMCommand: async (instanceId: string, commands: string[]): Promise<string> => {
+  executeSSMCommand: async (_instanceId: string, commands: string[]): Promise<string> => {
     await applyFaultInjection("executeSSMCommand");
-    console.log("[MOCK] executeSSMCommand called for:", instanceId, "commands:", commands);
+    console.log(`[MOCK] executeSSMCommand called with ${commands.length} command(s)`);
     const stateStore = getMockStateStore();
 
     // Add command to history
     const commandId = await stateStore.addCommand(commands);
-    console.log(`[MOCK] SSM command sent with ID: ${commandId}`);
+    console.log("[MOCK] SSM command sent");
 
     // Simulate command execution delay
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -885,13 +1051,13 @@ export const mockProvider: AwsProvider = {
       completedAt: new Date().toISOString(),
     });
 
-    console.log(`[MOCK] SSM command completed successfully. Command ID: ${commandId}`);
+    console.log("[MOCK] SSM command completed successfully");
     return output;
   },
 
-  listBackups: async (instanceId?: string): Promise<BackupInfo[]> => {
+  listBackups: async (_instanceId?: string): Promise<BackupInfo[]> => {
     await applyFaultInjection("listBackups");
-    console.log("[MOCK] listBackups called for:", instanceId);
+    console.log("[MOCK] listBackups called");
     const stateStore = getMockStateStore();
     const backups = await stateStore.getBackups();
 
@@ -918,15 +1084,20 @@ export const mockProvider: AwsProvider = {
     overwrite = true
   ): Promise<void> => {
     await applyFaultInjection("putParameter");
-    console.log("[MOCK] putParameter called for:", name, "value:", value, "type:", type, "overwrite:", overwrite);
+    const parameterType = type ?? "String";
+    console.log("[MOCK] putParameter called", {
+      name,
+      type: parameterType,
+      overwrite,
+      value: parameterType === "SecureString" ? "[REDACTED]" : value,
+    });
     const stateStore = getMockStateStore();
-    const existingValue = await stateStore.getParameter(name);
-    if (!overwrite && existingValue !== null) {
+    const written = await stateStore.putParameter(name, value, parameterType, overwrite);
+    if (!written) {
       const error = new Error(`Parameter ${name} already exists`);
       (error as Error & { name: string }).name = "ParameterAlreadyExists";
       throw error;
     }
-    await stateStore.setParameter(name, value, type || "String");
   },
 
   deleteParameter: async (name: string): Promise<void> => {
@@ -988,7 +1159,7 @@ export const mockProvider: AwsProvider = {
 
   updateEmailAllowlist: async (emails: string[]): Promise<void> => {
     await applyFaultInjection("updateEmailAllowlist");
-    console.log("[MOCK] updateEmailAllowlist called with:", emails);
+    console.log(`[MOCK] updateEmailAllowlist called with ${emails.length} entries`);
     const stateStore = getMockStateStore();
     // Store as JSON array
     await stateStore.setParameter("/minecraft/email-allowlist", JSON.stringify(emails), "String");
@@ -1025,14 +1196,14 @@ export const mockProvider: AwsProvider = {
   // CloudFormation
   getStackStatus: async (stackName = "MinecraftStack"): Promise<Stack | null> => {
     await applyFaultInjection("getStackStatus");
-    console.log("[MOCK] getStackStatus called for:", stackName);
+    console.log("[MOCK] getStackStatus called");
     const stateStore = getMockStateStore();
 
     // Get stack status from state store
     const stackState = await stateStore.getStackStatus();
 
     if (!stackState.exists) {
-      console.log(`[MOCK] Stack "${stackName}" does not exist`);
+      console.log("[MOCK] Managed stack does not exist");
       return null;
     }
 
@@ -1085,34 +1256,74 @@ export const mockProvider: AwsProvider = {
       ],
     };
 
-    console.log(`[MOCK] Stack "${stackName}" status:`, stackState.status);
+    console.log("[MOCK] Managed stack status:", stackState.status);
     return stack;
   },
 
-  checkStackExists: async (stackName = "MinecraftStack"): Promise<boolean> => {
+  checkStackExists: async (_stackName = "MinecraftStack"): Promise<boolean> => {
     await applyFaultInjection("checkStackExists");
-    console.log("[MOCK] checkStackExists called for:", stackName);
+    console.log("[MOCK] checkStackExists called");
     const stateStore = getMockStateStore();
 
     // Get stack status from state store
     const stackState = await stateStore.getStackStatus();
     const exists = stackState.exists;
 
-    console.log(`[MOCK] Stack "${stackName}" exists:`, exists);
+    console.log("[MOCK] Managed stack existence checked:", exists);
     return exists;
   },
 
   // Lambda
   invokeLambda: async (functionName: string, payload: unknown): Promise<void> => {
-    await applyFaultInjection("invokeLambda");
-    console.log("[MOCK] invokeLambda called for:", functionName, "payload:", payload);
     const stateStore = getMockStateStore();
 
     // Simulate StartMinecraftServer lambda
     if (functionName === "StartMinecraftServer" || functionName.includes("StartMinecraftServer")) {
       const context = parseMockLambdaCommand(payload);
-      await persistMockLambdaTransition(context, "running");
-      await runMockLambdaCommand(context, stateStore);
+      const userEmail = normalizeOwner(context.userEmail);
+      if (
+        !context.lockId ||
+        !Number.isSafeInteger(context.fencingToken) ||
+        !context.command ||
+        !context.operationId ||
+        !context.instanceId ||
+        !context.operationType ||
+        !userEmail
+      ) {
+        console.log("[MOCK] Skipping duplicate or stale lambda delivery");
+        return;
+      }
+      const identity = {
+        ...context,
+        lockId: context.lockId,
+        fencingToken: context.fencingToken as number,
+        command: context.command,
+        operationId: context.operationId,
+        userEmail,
+        instanceId: context.instanceId,
+        operationType: context.operationType,
+      };
+      const transport = await consumeMockLambdaTransportFault(identity, stateStore);
+      if (!transport.eligible) {
+        console.log("[MOCK] Skipping duplicate or stale lambda delivery");
+        return;
+      }
+      if (transport.latencyMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, transport.latencyMs));
+      }
+      if (transport.error) throw transport.error;
+
+      const claimedContext = await claimMockLambdaOperation(identity, stateStore);
+      if (!claimedContext) {
+        console.log("[MOCK] Skipping duplicate or stale lambda delivery");
+        return;
+      }
+      console.log("[MOCK] Running claimed StartMinecraftServer delivery");
+      await runMockLambdaCommand(claimedContext, stateStore);
+      return;
     }
+
+    console.log("[MOCK] invokeLambda called for:", functionName);
+    await applyFaultInjection("invokeLambda");
   },
 };

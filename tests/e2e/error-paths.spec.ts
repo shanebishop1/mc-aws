@@ -1,6 +1,25 @@
-import { expect, test } from "@playwright/test";
+import { type Page, type Response, expect, test } from "@playwright/test";
 import { confirmDialog } from "./helpers";
 import { injectFault, setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
+
+const unresolvedDispatchMessage = /Remote dispatch could not be confirmed/i;
+
+const waitForActionResponse = (page: Page, endpoint: string): Promise<Response> =>
+  page.waitForResponse(
+    (response) => new URL(response.url()).pathname === endpoint && response.request().method() === "POST"
+  );
+
+async function expectAcceptedUnresolvedResponse(response: Response): Promise<void> {
+  expect(response.status()).toBe(503);
+  const data = (await response.json()) as {
+    success?: boolean;
+    error?: string;
+    operation?: { status?: string };
+  };
+  expect(data.success).toBe(false);
+  expect(data.error).toMatch(unresolvedDispatchMessage);
+  expect(data.operation).toMatchObject({ status: "accepted" });
+}
 
 test.describe("Error Handling", () => {
   test.beforeEach(async ({ page }) => {
@@ -23,7 +42,7 @@ test.describe("Error Handling", () => {
     await expect(page.getByText(/Connection Error/i)).toBeVisible({ timeout: 10000 });
   });
 
-  test("shows error when start fails", async ({ page }) => {
+  test("keeps an ambiguously dispatched start in accepted waiting state", async ({ page }) => {
     await setupStoppedScenario(page);
 
     // Inject fault for start operation
@@ -35,30 +54,36 @@ test.describe("Error Handling", () => {
     });
 
     await page.goto("/");
+    const responsePromise = waitForActionResponse(page, "/api/start");
     await page.getByRole("button", { name: /start server/i }).click();
+    await expectAcceptedUnresolvedResponse(await responsePromise);
 
-    // API sanitizes provider errors to stable user-facing messages
-    await expect(page.getByText(/Failed to start server/i)).toBeVisible({
+    await expect(
+      page.getByRole("status").filter({ hasText: "Start request accepted. Waiting for completion…" })
+    ).toBeVisible({
       timeout: 5000,
     });
   });
 
-  test("shows error when stop fails", async ({ page }) => {
+  test("keeps an ambiguously dispatched stop in accepted waiting state", async ({ page }) => {
     await setupRunningScenario(page);
 
-    // Inject fault for stopInstance operation
+    // Fail the transport after dispatch begins, leaving remote acceptance unresolved.
     await injectFault(page, {
-      operation: "stopInstance",
-      alwaysFail: true,
+      operation: "invokeLambda",
+      failNext: true,
       errorCode: "IncorrectState",
       errorMessage: "Instance is in an incorrect state for this operation",
     });
 
     await page.goto("/");
+    const responsePromise = waitForActionResponse(page, "/api/stop");
     await page.getByRole("button", { name: /stop server/i }).click();
+    await expectAcceptedUnresolvedResponse(await responsePromise);
 
-    // API sanitizes provider errors to stable user-facing messages
-    await expect(page.getByText(/Failed to stop server/i)).toBeVisible({
+    await expect(
+      page.getByRole("status").filter({ hasText: "Stop request accepted. Waiting for the server to stop…" })
+    ).toBeVisible({
       timeout: 5000,
     });
   });
@@ -74,12 +99,21 @@ test.describe("Error Handling", () => {
       errorMessage: "The specified instance ID is not valid",
     });
 
-    await page.goto("/");
-    await page.getByRole("button", { name: /backup/i }).click();
-    await confirmDialog(page);
+    const response = await page.request.post("/api/backup", { data: {} });
 
-    // API sanitizes provider errors to stable user-facing messages
-    await expect(page.getByText(/Failed to create backup/i)).toBeVisible({ timeout: 5000 });
+    expect(response.status()).toBe(503);
+    const data = (await response.json()) as {
+      success?: boolean;
+      error?: string;
+      operation?: { id?: string; status?: string };
+    };
+    expect(data.success).toBe(false);
+    expect(data.error).toMatch(unresolvedDispatchMessage);
+    expect(data.operation).toMatchObject({ status: "accepted" });
+
+    const operationResponse = await page.request.get(`/api/operations/${data.operation?.id}`);
+    expect(operationResponse.status()).toBe(200);
+    expect(await operationResponse.json()).toMatchObject({ data: { status: "accepted" } });
   });
 
   test("shows error when restore fails", async ({ page }) => {
@@ -98,13 +132,13 @@ test.describe("Error Handling", () => {
       data: { backupName: "minecraft-backup-2025-01-15" },
     });
 
-    expect(response.status()).toBe(500);
+    expect(response.status()).toBe(503);
     const data = (await response.json()) as { success?: boolean; error?: string };
     expect(data.success).toBe(false);
-    expect(data.error).toMatch(/Failed to restore backup/i);
+    expect(data.error).toMatch(unresolvedDispatchMessage);
   });
 
-  test("shows error when hibernate fails", async ({ page }) => {
+  test("keeps an ambiguously dispatched hibernate in accepted waiting state", async ({ page }) => {
     await setupRunningScenario(page);
 
     // Inject fault for hibernate Lambda invocation
@@ -117,15 +151,18 @@ test.describe("Error Handling", () => {
 
     await page.goto("/");
     await page.getByRole("button", { name: /hibernate/i }).click();
+    const responsePromise = waitForActionResponse(page, "/api/hibernate");
     await confirmDialog(page);
+    await expectAcceptedUnresolvedResponse(await responsePromise);
 
-    // API sanitizes provider errors to stable user-facing messages
-    await expect(page.getByText(/Failed to hibernate server/i)).toBeVisible({
+    await expect(
+      page.getByRole("status").filter({ hasText: "Hibernate request accepted. Waiting for completion…" })
+    ).toBeVisible({
       timeout: 5000,
     });
   });
 
-  test("shows error when resume fails", async ({ page }) => {
+  test("keeps an ambiguously dispatched resume in accepted waiting state", async ({ page }) => {
     await setupHibernatedScenario(page);
 
     // Inject fault for resume Lambda invocation
@@ -140,10 +177,13 @@ test.describe("Error Handling", () => {
     await page.getByRole("button", { name: /resume/i }).click();
 
     // Click start fresh
+    const responsePromise = waitForActionResponse(page, "/api/resume");
     await page.getByRole("button", { name: /Start Fresh World/i }).click();
+    await expectAcceptedUnresolvedResponse(await responsePromise);
 
-    // API sanitizes provider errors to stable user-facing messages
-    await expect(page.getByText(/Failed to resume server/i)).toBeVisible({
+    await expect(
+      page.getByRole("status").filter({ hasText: "Resume request accepted. Waiting for completion…" })
+    ).toBeVisible({
       timeout: 5000,
     });
   });

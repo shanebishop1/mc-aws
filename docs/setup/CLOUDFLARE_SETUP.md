@@ -15,7 +15,7 @@ No custom domain or DNS token is required. Find the account Workers subdomain in
 The domain must be in an active Cloudflare zone. Use a hostname such as `panel.example.com`.
 
 - **Managed DNS:** create a zone-scoped panel token with **DNS Read/Edit** and **Workers Routes Read/Edit**. Setup may create or proxy the panel record and records ownership for teardown.
-- **External DNS:** create a proxied record yourself. A proxied `A` record to placeholder `192.0.2.1` is valid because the Worker route handles requests. Before setup, export `CLOUDFLARE_API_TOKEN` with account access for Worker scripts, secrets, and KV, plus zone read and **Workers Routes Read/Edit** for the panel zone. Setup does not read or modify panel DNS in this mode, but the shell token is required for deployment and route checks.
+- **External DNS:** create a proxied record yourself. A proxied `A` record to placeholder `192.0.2.1` is valid because the Worker route handles requests. Before setup, export `CLOUDFLARE_DEPLOY_API_TOKEN` (or the supported `CLOUDFLARE_API_TOKEN` alias) with account access for Worker scripts, secrets, and KV, plus zone read and **Workers Routes Read/Edit** for the panel zone. The wizard verifies token, zone, and route-list access before returning to chargeable AWS deployment. Setup does not read or modify panel DNS and never persists this shell token.
 
 Do not save the external shell deployment token in `.env.local` or `.env.production`.
 
@@ -24,6 +24,8 @@ Do not save the external shell deployment token in `.env.local` or `.env.product
 The deploy script runs Wrangler with isolated `HOME=~/.config/mc-aws/wrangler-home`. It does not reuse a login created by a normal `pnpm exec wrangler login` command. Without `CLOUDFLARE_API_TOKEN`, setup opens a browser for OAuth in the isolated home and verifies that session.
 
 Do not export a Minecraft DNS token globally. The deploy script reads it from the gitignored env file for runtime upload and removes it from Wrangler's authentication environment.
+
+For AWS host DNS updates, setup and `pnpm cdk:deploy` materialize the token directly into `/minecraft/cloudflare-api-token` as an SSM `SecureString` only after the deployment safety guard succeeds. The token is not a CloudFormation parameter and is never passed in command arguments.
 
 ## Optional Minecraft DNS
 

@@ -11,7 +11,8 @@ export function parseEmailFromEvent(event) {
       return { error: { statusCode: 400, body: "Invalid event structure." } };
     }
 
-    const payload = JSON.parse(event.Records[0].Sns.Message);
+    const snsRecord = event.Records[0].Sns;
+    const payload = JSON.parse(snsRecord.Message);
     const toAddr = payload.mail?.commonHeaders?.from?.[0];
     if (!toAddr) return { error: { statusCode: 400, body: "Sender address missing." } };
 
@@ -27,7 +28,10 @@ export function parseEmailFromEvent(event) {
       dmarc: receipt.dmarcVerdict?.status || "UNKNOWN",
     };
 
-    return { senderEmail, subject, body, verdicts };
+    const eventIdentity = payload.mail?.messageId || snsRecord.MessageId || null;
+    const requestedAt = payload.mail?.timestamp || snsRecord.Timestamp || null;
+
+    return { senderEmail, subject, body, verdicts, eventIdentity, requestedAt };
   } catch {
     console.error("ERROR parsing email payload.");
     return { error: { statusCode: 400, body: "Error processing incoming message." } };

@@ -17,7 +17,10 @@ import {
   createMutatingActionLockConflictFailure,
   mapMutatingActionExecutionToApiResponse,
 } from "@/lib/mutating-action-response";
-import { parseMutatingActionRequestPayload } from "@/lib/mutating-action-validation";
+import {
+  isMutatingActionPayloadValidationError,
+  parseMutatingActionRequestPayload,
+} from "@/lib/mutating-action-validation";
 import { enforceMutatingRouteThrottle, mapMutatingRouteThrottleFailure } from "@/lib/mutating-route-throttle";
 import { withOperationStatus } from "@/lib/operation";
 import {
@@ -65,9 +68,10 @@ async function invokeHibernateLambda(
   instanceId: string,
   user: AuthUser,
   lockId: string,
+  fencingToken: number,
   operationId: string
 ): Promise<HibernateResponse> {
-  console.log(`[HIBERNATE] Invoking Lambda for hibernate on ${instanceId}`);
+  console.log("[HIBERNATE] Invoking hibernate workflow");
   await invokeLambda("StartMinecraftServer", {
     invocationType: "api",
     command: "hibernate",
@@ -75,6 +79,7 @@ async function invokeHibernateLambda(
     userEmail: user.email,
     args: [],
     lockId,
+    fencingToken,
     operationId,
   });
 
@@ -97,7 +102,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
     context,
     authenticate: async () => {
       const user = await requireAdmin(context.request);
-      console.log("[HIBERNATE] Admin action by:", user.email);
+      console.log("[HIBERNATE] Authorized action requested");
       return user;
     },
     throttle: async ({ user }) => {
@@ -127,6 +132,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       if (alreadyHibernatingData) {
         return {
           lockId: "already-hibernating",
+          fencingToken: 0,
           action: "hibernate",
           ownerEmail: user.email,
           createdAt: new Date().toISOString(),
@@ -148,7 +154,7 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         throw new Error("Resolved instance ID is required before invoking hibernate action");
       }
 
-      return await invokeHibernateLambda(resolvedId, user, lock.lockId, context.operation.id);
+      return await invokeHibernateLambda(resolvedId, user, lock.lockId, lock.fencingToken, context.operation.id);
     },
     mapInvokeResult: ({ lock, invokeResult }) => {
       const syntheticLock = lock as typeof lock & { alreadyHibernatingData?: HibernateResponse };
@@ -180,6 +186,14 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
         });
       }
 
+      if (isMutatingActionPayloadValidationError(error)) {
+        return createMutatingActionFailure(error.message, {
+          httpStatus: 400,
+          code: error.code,
+          cause: error,
+        });
+      }
+
       return createMutatingActionFailure("Failed to hibernate server", {
         cause: error,
       });
@@ -191,8 +205,12 @@ export async function POST(request: NextRequest): Promise<NextResponse<ApiRespon
       }
 
       const ownerEmail = user?.email ?? "unknown";
-      await releaseServerActionLock(lock.lockId, { action: "hibernate", ownerEmail }).catch((releaseError) => {
-        console.error("[HIBERNATE] Failed to release lock after invoke error:", releaseError);
+      await releaseServerActionLock(lock.lockId, {
+        action: "hibernate",
+        ownerEmail,
+        fencingToken: lock.fencingToken,
+      }).catch(() => {
+        console.error("[HIBERNATE] Failed to release lock after invoke error");
       });
     },
   });

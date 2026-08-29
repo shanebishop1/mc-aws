@@ -1,0 +1,8 @@
+{
+  "name": "migrate-server-action-lock",
+  "version": "1.0.0",
+  "type": "module",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1119.0"
+  }
+}

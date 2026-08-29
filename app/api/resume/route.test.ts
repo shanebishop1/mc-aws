@@ -117,6 +117,24 @@ describe("POST /api/resume", () => {
     );
   });
 
+  it("returns 400 instead of selecting fresh mode for malformed JSON", async () => {
+    const req = createMockNextRequest("http://localhost/api/resume", {
+      method: "POST",
+      body: "{malformed",
+    });
+
+    const res = await POST(req);
+
+    expect(res.status).toBe(400);
+    const body = await parseNextResponse<ApiResponse<unknown>>(res);
+    expect(body.success).toBe(false);
+    expect(body.error).toBe("Request body must contain valid JSON");
+    expect(body.operation?.status).toBe("failed");
+    expect(mocks.findInstanceId).not.toHaveBeenCalled();
+    expect(mocks.acquireServerActionLock).not.toHaveBeenCalled();
+    expect(mocks.invokeLambda).not.toHaveBeenCalled();
+  });
+
   it("should return 400 when instance is already running", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Running);
@@ -186,11 +204,11 @@ describe("POST /api/resume", () => {
     const req = createMockNextRequest("http://localhost/api/resume", { method: "POST" });
     const res = await POST(req);
 
-    expect(res.status).toBe(500);
+    expect(res.status).toBe(503);
     const body = await parseNextResponse<ApiResponse<unknown>>(res);
     expect(body.success).toBe(false);
-    expect(body.error).toBe("Failed to resume server");
-    expect(body.operation?.status).toBe("failed");
+    expect(body.error).toContain("Remote dispatch could not be confirmed");
+    expect(body.operation?.status).toBe("accepted");
 
     expect(mocks.invokeLambda).toHaveBeenCalled();
   });

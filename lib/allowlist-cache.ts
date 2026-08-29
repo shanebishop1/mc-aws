@@ -27,8 +27,8 @@ export async function getCachedAllowlist(): Promise<string[]> {
       timestamp: now,
     };
     return emails;
-  } catch (error) {
-    console.error("[Allowlist] Failed to fetch allowlist from SSM:", error);
+  } catch {
+    console.error("[Allowlist] Failed to fetch allowlist from SSM");
     // Fail closed: return empty list (or fall back to stale cache if critical?)
     // Decision: Return empty list to prevent unauthorized access if we can't verify source of truth.
     return [];

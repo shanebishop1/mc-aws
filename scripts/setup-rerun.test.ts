@@ -145,4 +145,19 @@ describe("setup immutable AMI integration", () => {
     expect(source).toContain('--env-file "$LOCAL_ENV_FILE"');
     expect(source.indexOf("ensure_al2023_ami_pin")).toBeLessThan(source.indexOf("migrate-existing-deployment.ts"));
   });
+
+  it("persists both dual-v1 table outputs before any Worker deployment", () => {
+    const source = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
+    const captureLock = source.indexOf("LifecycleLockTableName");
+    const captureOperations = source.indexOf("OperationStateTableName");
+    const writeLock = source.indexOf('write_env_files "MC_LIFECYCLE_LOCK_TABLE_NAME"');
+    const writeOperations = source.indexOf('write_env_files "MC_OPERATION_STATE_TABLE_NAME"');
+    const workerDeploy = source.indexOf("pnpm deploy:cf");
+    expect(captureLock).toBeGreaterThan(-1);
+    expect(captureOperations).toBeGreaterThan(-1);
+    expect(writeLock).toBeGreaterThan(captureLock);
+    expect(writeOperations).toBeGreaterThan(captureOperations);
+    expect(writeLock).toBeLessThan(workerDeploy);
+    expect(writeOperations).toBeLessThan(workerDeploy);
+  });
 });

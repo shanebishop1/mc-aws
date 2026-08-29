@@ -11,10 +11,14 @@ describe("EC2 user data", () => {
     expect(spawnSync("bash", ["-n", scriptPath]).status).toBe(0);
   });
 
-  it("uses the supported Paper downloads service contract", () => {
-    expect(script).toContain("https://fill.papermc.io/v3/");
+  it("uses an exact checksum-verified Paper build instead of build discovery", () => {
+    expect(script).toContain('readonly PAPER_BUILD="132"');
+    expect(script).toContain(
+      'readonly PAPER_SHA256="5ffef465eeeb5f2a3c23a24419d97c51afd7dbb4923ff42df9a3f58bba1ccfba"'
+    );
     expect(script).toContain("User-Agent: ${PAPER_USER_AGENT}");
-    expect(script).not.toContain("api.papermc.io/v2");
+    expect(script).toContain('"$PAPER_URL" -o /tmp/paper.jar');
+    expect(script).not.toMatch(/\/versions\/\$\{MC_VERSION\}\/builds|first\(.+STABLE/);
   });
 
   it("powers off when bootstrap fails", () => {
@@ -27,6 +31,11 @@ describe("EC2 user data", () => {
     expect(script).toContain("command -v aws");
   });
 
+  it("keeps the pinned AMI immutable and uses intentional AMI upgrades for security maintenance", () => {
+    expect(script).not.toMatch(/dnf\s+(?:-[^\s]+\s+)*update/);
+    expect(script).toContain("reviewed AMI is the OS patch boundary");
+  });
+
   it("installs the rclone helper and optionally materializes config without an inline token", () => {
     expect(script).toContain("mc-profile-install.sh");
     expect(script).toContain("/usr/local/bin/mc-rclone-config.sh --bootstrap");
@@ -34,6 +43,15 @@ describe("EC2 user data", () => {
     expect(script).toContain("/etc/minecraft/gdrive-root");
     expect(script).not.toContain("TOKEN_JSON=");
     expect(script).not.toContain("chown -R minecraft:minecraft /opt/setup/rclone");
+    expect(script).not.toContain("rclone-current");
+    expect(script).toContain('"$RCLONE_SHA256" /tmp/rclone.zip');
+  });
+
+  it("installs only exact checksum-verified mcstatus wheels without package resolution", () => {
+    expect(script).toContain('readonly MCSTATUS_VERSION="12.0.2"');
+    expect(script).toContain('"$MCSTATUS_SHA256" /tmp/mcstatus.whl');
+    expect(script).toContain("pip install --no-index --no-deps");
+    expect(script).not.toMatch(/pip install mcstatus(?:\s|$)/);
   });
 
   it("bootstraps content-addressed assets without GitHub credentials", () => {

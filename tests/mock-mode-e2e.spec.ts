@@ -157,7 +157,7 @@ test.describe("Mock Mode E2E Tests", () => {
 
     // Verify costs are displayed (should be visible in cost dashboard)
     // Click cost button to open dashboard
-    await page.getByRole("button", { name: /costs/i }).click();
+    await page.getByRole("button", { name: /open cost dashboard/i }).click();
     await expect(page.getByTestId("cost-dashboard")).toBeVisible();
 
     // Click "Generate Report" button to fetch cost data
@@ -171,7 +171,7 @@ test.describe("Mock Mode E2E Tests", () => {
     await expect(page.getByText(/\$15\.50/i)).toBeVisible();
 
     // Close cost dashboard by clicking the Close button
-    await page.getByRole("button", { name: /close/i }).click();
+    await page.getByTestId("cost-dashboard").getByRole("button", { name: "Close", exact: true }).click();
   });
 
   test("Start Flow - transitions from stopped to running", async ({ page }) => {
@@ -324,7 +324,7 @@ test.describe("Mock Mode E2E Tests", () => {
     await dialogBackupButton.click();
 
     // Wait for success message to appear
-    await expect(page.getByText(/Backup started asynchronously/i)).toBeVisible({ timeout: 5000 });
+    await expect(page.getByText(/Backup completed successfully/i)).toBeVisible({ timeout: 5000 });
 
     // Verify backup dialog is closed after success
     await expect(page.getByTestId("backup-dialog")).not.toBeVisible();
@@ -373,21 +373,19 @@ test.describe("Mock Mode E2E Tests", () => {
     await waitForPageLoad(page);
 
     // Open cost dashboard
-    await page.getByRole("button", { name: /costs/i }).click();
+    await page.getByRole("button", { name: /open cost dashboard/i }).click();
 
     // Click "Generate Report" button to fetch cost data
     await page.getByRole("button", { name: /generate report/i }).click();
 
-    // Wait for cost data to load
-    await page.waitForTimeout(1000);
-
     // Verify high costs are displayed (format: "$ 125.50" with space)
-    await expect(page.getByText(/\$\s*125\.50/i)).toBeVisible();
+    const costDashboard = page.getByTestId("cost-dashboard");
+    await expect(costDashboard.getByText(/\$\s*125\.50/i)).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText(/amazon ec2/i)).toBeVisible();
     await expect(page.getByText(/\$\s*110\.00/i)).toBeVisible();
 
     // Close cost dashboard
-    await page.getByRole("button", { name: /close/i }).click();
+    await page.getByTestId("cost-dashboard").getByRole("button", { name: "Close", exact: true }).click();
   });
 
   test("Many players scenario - displays high player count", async ({ page }) => {

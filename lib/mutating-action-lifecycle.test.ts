@@ -8,9 +8,18 @@ import type { ServerActionLock } from "@/lib/server-action-lock";
 import { createMockNextRequest } from "@/tests/utils";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
+const mocks = vi.hoisted(() => ({
+  persistDurableOperationStateTransition: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock("@/lib/durable-operation-state", () => ({
+  persistDurableOperationStateTransition: mocks.persistDurableOperationStateTransition,
+}));
+
 describe("mutating-action-contract helpers", () => {
   afterEach(() => {
     vi.useRealTimers();
+    vi.clearAllMocks();
   });
 
   it("creates request context with running operation metadata", () => {
@@ -53,12 +62,42 @@ describe("mutating-action-contract helpers", () => {
 });
 
 describe("runMutatingActionLifecycle", () => {
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("does not persist operation state or acquire a lock when CSRF validation fails during authentication", async () => {
+    const request = createMockNextRequest("http://localhost/api/start", { method: "POST" });
+    const context = createMutatingActionRequestContext(request, "/api/start", "start");
+    const finalize = vi.fn().mockResolvedValue(undefined);
+    const acquireLock = vi.fn();
+
+    const result = await runMutatingActionLifecycle({
+      context,
+      authenticate: async () => {
+        throw new Response(null, { status: 403 });
+      },
+      throttle: async () => ({ allowed: true }),
+      acquireLock,
+      invoke: async () => {
+        throw new Error("should not invoke");
+      },
+      finalize,
+    });
+
+    expect(result.execution.ok).toBe(false);
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(acquireLock).not.toHaveBeenCalled();
+    expect(mocks.persistDurableOperationStateTransition).not.toHaveBeenCalled();
+  });
+
   it("executes auth -> throttle -> lock -> invoke -> finalize on success", async () => {
     const request = createMockNextRequest("http://localhost/api/start", { method: "POST" });
     const context = createMutatingActionRequestContext(request, "/api/start", "start");
     const order: string[] = [];
     const lock: ServerActionLock = {
       lockId: "lock-123",
+      fencingToken: 1,
       action: "start",
       ownerEmail: "admin@example.com",
       createdAt: "2026-04-13T12:00:00.000Z",
@@ -94,6 +133,20 @@ describe("runMutatingActionLifecycle", () => {
     expect(result.execution).toMatchObject({ status: "accepted", httpStatus: 202 });
     expect(result.completedStage).toBe("finalize");
     expect(result.finalizeResult).toEqual({ released: false });
+    expect(mocks.persistDurableOperationStateTransition).toHaveBeenCalledWith(
+      expect.objectContaining({
+        lockId: "lock-123",
+        fencingToken: 1,
+        phase: "dispatching",
+      })
+    );
+    expect(mocks.persistDurableOperationStateTransition).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        lockId: "lock-123",
+        fencingToken: 1,
+        phase: "dispatched",
+      })
+    );
   });
 
   it("short-circuits lock/invoke when throttled and still finalizes", async () => {
@@ -134,14 +187,23 @@ describe("runMutatingActionLifecycle", () => {
       code: "throttled",
     });
     expect(result.finalizeResult).toEqual({ finalized: true });
+    expect(mocks.persistDurableOperationStateTransition).toHaveBeenCalledTimes(2);
+    expect(mocks.persistDurableOperationStateTransition).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        status: "failed",
+        requestedBy: "admin@example.com",
+        code: "throttled",
+      })
+    );
   });
 
-  it("uses custom error mapper for invoke errors and finalizes with lock context", async () => {
+  it("uses the custom error mapper but retains the lock when remote dispatch is ambiguous", async () => {
     const request = createMockNextRequest("http://localhost/api/restore", { method: "POST" });
     const context = createMutatingActionRequestContext(request, "/api/restore", "restore");
     const finalizeSpy = vi.fn();
     const lock: ServerActionLock = {
       lockId: "lock-restore",
+      fencingToken: 1,
       action: "restore",
       ownerEmail: "admin@example.com",
       createdAt: "2026-04-13T12:00:00.000Z",
@@ -171,16 +233,54 @@ describe("runMutatingActionLifecycle", () => {
     expect(result.execution).toMatchObject({
       ok: false,
       status: "failed",
-      httpStatus: 409,
-      error: "failed at invoke",
-      code: "lock_conflict",
+      httpStatus: 503,
+      error: "Remote dispatch could not be confirmed. The operation remains pending until its lease expires.",
+      code: "dispatch_unresolved",
+      operationStatus: "accepted",
     });
     expect(result.lock?.lockId).toBe("lock-restore");
-    expect(finalizeSpy).toHaveBeenCalledOnce();
-    expect(finalizeSpy).toHaveBeenCalledWith(
+    expect(finalizeSpy).not.toHaveBeenCalled();
+    expect(mocks.persistDurableOperationStateTransition).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        lock,
+        lockId: lock.lockId,
+        fencingToken: lock.fencingToken,
+        status: "accepted",
+        phase: "dispatching",
       })
+    );
+  });
+
+  it("terminalizes and releases after a definite Lambda service rejection", async () => {
+    const request = createMockNextRequest("http://localhost/api/stop", { method: "POST" });
+    const context = createMutatingActionRequestContext(request, "/api/stop", "stop");
+    const finalize = vi.fn().mockResolvedValue({ released: true });
+    const rejected = Object.assign(new Error("too many requests"), {
+      name: "TooManyRequestsException",
+      $metadata: { httpStatusCode: 429, requestId: "request-id" },
+    });
+
+    const result = await runMutatingActionLifecycle({
+      context,
+      authenticate: async () => ({ email: "admin@example.com" }),
+      throttle: async () => ({ allowed: true }),
+      acquireLock: async () => ({
+        lockId: "lock-stop",
+        fencingToken: 2,
+        action: "stop",
+        ownerEmail: "admin@example.com",
+        createdAt: "2026-04-13T12:00:00.000Z",
+        expiresAt: "2026-04-13T13:30:00.000Z",
+      }),
+      invoke: async () => {
+        throw rejected;
+      },
+      finalize,
+    });
+
+    expect(result.execution).toMatchObject({ ok: false, status: "failed" });
+    expect(finalize).toHaveBeenCalledOnce();
+    expect(mocks.persistDurableOperationStateTransition).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "failed", phase: "terminal" })
     );
   });
 
@@ -194,6 +294,7 @@ describe("runMutatingActionLifecycle", () => {
       throttle: async () => ({ allowed: true }),
       acquireLock: async () => ({
         lockId: "lock-stop",
+        fencingToken: 1,
         action: "stop",
         ownerEmail: "admin@example.com",
         createdAt: "2026-04-13T12:00:00.000Z",

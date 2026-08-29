@@ -20,7 +20,7 @@ export async function GET(request: Request): Promise<NextResponse<ApiResponse<{ 
     // Check admin authorization
     try {
       const user = await requireAdmin(request as NextRequest);
-      console.log("[GDRIVE-SETUP] Admin action by:", user.email);
+      console.log("[GDRIVE-SETUP] Authorized setup requested");
       // eslint-disable-next-line @typescript-eslint/no-unused-vars
       void user;
     } catch (error) {

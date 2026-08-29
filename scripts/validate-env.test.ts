@@ -13,6 +13,9 @@ const baseWorkerValues: Record<string, string> = {
   GOOGLE_CLIENT_ID: "google-client-id",
   GOOGLE_CLIENT_SECRET: "google-client-secret",
   NEXT_PUBLIC_APP_URL: "https://panel.example.com",
+  MC_LIFECYCLE_LOCK_TABLE_NAME: "lifecycle-lock-table",
+  MC_OPERATION_STATE_TABLE_NAME: "operation-state-table",
+  MC_OPERATION_STATE_RETENTION_DAYS: "30",
 };
 
 const baseLambdaValues: Record<string, string> = {
@@ -20,6 +23,9 @@ const baseLambdaValues: Record<string, string> = {
   AWS_ACCOUNT_ID: "123456789012",
   INSTANCE_ID: "i-abc123",
   ADMIN_EMAIL: "admin@example.com",
+  MC_LIFECYCLE_LOCK_TABLE_NAME: "lifecycle-lock-table",
+  MC_OPERATION_STATE_TABLE_NAME: "operation-state-table",
+  MC_OPERATION_STATE_RETENTION_DAYS: "30",
 };
 
 describe("scripts/validate-env", () => {

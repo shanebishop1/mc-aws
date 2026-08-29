@@ -13,6 +13,10 @@ on:
         required: false
         default: false
         type: boolean
+      expected_domain:
+        description: "Expected Minecraft DNS hostname (falls back to the environment variable)"
+        required: false
+        type: string
 permissions:
   contents: read
 
@@ -28,10 +32,11 @@ jobs:
       group: real-environment-smoke
       cancel-in-progress: false
     env:
-      # Keep infrastructure/operator identifiers out of summaries and artifacts.
+      # The reporter emits only fixed contract signals; this label is validated but never published.
       SMOKE_ENVIRONMENT_LABEL: redacted
-      SMOKE_EXPECT_DOMAIN: ""
+      SMOKE_EXPECT_DOMAIN: ${{ inputs.expected_domain || vars.SMOKE_EXPECT_DOMAIN }}
       SMOKE_EXPECT_BACKEND_MODE: ${{ vars.SMOKE_EXPECT_BACKEND_MODE || 'aws' }}
+      SMOKE_REQUEST_TIMEOUT_MS: ${{ vars.SMOKE_REQUEST_TIMEOUT_MS || '15000' }}
       # Requiring S5 also enables it, so the required probe cannot silently skip.
       SMOKE_ENABLE_S5_ENVIRONMENT_PROBE: ${{ inputs.enable_s5_environment_probe || inputs.require_s5_environment_probe }}
       SMOKE_REQUIRE_S5_ENVIRONMENT_PROBE: ${{ inputs.require_s5_environment_probe }}
@@ -64,6 +69,10 @@ jobs:
             missing+=("secret: SMOKE_SESSION_COOKIE")
           fi
 
+          if [ -z "${SMOKE_EXPECT_DOMAIN:-}" ]; then
+            missing+=("variable SMOKE_EXPECT_DOMAIN or workflow input expected_domain")
+          fi
+
           if [ ${#missing[@]} -gt 0 ]; then
             echo "::error title=Missing smoke CI configuration::Required values are missing in GitHub Environment 'real-environment-smoke': ${missing[*]}"
             echo "See setup checklist: docs/OPERATIONS_GUIDE.md"
@@ -89,6 +98,12 @@ jobs:
 
           if [ "${#SMOKE_SESSION_COOKIE}" -lt 16 ]; then
             echo "::error title=Invalid SMOKE_SESSION_COOKIE::SMOKE_SESSION_COOKIE is unexpectedly short; verify a current session token value was stored."
+            exit 1
+          fi
+
+          lower_expected_domain="$(printf '%s' "$SMOKE_EXPECT_DOMAIN" | tr '[:upper:]' '[:lower:]')"
+          if [[ "$lower_expected_domain" =~ (changeme|placeholder|replace-me|example\.com|your-value) ]] || [[ "$SMOKE_EXPECT_DOMAIN" == *"://"* ]] || [[ "$SMOKE_EXPECT_DOMAIN" == *"/"* ]]; then
+            echo "::error title=Invalid expected domain::SMOKE_EXPECT_DOMAIN must be a configured DNS hostname without a scheme or path."
             exit 1
           fi
 
@@ -122,3 +137,5 @@ jobs:
           path: artifacts/real-environment-smoke-summary.md
           if-no-files-found: warn
           retention-days: 3
+          include-hidden-files: false
+          overwrite: true

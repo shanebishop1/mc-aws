@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { execFileSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, lstatSync, mkdtempSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -29,6 +29,7 @@ import {
   buildRetentionStageTemplate,
   decodeInstanceUserDataAttribute,
   establishOwnershipTags,
+  extractWorkerStackOutputs,
   inspectInstanceAndRootVolume,
   isRetentionStageComplete,
   isStableMigrationStackStatus,
@@ -36,21 +37,24 @@ import {
   normalizePnpmArguments,
   pinDeployedInstanceImage,
   templatesEqual,
+  updateDotenvValues,
 } from "./existing-deployment-migration";
 
 // biome-ignore lint/suspicious/noExplicitAny: AWS CLI responses are intentionally handled as open JSON documents.
 type JsonRecord = Record<string, any>;
-type Stage = "plan" | "retain" | "tags" | "prepare-bridge" | "execute-bridge";
+type Stage = "plan" | "retain" | "tags" | "prepare-bridge" | "execute-bridge" | "sync-worker-env";
 
 interface Options {
   stage: Stage;
   execute: boolean;
   stackName: string;
   region: string;
+  expectedAccount?: string;
   confirmStackId?: string;
   changeSetName?: string;
   assertStandardDeploySafe: boolean;
   confirmExclusiveTagging: boolean;
+  envFile: string;
 }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -100,10 +104,12 @@ function usage(): never {
   pnpm migrate:existing -- --stage tags --execute --confirm-stack-id <exact-stack-arn> --confirm-exclusive-tagging
   pnpm migrate:existing -- --stage prepare-bridge --execute --confirm-stack-id <exact-stack-arn>
   pnpm migrate:existing -- --stage execute-bridge --execute --confirm-stack-id <exact-stack-arn> --change-set-name <name-or-arn>
+  pnpm migrate:existing -- --stage sync-worker-env --execute --confirm-stack-id <exact-stack-arn> --env-file .env.production
 
 Options:
   --stack-name <name>       Default: MinecraftStack
   --region <region>         Default: AWS_REGION/AWS_DEFAULT_REGION/us-west-1
+  --account <12 digits>     Expected CDK deployment account (required by the standard-deploy guard)
   --assert-standard-deploy-safe  Read-only guard used by normal deployment entry points
   --confirm-exclusive-tagging    Tags stage only: confirms all other stack/EC2 lifecycle/tag writers are paused
 
@@ -121,6 +127,7 @@ function parseOptions(argv: string[]): Options {
     region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-west-1",
     assertStandardDeploySafe: false,
     confirmExclusiveTagging: false,
+    envFile: ".env.production",
   };
   for (let index = 0; index < arguments_.length; index += 1) {
     const argument = arguments_[index];
@@ -129,15 +136,26 @@ function parseOptions(argv: string[]): Options {
     else if (argument === "--execute") options.execute = true;
     else if (argument === "--stack-name") options.stackName = value();
     else if (argument === "--region") options.region = value();
+    else if (argument === "--account") options.expectedAccount = value();
     else if (argument === "--confirm-stack-id") options.confirmStackId = value();
     else if (argument === "--change-set-name") options.changeSetName = value();
     else if (argument === "--assert-standard-deploy-safe") options.assertStandardDeploySafe = true;
     else if (argument === "--confirm-exclusive-tagging") options.confirmExclusiveTagging = true;
+    else if (argument === "--env-file") options.envFile = value();
     else usage();
   }
-  if (!new Set<Stage>(["plan", "retain", "tags", "prepare-bridge", "execute-bridge"]).has(options.stage)) usage();
+  if (
+    !new Set<Stage>(["plan", "retain", "tags", "prepare-bridge", "execute-bridge", "sync-worker-env"]).has(
+      options.stage
+    )
+  )
+    usage();
   if (!/^[A-Za-z][A-Za-z0-9-]{0,127}$/.test(options.stackName) || !/^[a-z]{2}(?:-[a-z0-9]+)+-\d$/.test(options.region))
     usage();
+  if (options.expectedAccount !== undefined && !/^\d{12}$/.test(options.expectedAccount)) usage();
+  if (options.assertStandardDeploySafe && !options.expectedAccount) {
+    throw new Error("--assert-standard-deploy-safe requires --account for an exact CDK target identity.");
+  }
   if (options.execute && options.stage === "plan") usage();
   if (!options.execute && options.stage !== "plan") {
     throw new Error(`--stage ${options.stage} requires --execute; omit both flags for the read-only plan.`);
@@ -146,8 +164,33 @@ function parseOptions(argv: string[]): Options {
   return options;
 }
 
+function syncWorkerEnvironment(options: Options, identity: StackIdentity, stack: JsonRecord, instanceId: string): void {
+  requireMutationConfirmation(options, identity);
+  const envPath = path.resolve(ROOT, options.envFile);
+  const fileStatus = lstatSync(envPath);
+  if (!fileStatus.isFile() || fileStatus.isSymbolicLink() || fileStatus.nlink !== 1) {
+    throw new Error(`${options.envFile} must be one regular file with no links.`);
+  }
+  if (typeof process.getuid === "function" && statSync(envPath).uid !== process.getuid()) {
+    throw new Error(`${options.envFile} must be owned by the current user.`);
+  }
+  const outputs = extractWorkerStackOutputs(stack.Outputs, instanceId);
+  const updated = updateDotenvValues(readFileSync(envPath, "utf8"), outputs);
+  const temporaryPath = `${envPath}.tmp.${process.pid}`;
+  writeFileSync(temporaryPath, updated, { mode: 0o600, flag: "wx" });
+  chmodSync(temporaryPath, 0o600);
+  renameSync(temporaryPath, envPath);
+  const verified = updateDotenvValues(readFileSync(envPath, "utf8"), outputs);
+  if (verified !== updated) throw new Error("Environment output synchronization did not verify idempotently.");
+  console.log(`Synchronized INSTANCE_ID and DynamoDB table outputs into ${options.envFile}.`);
+  console.log(`Next: pnpm bootstrap:check -- --env-file ${options.envFile}`);
+}
+
 function stackIdentity(options: Options): { identity: StackIdentity; stack: JsonRecord } {
   const caller = aws(options.region, ["sts", "get-caller-identity"]);
+  if (options.expectedAccount && caller.Account !== options.expectedAccount) {
+    throw new Error("AWS caller account does not match the exact CDK deployment account.");
+  }
   const described = aws(options.region, ["cloudformation", "describe-stacks", "--stack-name", options.stackName]);
   if (described.Stacks?.length !== 1) throw new Error(`Expected exactly one stack named ${options.stackName}.`);
   const stack = described.Stacks[0];
@@ -720,6 +763,10 @@ function main(): void {
     return;
   }
   const inspection = inspectOwnership(identity);
+  if (options.stage === "sync-worker-env") {
+    syncWorkerEnvironment(options, identity, stack, inspection.instanceId);
+    return;
+  }
   if (options.stage === "tags") {
     applyTags(options, identity, live);
     return;
