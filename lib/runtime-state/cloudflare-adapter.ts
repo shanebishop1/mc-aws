@@ -44,6 +44,7 @@ interface SnapshotRecord {
 
 const COUNTER_UNAVAILABLE_MESSAGE = "Cloudflare Durable Object counter service is unavailable.";
 const SNAPSHOT_UNAVAILABLE_MESSAGE = "Cloudflare KV snapshot service is unavailable.";
+const CLOUDFLARE_KV_MIN_EXPIRATION_TTL_SECONDS = 60;
 
 const isInvalidCounterInput = ({ key, limit, windowMs }: CounterCheckInput): boolean => {
   return key.trim().length === 0 || limit <= 0 || windowMs <= 0;
@@ -378,6 +379,33 @@ const getSnapshot = async <TSnapshot>(
       };
     }
 
+    if (snapshot.expiresAt) {
+      const expiresAtMs = Date.parse(snapshot.expiresAt);
+      if (!Number.isFinite(expiresAtMs)) {
+        return {
+          ok: false,
+          error: {
+            code: "snapshot_decode_failed",
+            message: "Stored snapshot payload is malformed.",
+            retryable: false,
+          },
+        };
+      }
+      if (Date.now() >= expiresAtMs) {
+        try {
+          await namespace.delete(key);
+        } catch {
+          // Logical expiry is authoritative even if best-effort provider cleanup fails.
+        }
+        return {
+          ok: true,
+          data: {
+            status: "miss",
+          },
+        };
+      }
+    }
+
     return {
       ok: true,
       data: {
@@ -440,7 +468,8 @@ const setSnapshot = async <TSnapshot>(
 
   try {
     await namespace.put(key, payload, {
-      expirationTtl: ttlSeconds,
+      expirationTtl:
+        typeof ttlSeconds === "number" ? Math.max(ttlSeconds, CLOUDFLARE_KV_MIN_EXPIRATION_TTL_SECONDS) : undefined,
     });
     return {
       ok: true,
