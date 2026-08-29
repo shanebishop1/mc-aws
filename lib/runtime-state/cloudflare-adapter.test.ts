@@ -437,6 +437,15 @@ describe("cloudflare runtime-state adapter snapshot operations", () => {
     vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
 
     const kvState = new Map<string, { value: string; expiresAtMs?: number }>();
+    const put = vi.fn(async (key: string, value: string, options?: { expirationTtl?: number }) => {
+      kvState.set(key, {
+        value,
+        expiresAtMs: typeof options?.expirationTtl === "number" ? Date.now() + options.expirationTtl * 1000 : undefined,
+      });
+    });
+    const remove = vi.fn(async (key: string) => {
+      kvState.delete(key);
+    });
     const adapter = createCloudflareRuntimeStateAdapter({
       snapshotKvNamespace: {
         get: vi.fn(async (key: string) => {
@@ -452,16 +461,8 @@ describe("cloudflare runtime-state adapter snapshot operations", () => {
 
           return record.value;
         }),
-        put: vi.fn(async (key: string, value: string, options?: { expirationTtl?: number }) => {
-          kvState.set(key, {
-            value,
-            expiresAtMs:
-              typeof options?.expirationTtl === "number" ? Date.now() + options.expirationTtl * 1000 : undefined,
-          });
-        }),
-        delete: vi.fn(async (key: string) => {
-          kvState.delete(key);
-        }),
+        put,
+        delete: remove,
       },
     });
 
@@ -475,6 +476,7 @@ describe("cloudflare runtime-state adapter snapshot operations", () => {
     vi.advanceTimersByTime(1);
     const expired = await adapter.getSnapshot<typeof value>({ key });
 
+    expect(put).toHaveBeenCalledWith(key, expect.any(String), { expirationTtl: 60 });
     expect(staleButAllowed).toMatchObject({
       ok: true,
       data: {
@@ -488,5 +490,6 @@ describe("cloudflare runtime-state adapter snapshot operations", () => {
         status: "miss",
       },
     });
+    expect(remove).toHaveBeenCalledWith(key);
   });
 });
