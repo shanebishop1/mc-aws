@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   type HostIdentity,
   type ReplacementConfirmations,
@@ -26,6 +27,51 @@ type JsonRecord = Record<string, any>;
 export interface CloudFormationTemplate extends JsonRecord {
   Resources: Record<string, JsonRecord>;
   Parameters?: Record<string, JsonRecord>;
+}
+
+export type CloudFormationTemplateTransport =
+  | { kind: "inline"; request: { TemplateBody: string } }
+  | {
+      kind: "s3";
+      request: { TemplateURL: string };
+      bucket: string;
+      key: string;
+      checksumSha256: string;
+      byteLength: number;
+    };
+
+export function cloudFormationTemplateTransport(
+  identity: StackIdentity,
+  stackTemplateAssetObjectUrl: unknown,
+  templateBody: string
+): CloudFormationTemplateTransport {
+  const byteLength = Buffer.byteLength(templateBody, "utf8");
+  if (byteLength <= 51_200) return { kind: "inline", request: { TemplateBody: templateBody } };
+  if (byteLength > 460_800) {
+    throw new Error("Bridge template exceeds CloudFormation's 460,800-byte S3 template limit.");
+  }
+
+  const bucketMatch =
+    typeof stackTemplateAssetObjectUrl === "string" ? /^s3:\/\/([^/]+)\/.+$/.exec(stackTemplateAssetObjectUrl) : null;
+  if (!bucketMatch) throw new Error("MinecraftStack template asset bucket identity is malformed.");
+  const bucket = bucketMatch[1];
+  const escapedAccount = identity.accountId.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const escapedRegion = identity.region.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  if (!new RegExp(`^cdk-[a-z0-9-]+-assets-${escapedAccount}-${escapedRegion}$`).test(bucket)) {
+    throw new Error("MinecraftStack template asset bucket does not encode the confirmed account and region.");
+  }
+
+  const digest = createHash("sha256").update(templateBody, "utf8").digest();
+  const key = `mc-aws-bridge-templates/${digest.toString("hex")}.json`;
+  const dnsSuffix = identity.stackId.startsWith("arn:aws-cn:") ? "amazonaws.com.cn" : "amazonaws.com";
+  return {
+    kind: "s3",
+    request: { TemplateURL: `https://${bucket}.s3.${identity.region}.${dnsSuffix}/${key}` },
+    bucket,
+    key,
+    checksumSha256: digest.toString("base64"),
+    byteLength,
+  };
 }
 
 export interface PinnedInstanceTemplate {

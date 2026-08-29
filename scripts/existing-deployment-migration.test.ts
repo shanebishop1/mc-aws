@@ -20,6 +20,7 @@ import {
   buildChangeSetParameters,
   buildLegacyRetentionTemplate,
   buildPinnedInstanceBridgeTemplate,
+  cloudFormationTemplateTransport,
   decodeInstanceUserDataAttribute,
   establishOwnershipTags,
   extractWorkerStackOutputs,
@@ -1114,5 +1115,41 @@ describe("synthesized CDK assembly identity", () => {
     expect(() => assertSynthesizedAssemblyIdentity(identity, consistentlyWrongBucket)).toThrow(
       /does not encode the confirmed account and region/
     );
+  });
+});
+
+describe("CloudFormation bridge template transport", () => {
+  const identity = { accountId: "123456789012", region: "us-west-1", stackId, stackName: "MinecraftStack" };
+  const assetUrl = "s3://cdk-test-assets-123456789012-us-west-1/template.json";
+
+  it("keeps small templates inline", () => {
+    expect(cloudFormationTemplateTransport(identity, assetUrl, "{}")).toEqual({
+      kind: "inline",
+      request: { TemplateBody: "{}" },
+    });
+  });
+
+  it("uses a content-addressed template URL for larger templates", () => {
+    const transport = cloudFormationTemplateTransport(identity, assetUrl, "x".repeat(51_201));
+    expect(transport.kind).toBe("s3");
+    if (transport.kind !== "s3") throw new Error("expected S3 template transport");
+    expect(transport.bucket).toBe("cdk-test-assets-123456789012-us-west-1");
+    expect(transport.key).toMatch(/^mc-aws-bridge-templates\/[a-f0-9]{64}\.json$/);
+    expect(transport.request.TemplateURL).toBe(
+      `https://${transport.bucket}.s3.us-west-1.amazonaws.com/${transport.key}`
+    );
+    expect(transport.checksumSha256).toMatch(/^[A-Za-z0-9+/]{43}=$/);
+    expect(transport.byteLength).toBe(51_201);
+  });
+
+  it("rejects oversized templates and an unexpected asset bucket", () => {
+    expect(() => cloudFormationTemplateTransport(identity, assetUrl, "x".repeat(460_801))).toThrow(/460,800-byte/);
+    expect(() =>
+      cloudFormationTemplateTransport(
+        identity,
+        "s3://cdk-test-assets-999999999999-us-west-1/template.json",
+        "x".repeat(51_201)
+      )
+    ).toThrow(/confirmed account and region/);
   });
 });
