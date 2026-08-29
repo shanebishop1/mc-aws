@@ -27,6 +27,9 @@ describe("reviewed bootstrap pins contract", () => {
     const pins = validateBootstrapPins(config);
     expect(() => assertBootstrapUserDataMatches(userData, pins)).not.toThrow();
     expect(() => assertBootstrapUserDataMatches(runtimeRollout, pins)).not.toThrow();
+    expect(runtimeRollout).toContain("mcstatus-12.0.2-py3-none-any.whl");
+    expect(runtimeRollout).toContain("asyncio_dgram-2.2.0-py3-none-any.whl");
+    expect(runtimeRollout).toContain("dnspython-2.7.0-py3-none-any.whl");
   });
 
   it("rejects absent and placeholder pins", () => {
