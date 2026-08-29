@@ -219,6 +219,9 @@ const fetchSmoke = async (
 
 const validateDomainSignal = (data: Record<string, unknown>, expectedDomain: string): void => {
   const domain = data.domain;
+  const state = data.state;
+  const nonRunningStates = new Set(["stopped", "hibernating", "pending", "stopping", "terminated", "unknown"]);
+  if (typeof domain === "undefined" && typeof state === "string" && nonRunningStates.has(state)) return;
   if (typeof domain !== "string" || domain.trim().toLowerCase() !== expectedDomain) {
     throw new Error("Configured domain does not match the status response.");
   }

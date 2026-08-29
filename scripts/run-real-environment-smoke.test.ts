@@ -244,6 +244,35 @@ describe("real-environment smoke reporting", () => {
     expect(readFileSync(artifactPath, "utf8")).toContain("| S4 | fail | runtime binding contract failed |");
   });
 
+  it("accepts an intentionally absent domain while the server is stopped", async () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-real-smoke-"));
+    temporaryDirectories.push(directory);
+    const artifactPath = path.join(directory, "summary.md");
+    process.env = {
+      ...originalEnv,
+      SMOKE_BASE_URL: "https://smoke.invalid",
+      SMOKE_ENVIRONMENT_LABEL: "redacted",
+      SMOKE_SESSION_COOKIE: "safe-session-cookie-value",
+      SMOKE_EXPECT_DOMAIN: "expected.invalid",
+      SMOKE_SUMMARY_OUTPUT_PATH: artifactPath,
+    };
+    const replies = [
+      response({ authenticated: true, email: "redacted@example.invalid", role: "admin" }),
+      response({ success: true, data: { instanceId: "i-real" } }),
+      response({ success: true, data: { instanceRunning: false, serviceActive: false } }),
+      response({ success: true, data: { instanceId: "i-real", state: "stopped" } }, refreshHeaders),
+      response({ success: true, data: { instanceId: "i-real", state: "stopped" } }, hitHeaders),
+      response({ success: true, data: { exists: true } }),
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => replies.shift() ?? response({}))
+    );
+
+    expect(await runSmoke()).toBe(0);
+    expect(readFileSync(artifactPath, "utf8")).toContain("| S4 | pass | runtime binding contract passed |");
+  });
+
   it("requires expected-domain configuration before required checks run", async () => {
     const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-real-smoke-"));
     temporaryDirectories.push(directory);
