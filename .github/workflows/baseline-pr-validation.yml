@@ -263,7 +263,7 @@ jobs:
           test -z "$(git status --porcelain --untracked-files=all)"
 
   production-audits:
-    name: Root production dependency audit
+    name: Root and Lambda production dependency audits
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
