@@ -123,7 +123,7 @@ After setup completes:
 6. Connect using the displayed address and confirm the server works.
 7. Check AWS Billing and Cost Explorer.
 
-Use the web panel for production mutations. The repository's `scripts/server-cli.ts` sends no authentication, so its start/stop/backup/restore commands do not work against authenticated production routes.
+Use the web panel for production mutations by default. The `server:*` CLI commands target `NEXT_PUBLIC_APP_URL` when the deployment environment is present and require `MC_SERVER_CLI_SESSION_COOKIE_FILE` for remote calls. That file must contain only a current `mc_session` token and must be a current-user-owned `0600` regular file. Keep it outside the repository and remove it when the operator session is no longer needed; never pass the token in command arguments or store it in `.env` files.
 
 ## Runtime and cost behavior
 
