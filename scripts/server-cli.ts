@@ -3,6 +3,10 @@
  * Calls API endpoints to manage the server state
  */
 
+import { lstatSync, readFileSync, statSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { config as loadDotenv } from "dotenv";
 import type {
   ApiResponse,
   BackupResponse,
@@ -15,26 +19,98 @@ import type {
   StopServerResponse,
 } from "../lib/types";
 
-const API_BASE = process.env.API_BASE || "http://localhost:3000/api";
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+type Environment = Record<string, string | undefined>;
 
-async function callApi<T>(endpoint: string, method = "GET", body?: unknown): Promise<ApiResponse<T>> {
-  const url = `${API_BASE}${endpoint}`;
+export function loadServerCliEnvironment(environment: Environment = process.env): void {
+  for (const file of [".env.production", ".env.local"]) {
+    loadDotenv({
+      path: path.resolve(file),
+      override: false,
+      quiet: true,
+      processEnv: environment as Record<string, string>,
+    });
+  }
+}
+
+export function resolveApiBase(environment: Environment = process.env): URL {
+  const configured = environment.API_BASE?.trim();
+  const appUrl = environment.NEXT_PUBLIC_APP_URL?.trim();
+  const candidate = configured || (appUrl ? `${appUrl.replace(/\/$/, "")}/api` : "http://localhost:3000/api");
+  let url: URL;
+  try {
+    url = new URL(candidate);
+  } catch {
+    throw new Error("API_BASE or NEXT_PUBLIC_APP_URL is not a valid absolute URL");
+  }
+  if (url.username || url.password || url.search || url.hash) {
+    throw new Error("Server CLI API URL must not contain credentials, a query, or a fragment");
+  }
+  if (!LOOPBACK_HOSTS.has(url.hostname) && url.protocol !== "https:") {
+    throw new Error("Remote server CLI requests require HTTPS");
+  }
+  return url;
+}
+
+function remoteSessionCookie(apiBase: URL, environment: Environment = process.env): string | undefined {
+  if (LOOPBACK_HOSTS.has(apiBase.hostname)) return undefined;
+  const configuredPath = environment.MC_SERVER_CLI_SESSION_COOKIE_FILE?.trim();
+  if (!configuredPath) {
+    throw new Error(
+      "Remote API calls require MC_SERVER_CLI_SESSION_COOKIE_FILE pointing to a current-user-owned 0600 file containing the mc_session token"
+    );
+  }
+  const cookiePath = path.resolve(configuredPath);
+  const linkStatus = lstatSync(cookiePath);
+  const status = statSync(cookiePath);
+  if (
+    linkStatus.isSymbolicLink() ||
+    !linkStatus.isFile() ||
+    status.nlink !== 1 ||
+    (typeof process.getuid === "function" && status.uid !== process.getuid()) ||
+    (status.mode & 0o777) !== 0o600
+  ) {
+    throw new Error("Server CLI session token file must be one current-user-owned 0600 regular file");
+  }
+  const raw = readFileSync(cookiePath, "utf8").trim();
+  const token = raw.startsWith("mc_session=") ? raw.slice("mc_session=".length) : raw;
+  if (!/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) {
+    throw new Error("Server CLI session token file does not contain one valid mc_session token");
+  }
+  return `mc_session=${token}`;
+}
+
+export async function callApi<T>(
+  endpoint: string,
+  method = "GET",
+  body?: unknown,
+  environment: Environment = process.env
+): Promise<ApiResponse<T>> {
+  const apiBase = resolveApiBase(environment);
+  const url = new URL(`${apiBase.pathname.replace(/\/$/, "")}${endpoint}`, apiBase);
+  const cookie = remoteSessionCookie(apiBase, environment);
   try {
     const response = await fetch(url, {
       method,
-      headers: body ? { "Content-Type": "application/json" } : undefined,
+      headers: {
+        ...(body ? { "Content-Type": "application/json" } : {}),
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
       body: body ? JSON.stringify(body) : undefined,
     });
 
-    const data = await response.json();
+    const data = (await response.json()) as ApiResponse<T>;
 
     if (!response.ok) {
-      throw new Error(data.error || `HTTP error! status: ${response.status}`);
+      throw new Error(data.error || `API returned HTTP ${response.status}`);
     }
 
     return data;
   } catch (error) {
     if (error instanceof Error) {
+      if (error.message === "fetch failed") {
+        throw new Error(`Could not reach server API at ${url.origin}; verify the configured panel URL and network`);
+      }
       throw error;
     }
     throw new Error("An unknown error occurred");
@@ -119,6 +195,7 @@ async function handleBackups() {
 }
 
 async function main() {
+  loadServerCliEnvironment();
   const args = process.argv.slice(2);
   const command = args[0];
   const param = args[1];
@@ -170,4 +247,4 @@ async function main() {
   }
 }
 
-main();
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) void main();
