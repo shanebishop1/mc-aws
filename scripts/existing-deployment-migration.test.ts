@@ -88,7 +88,7 @@ describe("dual-v1 rolling deployment compatibility", () => {
   });
 
   it("requires Worker-first rollback and refuses to report completion while either lifecycle lock remains active", () => {
-    const recoverySource = readFileSync(path.resolve("scripts/deploy-cloudflare.sh"), "utf8");
+    const recoverySource = readFileSync(path.resolve("scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
     const guide = readFileSync(path.resolve("docs/OPERATIONS_GUIDE.md"), "utf8");
     expect(recoverySource.indexOf("restore_recorded_routes || return 1")).toBeLessThan(
       recoverySource.indexOf("assert_lifecycle_recovery_unblocked || return 1")

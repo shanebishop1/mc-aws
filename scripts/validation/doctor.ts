@@ -4,7 +4,7 @@ import path from "node:path";
 import dotenv from "dotenv";
 import type { EnvSchemaValidationIssue, RuntimeTarget } from "../../lib/runtime-config-schema";
 import { validateEnvForTarget, validateRuntimeStateWranglerConfig } from "../../lib/runtime-config-schema";
-import { parseJsoncObject } from "../wrangler-config";
+import { parseJsoncObject } from "../cloudflare/wrangler-config";
 
 type CheckLevel = "pass" | "warn" | "fail";
 
@@ -293,7 +293,9 @@ const reportWranglerConfig = () => {
       if (level === "fail") {
         addFail(`wrangler.jsonc: ${error}`);
       } else {
-        addWarn(`wrangler.jsonc: ${error} deploy-cloudflare.sh will replace these ids during deploy.`);
+        addWarn(
+          `wrangler.jsonc: ${error} scripts/cloudflare/deploy-cloudflare.sh will replace these ids during deploy.`
+        );
       }
     }
   } catch (error) {

@@ -790,7 +790,7 @@ collect_dns_mode() {
 }
 
 get_worker_name() {
-  pnpm exec tsx scripts/wrangler-config.ts worker-name wrangler.jsonc
+  pnpm exec tsx scripts/cloudflare/wrangler-config.ts worker-name wrangler.jsonc
 }
 
 collect_panel_hosting() {
@@ -817,7 +817,7 @@ collect_panel_hosting() {
       while true; do
         prompt workers_input "Enter Workers account subdomain or full panel URL" "${CLOUDFLARE_WORKERS_SUBDOMAIN:-}"
         local derived
-        if derived=$(pnpm exec tsx scripts/panel-hosting.ts derive-workers-url \
+        if derived=$(pnpm exec tsx scripts/cloudflare/panel-hosting.ts derive-workers-url \
           --worker-name "$worker_name" --input "$workers_input" 2>/dev/null); then
           IFS=$'\t' read -r CLOUDFLARE_WORKERS_SUBDOMAIN NEXT_PUBLIC_APP_URL <<< "$derived"
           break
@@ -835,7 +835,7 @@ collect_panel_hosting() {
       while true; do
         prompt NEXT_PUBLIC_APP_URL "Enter full custom control panel URL" "${NEXT_PUBLIC_APP_URL:-}"
         local validated_custom_url
-        if validated_custom_url=$(pnpm exec tsx scripts/panel-hosting.ts validate-custom-url \
+        if validated_custom_url=$(pnpm exec tsx scripts/cloudflare/panel-hosting.ts validate-custom-url \
           --url "$NEXT_PUBLIC_APP_URL" 2>/dev/null); then
           NEXT_PUBLIC_APP_URL="$validated_custom_url"
           break

@@ -6,7 +6,7 @@ import { deployOnlyIgnoredSecretNames } from "./deploy-env";
 
 describe("deployment credential boundary", () => {
   it("excludes local human AWS credentials from the general Worker secret uploader", () => {
-    const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
+    const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
     expect(workerSecretAllowlist).not.toContain("AWS_ACCESS_KEY_ID");
     expect(workerSecretAllowlist).not.toContain("AWS_SECRET_ACCESS_KEY");
@@ -15,8 +15,8 @@ describe("deployment credential boundary", () => {
     expect(deployOnlyIgnoredSecretNames.has("AWS_SECRET_ACCESS_KEY")).toBe(true);
     expect(deployOnlyIgnoredSecretNames.has("AWS_SESSION_TOKEN")).toBe(true);
     expect(deploySource).toContain("env -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN");
-    expect(deploySource).toContain("deploy-env.ts sanitize-build-env");
-    expect(deploySource).toContain("bash scripts/rotate-worker-runtime-key.sh");
+    expect(deploySource).toContain("scripts/cloudflare/deploy-env.ts sanitize-build-env");
+    expect(deploySource).toContain("bash scripts/cloudflare/rotate-worker-runtime-key.sh");
   });
 
   it("uses the local AWS CLI session instead of collecting human keys in the setup wizard", () => {
@@ -31,7 +31,7 @@ describe("deployment credential boundary", () => {
   });
 
   it("keeps deploy and panel-route credentials out of Worker secrets and build input", () => {
-    const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
+    const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
     expect(workerSecretAllowlist).not.toContain("CLOUDFLARE_API_TOKEN");
     expect(workerSecretAllowlist).not.toContain("CLOUDFLARE_PANEL_DNS_API_TOKEN");
@@ -40,7 +40,7 @@ describe("deployment credential boundary", () => {
     expect(deployOnlyIgnoredSecretNames.has("CLOUDFLARE_DEPLOY_API_TOKEN")).toBe(true);
     expect(deployOnlyIgnoredSecretNames.has("CLOUDFLARE_PANEL_DNS_API_TOKEN")).toBe(true);
     expect(deployOnlyIgnoredSecretNames.has("PANEL_DNS_MANAGEMENT")).toBe(true);
-    expect(deploySource).toContain("deploy-env.ts worker-secret-entries");
+    expect(deploySource).toContain("scripts/cloudflare/deploy-env.ts worker-secret-entries");
     expect(deploySource).toContain("put_secret_base64");
   });
 
@@ -54,7 +54,7 @@ describe("deployment credential boundary", () => {
   });
 
   it("uses the shell deploy token only as an external-mode route API fallback and preserves DNS", () => {
-    const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
+    const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
     expect(deploySource).toContain('PANEL_DNS_MANAGEMENT" == "external" && -z "$CF_DNS_API_TOKEN"');
     expect(deploySource).toContain('CF_DNS_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN"');

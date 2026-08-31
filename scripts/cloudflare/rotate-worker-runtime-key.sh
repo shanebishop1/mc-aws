@@ -68,7 +68,7 @@ resolve_worker_name() {
     return
   fi
 
-  pnpm exec tsx scripts/wrangler-config.ts worker-name "$WRANGLER_SOURCE_CONFIG_FILE"
+  pnpm exec tsx scripts/cloudflare/wrangler-config.ts worker-name "$WRANGLER_SOURCE_CONFIG_FILE"
 }
 
 resolve_runtime_user_name() {
@@ -146,7 +146,7 @@ update_manifest_worker_identity_best_effort() {
 const fs=require("node:fs"); const raw=fs.readFileSync(0,"utf8"); const start=raw.indexOf("{"); if(start<0) process.exit(2);
 const deployment=JSON.parse(raw.slice(start)); if(typeof deployment.id!=="string") process.exit(2); process.stdout.write(deployment.id);
 ' 2>/dev/null)" || return 0
-  MC_AWS_DEPLOYMENT_MANIFEST="$manifest_file" node scripts/deployment-manifest.mjs \
+  MC_AWS_DEPLOYMENT_MANIFEST="$manifest_file" node scripts/shared/deployment-manifest.mjs \
     cloudflare-deployed --deployment-id "$deployment_id" >/dev/null 2>&1 || true
 }
 

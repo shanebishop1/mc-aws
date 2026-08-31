@@ -54,7 +54,7 @@
     "docs:check": "tsx scripts/validation/validate-docs-consistency.ts",
     "release:prepare": "tsx scripts/release/prepare-release.ts",
     "preview:cf": "opennextjs-cloudflare build && wrangler dev",
-    "deploy:cf": "./scripts/deploy-cloudflare.sh",
+    "deploy:cf": "./scripts/cloudflare/deploy-cloudflare.sh",
     "cdk:version": "cd infra && cdk --version",
     "cdk:list": "cd infra && cdk list",
     "cdk:synth": "cd infra && cdk synth",

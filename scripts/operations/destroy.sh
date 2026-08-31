@@ -115,7 +115,7 @@ require_executable "$CURL_BIN"
   exit 1
 }
 
-if ! MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" validate >/dev/null; then
+if ! MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" validate >/dev/null; then
   error "Manifest validation failed; refusing teardown"
   exit 1
 fi
@@ -127,7 +127,7 @@ refresh_manifest_digest() {
 }
 
 assert_manifest_unchanged() {
-  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" validate >/dev/null || {
+  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" validate >/dev/null || {
     error "Manifest security/schema validation changed during teardown; refusing further mutation"
     exit 1
   }
@@ -298,7 +298,7 @@ process.exit(d.success===false && Array.isArray(d.errors) && d.errors.some((erro
 
 mark_complete() {
   assert_manifest_unchanged
-  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" \
     mark-complete --resource "$1" >/dev/null
   refresh_manifest_digest
 }
@@ -459,7 +459,7 @@ process.exit(d.CommandId===process.env.EXPECTED_COMMAND && d.InstanceId===proces
       fi
       if [[ "$DATA_PRESERVATION_MODE" == "snapshot" ]]; then
         assert_manifest_unchanged
-        MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+        MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" \
           snapshot-scrub --volume-id "$expected_root_volume" --completed-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" >/dev/null
         refresh_manifest_digest
         log "  ✅ Scrubbed reusable Google Drive/rclone credentials before snapshot"
@@ -567,7 +567,7 @@ process.stdout.write(`${cache.backups.length}\t${cache.cachedAt}`);
   }
   IFS=$'\t' read -r backup_count backup_cached_at <<< "$backup_line"
   assert_manifest_unchanged
-  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" \
     google-drive-backup --backup-count "$backup_count" --cached-at "$backup_cached_at" --observed-at "$observed_at" >/dev/null
   refresh_manifest_digest
   log "  ✅ Recorded Google Drive cache evidence: $backup_count backup(s), cachedAt=$backup_cached_at"
@@ -799,7 +799,7 @@ process.exit(v?.VolumeId===process.env.EXPECTED_VOLUME&&v.State==="available"&&(
         return 1
       fi
       assert_manifest_unchanged
-      MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+      MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" \
         final-snapshot --snapshot-id "$pending_snapshot_id" --volume-id "$root_volume_id" \
         --created-at "$pending_snapshot_created_at" >/dev/null
       refresh_manifest_digest
@@ -836,7 +836,7 @@ process.stdout.write(JSON.stringify([{ResourceType:"snapshot",Tags:[
   }
   snapshot_id="$(printf '%s' "$create_json" | "$NODE_BIN" -e 'const d=JSON.parse(require("node:fs").readFileSync(0,"utf8")); if(!d.SnapshotId) process.exit(1); process.stdout.write(d.SnapshotId)')" || return 1
   assert_manifest_unchanged
-  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" \
     pending-final-snapshot --snapshot-id "$snapshot_id" --volume-id "$root_volume_id" --created-at "$observed_at" >/dev/null
   refresh_manifest_digest
   log "  ⏳ Waiting for final root snapshot to complete: $snapshot_id"
@@ -849,7 +849,7 @@ process.stdout.write(JSON.stringify([{ResourceType:"snapshot",Tags:[
     return 1
   fi
   assert_manifest_unchanged
-  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/deployment-manifest.mjs" \
+  MC_AWS_DEPLOYMENT_MANIFEST="$MANIFEST_FILE" "$NODE_BIN" "$ROOT_DIR/scripts/shared/deployment-manifest.mjs" \
     final-snapshot --snapshot-id "$snapshot_id" --volume-id "$root_volume_id" --created-at "$observed_at" >/dev/null
   refresh_manifest_digest
   log "  ✅ Final root snapshot completed and recorded: $snapshot_id"

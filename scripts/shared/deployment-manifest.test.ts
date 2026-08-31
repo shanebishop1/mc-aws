@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const rootDir = path.resolve(process.cwd());
-const script = path.join(rootDir, "scripts/deployment-manifest.mjs");
+const script = path.join(rootDir, "scripts/shared/deployment-manifest.mjs");
 const directories: string[] = [];
 const account = "123456789012";
 const region = "us-east-1";

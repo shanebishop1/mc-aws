@@ -155,7 +155,7 @@ jobs:
           rm -rf .next .open-next
           ci_wrangler_config=".wrangler.ci.jsonc"
           trap 'rm -f "$ci_wrangler_config"' EXIT
-          pnpm exec tsx scripts/panel-hosting.ts prepare-config \
+          pnpm exec tsx scripts/cloudflare/panel-hosting.ts prepare-config \
             --source wrangler.jsonc \
             --output "$ci_wrangler_config" \
             --kv-id 00000000000000000000000000000000 \

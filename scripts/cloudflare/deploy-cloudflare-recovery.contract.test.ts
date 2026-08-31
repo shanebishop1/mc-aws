@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Cloudflare deployment recovery contract", () => {
-  const source = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
+  const source = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
   it("records all recoverable identities before the first provider mutation", () => {
     const routeInventory = source.lastIndexOf("capture_panel_route_before_deploy\n");
