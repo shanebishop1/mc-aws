@@ -8,11 +8,7 @@ export default defineConfig({
     environment: "node", // Use node for API route tests
     globals: true,
     include: ["**/*.test.ts", "**/*.test.tsx"],
-    exclude: [
-      "**/node_modules/**",
-      "**/lib/aws/mock-provider-costs-stack.test.ts",
-      "**/lib/aws/mock-state-store.test.ts",
-    ],
+    exclude: ["**/node_modules/**"],
     setupFiles: ["./tests/setup.ts"],
   },
   resolve: {
