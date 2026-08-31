@@ -623,7 +623,7 @@ main() {
 
   (
     unset CLOUDFLARE_API_TOKEN
-    run_with_mise pnpm exec tsx scripts/migrate-existing-deployment.ts \
+    run_with_mise pnpm exec tsx scripts/aws/migrate-existing-deployment.ts \
       --assert-standard-deploy-safe \
       --account "$CDK_DEFAULT_ACCOUNT" \
       --stack-name "$STACK_NAME" \

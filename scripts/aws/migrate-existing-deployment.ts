@@ -58,7 +58,7 @@ interface Options {
   envFile: string;
 }
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const INFRA_DIR = path.join(ROOT, "infra");
 const BRIDGE_DESCRIPTION = "mc-aws existing-deployment bridge: retain legacy SES removals and pin live EC2 instance";
 const RETENTION_DESCRIPTION = "mc-aws existing-deployment stage 1: retain legacy SES resources";

@@ -143,7 +143,9 @@ describe("setup immutable AMI integration", () => {
     expect(source).toContain("scripts/setup/pin-al2023-ami.ts ensure");
     expect(source).toContain('--env-file "$PRODUCTION_ENV_FILE"');
     expect(source).toContain('--env-file "$LOCAL_ENV_FILE"');
-    expect(source.indexOf("ensure_al2023_ami_pin")).toBeLessThan(source.indexOf("migrate-existing-deployment.ts"));
+    expect(source.indexOf("ensure_al2023_ami_pin")).toBeLessThan(
+      source.indexOf("scripts/aws/migrate-existing-deployment.ts")
+    );
   });
 
   it("persists both dual-v1 table outputs before any Worker deployment", () => {
