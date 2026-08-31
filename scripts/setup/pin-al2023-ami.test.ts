@@ -48,7 +48,7 @@ if (args.includes("get-parameter")) {
     spawnSync(
       path.join(rootDir, "node_modules/.bin/tsx"),
       [
-        "scripts/pin-al2023-ami.ts",
+        "scripts/setup/pin-al2023-ami.ts",
         command,
         "--region",
         "us-west-1",

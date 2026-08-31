@@ -2,9 +2,13 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { LOCAL_PROFILE_DIRECTORY, resolveServerProfileDirectory, validateServerProfile } from "../lib/server-profile";
+import {
+  LOCAL_PROFILE_DIRECTORY,
+  resolveServerProfileDirectory,
+  validateServerProfile,
+} from "../../lib/server-profile";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const command = process.argv[2] ?? "validate";
 
 try {

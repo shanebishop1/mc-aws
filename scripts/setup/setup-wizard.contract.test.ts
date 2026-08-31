@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const setupWizardPath = path.resolve(process.cwd(), "scripts/setup-wizard.sh");
+const setupWizardPath = path.resolve(process.cwd(), "scripts/setup/setup-wizard.sh");
 
 describe("setup-wizard email optional contract", () => {
   it("collects disabled, notifications-only, inbound-only, and combined SES modes", () => {
@@ -40,7 +40,7 @@ describe("setup-wizard email optional contract", () => {
       "bash",
       [
         "-c",
-        'source scripts/setup-wizard.sh; START_KEYWORD="$EXISTING_KEYWORD"; prompt START_KEYWORD "Enter private start keyword" "$START_KEYWORD" true; [[ "$START_KEYWORD" == "$EXISTING_KEYWORD" ]] && printf preserved',
+        'source scripts/setup/setup-wizard.sh; START_KEYWORD="$EXISTING_KEYWORD"; prompt START_KEYWORD "Enter private start keyword" "$START_KEYWORD" true; [[ "$START_KEYWORD" == "$EXISTING_KEYWORD" ]] && printf preserved',
       ],
       {
         cwd: process.cwd(),
@@ -95,7 +95,7 @@ describe("setup-wizard panel hosting contract", () => {
         "bash",
         [
           "-c",
-          `source scripts/setup-wizard.sh; if validate_cloudflare_zone_id_format "${zoneId}"; then printf valid; else printf invalid; fi`,
+          `source scripts/setup/setup-wizard.sh; if validate_cloudflare_zone_id_format "${zoneId}"; then printf valid; else printf invalid; fi`,
         ],
         {
           cwd: process.cwd(),
@@ -143,7 +143,7 @@ fi
         "bash",
         [
           "-c",
-          "source scripts/setup-wizard.sh; validate_cloudflare_route_access token 0123456789abcdef0123456789abcdef",
+          "source scripts/setup/setup-wizard.sh; validate_cloudflare_route_access token 0123456789abcdef0123456789abcdef",
         ],
         {
           cwd: process.cwd(),

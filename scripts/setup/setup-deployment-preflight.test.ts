@@ -35,7 +35,7 @@ describe("public setup deployment preflight", () => {
       setupSource.indexOf("# Reload env")
     );
     const awsIdentity = setupSource.indexOf("if ! ensure_cdk_defaults", envReload);
-    const sesPreflight = setupSource.indexOf("scripts/ses-preflight.ts", awsIdentity);
+    const sesPreflight = setupSource.indexOf("scripts/setup/ses-preflight.ts", awsIdentity);
 
     expect(envReload).toBeGreaterThan(-1);
     expect(awsIdentity).toBeGreaterThan(envReload);
@@ -57,7 +57,7 @@ describe("public setup deployment preflight", () => {
   it("guards and confirms before DNS mutation and never forwards removed token parameters", () => {
     const guard = setupSource.indexOf("--assert-standard-deploy-safe");
     const confirmation = setupSource.indexOf("print_deployment_preflight", guard);
-    const materialize = setupSource.indexOf("scripts/materialize-dns-secrets.ts", confirmation);
+    const materialize = setupSource.indexOf("scripts/setup/materialize-dns-secrets.ts", confirmation);
     const deploy = setupSource.indexOf("pnpm exec cdk deploy", materialize);
 
     expect(guard).toBeGreaterThan(-1);

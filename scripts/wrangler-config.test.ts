@@ -27,8 +27,12 @@ describe("shared Wrangler JSONC parser", () => {
         encoding: "utf8",
       })
     ).toBe("mc-aws-panel");
-    for (const file of ["deploy-cloudflare.sh", "rotate-worker-runtime-key.sh", "setup-wizard.sh"]) {
-      expect(readFileSync(path.resolve("scripts", file), "utf8")).toContain("scripts/wrangler-config.ts worker-name");
+    for (const file of [
+      "scripts/deploy-cloudflare.sh",
+      "scripts/rotate-worker-runtime-key.sh",
+      "scripts/setup/setup-wizard.sh",
+    ]) {
+      expect(readFileSync(path.resolve(file), "utf8")).toContain("scripts/wrangler-config.ts worker-name");
     }
   });
 });

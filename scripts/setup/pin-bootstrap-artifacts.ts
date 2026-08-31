@@ -7,7 +7,7 @@ import {
   bootstrapPinsFingerprint,
   bootstrapUserDataBindings,
   validateBootstrapPins,
-} from "../lib/bootstrap-pins";
+} from "../../lib/bootstrap-pins";
 
 const configPath = path.resolve("config/bootstrap-pins.json");
 const userDataPath = path.resolve("infra/src/ec2/user_data.sh");

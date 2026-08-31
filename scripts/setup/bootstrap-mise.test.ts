@@ -62,7 +62,7 @@ cp ${JSON.stringify(binary)} "$output"
     { mode: 0o755 }
   );
   chmodSync(curl, 0o755);
-  const result = spawnSync("bash", ["scripts/bootstrap-mise.sh", "install"], {
+  const result = spawnSync("bash", ["scripts/setup/bootstrap-mise.sh", "install"], {
     cwd: root,
     encoding: "utf8",
     env: {
@@ -83,13 +83,15 @@ describe("pinned mise bootstrap", () => {
   it("runs before any credential environment file is loaded and has no mutable curl pipe", () => {
     const setup = readFileSync(path.join(root, "setup.sh"), "utf8");
     const main = setup.slice(setup.indexOf("main()"));
-    expect(main.indexOf("bootstrap-mise.sh install")).toBeGreaterThan(-1);
-    expect(main.indexOf("bootstrap-mise.sh install")).toBeLessThan(main.indexOf("maybe_confirm_existing_credentials"));
+    expect(main.indexOf("scripts/setup/bootstrap-mise.sh install")).toBeGreaterThan(-1);
+    expect(main.indexOf("scripts/setup/bootstrap-mise.sh install")).toBeLessThan(
+      main.indexOf("maybe_confirm_existing_credentials")
+    );
     expect(main.indexOf("mise install")).toBeLessThan(main.indexOf("maybe_confirm_existing_credentials"));
     expect(main.indexOf("pnpm install --frozen-lockfile")).toBeLessThan(
       main.indexOf("maybe_confirm_existing_credentials")
     );
-    expect(main.indexOf("bootstrap-mise.sh install")).toBeLessThan(
+    expect(main.indexOf("scripts/setup/bootstrap-mise.sh install")).toBeLessThan(
       main.indexOf('load_env_file "$PRODUCTION_ENV_FILE"')
     );
     expect(main).toContain('env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}"');
