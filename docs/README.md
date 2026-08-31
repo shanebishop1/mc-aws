@@ -8,6 +8,7 @@
 - [AWS credential boundary](AWS_CREDENTIALS_SETUP.md)
 - [Server profiles](SERVER_PROFILES.md)
 - [Operations](OPERATIONS_GUIDE.md)
+- [Cloudflare deployment recovery](CLOUDFLARE_DEPLOYMENT_RECOVERY.md)
 - [Reviewed bootstrap and OS upgrades](BOOTSTRAP_UPGRADES.md)
 - [Teardown](TEARDOWN.md)
 - [Existing Deployment Migration](EXISTING_DEPLOYMENT_MIGRATION.md)

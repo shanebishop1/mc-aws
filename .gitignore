@@ -1,6 +1,5 @@
 **/node_modules/
 **/.DS_Store
-.env
 cdk.out
 cdk.context.json
 **/env.json
@@ -9,7 +8,6 @@ cdk.context.json
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
 
 # dependencies
-/node_modules
 /.pnp
 .pnp.*
 .yarn/*
@@ -31,7 +29,6 @@ test-results/
 /build
 
 # misc
-.DS_Store
 *.pem
 
 # debug
@@ -72,7 +69,14 @@ tests/*-results.txt
 *.tsbuildinfo
 next-env.d.ts
 .open-next
-frontend/.next
 
-.agents/
+/artifacts/
+/.wrangler/
+/.beads/
+/.opencode/
+/.local-docs/
+/.agent/
+/.agents/
+/.crush/
+/.claude/settings.local.json
 AGENTS.md
