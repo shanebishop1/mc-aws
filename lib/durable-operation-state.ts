@@ -394,10 +394,14 @@ function parseDurableOperationState(raw: string | null): DurableOperationState |
   }
 }
 
+function isMockBackendMode(): boolean {
+  return process.env.MC_BACKEND_MODE?.trim().toLowerCase() === "mock";
+}
+
 function shouldUseInMemoryStore(): boolean {
   // Mock mode uses the provider-backed SSM store so API routes and simulated
   // Lambda completions observe the same operation record across module reloads.
-  if (process.env.MC_BACKEND_MODE === "mock") {
+  if (isMockBackendMode()) {
     return false;
   }
 
@@ -418,6 +422,15 @@ function shouldUseInMemoryStore(): boolean {
     typeof awsModule.deleteParameter !== "function" ||
     typeof awsModule.listParametersByPath !== "function"
   );
+}
+
+function shouldUseVersionedOperationStore(): boolean {
+  // Local mock mode must keep operation records beside its lifecycle lock in
+  // the mock SSM store. Next dev loads deployment table names from .env even
+  // when MC_BACKEND_MODE=mock; honoring those names splits the operation and
+  // lock identities across stores, so the simulated Lambda rejects a fresh
+  // delivery as stale. AWS mode retains the versioned DynamoDB path.
+  return !isMockBackendMode() && Boolean(process.env.MC_OPERATION_STATE_TABLE_NAME?.trim());
 }
 
 async function readRawOperationState(parameterName: string): Promise<string | null> {
@@ -837,7 +850,7 @@ async function persistInMemoryOperationStateTransition(
 }
 
 function assertInMemoryOperationStateWritesAllowed(): void {
-  if (!shouldUseInMemoryStore() && process.env.MC_BACKEND_MODE !== "mock") {
+  if (!shouldUseInMemoryStore() && !isMockBackendMode()) {
     throw new Error("MC_OPERATION_STATE_TABLE_NAME is required for durable operation state writes");
   }
 }
@@ -847,7 +860,7 @@ export async function persistDurableOperationStateTransition(
 ): Promise<DurableOperationState> {
   const now = input.timestamp ?? new Date().toISOString();
   const parameterName = getOperationStateParameterName(input.operationId);
-  if (!process.env.MC_OPERATION_STATE_TABLE_NAME?.trim()) {
+  if (!shouldUseVersionedOperationStore()) {
     assertInMemoryOperationStateWritesAllowed();
     return await persistInMemoryOperationStateTransition(input, parameterName, now);
   }
@@ -1003,14 +1016,14 @@ export async function expireAcceptedDispatchIfDeadlineElapsed(
   const timestamp = now.toISOString();
   const parameterName = getOperationStateParameterName(operationId);
   const input = { operationId, parameterName, nowMs, timestamp };
-  return process.env.MC_OPERATION_STATE_TABLE_NAME?.trim()
+  return shouldUseVersionedOperationStore()
     ? await expireAcceptedDispatchInDynamoDb(input)
     : await expireAcceptedDispatchInMemory(input);
 }
 
 export async function getDurableOperationState(operationId: string): Promise<DurableOperationState | null> {
   const parameterName = getOperationStateParameterName(operationId);
-  if (process.env.MC_OPERATION_STATE_TABLE_NAME?.trim()) {
+  if (shouldUseVersionedOperationStore()) {
     const record = await readVersionedOperationRecord(operationId);
     if (record) {
       const parsed = parseDurableOperationState(record.payload);

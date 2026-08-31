@@ -313,38 +313,42 @@ describe("DynamoDB server action lock", () => {
     expect(command.input.ConditionExpression).toContain("leaseExpiresAt >= :now");
   });
 
-  it("stores mock locks in the shared provider state and releases only the matching fence", async () => {
-    vi.stubEnv("MC_BACKEND_MODE", "mock");
-    const storedLock = {
-      lockId: "lock-a",
-      fencingToken: 5,
-      action: "backup",
-      ownerEmail: "admin@example.com",
-      createdAt: "2026-04-13T12:00:00.000Z",
-      expiresAt: "2026-04-13T13:30:00.000Z",
-    };
-    mocks.acquireLifecycleLock.mockResolvedValueOnce({ acquired: true, lock: storedLock });
-
-    const lock = await acquireServerActionLock("backup", "ADMIN@example.com");
-
-    expect(lock).toMatchObject({ lockId: "lock-a", fencingToken: 5, ownerEmail: "admin@example.com" });
-    expect(mocks.acquireLifecycleLock).toHaveBeenCalledWith(
-      expect.objectContaining({ lockId: "lock-a", ownerEmail: "admin@example.com" }),
-      Date.parse("2026-04-13T12:00:00.000Z")
-    );
-
-    await expect(
-      releaseServerActionLock(lock.lockId, {
+  it.each(["mock", "MOCK", " mock "])(
+    "stores %j-mode locks in shared provider state and releases only the matching fence",
+    async (backendMode) => {
+      vi.stubEnv("MC_BACKEND_MODE", backendMode);
+      const storedLock = {
+        lockId: "lock-a",
+        fencingToken: 5,
         action: "backup",
         ownerEmail: "admin@example.com",
-        fencingToken: lock.fencingToken,
-      })
-    ).resolves.toBe(true);
-    expect(mocks.releaseLifecycleLock).toHaveBeenCalledWith({
-      lockId: "lock-a",
-      fencingToken: 5,
-      action: "backup",
-      ownerEmail: "admin@example.com",
-    });
-  });
+        createdAt: "2026-04-13T12:00:00.000Z",
+        expiresAt: "2026-04-13T13:30:00.000Z",
+      };
+      mocks.acquireLifecycleLock.mockResolvedValueOnce({ acquired: true, lock: storedLock });
+
+      const lock = await acquireServerActionLock("backup", "ADMIN@example.com");
+
+      expect(lock).toMatchObject({ lockId: "lock-a", fencingToken: 5, ownerEmail: "admin@example.com" });
+      expect(mocks.acquireLifecycleLock).toHaveBeenCalledWith(
+        expect.objectContaining({ lockId: "lock-a", ownerEmail: "admin@example.com" }),
+        Date.parse("2026-04-13T12:00:00.000Z")
+      );
+
+      await expect(
+        releaseServerActionLock(lock.lockId, {
+          action: "backup",
+          ownerEmail: "admin@example.com",
+          fencingToken: lock.fencingToken,
+        })
+      ).resolves.toBe(true);
+      expect(mocks.releaseLifecycleLock).toHaveBeenCalledWith({
+        lockId: "lock-a",
+        fencingToken: 5,
+        action: "backup",
+        ownerEmail: "admin@example.com",
+      });
+      expect(mocks.send).not.toHaveBeenCalled();
+    }
+  );
 });
