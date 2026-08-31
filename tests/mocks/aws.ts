@@ -25,36 +25,3 @@ export const mockDescribeInstances = (instances: unknown[], once = true) => {
     mockEC2Client.send.mockResolvedValue(response);
   }
 };
-
-/**
- * Helper to mock SSM GetParameter response
- */
-export const mockGetParameter = (value: string, once = true) => {
-  const response = {
-    Parameter: { Value: value },
-  };
-  if (once) {
-    mockSSMClient.send.mockResolvedValueOnce(response);
-  } else {
-    mockSSMClient.send.mockResolvedValue(response);
-  }
-};
-
-/**
- * Helper to mock SSM SendCommand response
- */
-export const mockSendCommand = (commandId: string) => {
-  mockSSMClient.send.mockResolvedValueOnce({
-    Command: { CommandId: commandId },
-  });
-};
-
-/**
- * Helper to mock SSM GetCommandInvocation response
- */
-export const mockGetCommandInvocation = (status: string, output: string) => {
-  mockSSMClient.send.mockResolvedValueOnce({
-    Status: status,
-    StandardOutputContent: output,
-  });
-};

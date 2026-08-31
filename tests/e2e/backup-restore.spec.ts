@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { confirmDialog, expectErrorMessage, expectSuccessMessage, waitForPageLoad } from "./helpers";
+import { expectSuccessMessage, waitForPageLoad } from "./helpers";
 import { setMockParameter, setupRunningScenario } from "./setup";
 
 test.describe("Backup and Restore", () => {
