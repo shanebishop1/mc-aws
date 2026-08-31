@@ -29,7 +29,7 @@ describe("standard CDK deployment orchestration", () => {
     expect(commands[0].args).toEqual([
       "exec",
       "tsx",
-      "scripts/migrate-existing-deployment.ts",
+      "scripts/aws/migrate-existing-deployment.ts",
       "--assert-standard-deploy-safe",
       "--account",
       "123456789012",

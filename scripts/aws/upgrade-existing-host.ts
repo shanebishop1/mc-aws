@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { config as loadDotenv } from "dotenv";
-import { bootstrapPinsFingerprint, validateBootstrapPins } from "../lib/bootstrap-pins";
+import { bootstrapPinsFingerprint, validateBootstrapPins } from "../../lib/bootstrap-pins";
 import {
   type CloudFormationTemplate,
   INSTANCE_LOGICAL_ID,
@@ -55,7 +55,7 @@ interface UpgradeState {
   quiescenceLockValue?: string;
 }
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const INFRA = path.join(ROOT, "infra");
 const STATE_PATH = path.resolve(process.env.MC_AWS_HOST_UPGRADE_STATE || ".mc-aws-host-upgrade.json");
 const PINS = validateBootstrapPins(

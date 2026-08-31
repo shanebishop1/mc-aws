@@ -5,9 +5,9 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as dotenv from "dotenv";
-import { materializeDnsSecrets } from "./setup/materialize-dns-secrets";
+import { materializeDnsSecrets } from "../setup/materialize-dns-secrets";
 
-const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const CDK_TARGET_VARIABLES = ["CDK_DEFAULT_ACCOUNT", "CDK_DEFAULT_REGION"] as const;
 
 interface DeployTarget {
@@ -92,7 +92,7 @@ export async function orchestrateCdkDeploy(
     [
       "exec",
       "tsx",
-      "scripts/migrate-existing-deployment.ts",
+      "scripts/aws/migrate-existing-deployment.ts",
       "--assert-standard-deploy-safe",
       "--account",
       target.account,

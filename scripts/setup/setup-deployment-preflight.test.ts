@@ -41,7 +41,7 @@ describe("public setup deployment preflight", () => {
     expect(awsIdentity).toBeGreaterThan(envReload);
     expect(sesPreflight).toBeGreaterThan(awsIdentity);
     expect(sesPreflight).toBeLessThan(setupSource.indexOf("ensure_al2023_ami_pin", sesPreflight));
-    expect(sesPreflight).toBeLessThan(setupSource.indexOf("migrate-existing-deployment.ts", sesPreflight));
+    expect(sesPreflight).toBeLessThan(setupSource.indexOf("scripts/aws/migrate-existing-deployment.ts", sesPreflight));
     expect(sesPreflight).toBeLessThan(
       setupSource.indexOf("scripts/shared/deployment-manifest.mjs aws-init", sesPreflight)
     );

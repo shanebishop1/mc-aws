@@ -74,7 +74,7 @@ describe("dual-v1 rolling deployment compatibility", () => {
     const stackSource = readFileSync(path.resolve("infra/lib/minecraft-stack.ts"), "utf8");
     const workerLockSource = readFileSync(path.resolve("lib/server-action-lock.ts"), "utf8");
     const lambdaSource = readFileSync(path.resolve("infra/src/lambda/StartMinecraftServer/index.js"), "utf8");
-    const migrationCli = readFileSync(path.resolve("scripts/migrate-existing-deployment.ts"), "utf8");
+    const migrationCli = readFileSync(path.resolve("scripts/aws/migrate-existing-deployment.ts"), "utf8");
 
     expect(stackSource).toContain("startLambda.node.addDependency(migrateLockResource)");
     expect(stackSource).toContain('new cdk.CfnOutput(this, "LifecycleLockTableName"');
@@ -197,7 +197,10 @@ const volumeResponse = (tags = ownershipTags) => ({
 
 describe("existing deployment migration template contracts", () => {
   it("revalidates legacy dependencies against the exact pending template before bridge execution", () => {
-    const commandSource = readFileSync(path.resolve(process.cwd(), "scripts/migrate-existing-deployment.ts"), "utf8");
+    const commandSource = readFileSync(
+      path.resolve(process.cwd(), "scripts/aws/migrate-existing-deployment.ts"),
+      "utf8"
+    );
     const executeBridgeSource = commandSource.slice(
       commandSource.indexOf("function executeBridge("),
       commandSource.indexOf("function assertStandardDeploySafe(")
@@ -1017,10 +1020,10 @@ describe("existing deployment migration entry-point contract", () => {
 
   it("keeps migration dry-run by default and guards routine setup/CDK deployment", () => {
     const root = path.resolve(process.cwd());
-    const migrationCli = readFileSync(path.join(root, "scripts/migrate-existing-deployment.ts"), "utf8");
-    const migrationContracts = readFileSync(path.join(root, "scripts/existing-deployment-migration.ts"), "utf8");
+    const migrationCli = readFileSync(path.join(root, "scripts/aws/migrate-existing-deployment.ts"), "utf8");
+    const migrationContracts = readFileSync(path.join(root, "scripts/aws/existing-deployment-migration.ts"), "utf8");
     const packageJson = JSON.parse(readFileSync(path.join(root, "package.json"), "utf8"));
-    const deployOrchestrator = readFileSync(path.join(root, "scripts/deploy-cdk.ts"), "utf8");
+    const deployOrchestrator = readFileSync(path.join(root, "scripts/aws/deploy-cdk.ts"), "utf8");
     const setup = readFileSync(path.join(root, "setup.sh"), "utf8");
 
     expect(migrationCli).toContain('stage: "plan"');
@@ -1030,12 +1033,12 @@ describe("existing deployment migration entry-point contract", () => {
     expect(migrationCli).toContain('"describe-instance-attribute"');
     expect(migrationContracts).not.toContain("beforePreview");
     expect(migrationContracts).not.toContain("afterPreview");
-    expect(packageJson.scripts["cdk:deploy"]).toContain("scripts/deploy-cdk.ts");
+    expect(packageJson.scripts["cdk:deploy"]).toContain("scripts/aws/deploy-cdk.ts");
     expect(deployOrchestrator).toContain("--assert-standard-deploy-safe");
     expect(deployOrchestrator.indexOf("--assert-standard-deploy-safe")).toBeLessThan(
       deployOrchestrator.indexOf("dependencies.materialize")
     );
-    expect(setup).toContain("migrate-existing-deployment.ts");
+    expect(setup).toContain("scripts/aws/migrate-existing-deployment.ts");
     expect(setup).toContain("--assert-standard-deploy-safe");
   });
 
@@ -1045,7 +1048,7 @@ describe("existing deployment migration entry-point contract", () => {
     expect(() => assertExclusiveTaggingAcknowledged("plan", false, false)).not.toThrow();
     expect(() => assertExclusiveTaggingAcknowledged("retain", true, false)).not.toThrow();
 
-    const migrationCli = readFileSync(path.join(process.cwd(), "scripts/migrate-existing-deployment.ts"), "utf8");
+    const migrationCli = readFileSync(path.join(process.cwd(), "scripts/aws/migrate-existing-deployment.ts"), "utf8");
     expect(migrationCli).toContain('argument === "--confirm-exclusive-tagging"');
   });
 });
