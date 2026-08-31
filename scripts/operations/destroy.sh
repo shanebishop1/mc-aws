@@ -5,7 +5,7 @@
 
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 MANIFEST_FILE="${MC_AWS_DEPLOYMENT_MANIFEST:-$ROOT_DIR/.mc-aws-deployment.json}"
 ENV_FILE="${ENV_FILE:-$ROOT_DIR/.env.production}"
 AWS_CLI="${AWS_CLI:-aws}"
@@ -23,7 +23,7 @@ CONSENT_SSM_NAMES=()
 
 usage() {
   cat <<'EOF'
-Usage: scripts/destroy.sh [--execute] [--retain-final-snapshot] [--retain-gdrive-token-for-migration] [--confirm-absent-stack-data] [--consent-delete-ssm NAME] [--cleanup-local-env] [--manifest PATH]
+Usage: scripts/operations/destroy.sh [--execute] [--retain-final-snapshot] [--retain-gdrive-token-for-migration] [--confirm-absent-stack-data] [--consent-delete-ssm NAME] [--cleanup-local-env] [--manifest PATH]
 
 Default: live inventory and dry-run only; no resources or local files change.
   --execute            perform only ownership-verified deletion actions

@@ -2,7 +2,7 @@ import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { lstatSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import path from "node:path";
-import { type LambdaAssetId, lambdaAssetRuntimeFiles, markerFileName } from "../infra/lib/lambda-assets";
+import { type LambdaAssetId, lambdaAssetRuntimeFiles, markerFileName } from "../../infra/lib/lambda-assets";
 
 const assemblyDirectory = realpathSync(path.resolve(process.argv[2] || "infra/cdk.out"));
 const expectedAssetIds = new Set(Object.keys(lambdaAssetRuntimeFiles));

@@ -2,9 +2,9 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import dotenv from "dotenv";
-import type { EnvSchemaValidationIssue, RuntimeTarget } from "../lib/runtime-config-schema";
-import { validateEnvForTarget, validateRuntimeStateWranglerConfig } from "../lib/runtime-config-schema";
-import { parseJsoncObject } from "./wrangler-config";
+import type { EnvSchemaValidationIssue, RuntimeTarget } from "../../lib/runtime-config-schema";
+import { validateEnvForTarget, validateRuntimeStateWranglerConfig } from "../../lib/runtime-config-schema";
+import { parseJsoncObject } from "../wrangler-config";
 
 type CheckLevel = "pass" | "warn" | "fail";
 

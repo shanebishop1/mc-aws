@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 export type ReleaseInput = "major" | "minor" | "patch" | string;
 
@@ -82,8 +82,9 @@ export function main(args = process.argv.slice(2)): void {
     throw new Error("Usage: pnpm release:prepare <major|minor|patch|X.Y.Z>");
   }
 
-  const root = command("git", ["rev-parse", "--show-toplevel"]);
-  if (path.resolve(root) !== path.resolve(process.cwd())) {
+  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
+  const gitRoot = command("git", ["rev-parse", "--show-toplevel"]);
+  if (path.resolve(gitRoot) !== root || root !== path.resolve(process.cwd())) {
     throw new Error("Run release preparation from the repository root");
   }
   if (command("git", ["branch", "--show-current"]) !== "main") {

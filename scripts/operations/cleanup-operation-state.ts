@@ -127,7 +127,7 @@ export async function cleanupDynamoDbOperations(input: {
 
 function printUsage(): void {
   console.log(
-    "Usage: tsx scripts/cleanup-operation-state.ts [--dry-run] [--include-legacy-ssm|--legacy-ssm-only] [--retention-days=<days>] [--max-deletions=<count>]"
+    "Usage: tsx scripts/operations/cleanup-operation-state.ts [--dry-run] [--include-legacy-ssm|--legacy-ssm-only] [--retention-days=<days>] [--max-deletions=<count>]"
   );
 }
 

@@ -28,7 +28,7 @@ const baseLambdaValues: Record<string, string> = {
   MC_OPERATION_STATE_RETENTION_DAYS: "30",
 };
 
-describe("scripts/validate-env", () => {
+describe("scripts/validation/validate-env", () => {
   it("fails closed for production strict validation", () => {
     expect(() =>
       validateEnv({

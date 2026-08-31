@@ -6,8 +6,8 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import dotenv from "dotenv";
-import type { RuntimeTarget } from "../lib/runtime-config-schema";
-import { validateEnvForTarget } from "../lib/runtime-config-schema";
+import type { RuntimeTarget } from "../../lib/runtime-config-schema";
+import { validateEnvForTarget } from "../../lib/runtime-config-schema";
 
 const buildLifecycleEvents = new Set(["build", "prebuild", "deploy:cf", "preview:cf"]);
 
