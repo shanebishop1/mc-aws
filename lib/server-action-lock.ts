@@ -58,6 +58,10 @@ export class ServerActionLockConflictError extends Error {
   }
 }
 
+function isMockBackendMode(): boolean {
+  return process.env.MC_BACKEND_MODE?.trim().toLowerCase() === "mock";
+}
+
 function tableName(): string {
   const value = process.env.MC_LIFECYCLE_LOCK_TABLE_NAME?.trim();
   if (!value) throw new Error("MC_LIFECYCLE_LOCK_TABLE_NAME is required for lifecycle locking");
@@ -106,7 +110,7 @@ function parseLockItem(
 }
 
 async function assertBridgeMetadata(): Promise<void> {
-  if (process.env.MC_BACKEND_MODE === "mock") return;
+  if (isMockBackendMode()) return;
   const response = await getDynamoDbClient().send(
     new GetItemCommand({
       TableName: tableName(),
@@ -397,7 +401,7 @@ function isMatchingReleasedItem(
 
 export async function acquireServerActionLock(action: ServerActionType, ownerEmail: string): Promise<ServerActionLock> {
   if (!serverActions.has(action)) throw new Error(`Unsupported lifecycle action: ${action}`);
-  if (process.env.MC_BACKEND_MODE === "mock") {
+  if (isMockBackendMode()) {
     return await acquireMockLock(action, ownerEmail);
   }
   await assertBridgeMetadata();
@@ -461,7 +465,7 @@ export async function assertServerActionLockOwned(
   fencingToken: number,
   action: ServerActionType
 ): Promise<ServerActionLock> {
-  if (process.env.MC_BACKEND_MODE === "mock") {
+  if (isMockBackendMode()) {
     const mockLock = parseMockLock(await getParameter(legacyLockParameter));
     if (
       !mockLock ||
@@ -503,7 +507,7 @@ export async function assertServerActionLockOwned(
 }
 
 export async function renewServerActionLock(lockId: string, fencingToken: number): Promise<ServerActionLock> {
-  if (process.env.MC_BACKEND_MODE === "mock") {
+  if (isMockBackendMode()) {
     const now = Date.now();
     const renewed = await getMockStateStore().renewLifecycleLock(
       lockId,
@@ -560,7 +564,7 @@ export async function releaseServerActionLock(
 ): Promise<boolean> {
   const fencingToken = options?.fencingToken;
   if (!Number.isSafeInteger(fencingToken)) return false;
-  if (process.env.MC_BACKEND_MODE === "mock") {
+  if (isMockBackendMode()) {
     return await releaseMockLock(lockId, fencingToken as number, options);
   }
   const values: Record<string, AttributeValue> = {

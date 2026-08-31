@@ -10,6 +10,7 @@ vi.mock("@/lib/aws/dynamodb-operation-store", () => ({
 
 import {
   expireAcceptedDispatchIfDeadlineElapsed,
+  getDurableOperationState,
   persistDurableOperationStateTransition,
 } from "@/lib/durable-operation-state";
 
@@ -34,9 +35,37 @@ function operationPayload(overrides: Record<string, unknown> = {}): string {
 describe("cross-runtime DynamoDB operation compatibility", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.stubEnv("MC_BACKEND_MODE", "aws");
     vi.stubEnv("MC_OPERATION_STATE_TABLE_NAME", "operations-table");
     mocks.write.mockResolvedValue(6);
   });
+
+  it.each(["mock", "MOCK", " mock "])(
+    "keeps %j-mode operations in the provider store when deployment table names are loaded",
+    async (backendMode) => {
+      vi.stubEnv("MC_BACKEND_MODE", backendMode);
+
+      await persistDurableOperationStateTransition({
+        operationId: "mock-backup-op",
+        type: "backup",
+        route: "/api/backup",
+        status: "accepted",
+        source: "api",
+        requestedBy: "dev@localhost",
+        lockId: "mock-lock",
+        fencingToken: 1,
+        phase: "dispatching",
+      });
+
+      expect(await getDurableOperationState("mock-backup-op")).toMatchObject({
+        id: "mock-backup-op",
+        status: "accepted",
+        lockId: "mock-lock",
+      });
+      expect(mocks.read).not.toHaveBeenCalled();
+      expect(mocks.write).not.toHaveBeenCalled();
+    }
+  );
 
   it("preserves Lambda execution ownership when the Worker records dispatched state", async () => {
     mocks.read.mockResolvedValue({
