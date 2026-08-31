@@ -21,11 +21,6 @@ const {
   putParameterMock,
   shouldRetainLifecycleLockMock,
   reconcileRemoteCommandMock,
-  extractEmailsMock,
-  getAllowlistMock,
-  updateAllowlistMock,
-  parseCommandMock,
-  parseEmailFromEventMock,
   resolveResumeRestoreStrategyMock,
   handleBackupMock,
   handleRefreshBackupsMock,
@@ -53,11 +48,6 @@ const {
   putParameterMock: vi.fn(),
   shouldRetainLifecycleLockMock: vi.fn(),
   reconcileRemoteCommandMock: vi.fn(),
-  extractEmailsMock: vi.fn(),
-  getAllowlistMock: vi.fn(),
-  updateAllowlistMock: vi.fn(),
-  parseCommandMock: vi.fn(),
-  parseEmailFromEventMock: vi.fn(),
   resolveResumeRestoreStrategyMock: vi.fn(),
   handleBackupMock: vi.fn(),
   handleRefreshBackupsMock: vi.fn(),
@@ -102,20 +92,6 @@ vi.mock("./ssm.js", () => ({
   reconcileRemoteCommand: reconcileRemoteCommandMock,
 }));
 
-vi.mock("./allowlist.js", () => ({
-  extractEmails: extractEmailsMock,
-  getAllowlist: getAllowlistMock,
-  updateAllowlist: updateAllowlistMock,
-}));
-
-vi.mock("./command-parser.js", () => ({
-  parseCommand: parseCommandMock,
-}));
-
-vi.mock("./email-parser.js", () => ({
-  parseEmailFromEvent: parseEmailFromEventMock,
-}));
-
 vi.mock("./restore-contract.js", () => ({
   resolveResumeRestoreStrategy: resolveResumeRestoreStrategyMock,
 }));
@@ -155,9 +131,6 @@ describe("StartMinecraftServer environment contract", () => {
     getPublicIpMock.mockResolvedValue("203.0.113.10");
     sendNotificationMock.mockResolvedValue(undefined);
     getInstanceStateMock.mockResolvedValue("running");
-    getAllowlistMock.mockResolvedValue(["notify@example.com"]);
-    extractEmailsMock.mockReturnValue([]);
-    parseCommandMock.mockReturnValue({ command: "start", args: [] });
     getSanitizedErrorMessageMock.mockReturnValue("Command execution failed. Check CloudWatch logs for details.");
     resolveResumeRestoreStrategyMock.mockReturnValue({ mode: "fresh" });
     getParameterMock.mockResolvedValue(null);
@@ -231,7 +204,6 @@ describe("StartMinecraftServer environment contract", () => {
       statusCode: 400,
       body: "Unsupported invocation payload.",
     });
-    expect(parseEmailFromEventMock).not.toHaveBeenCalled();
     expect(updateOperationStateMock).not.toHaveBeenCalled();
   });
 

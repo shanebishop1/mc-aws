@@ -38,7 +38,7 @@ describe("persisted logging security contract", () => {
 
   it("never logs inbound email subjects, sender addresses, allowlist values, or complete Lambda events", () => {
     const lambdaSource = source("infra/src/lambda/StartMinecraftServer/index.js");
-    const parserSource = source("infra/src/lambda/StartMinecraftServer/email-parser.js");
+    const parserSource = source("infra/src/lambda/InboundEmailCommand/index.js");
     const consoleLines = `${lambdaSource}\n${parserSource}`
       .split("\n")
       .filter((line) => line.includes("console."))

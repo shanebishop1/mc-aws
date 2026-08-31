@@ -1,5 +1,5 @@
 import { expect, test } from "@playwright/test";
-import { confirmDialog, waitForLoading, waitForPageLoad } from "./helpers";
+import { confirmDialog, waitForPageLoad } from "./helpers";
 import { setMockParameter, setupHibernatedScenario, setupRunningScenario, setupStoppedScenario } from "./setup";
 
 const seedBackupsCache = async (page: Parameters<typeof setupHibernatedScenario>[0]) => {

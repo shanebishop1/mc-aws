@@ -183,20 +183,6 @@ export async function setupHibernatedScenario(page: Page): Promise<void> {
 }
 
 /**
- * Setup scenario for high costs
- */
-export async function setupHighCostScenario(page: Page): Promise<void> {
-  await setupTestEnvironment(page, "high-cost");
-}
-
-/**
- * Setup scenario for many players
- */
-export async function setupManyPlayersScenario(page: Page): Promise<void> {
-  await setupTestEnvironment(page, "many-players");
-}
-
-/**
  * Setup scenario for errors
  */
 export async function setupErrorsScenario(page: Page): Promise<void> {
