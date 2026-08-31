@@ -76,7 +76,7 @@ Legacy `/minecraft/github-pat`, `/minecraft/github-user`, and `/minecraft/github
 
 ### Exceptional Drive credential migration
 
-Only when another reviewed migration still needs the encrypted Drive credential, run `scripts/destroy.sh --execute --retain-gdrive-token-for-migration`. This retains `/minecraft/gdrive-token`; other ownership-proven SSM data is deleted while pre-existing or uncertain data remains preserved. The final report flags the credential as a security residual. Delete it immediately after migration. This option is not a backup-retention mechanism: Drive archives remain in Drive without retaining the credential.
+Only when another reviewed migration still needs the encrypted Drive credential, run `scripts/operations/destroy.sh --execute --retain-gdrive-token-for-migration`. This retains `/minecraft/gdrive-token`; other ownership-proven SSM data is deleted while pre-existing or uncertain data remains preserved. The final report flags the credential as a security residual. Delete it immediately after migration. This option is not a backup-retention mechanism: Drive archives remain in Drive without retaining the credential.
 
 If CloudFormation is already absent and the manifest has no completed preservation stage plus Drive/snapshot evidence, normal teardown blocks. After directly checking Drive archives or an exact retained snapshot, `--confirm-absent-stack-data` enables execution and requires a second StackId-specific phrase. This exception acknowledges external proof; it never infers that stack deletion preserved data.
 

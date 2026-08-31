@@ -127,7 +127,7 @@ jobs:
         env:
           SMOKE_BASE_URL: ${{ secrets.SMOKE_BASE_URL }}
           SMOKE_SESSION_COOKIE: ${{ secrets.SMOKE_SESSION_COOKIE }}
-        run: pnpm exec tsx scripts/run-real-environment-smoke.ts
+        run: pnpm exec tsx scripts/smoke/run-real-environment-smoke.ts
 
       - name: Upload smoke summary artifact
         if: always()

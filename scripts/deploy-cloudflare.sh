@@ -768,7 +768,7 @@ echo "   Google Drive callback: ${NEXT_PUBLIC_APP_URL%/}/api/gdrive/callback"
 echo ""
 
 echo "🔍 Running strict production schema validation..."
-if ! NODE_ENV=production pnpm exec tsx scripts/validate-env.ts --target worker --strict --env-file "$ENV_FILE"; then
+if ! NODE_ENV=production pnpm exec tsx scripts/validation/validate-env.ts --target worker --strict --env-file "$ENV_FILE"; then
   echo "❌ Error: strict production schema validation failed"
   exit 1
 fi

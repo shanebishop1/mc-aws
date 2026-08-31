@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 interface Rule {
   readonly id: string;
@@ -42,7 +43,7 @@ const rules: readonly Rule[] = [
   },
 ];
 
-const rootDir = process.cwd();
+const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const violations: string[] = [];
 const proseFilesToCheck = Array.from(
   new Set(

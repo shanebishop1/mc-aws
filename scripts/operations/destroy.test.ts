@@ -435,7 +435,7 @@ function makeHarness(
     tools[tool] = wrapperPath;
   }
   const run = (args: string[] = [], input = "") =>
-    spawnSync("bash", [path.join(rootDir, "scripts/destroy.sh"), "--manifest", manifestPath, ...args], {
+    spawnSync("bash", [path.join(rootDir, "scripts/operations/destroy.sh"), "--manifest", manifestPath, ...args], {
       cwd: rootDir,
       env: {
         ...process.env,

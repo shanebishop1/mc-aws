@@ -17,7 +17,7 @@ import type {
   ServerStatusResponse,
   StartServerResponse,
   StopServerResponse,
-} from "../lib/types";
+} from "../../lib/types";
 
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 type Environment = Record<string, string | undefined>;

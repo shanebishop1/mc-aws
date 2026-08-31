@@ -10,7 +10,7 @@
  * 5. Tests protected routes
  *
  * Usage:
- *   MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true node scripts/validate-dev-login.ts
+ *   MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true node scripts/validation/validate-dev-login.ts
  */
 
 import http from "node:http";
