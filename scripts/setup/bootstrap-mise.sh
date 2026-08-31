@@ -3,7 +3,7 @@
 # any deployment environment file so a remote installer never receives secrets.
 set -euo pipefail
 
-ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
+ROOT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 PINS_FILE="${MC_AWS_MISE_PINS_FILE:-$ROOT_DIR/config/mise-pins.json}"
 INSTALL_DIR="${MISE_INSTALL_DIR:-$HOME/.local/bin}"
 INSTALL_PATH="$INSTALL_DIR/mise"

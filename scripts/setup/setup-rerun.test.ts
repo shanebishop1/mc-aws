@@ -140,7 +140,7 @@ describe("setup completion connection output", () => {
 describe("setup immutable AMI integration", () => {
   it("invokes the pinning command with both reusable deployment env files", () => {
     const source = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
-    expect(source).toContain("pin-al2023-ami.ts ensure");
+    expect(source).toContain("scripts/setup/pin-al2023-ami.ts ensure");
     expect(source).toContain('--env-file "$PRODUCTION_ENV_FILE"');
     expect(source).toContain('--env-file "$LOCAL_ENV_FILE"');
     expect(source.indexOf("ensure_al2023_ami_pin")).toBeLessThan(source.indexOf("migrate-existing-deployment.ts"));

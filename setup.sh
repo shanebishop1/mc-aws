@@ -217,7 +217,7 @@ get_missing_required_credentials() {
 
 ensure_al2023_ami_pin() {
   local pinned_ami
-  if ! pinned_ami="$(run_with_mise pnpm exec tsx scripts/pin-al2023-ami.ts ensure \
+  if ! pinned_ami="$(run_with_mise pnpm exec tsx scripts/setup/pin-al2023-ami.ts ensure \
     --region "$CDK_DEFAULT_REGION" \
     --env-file "$PRODUCTION_ENV_FILE" \
     --env-file "$LOCAL_ENV_FILE")"; then
@@ -229,7 +229,7 @@ ensure_al2023_ami_pin() {
 
 ensure_bootstrap_artifact_pins() {
   local pins_sha256
-  if ! pins_sha256="$(run_with_mise pnpm exec tsx scripts/pin-bootstrap-artifacts.ts check \
+  if ! pins_sha256="$(run_with_mise pnpm exec tsx scripts/setup/pin-bootstrap-artifacts.ts check \
     --env-file "$PRODUCTION_ENV_FILE" \
     --env-file "$LOCAL_ENV_FILE")"; then
     return 1
@@ -511,7 +511,7 @@ main() {
   step "Setting up mise (version manager)"
 
   local mise_install_dir="$HOME/.local/bin"
-  if ! env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" bash ./scripts/bootstrap-mise.sh install; then
+  if ! env -i HOME="$HOME" PATH="$PATH" TMPDIR="${TMPDIR:-/tmp}" bash ./scripts/setup/bootstrap-mise.sh install; then
     error_exit "Failed to install the checksum-verified repository-pinned mise release. Review config/mise-pins.json and retry."
   fi
   export PATH="$mise_install_dir:$PATH"
@@ -568,16 +568,16 @@ main() {
     # Production env file is already in place
   else
     step "Starting interactive setup wizard"
-    log "Launching scripts/setup-wizard.sh..."
-    if [ ! -f "scripts/setup-wizard.sh" ]; then
-      error_exit "Setup wizard script not found at scripts/setup-wizard.sh"
+    log "Launching scripts/setup/setup-wizard.sh..."
+    if [ ! -f "scripts/setup/setup-wizard.sh" ]; then
+      error_exit "Setup wizard script not found at scripts/setup/setup-wizard.sh"
     fi
 
     # Make sure the wizard is executable
-    chmod +x scripts/setup-wizard.sh
+    chmod +x scripts/setup/setup-wizard.sh
 
     # Tell the wizard we're returning here after it finishes
-    run_with_mise env MC_AWS_SETUP_RETURN_TO_SETUP_SH=1 bash ./scripts/setup-wizard.sh
+    run_with_mise env MC_AWS_SETUP_RETURN_TO_SETUP_SH=1 bash ./scripts/setup/setup-wizard.sh
   fi
 
   # Reload env for the deploy steps below
@@ -587,7 +587,7 @@ main() {
   fi
 
   step "Checking SES inbound-command prerequisites"
-  if ! run_with_mise pnpm exec tsx scripts/ses-preflight.ts; then
+  if ! run_with_mise pnpm exec tsx scripts/setup/ses-preflight.ts; then
     error_exit "SES inbound-command prerequisites are not ready. No deployment changes were made; review docs/setup/SES_SETUP.md and re-run setup."
   fi
 
@@ -689,7 +689,7 @@ main() {
   success "Recorded pre-deployment SSM ownership facts"
 
   print_deployment_preflight
-  if ! run_with_mise pnpm exec tsx scripts/materialize-dns-secrets.ts; then
+  if ! run_with_mise pnpm exec tsx scripts/setup/materialize-dns-secrets.ts; then
     error_exit "Could not materialize the selected DNS credential as an SSM SecureString; secret values were omitted."
   fi
   (

@@ -64,7 +64,7 @@ describe("reviewed bootstrap pins contract", () => {
 
   it("keeps setup validation wired to both reusable deployment env files", () => {
     const setup = readFileSync(path.join(root, "setup.sh"), "utf8");
-    expect(setup).toContain("pin-bootstrap-artifacts.ts check");
+    expect(setup).toContain("scripts/setup/pin-bootstrap-artifacts.ts check");
     expect(setup).toContain('--env-file "$PRODUCTION_ENV_FILE"');
     expect(setup).toContain('--env-file "$LOCAL_ENV_FILE"');
   });

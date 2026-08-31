@@ -176,7 +176,10 @@ const setupGuide = readFileSync(path.join(rootDir, "docs/setup/SETUP_AND_RUN.md"
 const mockQuickStart = readFileSync(path.join(rootDir, "docs/QUICK_START_MOCK_MODE.md"), "utf8");
 const setupSource = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
 const deploymentPreflightIndex = setupSource.lastIndexOf("print_deployment_preflight");
-const dnsMaterializationIndex = setupSource.indexOf("scripts/materialize-dns-secrets.ts", deploymentPreflightIndex);
+const dnsMaterializationIndex = setupSource.indexOf(
+  "scripts/setup/materialize-dns-secrets.ts",
+  deploymentPreflightIndex
+);
 const cdkDeploymentIndex = setupSource.indexOf(
   'run_with_mise pnpm exec cdk deploy "$STACK_NAME"',
   dnsMaterializationIndex

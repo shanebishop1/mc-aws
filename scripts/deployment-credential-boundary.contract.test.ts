@@ -20,7 +20,7 @@ describe("deployment credential boundary", () => {
   });
 
   it("uses the local AWS CLI session instead of collecting human keys in the setup wizard", () => {
-    const wizardSource = readFileSync(path.resolve(process.cwd(), "scripts/setup-wizard.sh"), "utf8");
+    const wizardSource = readFileSync(path.resolve(process.cwd(), "scripts/setup/setup-wizard.sh"), "utf8");
 
     expect(wizardSource).toContain("aws sts get-caller-identity");
     expect(wizardSource).toContain("aws sso login");

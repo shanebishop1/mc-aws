@@ -12,7 +12,7 @@ You need:
 - a Cloudflare account with Workers enabled; a custom domain is optional
 - a Google OAuth **Web application** client ID and secret
 
-Before reading `.env.production` or any other credential file, setup uses a cleared environment to download the exact platform binary in [`config/mise-pins.json`](../../config/mise-pins.json), verifies its reviewed SHA-256, verifies its version output, and installs it at `~/.local/bin/mise`. It never runs a mutable curl pipe. Review the pin with `bash scripts/bootstrap-mise.sh review`; an intentional pin change is installed only with `pnpm mise:upgrade -- --confirm '<exact review output>'`. Setup does not activate `mise` in the calling shell.
+Before reading `.env.production` or any other credential file, setup uses a cleared environment to download the exact platform binary in [`config/mise-pins.json`](../../config/mise-pins.json), verifies its reviewed SHA-256, verifies its version output, and installs it at `~/.local/bin/mise`. It never runs a mutable curl pipe. Review the pin with `bash scripts/setup/bootstrap-mise.sh review`; an intentional pin change is installed only with `pnpm mise:upgrade -- --confirm '<exact review output>'`. Setup does not activate `mise` in the calling shell.
 
 Review the required account guides:
 
