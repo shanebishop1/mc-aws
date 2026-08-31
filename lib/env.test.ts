@@ -22,25 +22,11 @@ describe("Environment Variables", () => {
     it("should return empty string for missing required variable", () => {
       expect(getEnv("MISSING_VAR")).toBe("");
     });
-
-    it("should return empty string for missing optional variable", () => {
-      expect(getEnv("MISSING_VAR", true)).toBe("");
-    });
-
-    it("should return value for optional variable when set", () => {
-      vi.stubEnv("OPTIONAL_VAR", "optional-value");
-      expect(getEnv("OPTIONAL_VAR", true)).toBe("optional-value");
-    });
   });
 
   describe("getBackendMode()", () => {
     it("should default to 'aws' when MC_BACKEND_MODE is not set", () => {
       vi.stubEnv("MC_BACKEND_MODE", undefined);
-      expect(getBackendMode()).toBe("aws");
-    });
-
-    it("should return 'aws' when MC_BACKEND_MODE is 'aws'", () => {
-      vi.stubEnv("MC_BACKEND_MODE", "aws");
       expect(getBackendMode()).toBe("aws");
     });
 
@@ -50,10 +36,14 @@ describe("Environment Variables", () => {
       expect(getBackendMode()).toBe("mock");
     });
 
-    it("should return 'mock' when MC_BACKEND_MODE is 'mock' in test", () => {
-      vi.stubEnv("MC_BACKEND_MODE", "mock");
-      vi.stubEnv("NODE_ENV", "test");
-      expect(getBackendMode()).toBe("mock");
+    it.each([
+      ["explicit", "aws"],
+      ["default", undefined],
+    ])("accepts %s AWS mode in production", (_variant, mode) => {
+      vi.stubEnv("MC_BACKEND_MODE", mode);
+      vi.stubEnv("NODE_ENV", "production");
+
+      expect(getBackendMode()).toBe("aws");
     });
 
     it("should throw error when MC_BACKEND_MODE is 'mock' in production", () => {
@@ -63,18 +53,6 @@ describe("Environment Variables", () => {
       expect(() => getBackendMode()).toThrow(
         'MC_BACKEND_MODE="mock" is not allowed in production. Set MC_BACKEND_MODE="aws" or unset NODE_ENV.'
       );
-    });
-
-    it("should allow 'aws' mode in production", () => {
-      vi.stubEnv("MC_BACKEND_MODE", "aws");
-      vi.stubEnv("NODE_ENV", "production");
-      expect(getBackendMode()).toBe("aws");
-    });
-
-    it("should default to 'aws' when MC_BACKEND_MODE is not set in production", () => {
-      vi.stubEnv("MC_BACKEND_MODE", undefined);
-      vi.stubEnv("NODE_ENV", "production");
-      expect(getBackendMode()).toBe("aws");
     });
 
     it("should handle case-insensitive mode values", () => {

@@ -20,12 +20,21 @@ const mocks = vi.hoisted(() => ({
     retryAfterHeader: response.headers.get("Retry-After") ?? undefined,
     cacheControlHeader: response.headers.get("Cache-Control") ?? undefined,
   })),
+  findInstanceId: vi.fn(),
+  getInstanceState: vi.fn(),
   invokeLambda: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock("@/lib/aws", async () => {
   const actual = await vi.importActual<typeof import("@/lib/aws")>("@/lib/aws");
-  return { ...actual, invokeLambda: mocks.invokeLambda };
+  mocks.findInstanceId.mockImplementation(actual.findInstanceId);
+  mocks.getInstanceState.mockImplementation(actual.getInstanceState);
+  return {
+    ...actual,
+    findInstanceId: mocks.findInstanceId,
+    getInstanceState: mocks.getInstanceState,
+    invokeLambda: mocks.invokeLambda,
+  };
 });
 
 vi.mock("@/lib/api-auth", () => ({
@@ -227,7 +236,7 @@ describe("POST /api/stop", () => {
     expect(mockEC2Client.send).not.toHaveBeenCalled();
   });
 
-  it("runs lifecycle stages in auth -> throttle -> lock order", async () => {
+  it("runs lifecycle stages in auth -> throttle -> resolution -> validation -> lock -> invoke order", async () => {
     const { mockEC2Client } = await import("@/tests/mocks/aws");
 
     mockEC2Client.send
@@ -241,11 +250,15 @@ describe("POST /api/stop", () => {
 
     const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
     const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
+    const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
+    const stateValidationOrder = mocks.getInstanceState.mock.invocationCallOrder[0];
     const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
     const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
 
     expect(authOrder).toBeLessThan(throttleOrder);
-    expect(throttleOrder).toBeLessThan(lockOrder);
+    expect(throttleOrder).toBeLessThan(findInstanceOrder);
+    expect(findInstanceOrder).toBeLessThan(stateValidationOrder);
+    expect(stateValidationOrder).toBeLessThan(lockOrder);
     expect(lockOrder).toBeLessThan(invokeOrder);
   });
 });

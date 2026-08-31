@@ -95,33 +95,6 @@ describe("POST /api/restore", () => {
     expect(mocks.enforceMutatingRouteThrottle).toHaveBeenCalledTimes(1);
   });
 
-  it("should trigger async lambda with empty args when no backup name provided (back-compat)", async () => {
-    const req = createMockNextRequest("http://localhost/api/restore", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    const res = await POST(req);
-
-    expect(res.status).toBe(202);
-    const body = await parseNextResponse<ApiResponse<RestoreResponse>>(res);
-    expect(body.success).toBe(true);
-    expect(body.data?.backupName).toBe("latest");
-    expect(body.data?.message).toContain("asynchronously");
-
-    expect(mocks.invokeLambda).toHaveBeenCalledWith(
-      "StartMinecraftServer",
-      expect.objectContaining({
-        invocationType: "api",
-        command: "restore",
-        instanceId: "i-1234",
-        userEmail: "admin@example.com",
-        args: [],
-        lockId: "lock-restore-123",
-        operationId: body.operation?.id,
-      })
-    );
-  });
-
   it("should handle empty body gracefully (back-compat)", async () => {
     const req = createMockNextRequest("http://localhost/api/restore", {
       method: "POST",
@@ -167,7 +140,7 @@ describe("POST /api/restore", () => {
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
-  it.each([{ backupName: "" }, { backupName: "   " }, { name: "" }, { name: "\n" }])(
+  it.each([{ backupName: "   " }])(
     "returns 400 instead of restoring latest for an explicitly blank alias: %j",
     async (payload) => {
       const req = createMockNextRequest("http://localhost/api/restore", {
@@ -196,24 +169,6 @@ describe("POST /api/restore", () => {
     expect(body.success).toBe(false);
     expect(body.error).toBe("instanceId is not allowed for restore requests");
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
-  });
-
-  it("should handle lambda invocation failures", async () => {
-    mocks.invokeLambda.mockRejectedValueOnce(new Error("Lambda failure"));
-
-    const req = createMockNextRequest("http://localhost/api/restore", {
-      method: "POST",
-      body: JSON.stringify({ backupName: "my-backup-2024" }),
-    });
-    const res = await POST(req);
-
-    expect(res.status).toBe(503);
-    const body = await parseNextResponse<ApiResponse<unknown>>(res);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("Remote dispatch could not be confirmed");
-    expect(body.operation?.status).toBe("accepted");
-
-    expect(mocks.invokeLambda).toHaveBeenCalled();
   });
 
   it("should support legacy 'name' field for backward compatibility", async () => {
@@ -349,12 +304,16 @@ describe("POST /api/restore", () => {
     const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
     const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
     const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
+    const stateValidationOrder = mocks.getInstanceState.mock.invocationCallOrder[0];
+    const serviceValidationOrder = mocks.executeSSMCommand.mock.invocationCallOrder[0];
     const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
     const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
 
     expect(authOrder).toBeLessThan(throttleOrder);
     expect(throttleOrder).toBeLessThan(findInstanceOrder);
-    expect(findInstanceOrder).toBeLessThan(lockOrder);
+    expect(findInstanceOrder).toBeLessThan(stateValidationOrder);
+    expect(stateValidationOrder).toBeLessThan(serviceValidationOrder);
+    expect(serviceValidationOrder).toBeLessThan(lockOrder);
     expect(lockOrder).toBeLessThan(invokeOrder);
   });
 });

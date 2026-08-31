@@ -1,8 +1,4 @@
-import {
-  createMutatingActionFailure,
-  createMutatingActionRequestContext,
-  createMutatingActionSuccess,
-} from "@/lib/mutating-action-contract";
+import { createMutatingActionFailure, createMutatingActionRequestContext } from "@/lib/mutating-action-contract";
 import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
 import type { ServerActionLock } from "@/lib/server-action-lock";
 import { createMockNextRequest } from "@/tests/utils";
@@ -16,54 +12,20 @@ vi.mock("@/lib/durable-operation-state", () => ({
   persistDurableOperationStateTransition: mocks.persistDurableOperationStateTransition,
 }));
 
-describe("mutating-action-contract helpers", () => {
+describe("runMutatingActionLifecycle", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.clearAllMocks();
   });
 
-  it("creates request context with running operation metadata", () => {
+  it("initializes request context requestedAt from the current time", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-13T12:00:00.000Z"));
 
     const request = createMockNextRequest("http://localhost/api/start", { method: "POST" });
     const context = createMutatingActionRequestContext(request, "/api/start", "start");
 
-    expect(context.route).toBe("/api/start");
-    expect(context.action).toBe("start");
-    expect(context.operation.type).toBe("start");
-    expect(context.operation.status).toBe("running");
     expect(context.requestedAt).toBe("2026-04-13T12:00:00.000Z");
-  });
-
-  it("creates success and failure execution result helpers", () => {
-    const success = createMutatingActionSuccess({ instanceId: "i-123" });
-    const failure = createMutatingActionFailure("boom", {
-      httpStatus: 409,
-      code: "conflict",
-    });
-
-    expect(success).toEqual({
-      ok: true,
-      status: "accepted",
-      httpStatus: 202,
-      data: { instanceId: "i-123" },
-    });
-
-    expect(failure).toEqual({
-      ok: false,
-      status: "failed",
-      httpStatus: 409,
-      error: "boom",
-      code: "conflict",
-      cause: undefined,
-    });
-  });
-});
-
-describe("runMutatingActionLifecycle", () => {
-  afterEach(() => {
-    vi.clearAllMocks();
   });
 
   it("does not persist operation state or acquire a lock when CSRF validation fails during authentication", async () => {

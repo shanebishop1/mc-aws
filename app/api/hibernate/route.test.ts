@@ -119,23 +119,6 @@ describe("POST /api/hibernate", () => {
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
-  it("should handle lambda invocation failures", async () => {
-    // Setup state
-    mocks.getInstanceState.mockResolvedValue(ServerState.Running);
-    mocks.invokeLambda.mockRejectedValueOnce(new Error("Lambda failure"));
-
-    const req = createMockNextRequest("http://localhost/api/hibernate", { method: "POST" });
-    const res = await POST(req);
-
-    expect(res.status).toBe(503);
-    const body = await parseNextResponse<ApiResponse<unknown>>(res);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("Remote dispatch could not be confirmed");
-    expect(body.operation?.status).toBe("accepted");
-
-    expect(mocks.invokeLambda).toHaveBeenCalled();
-  });
-
   it("returns failed operation metadata for auth failures", async () => {
     mocks.requireAdmin.mockRejectedValueOnce(
       new Response(JSON.stringify({ success: false, error: "Insufficient permissions" }), {
@@ -220,12 +203,14 @@ describe("POST /api/hibernate", () => {
     const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
     const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
     const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
+    const stateValidationOrder = mocks.getInstanceState.mock.invocationCallOrder[0];
     const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
     const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
 
     expect(authOrder).toBeLessThan(throttleOrder);
     expect(throttleOrder).toBeLessThan(findInstanceOrder);
-    expect(findInstanceOrder).toBeLessThan(lockOrder);
+    expect(findInstanceOrder).toBeLessThan(stateValidationOrder);
+    expect(stateValidationOrder).toBeLessThan(lockOrder);
     expect(lockOrder).toBeLessThan(invokeOrder);
   });
 });

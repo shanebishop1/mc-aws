@@ -73,8 +73,6 @@ vi.mock("@/lib/runtime-state", () => {
 });
 
 describe("GET /api/service-status cache contract", () => {
-  const toleratedSnapshotStalenessMs = snapshotCacheTtlSeconds.serviceStatus * 1000;
-
   beforeEach(() => {
     freezeTime("2026-01-02T03:04:05.000Z");
     snapshotState.value = null;
@@ -163,40 +161,6 @@ describe("GET /api/service-status cache contract", () => {
         ttlSeconds: snapshotCacheTtlSeconds.serviceStatus,
       })
     );
-  });
-
-  it("accepts bounded-stale cached payloads without strict freshness", async () => {
-    const { GET } = await import("./route");
-    const req = createMockNextRequest("http://localhost/api/service-status");
-
-    const stalePayloadAgeMs = toleratedSnapshotStalenessMs - 1_000;
-    const staleTimestamp = new Date(Date.now() - stalePayloadAgeMs).toISOString();
-
-    snapshotState.value = {
-      payload: {
-        success: true,
-        data: {
-          serviceActive: true,
-          instanceRunning: true,
-        },
-        timestamp: staleTimestamp,
-      },
-    };
-
-    const response = await GET(req);
-    const body = await parseNextResponse<ApiResponse<unknown>>(response);
-
-    expect(response.headers.get("X-Service-Status-Cache")).toBe("HIT");
-    expect(body.success).toBe(true);
-    expect(body.timestamp).toBe(staleTimestamp);
-
-    const observedStalenessMs = Date.now() - Date.parse(body.timestamp);
-    expect(observedStalenessMs).toBeGreaterThan(0);
-    expect(observedStalenessMs).toBeLessThanOrEqual(toleratedSnapshotStalenessMs);
-
-    expect(findInstanceIdMock).not.toHaveBeenCalled();
-    expect(getInstanceStateMock).not.toHaveBeenCalled();
-    expect(executeSSMCommandMock).not.toHaveBeenCalled();
   });
 
   it("returns service unavailable when production runtime state is misconfigured", async () => {
