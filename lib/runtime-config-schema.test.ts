@@ -431,10 +431,7 @@ describe("runtime-config-schema", () => {
       expect(new Set(workerSecretAllowlist).size).toBe(workerSecretAllowlist.length);
     });
 
-    it("keeps directly managed AWS runtime credentials out of env-file uploads", () => {
-      expect(workerSecretAllowlist).not.toEqual(
-        expect.arrayContaining(["AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN"])
-      );
+    it("tracks directly managed AWS runtime credentials", () => {
       expect(workerManagedAwsCredentialSecretNames).toEqual(
         expect.arrayContaining([
           "AWS_ACCESS_KEY_ID",

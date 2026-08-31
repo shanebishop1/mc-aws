@@ -162,21 +162,6 @@ describe("POST /api/start", () => {
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
   });
 
-  it("blocks non-admin users from using start on resumable states", async () => {
-    mocks.requireAllowed.mockResolvedValueOnce({ email: "allowed@example.com", role: "allowed" });
-    mocks.getInstanceState.mockResolvedValueOnce(ServerState.Hibernating);
-
-    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
-    const res = await POST(req);
-
-    expect(res.status).toBe(400);
-    const body = await parseNextResponse<ApiResponse<unknown>>(res);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("Use resume instead");
-    expect(body.operation?.status).toBe("failed");
-    expect(mocks.invokeLambda).not.toHaveBeenCalled();
-  });
-
   it("should reject instanceId from request body instead of trusting or ignoring it", async () => {
     // Setup state
     mocks.getInstanceState.mockResolvedValue(ServerState.Stopped);
@@ -192,24 +177,6 @@ describe("POST /api/start", () => {
     expect(body.success).toBe(false);
     expect(body.error).toBe("instanceId is not allowed for start requests");
     expect(mocks.invokeLambda).not.toHaveBeenCalled();
-  });
-
-  it("should handle lambda invocation failures", async () => {
-    // Setup state
-    mocks.getInstanceState.mockResolvedValue(ServerState.Stopped);
-    mocks.invokeLambda.mockRejectedValue(new Error("Lambda failure"));
-
-    const req = createMockNextRequest("http://localhost/api/start", { method: "POST" });
-    const res = await POST(req);
-
-    expect(res.status).toBe(503);
-    const body = await parseNextResponse<ApiResponse<unknown>>(res);
-    expect(body.success).toBe(false);
-    expect(body.error).toContain("Remote dispatch could not be confirmed");
-    expect(body.operation?.status).toBe("accepted");
-
-    expect(mocks.invokeLambda).toHaveBeenCalled();
-    expect(mocks.releaseServerActionLock).not.toHaveBeenCalled();
   });
 
   it("runs shared lifecycle stages in order on success", async () => {

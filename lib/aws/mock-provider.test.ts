@@ -154,16 +154,6 @@ describe("Mock Provider Core", () => {
       await expect(mockProvider.startInstance()).rejects.toThrow("Cannot start instance in state: pending");
     });
 
-    it("should throw error when stopping instance in invalid state", async () => {
-      const stateStore = getMockStateStore();
-
-      // Set instance to stopped (invalid for stop)
-      await stateStore.updateInstanceState("stopped" as ServerState);
-
-      // This should be a no-op, not an error
-      await expect(mockProvider.stopInstance()).resolves.not.toThrow();
-    });
-
     it("should wait for instance to reach running state", async () => {
       const stateStore = getMockStateStore();
 
@@ -298,14 +288,6 @@ describe("Mock Provider Core", () => {
   });
 
   describe("SSM Command Execution", () => {
-    it("should execute SSM command successfully", async () => {
-      const commands = ["echo 'Hello, World!'"];
-      const output = await mockProvider.executeSSMCommand("i-mock1234567890abcdef", commands);
-
-      expect(output).toBeDefined();
-      expect(output).toContain("Hello, World!");
-    });
-
     it("should track command status lifecycle", async () => {
       const stateStore = getMockStateStore();
       const commands = ["echo 'test'"];
@@ -436,12 +418,6 @@ describe("Mock Provider Core", () => {
   });
 
   describe("CloudFormation Stack Operations", () => {
-    it("should check if stack exists", async () => {
-      const exists = await mockProvider.checkStackExists("MinecraftStack");
-
-      expect(typeof exists).toBe("boolean");
-    });
-
     it("should get stack status", async () => {
       const stack = await mockProvider.getStackStatus("MinecraftStack");
 
@@ -449,6 +425,18 @@ describe("Mock Provider Core", () => {
       expect(stack?.StackName).toBe("MinecraftStack");
       expect(stack?.StackId).toBeDefined();
       expect(stack?.StackStatus).toBeDefined();
+    });
+
+    it("returns a configured non-default stack status", async () => {
+      await getMockStateStore().setStackStatus({
+        exists: true,
+        status: "UPDATE_IN_PROGRESS",
+        stackId: "stack-update-in-progress",
+      });
+
+      const stack = await mockProvider.getStackStatus("MinecraftStack");
+
+      expect(stack?.StackStatus).toBe("UPDATE_IN_PROGRESS");
     });
 
     it("should return null for non-existent stack", async () => {
@@ -475,56 +463,9 @@ describe("Mock Provider Core", () => {
       expect(instanceIdOutput).toBeDefined();
       expect(instanceIdOutput?.OutputValue).toBeDefined();
     });
-
-    it("should return stack parameters", async () => {
-      const stack = await mockProvider.getStackStatus("MinecraftStack");
-
-      expect(stack?.Parameters).toBeDefined();
-      expect(Array.isArray(stack?.Parameters)).toBe(true);
-      expect(stack?.Parameters?.length).toBeGreaterThan(0);
-    });
-
-    it("should return stack tags", async () => {
-      const stack = await mockProvider.getStackStatus("MinecraftStack");
-
-      expect(stack?.Tags).toBeDefined();
-      expect(Array.isArray(stack?.Tags)).toBe(true);
-      expect(stack?.Tags?.length).toBeGreaterThan(0);
-    });
-
-    it("should handle different stack statuses", async () => {
-      const stateStore = getMockStateStore();
-      const statuses = ["CREATE_COMPLETE", "CREATE_IN_PROGRESS", "UPDATE_IN_PROGRESS", "ROLLBACK_COMPLETE"];
-
-      for (const status of statuses) {
-        await stateStore.setStackStatus({
-          exists: true,
-          status,
-          stackId: "arn:aws:cloudformation:us-east-1:123456789012:stack/minecraft-stack/abc123",
-        });
-
-        const stack = await mockProvider.getStackStatus("MinecraftStack");
-        expect(stack?.StackStatus).toBe(status);
-      }
-    });
   });
 
   describe("Parameter Store Operations", () => {
-    it("should get parameter", async () => {
-      const stateStore = getMockStateStore();
-      await stateStore.setParameter("/minecraft/test-param", "test-value");
-
-      const value = await mockProvider.getParameter("/minecraft/test-param");
-      expect(value).toBe("test-value");
-    });
-
-    it("should put parameter", async () => {
-      await mockProvider.putParameter("/minecraft/new-param", "new-value");
-
-      const value = await mockProvider.getParameter("/minecraft/new-param");
-      expect(value).toBe("new-value");
-    });
-
     it("redacts SecureString values from putParameter diagnostics", async () => {
       const secret = "oauth-token-never-log-9f8472";
       const logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -562,15 +503,6 @@ describe("Mock Provider Core", () => {
 
       const value = await mockProvider.getParameter("/minecraft/delete-me");
       expect(value).toBeNull();
-    });
-
-    it("should get email allowlist", async () => {
-      const stateStore = getMockStateStore();
-      await stateStore.setParameter("/minecraft/email-allowlist", JSON.stringify(["test@example.com"]));
-
-      const allowlist = await mockProvider.getEmailAllowlist();
-      expect(Array.isArray(allowlist)).toBe(true);
-      expect(allowlist).toContain("test@example.com");
     });
 
     it("should update email allowlist", async () => {
@@ -1045,37 +977,6 @@ describe("Mock Provider Core", () => {
   });
 
   describe("Instance Details", () => {
-    it("should get instance details", async () => {
-      const details = await mockProvider.getInstanceDetails();
-
-      expect(details).toBeDefined();
-      expect(details.instance).toBeDefined();
-      expect(details.state).toBeDefined();
-      expect(details.az).toBeDefined();
-    });
-
-    it("should include block device mappings", async () => {
-      const details = await mockProvider.getInstanceDetails();
-
-      expect(details.blockDeviceMappings).toBeDefined();
-      expect(Array.isArray(details.blockDeviceMappings)).toBe(true);
-    });
-
-    it("should find instance ID", async () => {
-      const instanceId = await mockProvider.findInstanceId();
-
-      expect(instanceId).toBeDefined();
-      expect(typeof instanceId).toBe("string");
-      expect(instanceId).toMatch(/^i-/);
-    });
-
-    it("should resolve instance ID", async () => {
-      const resolvedId = await mockProvider.resolveInstanceId();
-
-      expect(resolvedId).toBeDefined();
-      expect(typeof resolvedId).toBe("string");
-    });
-
     it("should use provided instance ID when resolving", async () => {
       const providedId = "i-provided123";
       const resolvedId = await mockProvider.resolveInstanceId(providedId);

@@ -195,12 +195,16 @@ describe("POST /api/backup", () => {
     const authOrder = mocks.requireAdmin.mock.invocationCallOrder[0];
     const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
     const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
+    const stateValidationOrder = mocks.getInstanceState.mock.invocationCallOrder[0];
+    const serviceValidationOrder = mocks.executeSSMCommand.mock.invocationCallOrder[0];
     const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
     const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
 
     expect(authOrder).toBeLessThan(throttleOrder);
     expect(throttleOrder).toBeLessThan(findInstanceOrder);
-    expect(findInstanceOrder).toBeLessThan(lockOrder);
+    expect(findInstanceOrder).toBeLessThan(stateValidationOrder);
+    expect(stateValidationOrder).toBeLessThan(serviceValidationOrder);
+    expect(serviceValidationOrder).toBeLessThan(lockOrder);
     expect(lockOrder).toBeLessThan(invokeOrder);
   });
 });

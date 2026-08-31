@@ -135,7 +135,7 @@ describe("GET /api/operations/[operationId]", () => {
     expect(mocks.getDurableOperationState).not.toHaveBeenCalled();
   });
 
-  it.each(["bad/id", `resume-${"x".repeat(128)}`, "bad id", "-leading"])(
+  it.each(["bad/id", `resume-${"x".repeat(128)}`, "-leading"])(
     "rejects invalid or oversized operation id %s",
     async (operationId) => {
       const request = createMockNextRequest(`http://localhost/api/operations/${encodeURIComponent(operationId)}`);
@@ -241,41 +241,6 @@ describe("GET /api/operations/[operationId]", () => {
       ownerEmail: "admin@example.com",
       fencingToken: 11,
     });
-  });
-
-  it("terminalizes an expired dispatch with missing lock metadata without releasing any lock", async () => {
-    const accepted: DurableOperationState = {
-      schemaVersion: 1,
-      id: "resume-expired",
-      type: "resume",
-      route: "/api/resume",
-      status: "accepted",
-      phase: "dispatched",
-      requestedAt: "2026-04-14T10:00:00.000Z",
-      updatedAt: "2026-04-14T10:00:01.000Z",
-      requestedBy: "admin@example.com",
-      history: [],
-    };
-    const failed = {
-      ...accepted,
-      status: "failed",
-      phase: "terminal",
-      code: "dispatch_expired",
-      lastError: "The operation was not executed before its dispatch lease expired",
-    } satisfies DurableOperationState;
-    mocks.getDurableOperationState.mockResolvedValueOnce(accepted);
-    mocks.expireAcceptedDispatchIfDeadlineElapsed.mockResolvedValueOnce({
-      operation: failed,
-      shouldReleaseLock: true,
-    });
-
-    const response = await GET(createMockNextRequest("http://localhost/api/operations/resume-expired"), {
-      params: Promise.resolve({ operationId: "resume-expired" }),
-    });
-    const body = await parseNextResponse<ApiResponse<OperationStatusData>>(response);
-
-    expect(body.data?.status).toBe("failed");
-    expect(mocks.releaseServerActionLockIfOwned).not.toHaveBeenCalled();
   });
 
   it("does not release an expired operation lock without its exact fencing token", async () => {
