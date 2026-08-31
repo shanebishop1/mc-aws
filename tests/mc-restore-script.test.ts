@@ -113,7 +113,7 @@ const createHarness = (): Harness => {
     `#!/usr/bin/env bash
 set -euo pipefail
 case "\${1:-}" in
-  lsf)
+  lsjson)
     printf '%s' "\${RCLONE_TEST_LIST:-}"
     ;;
   copy)
@@ -284,7 +284,13 @@ describe("mc-restore.sh", () => {
     cleanupDirs.push(harness.rootDir);
     harness.addArchive("newest.gz");
 
-    const result = harness.run("latest", { RCLONE_TEST_LIST: "notes.txt\nnewest.gz\nolder.tar.gz\n" });
+    const result = harness.run("latest", {
+      RCLONE_TEST_LIST: JSON.stringify([
+        { Path: "notes.txt", ModTime: "2026-08-31T12:00:00Z" },
+        { Path: "older.tar.gz", ModTime: "2026-08-29T12:00:00Z" },
+        { Path: "newest.gz", ModTime: "2026-08-31T12:00:00Z" },
+      ]),
+    });
 
     expect(result.status, result.stderr).toBe(0);
     expect(result.stdout).toContain("Found latest backup: newest.gz");

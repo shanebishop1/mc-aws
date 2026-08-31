@@ -349,22 +349,35 @@ fi
 BACKUP_REF="${1:-latest}"
 if [[ "$BACKUP_REF" == "latest" ]]; then
   log "Latest backup requested, finding latest backup file..."
-  if ! BACKUP_LIST="$(rclone lsf "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" --sort time --reverse --files-only)"; then
+  if ! BACKUP_LIST="$(rclone lsjson "${GDRIVE_REMOTE}:${GDRIVE_ROOT}/" --files-only --no-mimetype)"; then
     log "ERROR: Failed to list backups in ${GDRIVE_REMOTE}:${GDRIVE_ROOT}/"
     exit 1
   fi
 
-  BACKUP_FILE=""
-  while IFS= read -r candidate; do
-    case "$candidate" in
-      *.tar.gz|*.gz)
-        BACKUP_FILE="$candidate"
-        break
-        ;;
-    esac
-  done <<< "$BACKUP_LIST"
+  if ! BACKUP_FILE="$(printf '%s' "$BACKUP_LIST" | python3 -c '
+import datetime
+import json
+import re
+import sys
 
-  if [[ -z "$BACKUP_FILE" ]]; then
+items = json.load(sys.stdin)
+candidates = []
+for item in items if isinstance(items, list) else []:
+    name = item.get("Path") or item.get("Name")
+    modified = item.get("ModTime")
+    if not isinstance(name, str) or not re.fullmatch(r"[A-Za-z0-9._-]+\.(?:tar\.gz|gz)", name):
+        continue
+    if not isinstance(modified, str):
+        continue
+    try:
+        timestamp = datetime.datetime.fromisoformat(modified.replace("Z", "+00:00")).timestamp()
+    except ValueError:
+        continue
+    candidates.append((timestamp, name))
+if not candidates:
+    raise SystemExit(1)
+print(max(candidates)[1])
+')"; then
     log "ERROR: No backups found in ${GDRIVE_REMOTE}:${GDRIVE_ROOT}/"
     exit 1
   fi

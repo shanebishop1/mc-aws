@@ -36,11 +36,13 @@ readonly BOOTSTRAP_MARKER="/var/lib/mc-aws/bootstrap-complete"
 GDRIVE_REMOTE="${GDRIVE_REMOTE:-gdrive}"
 GDRIVE_ROOT="${GDRIVE_ROOT:-mc-backups}"
 
-# The reviewed AMI is the OS patch boundary. Its releasever points at an immutable
-# AL2023 repository snapshot; pass it explicitly so bootstrap cannot follow a later
-# repository release if host/global DNF configuration changes. Package NEVRAs within
-# that AWS snapshot remain upstream-controlled and are recorded below for diagnosis.
-readonly AL2023_RELEASEVER="$(tr -d '[:space:]' < /etc/dnf/vars/releasever)"
+# The reviewed AMI is the OS patch boundary. Its installed system-release package
+# identifies the immutable AL2023 repository snapshot; pass it explicitly so
+# bootstrap cannot follow a later repository release if host/global DNF configuration
+# changes. Package NEVRAs within that AWS snapshot remain upstream-controlled and are
+# recorded below for diagnosis.
+AL2023_RELEASEVER="$(rpm -q --qf '%{VERSION}' system-release)"
+readonly AL2023_RELEASEVER
 [[ "$AL2023_RELEASEVER" =~ ^2023\.[0-9]+\.[0-9]+$ ]] || { log "ERROR: reviewed AL2023 AMI has an invalid releasever"; exit 1; }
 dnf install -y --releasever="$AL2023_RELEASEVER" --setopt=install_weak_deps=False --setopt=metadata_expire=never \
   java-21-amazon-corretto-devel unzip python3 python3-pip cronie screen jq
@@ -63,6 +65,12 @@ python3 -m pip install --no-index --no-deps \
   /tmp/asyncio_dgram-2.2.0-py3-none-any.whl \
   /tmp/dnspython-2.7.0-py3-none-any.whl \
   /tmp/mcstatus-12.0.2-py3-none-any.whl
+cat > /usr/local/bin/mcstatus <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+exec python3 -m mcstatus "$@"
+SH
+chmod 0755 /usr/local/bin/mcstatus
 
 curl --fail --location --proto '=https' --tlsv1.2 --retry 3 --output /tmp/rclone.zip "$RCLONE_URL"
 printf '%s  %s\n' "$RCLONE_SHA256" /tmp/rclone.zip | sha256sum --check --status

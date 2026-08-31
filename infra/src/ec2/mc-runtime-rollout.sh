@@ -73,6 +73,12 @@ python3 -m pip install --disable-pip-version-check --no-index --no-deps --force-
   "$work/asyncio_dgram-2.2.0-py3-none-any.whl" \
   "$work/dnspython-2.7.0-py3-none-any.whl" \
   "$work/mcstatus-12.0.2-py3-none-any.whl"
+cat > /usr/local/bin/mcstatus <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+exec python3 -m mcstatus "$@"
+SH
+chmod 0755 /usr/local/bin/mcstatus
 python3 - "$MCSTATUS_VERSION" "$ASYNCIO_DGRAM_VERSION" "$DNSPYTHON_VERSION" <<'PY'
 import importlib.metadata, sys
 expected = {"mcstatus": sys.argv[1], "asyncio-dgram": sys.argv[2], "dnspython": sys.argv[3]}

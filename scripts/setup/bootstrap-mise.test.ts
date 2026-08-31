@@ -16,7 +16,17 @@ function harness(checksumMatches: boolean) {
   mkdirSync(home);
   mkdirSync(bin);
   const binary = path.join(directory, "mise-release");
-  writeFileSync(binary, "#!/usr/bin/env bash\nprintf 'mise 2099.1.2 test-platform\\n'\n", { mode: 0o755 });
+  writeFileSync(
+    binary,
+    `#!/usr/bin/env bash
+[[ "\${0##*/}" == "mise" ]] || exit 2
+printf 'mise 2099.1.2 test-platform\\n' || exit 141
+for ((i = 0; i < 20000; i++)); do
+  printf 'mise update warning with enough trailing output to expose early pipe closure\\n' || exit 141
+done
+`,
+    { mode: 0o755 }
+  );
   chmodSync(binary, 0o755);
   const digest = createHash("sha256").update(readFileSync(binary)).digest("hex");
   const platform =

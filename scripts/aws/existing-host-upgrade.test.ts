@@ -144,6 +144,23 @@ describe("existing host upgrade safety contracts", () => {
     expect(() =>
       assertReviewedInstanceReplacementPlan(identity, replacementChangeSet(), "MinecraftServerACE914F3")
     ).not.toThrow();
+    const sameAmiIdentity = { ...identity, targetAmiId: identity.currentAmiId };
+    const userDataReplacement = replacementChangeSet();
+    userDataReplacement.Changes[0].ResourceChange.Replacement = "Conditional";
+    userDataReplacement.Changes[0].ResourceChange.Details = [
+      {
+        Target: {
+          Attribute: "Properties",
+          Name: "UserData",
+          BeforeValue: "old-user-data",
+          AfterValue: "new-user-data",
+          RequiresRecreation: "Conditionally",
+        },
+      },
+    ];
+    expect(assertReviewedInstanceReplacementPlan(sameAmiIdentity, userDataReplacement, "MinecraftServerACE914F3")).toBe(
+      "in-place"
+    );
     const noReplacement = replacementChangeSet();
     noReplacement.Changes[0].ResourceChange.Replacement = "False";
     expect(() => assertReviewedInstanceReplacementPlan(identity, noReplacement, "MinecraftServerACE914F3")).toThrow(
