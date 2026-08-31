@@ -524,7 +524,7 @@ function persistOutputs(found: JsonRecord): void {
     writeEnvValue(".env.local", name, value);
   }
   run("node", [
-    "scripts/deployment-manifest.mjs",
+    "scripts/shared/deployment-manifest.mjs",
     "aws-deployed",
     "--stack-id",
     found.StackId,

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
 import dotenv from "dotenv";
-import { workerSecretAllowlist } from "../lib/runtime-config-schema";
+import { workerSecretAllowlist } from "../../lib/runtime-config-schema";
 
 const buildEnvExcludedKeys = new Set([
   "AWS_ACCESS_KEY_ID",

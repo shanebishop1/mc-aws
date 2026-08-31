@@ -23,16 +23,16 @@ describe("shared Wrangler JSONC parser", () => {
   it("parses the checked-in commented config through every project-owned parser path", () => {
     expect(readWranglerConfig("wrangler.jsonc").name).toBe("mc-aws-panel");
     expect(
-      execFileSync("pnpm", ["exec", "tsx", "scripts/wrangler-config.ts", "worker-name", "wrangler.jsonc"], {
+      execFileSync("pnpm", ["exec", "tsx", "scripts/cloudflare/wrangler-config.ts", "worker-name", "wrangler.jsonc"], {
         encoding: "utf8",
       })
     ).toBe("mc-aws-panel");
     for (const file of [
-      "scripts/deploy-cloudflare.sh",
-      "scripts/rotate-worker-runtime-key.sh",
+      "scripts/cloudflare/deploy-cloudflare.sh",
+      "scripts/cloudflare/rotate-worker-runtime-key.sh",
       "scripts/setup/setup-wizard.sh",
     ]) {
-      expect(readFileSync(path.resolve(file), "utf8")).toContain("scripts/wrangler-config.ts worker-name");
+      expect(readFileSync(path.resolve(file), "utf8")).toContain("scripts/cloudflare/wrangler-config.ts worker-name");
     }
   });
 });

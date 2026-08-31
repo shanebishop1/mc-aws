@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
-const rotationScript = path.resolve(process.cwd(), "scripts/rotate-worker-runtime-key.sh");
+const rotationScript = path.resolve(process.cwd(), "scripts/cloudflare/rotate-worker-runtime-key.sh");
 
 function writeExecutable(filePath: string, source: string): void {
   writeFileSync(filePath, source, { mode: 0o700 });

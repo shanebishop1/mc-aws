@@ -42,16 +42,18 @@ describe("public setup deployment preflight", () => {
     expect(sesPreflight).toBeGreaterThan(awsIdentity);
     expect(sesPreflight).toBeLessThan(setupSource.indexOf("ensure_al2023_ami_pin", sesPreflight));
     expect(sesPreflight).toBeLessThan(setupSource.indexOf("migrate-existing-deployment.ts", sesPreflight));
-    expect(sesPreflight).toBeLessThan(setupSource.indexOf("deployment-manifest.mjs aws-init", sesPreflight));
+    expect(sesPreflight).toBeLessThan(
+      setupSource.indexOf("scripts/shared/deployment-manifest.mjs aws-init", sesPreflight)
+    );
     expect(sesPreflight).toBeLessThan(setupSource.indexOf("pnpm exec cdk deploy", sesPreflight));
   });
 
   it("records SSM ownership observations before CDK can mutate parameters", () => {
     const ownershipInventory = setupSource.indexOf("Recorded pre-deployment SSM ownership facts");
     const deploy = setupSource.indexOf("pnpm exec cdk deploy", ownershipInventory);
-    expect(ownershipInventory).toBeGreaterThan(setupSource.indexOf("deployment-manifest.mjs aws-init"));
+    expect(ownershipInventory).toBeGreaterThan(setupSource.indexOf("scripts/shared/deployment-manifest.mjs aws-init"));
     expect(deploy).toBeGreaterThan(ownershipInventory);
-    expect(setupSource).toContain("deployment-manifest.mjs ssm-stack-resource");
+    expect(setupSource).toContain("scripts/shared/deployment-manifest.mjs ssm-stack-resource");
   });
 
   it("guards and confirms before DNS mutation and never forwards removed token parameters", () => {

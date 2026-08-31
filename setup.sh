@@ -630,7 +630,7 @@ main() {
       --region "$CDK_DEFAULT_REGION"
   )
 
-  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs aws-init \
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/shared/deployment-manifest.mjs aws-init \
     --account "$CDK_DEFAULT_ACCOUNT" \
     --region "$CDK_DEFAULT_REGION" \
     --stack "$STACK_NAME" \
@@ -674,7 +674,7 @@ main() {
       ssm_state="absent"
       ssm_type="unknown"
     fi
-    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs ssm-observe \
+    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/shared/deployment-manifest.mjs ssm-observe \
       --name "$ssm_name" --state "$ssm_state" --type "$ssm_type" >/dev/null
   done
   for ssm_name in /minecraft/operations /minecraft/server-action-delete-claim; do
@@ -683,7 +683,7 @@ main() {
       --query 'length(Parameters)' --output text 2>/dev/null || true)"
     [[ "$ssm_metadata" =~ ^[0-9]+$ ]] || error_exit "Could not inventory SSM namespace '$ssm_name' before deployment"
     [[ "$ssm_metadata" == "0" ]] && ssm_state="absent" || ssm_state="existing"
-    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs ssm-observe \
+    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/shared/deployment-manifest.mjs ssm-observe \
       --name "$ssm_name/*" --state "$ssm_state" --type unknown >/dev/null
   done
   success "Recorded pre-deployment SSM ownership facts"
@@ -725,7 +725,7 @@ main() {
     error_exit "Could not read StackId for CloudFormation stack '$STACK_NAME'"
   fi
 
-  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs aws-deployed \
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/shared/deployment-manifest.mjs aws-deployed \
     --stack-id "$STACK_ID" \
     --instance-id "$INSTANCE_ID" \
     --runtime-user "$RUNTIME_IAM_USER_NAME"
@@ -734,7 +734,7 @@ main() {
     [[ -n "$ssm_logical_id" && -n "$ssm_name" ]] || continue
     ssm_type="$(aws ssm describe-parameters --parameter-filters "Key=Name,Option=Equals,Values=$ssm_name" \
       --query 'Parameters[0].Type' --output text)"
-    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/deployment-manifest.mjs ssm-stack-resource \
+    MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" run_with_mise node scripts/shared/deployment-manifest.mjs ssm-stack-resource \
       --name "$ssm_name" --type "$ssm_type" --logical-id "$ssm_logical_id" >/dev/null
   done < <(aws cloudformation list-stack-resources --stack-name "$STACK_ID" \
     --query 'StackResourceSummaries[?ResourceType==`AWS::SSM::Parameter`].[LogicalResourceId,PhysicalResourceId]' --output text)

@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Cloudflare legacy secret pruning deployment contract", () => {
-  const source = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
+  const source = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
   const helperBody = (name: string): string => {
     const match = source.match(new RegExp(`${name}\\(\\) \\{([\\s\\S]*?)\\n\\}`));
@@ -13,7 +13,7 @@ describe("Cloudflare legacy secret pruning deployment contract", () => {
 
   it("uses one Wrangler v4 bulk merge patch based on the live inventory", () => {
     expect(source).toContain('wrangler secret list --config "$WRANGLER_DEPLOY_CONFIG_FILE"');
-    expect(source).toContain("legacy-worker-secret-policy.ts merge-patch");
+    expect(source).toContain("scripts/cloudflare/legacy-worker-secret-policy.ts merge-patch");
     expect(source).toContain('wrangler secret bulk --config "$WRANGLER_DEPLOY_CONFIG_FILE"');
     expect(source).not.toContain("wrangler secret delete --config");
     expect(source).toContain('if [[ "$LEGACY_SECRET_DELETION_PATCH" == "{}" ]]');

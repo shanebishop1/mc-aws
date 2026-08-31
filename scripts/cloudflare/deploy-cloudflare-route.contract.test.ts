@@ -3,7 +3,7 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 describe("Cloudflare route replacement deployment contract", () => {
-  const source = readFileSync(path.resolve(process.cwd(), "scripts/deploy-cloudflare.sh"), "utf8");
+  const source = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
   it("classifies an exact live route through the validated manifest before deploy", () => {
     expect(source).toContain("manifest_route_state --zone");

@@ -19,7 +19,7 @@ const withCwd = async (cwd: string, callback: () => void | Promise<void>): Promi
   }
 };
 
-describe("scripts/validate-runtime-state-deploy", () => {
+describe("scripts/cloudflare/validate-runtime-state-deploy", () => {
   it("passes when wrangler runtime-state config can be resolved from env", async () => {
     const tempDir = createTempProject();
 

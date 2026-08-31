@@ -64,7 +64,7 @@ prepare_next_build_env_file() {
   # Parse effective dotenv keys so whitespace and export forms cannot bypass
   # deployment-only credential filtering. Empty AWS values also block Next.js
   # from reloading human credentials from .env.local.
-  if ! pnpm exec tsx scripts/deploy-env.ts sanitize-build-env \
+  if ! pnpm exec tsx scripts/cloudflare/deploy-env.ts sanitize-build-env \
     --env-file "$ENV_FILE" --output "$NEXT_BUILD_ENV_FILE"; then
     echo "❌ Error: Failed to prepare sanitized Next.js build environment"
     exit 1
@@ -163,11 +163,11 @@ wrangler() {
 }
 
 manifest() {
-  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs "$@" >/dev/null
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/shared/deployment-manifest.mjs "$@" >/dev/null
 }
 
 manifest_route_state() {
-  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/deployment-manifest.mjs route-state "$@"
+  MC_AWS_DEPLOYMENT_MANIFEST="$DEPLOYMENT_MANIFEST_FILE" node scripts/shared/deployment-manifest.mjs route-state "$@"
 }
 
 is_worker_not_found_output() {
@@ -423,7 +423,7 @@ retry() {
 }
 
 get_worker_name() {
-  pnpm exec tsx scripts/wrangler-config.ts worker-name "$WRANGLER_CONFIG_FILE"
+  pnpm exec tsx scripts/cloudflare/wrangler-config.ts worker-name "$WRANGLER_CONFIG_FILE"
 }
 
 get_env_value() {
@@ -652,7 +652,7 @@ prepare_wrangler_deploy_config() {
 
   WRANGLER_DEPLOY_CONFIG_FILE="$(mktemp "wrangler.deploy.XXXXXX.jsonc")"
 
-  if ! pnpm exec tsx scripts/panel-hosting.ts prepare-config \
+  if ! pnpm exec tsx scripts/cloudflare/panel-hosting.ts prepare-config \
     --source "$WRANGLER_CONFIG_FILE" \
     --output "$WRANGLER_DEPLOY_CONFIG_FILE" \
     --kv-id "$runtime_state_snapshot_kv_id" \
@@ -682,7 +682,7 @@ prepare_wrangler_deploy_args() {
   fi
 
   local args_output
-  if ! args_output="$(pnpm exec tsx scripts/panel-hosting.ts "${helper_args[@]}")"; then
+  if ! args_output="$(pnpm exec tsx scripts/cloudflare/panel-hosting.ts "${helper_args[@]}")"; then
     echo "❌ Error: Failed to construct safe Wrangler deployment arguments"
     exit 1
   fi
@@ -752,7 +752,7 @@ if [[ -z "$WORKER_NAME" ]]; then
 fi
 
 echo "🔍 Validating panel hosting configuration..."
-PANEL_VALIDATION_OUTPUT="$(pnpm exec tsx scripts/panel-hosting.ts validate-env \
+PANEL_VALIDATION_OUTPUT="$(pnpm exec tsx scripts/cloudflare/panel-hosting.ts validate-env \
   --env-file "$ENV_FILE" --worker-name "$WORKER_NAME")" || {
   echo "❌ Error: panel hosting configuration is invalid"
   exit 1
@@ -776,7 +776,7 @@ echo "✅ Production schema validation passed"
 echo ""
 
 echo "🔍 Validating runtime-state Wrangler setup..."
-if ! pnpm exec tsx scripts/validate-runtime-state-deploy.ts --env-file "$ENV_FILE" --wrangler-config "$WRANGLER_CONFIG_FILE"; then
+if ! pnpm exec tsx scripts/cloudflare/validate-runtime-state-deploy.ts --env-file "$ENV_FILE" --wrangler-config "$WRANGLER_CONFIG_FILE"; then
   echo "❌ Error: runtime-state deployment preflight failed"
   exit 1
 fi
@@ -1302,7 +1302,7 @@ run_runtime_rotation() {
     WRANGLER_HOME_DIR="$WRANGLER_HOME_DIR" \
     CLOUDFLARE_DEPLOY_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" \
     MC_AWS_CLOUDFLARE_RECOVERY_RECORD="$RECOVERY_RECORD_FILE" \
-    ROTATION_MODE="$mode" bash scripts/rotate-worker-runtime-key.sh
+    ROTATION_MODE="$mode" bash scripts/cloudflare/rotate-worker-runtime-key.sh
 }
 
 assert_lifecycle_recovery_unblocked() {
@@ -1538,7 +1538,7 @@ fi
 
 recover_pending_deployment
 
-if ! PREFLIGHT_SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
+if ! PREFLIGHT_SECRET_ENTRIES_OUTPUT="$(pnpm exec tsx scripts/cloudflare/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")"; then
   echo "❌ Error: Failed to parse approved Worker secrets before provider mutation" >&2
   exit 1
 fi
@@ -1670,7 +1670,7 @@ verify_deployed_secret_and_binding_inventory() {
   local live_secrets expected_entries expected_names deployments_json version_id version_json live_bindings expected_kv_id
   live_secrets="$(wrangler secret list --config "$WRANGLER_DEPLOY_CONFIG_FILE" --name "$WORKER_NAME" --format json)" || return 1
   live_secrets="$(printf '%s' "$live_secrets" | sanitize_secret_inventory)" || return 1
-  expected_entries="$(pnpm exec tsx scripts/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")" || return 1
+  expected_entries="$(pnpm exec tsx scripts/cloudflare/deploy-env.ts worker-secret-entries --env-file "$ENV_FILE")" || return 1
   expected_names="$(printf '%s' "$expected_entries" | node -e '
 const fs=require("node:fs"); const names=fs.readFileSync(0,"utf8").split(/\r?\n/).filter(Boolean).map((line)=>line.split("\t",1)[0]);
 process.stdout.write(JSON.stringify(names));
@@ -1783,7 +1783,7 @@ if ! WORKER_SECRET_INVENTORY="$(wrangler secret list --config "$WRANGLER_DEPLOY_
   exit 1
 fi
 if ! LEGACY_SECRET_DELETION_PATCH="$(printf '%s' "$WORKER_SECRET_INVENTORY" | \
-  pnpm exec tsx scripts/legacy-worker-secret-policy.ts merge-patch)"; then
+  pnpm exec tsx scripts/cloudflare/legacy-worker-secret-policy.ts merge-patch)"; then
   echo "❌ Error: Failed to apply the explicit legacy Worker secret policy"
   exit 1
 fi

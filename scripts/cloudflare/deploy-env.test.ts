@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { buildWorkerSecretUploadEntries } from "./deploy-env";
 
 const rootDir = path.resolve(process.cwd());
-const helperPath = path.join(rootDir, "scripts/deploy-env.ts");
+const helperPath = path.join(rootDir, "scripts/cloudflare/deploy-env.ts");
 
 describe("deployment build environment sanitization", () => {
   it("filters deployment-only keys across dotenv whitespace and export forms", () => {
