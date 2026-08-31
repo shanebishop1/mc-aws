@@ -603,7 +603,7 @@ describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisCo
 
   it("keeps first boot on the reviewed AL2023 repository snapshot and records installed package versions", () => {
     const userData = readFileSync(path.resolve(process.cwd(), "infra/src/ec2/user_data.sh"), "utf8");
-    expect(userData).toContain("/etc/dnf/vars/releasever");
+    expect(userData).toContain("rpm -q --qf '%{VERSION}' system-release");
     expect(userData).toContain('--releasever="$AL2023_RELEASEVER"');
     expect(userData).toContain("--setopt=metadata_expire=never");
     expect(userData).toContain("/var/lib/mc-aws/os-package-manifest.txt");

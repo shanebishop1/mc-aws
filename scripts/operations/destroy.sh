@@ -636,7 +636,8 @@ for(const parameter of parameters){
   const ownership=fact?.ownership==="created"||stackOwned.has(name)?"created":fact?.ownership==="preexisting"?"preexisting":"unproven";
   let disposition="preserve-unclassified";
   if(category){
-    if(ownership==="created") disposition=name==="/minecraft/gdrive-token"&&process.env.RETAIN_GDRIVE_TOKEN==="1"?"retain-for-migration":"delete";
+    if(name==="/minecraft/gdrive-token"&&process.env.RETAIN_GDRIVE_TOKEN==="1") disposition="retain-for-migration";
+    else if(ownership==="created") disposition="delete";
     else if(consented.has(name)) disposition="delete-consented";
     else if(ownership==="preexisting") disposition="preserve-preexisting";
     else disposition="preserve-unproven";

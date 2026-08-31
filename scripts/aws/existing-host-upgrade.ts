@@ -27,6 +27,9 @@ const idPatterns = {
 };
 
 export function replacementConfirmationPhrase(identity: HostIdentity, snapshotId: string): string {
+  if (identity.currentAmiId === identity.targetAmiId) {
+    return `UPDATE ${identity.instanceId} USERDATA IN PLACE FROM ${snapshotId}`;
+  }
   return `REPLACE ${identity.instanceId} WITH ${identity.targetAmiId} FROM ${snapshotId}`;
 }
 
@@ -85,11 +88,55 @@ function replacementValue(change: JsonRecord, name: string, side: "BeforeValue" 
     .find((value: unknown) => value !== undefined);
 }
 
+function assertReviewedAmiTransition(identity: HostIdentity, instance: JsonRecord): void {
+  const before = replacementValue(instance, "ImageId", "BeforeValue");
+  const after = replacementValue(instance, "ImageId", "AfterValue");
+  if (identity.currentAmiId === identity.targetAmiId) {
+    if (
+      (before !== undefined || after !== undefined) &&
+      (before !== identity.currentAmiId || after !== identity.targetAmiId)
+    ) {
+      throw new Error("EC2 replacement plan contains an unexpected AMI transition");
+    }
+    return;
+  }
+  if (before !== identity.currentAmiId || after !== identity.targetAmiId) {
+    throw new Error("EC2 replacement plan does not show the exact reviewed AMI transition");
+  }
+}
+
+function classifyReviewedInstanceChange(identity: HostIdentity, resource: JsonRecord): "replacement" | "in-place" {
+  if (
+    resource.ResourceType !== "AWS::EC2::Instance" ||
+    resource.PhysicalResourceId !== identity.instanceId ||
+    resource.Action !== "Modify"
+  ) {
+    throw new Error("Managed EC2 change must modify the exact live instance");
+  }
+  const sameAmi = identity.currentAmiId === identity.targetAmiId;
+  if (!sameAmi) {
+    if (resource.Replacement !== "True") {
+      throw new Error("Managed EC2 AMI change must be an explicit replacement of the exact live instance");
+    }
+    return "replacement";
+  }
+  const userDataChanges = (resource.Details ?? []).filter(
+    (detail: JsonRecord) =>
+      detail.Target?.Attribute === "Properties" &&
+      detail.Target?.Name === "UserData" &&
+      detail.Target?.RequiresRecreation === "Conditionally"
+  );
+  if (resource.Replacement !== "Conditional" || userDataChanges.length !== 1) {
+    throw new Error("Same-AMI EC2 change must be exactly one conditional UserData update");
+  }
+  return "in-place";
+}
+
 export function assertReviewedInstanceReplacementPlan(
   identity: HostIdentity,
   changeSet: JsonRecord,
   instanceLogicalId: string
-): void {
+): "replacement" | "in-place" {
   if (
     changeSet.StackId !== identity.stackId ||
     changeSet.Status !== "CREATE_COMPLETE" ||
@@ -104,19 +151,8 @@ export function assertReviewedInstanceReplacementPlan(
   if (instanceChanges.length !== 1) throw new Error("Plan must contain exactly one managed EC2 instance change");
   const instance = instanceChanges[0];
   const resource = instance.ResourceChange;
-  if (
-    resource.ResourceType !== "AWS::EC2::Instance" ||
-    resource.PhysicalResourceId !== identity.instanceId ||
-    resource.Action !== "Modify" ||
-    resource.Replacement !== "True"
-  ) {
-    throw new Error("Managed EC2 change must be an explicit replacement of the exact live instance");
-  }
-  const before = replacementValue(instance, "ImageId", "BeforeValue");
-  const after = replacementValue(instance, "ImageId", "AfterValue");
-  if (before !== identity.currentAmiId || after !== identity.targetAmiId) {
-    throw new Error("EC2 replacement plan does not show the exact reviewed AMI transition");
-  }
+  const changeKind = classifyReviewedInstanceChange(identity, resource);
+  assertReviewedAmiTransition(identity, instance);
   for (const change of changes) {
     const candidate = change.ResourceChange ?? {};
     if (candidate.LogicalResourceId === instanceLogicalId) continue;
@@ -124,6 +160,7 @@ export function assertReviewedInstanceReplacementPlan(
       throw new Error(`Replacement plan contains another destructive/replacing change: ${candidate.LogicalResourceId}`);
     }
   }
+  return changeKind;
 }
 
 export interface PersistedStackOutputs {

@@ -46,6 +46,7 @@ interface Options {
 interface UpgradeState {
   schemaVersion: 1;
   status: "prepared" | "executing" | "recovery-required" | "complete";
+  changeKind: "replacement" | "in-place";
   identity: HostIdentity;
   snapshotId: string;
   changeSetId: string;
@@ -161,9 +162,14 @@ function readState(): UpgradeState {
   ) {
     throw new Error("Host-upgrade recovery state must be one current-user-owned 0600 regular file");
   }
-  const state = JSON.parse(readFileSync(STATE_PATH, "utf8")) as UpgradeState;
+  const state = JSON.parse(readFileSync(STATE_PATH, "utf8")) as Omit<UpgradeState, "changeKind"> & {
+    changeKind?: UpgradeState["changeKind"];
+  };
   if (state.schemaVersion !== 1) throw new Error("Unsupported host-upgrade recovery state");
-  return state;
+  if (state.changeKind !== undefined && !new Set(["replacement", "in-place"]).has(state.changeKind)) {
+    throw new Error("Host-upgrade recovery state has an unsupported change classification");
+  }
+  return { ...state, changeKind: state.changeKind ?? "replacement" };
 }
 
 function stack(options: Options): JsonRecord {
@@ -238,6 +244,22 @@ function assertBasicConfirmation(options: Options, identity: HostIdentity): void
   }
 }
 
+function waitForSsmCommand(region: string, commandId: string, instanceId: string): JsonRecord {
+  for (let attempt = 0; attempt < 360; attempt += 1) {
+    let result: JsonRecord | undefined;
+    try {
+      result = aws(region, ["ssm", "get-command-invocation", "--command-id", commandId, "--instance-id", instanceId]);
+    } catch (error) {
+      if (!(error instanceof CommandFailure) || !/InvocationDoesNotExist/.test(error.output)) throw error;
+    }
+    if (result && new Set(["Success", "Cancelled", "TimedOut", "Failed", "Cancelling"]).has(result.Status)) {
+      return result;
+    }
+    run("sleep", ["5"]);
+  }
+  throw new Error(`Host command ${commandId} did not reach a terminal state within 30 minutes`);
+}
+
 function ssmCommand(region: string, instanceId: string, commands: string[]): string {
   const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-host-command-"));
   try {
@@ -250,25 +272,7 @@ function ssmCommand(region: string, instanceId: string, commands: string[]): str
     const sent = aws(region, ["ssm", "send-command", "--cli-input-json", `file://${input}`]);
     const commandId = sent.Command?.CommandId;
     if (typeof commandId !== "string") throw new Error("SSM did not return a command ID");
-    run("aws", [
-      "--region",
-      region,
-      "ssm",
-      "wait",
-      "command-executed",
-      "--command-id",
-      commandId,
-      "--instance-id",
-      instanceId,
-    ]);
-    const result = aws(region, [
-      "ssm",
-      "get-command-invocation",
-      "--command-id",
-      commandId,
-      "--instance-id",
-      instanceId,
-    ]);
+    const result = waitForSsmCommand(region, commandId, instanceId);
     if (result.Status !== "Success")
       throw new Error(`Host command failed: ${result.StandardErrorContent || result.Status}`);
     return String(result.StandardOutputContent ?? "").trim();
@@ -386,7 +390,8 @@ function plan(options: Options, found: JsonRecord, identity: HostIdentity): void
   console.log(`AMI: ${identity.currentAmiId} -> ${identity.targetAmiId}`);
   console.log(`Bootstrap pins: ${PINS_SHA256}`);
   if (identity.currentAmiId === identity.targetAmiId) {
-    console.log("AMI is unchanged. Use rollout-runtime for an idempotent in-place bootstrap/security pin rollout.");
+    console.log("AMI is unchanged. Use rollout-runtime for artifact-only changes.");
+    console.log("If launch-time UserData changed, use the backup-guarded replacement stages instead.");
   } else {
     console.log("AMI differs: CloudFormation replacement is required; UserData will run only on the new instance.");
     console.log("Next: prepare-replacement with exact StackId and instance confirmations shown above.");
@@ -415,8 +420,6 @@ function readRemoteBackupProof(region: string, instanceId: string, backupName: s
 
 function prepareReplacement(options: Options, found: JsonRecord, identity: HostIdentity): void {
   assertBasicConfirmation(options, identity);
-  if (identity.currentAmiId === identity.targetAmiId)
-    throw new Error("AMI is unchanged; use rollout-runtime instead of replacement");
   const quiescence = acquireQuiescence(options);
   let instanceStopped = false;
   try {
@@ -473,11 +476,12 @@ function prepareReplacement(options: Options, found: JsonRecord, identity: HostI
       changeSetName,
       "--include-property-values",
     ]);
-    assertReviewedInstanceReplacementPlan(identity, changeSet, INSTANCE_LOGICAL_ID);
+    const changeKind = assertReviewedInstanceReplacementPlan(identity, changeSet, INSTANCE_LOGICAL_ID);
     const changeSetId = changeSet.ChangeSetId;
     const state: UpgradeState = {
       schemaVersion: 1,
       status: "prepared",
+      changeKind,
       identity,
       snapshotId,
       changeSetId,
@@ -485,7 +489,7 @@ function prepareReplacement(options: Options, found: JsonRecord, identity: HostI
       backupProof,
     };
     writeState(state);
-    console.log(`Prepared and validated replacement: ${changeSetId}`);
+    console.log(`Prepared and validated ${changeKind} host change: ${changeSetId}`);
     console.log(`Completed rollback snapshot (billed until deleted): ${snapshotId}`);
     console.log(`Verified Drive backup: ${backupName}`);
     console.log(`Confirmation: ${replacementConfirmationPhrase(identity, snapshotId)}`);
@@ -559,16 +563,38 @@ function postRestore(options: Options, state: UpgradeState, newInstanceId: strin
   const backupBase = state.backupName.replace(/\.tar\.gz$/, "");
   const waitReadyDigest = runtimeFileDigest(readFileSync(path.join(ROOT, "infra/src/ec2/mc-wait-ready.sh")));
   const rolloutDigest = runtimeFileDigest(readFileSync(path.join(ROOT, "infra/src/ec2/mc-runtime-rollout.sh")));
-  const output = ssmCommand(options.region, newInstanceId, [
+  const commands = [
     "while [[ ! -f /var/lib/mc-aws/bootstrap-complete ]]; do sleep 5; done",
+    ...(state.changeKind === "in-place" ? ["sudo /usr/local/bin/mc-profile-install.sh"] : []),
     `sudo /usr/local/bin/mc-resume.sh named '${backupBase}.tar.gz'`,
+    ...(state.changeKind === "in-place"
+      ? [`sudo /usr/local/bin/mc-runtime-rollout.sh --confirm-pins '${PINS_SHA256}'`]
+      : []),
     "sudo /usr/local/bin/mc-wait-ready.sh raw_ip '' ''",
     `grep -Fx 'pins ${PINS_SHA256}' /var/lib/mc-aws/runtime-hashes.sha256`,
     `grep -Fx 'paper ${PINS.artifacts.paper.sha256}' /var/lib/mc-aws/runtime-hashes.sha256`,
     `grep -Fx 'mc-wait-ready ${waitReadyDigest}' /var/lib/mc-aws/runtime-hashes.sha256`,
     `grep -Fx 'mc-runtime-rollout ${rolloutDigest}' /var/lib/mc-aws/runtime-hashes.sha256`,
-  ]);
+  ];
+  const output = ssmCommand(options.region, newInstanceId, commands);
   if (!output.includes('"ready":true')) throw new Error("Replacement readiness output was not successful");
+}
+
+function verifyUpdatedInstance(options: Options, state: UpgradeState, instanceId: string): void {
+  if (state.changeKind === "replacement" && instanceId === state.identity.instanceId) {
+    throw new Error("CloudFormation did not replace the instance");
+  }
+  if (state.changeKind === "in-place" && instanceId !== state.identity.instanceId) {
+    throw new Error("CloudFormation unexpectedly replaced the in-place instance");
+  }
+  const instance = aws(options.region, ["ec2", "describe-instances", "--instance-ids", instanceId]).Reservations?.[0]
+    ?.Instances?.[0];
+  if (instance?.ImageId !== state.identity.targetAmiId) {
+    throw new Error("Updated instance does not use the reviewed target AMI");
+  }
+  if (state.changeKind === "in-place" && instance.State?.Name === "stopped") {
+    aws(options.region, ["ec2", "start-instances", "--instance-ids", instanceId]);
+  }
 }
 
 function executeReplacement(options: Options, state: UpgradeState): void {
@@ -593,7 +619,8 @@ function executeReplacement(options: Options, state: UpgradeState): void {
     state.changeSetId,
     "--include-property-values",
   ]);
-  assertReviewedInstanceReplacementPlan(state.identity, reviewed, INSTANCE_LOGICAL_ID);
+  const reviewedChangeKind = assertReviewedInstanceReplacementPlan(state.identity, reviewed, INSTANCE_LOGICAL_ID);
+  if (reviewedChangeKind !== state.changeKind) throw new Error("Reviewed host change classification changed");
   const pendingResponse = aws(options.region, [
     "cloudformation",
     "get-template",
@@ -665,13 +692,7 @@ function executeReplacement(options: Options, state: UpgradeState): void {
     const outputs = validateRequiredStackOutputs(stackOutputs(after));
     state.newInstanceId = outputs.InstanceId;
     writeState(state);
-    if (outputs.InstanceId === state.identity.instanceId)
-      throw new Error("CloudFormation did not replace the instance");
-    const replacement = aws(options.region, ["ec2", "describe-instances", "--instance-ids", outputs.InstanceId])
-      .Reservations?.[0]?.Instances?.[0];
-    if (replacement?.ImageId !== state.identity.targetAmiId) {
-      throw new Error("Replacement instance does not use the reviewed target AMI");
-    }
+    verifyUpdatedInstance(options, state, outputs.InstanceId);
     postRestore(options, state, outputs.InstanceId);
     persistOutputs(after);
     assertSafeToReleaseUpgradeQuiescence({
@@ -686,7 +707,9 @@ function executeReplacement(options: Options, state: UpgradeState): void {
     quiescence.release();
     state.status = "complete";
     writeState(state);
-    console.log(`Replacement complete and verified: ${outputs.InstanceId}`);
+    console.log(
+      `${state.changeKind === "replacement" ? "Replacement" : "In-place host update"} complete and verified: ${outputs.InstanceId}`
+    );
     console.log("AWS outputs are persisted. Deploy the Worker only after reviewing dual-v1 rollout order.");
   } catch (error) {
     state.status = "recovery-required";

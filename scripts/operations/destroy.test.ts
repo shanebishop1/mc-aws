@@ -522,6 +522,20 @@ describe("ownership-aware destroy", { timeout: 60_000 }, () => {
     expect(result.stdout).toContain("Security residual: retained credential /minecraft/gdrive-token");
   }, 20_000);
 
+  it("allows the migration flag to retain a legacy ownership-unproven Drive credential", () => {
+    const harness = makeHarness(undefined, (manifest) => {
+      manifest.aws.ssmParameters = manifest.aws.ssmParameters.filter(
+        (parameter) => parameter.name !== "/minecraft/gdrive-token"
+      );
+    });
+    const result = harness.run(["--retain-gdrive-token-for-migration"]);
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.stdout).toContain(
+      "/minecraft/gdrive-token [SecureString; credential; ownership=unproven; evidence=none] => retain-for-migration"
+    );
+    expect(harness.readState().mutations).toEqual([]);
+  });
+
   it("preserves and blocks on an SSM path outside the exact project allowlist", () => {
     const harness = makeHarness({
       ssmParameters: {

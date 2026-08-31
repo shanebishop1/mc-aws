@@ -53,6 +53,7 @@ describe("EC2 user data", () => {
     expect(script).toContain("/tmp/asyncio_dgram-2.2.0-py3-none-any.whl");
     expect(script).toContain("/tmp/dnspython-2.7.0-py3-none-any.whl");
     expect(script).toContain("pip install --no-index --no-deps");
+    expect(script).toContain('exec python3 -m mcstatus "$@"');
     expect(script).not.toMatch(/pip install mcstatus(?:\s|$)/);
   });
 

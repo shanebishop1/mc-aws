@@ -72,7 +72,7 @@ review() {
 }
 
 install_pinned() {
-  local version version_pattern url expected actual temporary
+  local version version_pattern version_output url expected actual temporary temporary_dir
   IFS=$'\t' read -r version url expected < <(read_pin "$(platform_key)")
   [[ -n "$version" && -n "$url" && -n "$expected" ]] || fail "could not read complete mise pin"
   version_pattern="${version//./\\.}"
@@ -80,21 +80,25 @@ install_pinned() {
   [[ ! -L "$INSTALL_PATH" ]] || fail "$INSTALL_PATH must not be a symlink"
 
   if [[ -f "$INSTALL_PATH" && ! -L "$INSTALL_PATH" ]] && [[ "$(sha256_file "$INSTALL_PATH")" == "$expected" ]]; then
-    "$INSTALL_PATH" --version 2>/dev/null | grep -Eq "(^|[[:space:]])${version_pattern}([[:space:]]|$)" || fail "installed mise checksum matches but version output does not"
+    version_output="$("$INSTALL_PATH" --version 2>/dev/null)" || fail "installed mise checksum matches but version command failed"
+    grep -Eq "(^|[[:space:]])${version_pattern}([[:space:]]|$)" <<< "$version_output" || fail "installed mise checksum matches but version output does not"
     export PATH="$INSTALL_DIR:$PATH"
     return
   fi
 
   command -v curl >/dev/null 2>&1 || fail "curl is required"
   mkdir -p -- "$INSTALL_DIR"
-  temporary="$(mktemp "$INSTALL_DIR/.mise.download.XXXXXX")"
-  trap 'rm -f -- "$temporary"' EXIT HUP INT TERM
+  temporary_dir="$(mktemp -d "$INSTALL_DIR/.mise.download.XXXXXX")"
+  temporary="$temporary_dir/mise"
+  trap 'rm -rf -- "$temporary_dir"' EXIT HUP INT TERM
   curl --disable --fail --location --proto '=https' --tlsv1.2 --retry 3 --output "$temporary" "$url"
   actual="$(sha256_file "$temporary")"
   [[ "$actual" == "$expected" ]] || fail "checksum mismatch for $url (expected $expected, got $actual)"
   chmod 0755 "$temporary"
-  "$temporary" --version 2>/dev/null | grep -Eq "(^|[[:space:]])${version_pattern}([[:space:]]|$)" || fail "downloaded binary did not report mise $version"
+  version_output="$("$temporary" --version 2>/dev/null)" || fail "downloaded mise $version version command failed"
+  grep -Eq "(^|[[:space:]])${version_pattern}([[:space:]]|$)" <<< "$version_output" || fail "downloaded binary did not report mise $version"
   mv -f -- "$temporary" "$INSTALL_PATH"
+  rmdir -- "$temporary_dir"
   trap - EXIT HUP INT TERM
   export PATH="$INSTALL_DIR:$PATH"
 }

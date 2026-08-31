@@ -44,8 +44,8 @@ Do not replace a version with `latest`, `current`, an API query performed during
    pnpm host:upgrade -- plan --region "$AWS_REGION"
    ```
 
-8. If the AMI is unchanged, use the plan's exact IDs and digest with `rollout-runtime`. It takes a maintenance lock compatible with old and `dual-v1` clients, stops Minecraft only while applying exact artifacts, transfers `mc-wait-ready.sh` before a new Lambda can depend on it, and verifies hashes/readiness. Then use the existing-deployment non-instance bridge to publish AWS assets/Lambda without replacing EC2. A Paper/Minecraft upgrade can rewrite world data; take and test a Drive backup first, and do not assume reinstalling an older jar reverses a world-format migration.
-9. If the AMI changed, use the replacement stages below. Never run ordinary `cdk:deploy` to bypass the guard.
+8. If the AMI and launch-time UserData are unchanged, use the plan's exact IDs and digest with `rollout-runtime`. It takes a maintenance lock compatible with old and `dual-v1` clients, stops Minecraft only while applying exact artifacts, transfers `mc-wait-ready.sh` before a new Lambda can depend on it, and verifies hashes/readiness. Then use the existing-deployment non-instance bridge to publish AWS assets/Lambda without replacing EC2. A Paper/Minecraft upgrade can rewrite world data; take and test a Drive backup first, and do not assume reinstalling an older jar reverses a world-format migration.
+9. If the AMI or launch-time UserData changed, use the guarded stages below. A same-AMI UserData update is accepted only when the prepared CloudFormation change set identifies exactly one conditional UserData change on the exact EC2 instance; an AMI change must still prove explicit replacement. Never run ordinary `cdk:deploy` to bypass the guard.
 
 ## Intentional Amazon Linux security upgrade
 
@@ -65,7 +65,7 @@ Review Amazon Linux security advisories and release notes first. Pinning changes
 An AMI or current UserData change replaces EC2 and its `DeleteOnTermination=true` root volume. **Wrong confirmations, an untested Drive restore, or deleting recovery artifacts can permanently lose world data.** The EBS snapshot adds regional snapshot-storage charges until explicitly deleted; replacement also incurs normal EC2/EBS/data-transfer costs.
 
 1. Schedule downtime, stop new panel/email actions, test a Drive backup/restore, and preserve `.mc-aws-deployment.json`.
-2. Run `host:upgrade plan`, then `prepare-replacement` with the exact printed StackId/instance ID. Prepare acquires the compatibility lock, creates and re-reads a fresh exact Drive archive, gracefully stops Minecraft/EC2, creates and waits for an encrypted root snapshot, asks CDK to prepare (not execute) a change set, and rejects anything except the exact EC2 AMI replacement plus non-destructive adjacent changes. It restarts the old host after preparation.
+2. Run `host:upgrade plan`, then `prepare-replacement` with the exact printed StackId/instance ID. Prepare acquires the compatibility lock, creates and re-reads a fresh exact Drive archive, gracefully stops Minecraft/EC2, creates and waits for an encrypted root snapshot, asks CDK to prepare (not execute) a change set, and rejects anything except explicit replacement of the exact EC2 instance plus non-destructive adjacent changes. It restarts the old host after preparation.
 3. Review the immutable change-set ARN in CloudFormation. Execute only with all exact printed confirmations:
 
    ```bash
