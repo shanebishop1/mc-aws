@@ -23,10 +23,18 @@ const seedBackups = async (page: Parameters<typeof setupRunningScenario>[0]) => 
   );
 };
 
+const openDriveAction = async (page: Parameters<typeof setupRunningScenario>[0], action: "backup" | "restore") => {
+  const statusResponse = page.waitForResponse(
+    (response) => new URL(response.url()).pathname === "/api/gdrive/status" && response.request().method() === "GET"
+  );
+  await page.getByRole("button", { name: new RegExp(`^${action}$`, "i") }).click();
+  expect((await statusResponse).ok()).toBe(true);
+};
+
 test.describe("Backup and Restore", () => {
   test("completes a confirmed backup", async ({ page }) => {
     await openRunningServer(page);
-    await page.getByRole("button", { name: /^backup$/i }).click();
+    await openDriveAction(page, "backup");
     const dialog = page.getByTestId("backup-dialog");
     await expect(dialog).toBeVisible();
     await dialog.getByRole("button", { name: /^backup$/i }).click();
@@ -39,7 +47,7 @@ test.describe("Backup and Restore", () => {
     await page.goto("/");
     await waitForPageLoad(page);
 
-    await page.getByRole("button", { name: /^restore$/i }).click();
+    await openDriveAction(page, "restore");
     await expect(page.getByTestId("backup-selection-list")).toBeVisible();
     await page.getByText("minecraft-backup-2025-01-20", { exact: true }).click();
     await expect(page.getByTestId("restore-backup-input")).toHaveValue("minecraft-backup-2025-01-20");
@@ -57,7 +65,7 @@ test.describe("Backup and Restore", () => {
     await page.goto("/");
     await waitForPageLoad(page);
 
-    await page.getByRole("button", { name: /^restore$/i }).click();
+    await openDriveAction(page, "restore");
     const input = page.getByTestId("restore-backup-input");
     await input.fill("manual-backup-2025-02-03");
     await expect(page.getByText(/Restore backup: manual-backup-2025-02-03/i)).toBeVisible();
@@ -76,7 +84,7 @@ test.describe("Backup and Restore", () => {
     await waitForPageLoad(page);
 
     for (const action of ["backup", "restore"] as const) {
-      await page.getByRole("button", { name: new RegExp(`^${action}$`, "i") }).click();
+      await openDriveAction(page, action);
       const prompt = page.getByTestId("gdrive-setup-prompt");
       await expect(prompt).toContainText(
         action === "backup" ? /Connect Google Drive to create backups/i : /Connect Google Drive to restore backups/i
@@ -100,14 +108,14 @@ test.describe("Backup and Restore", () => {
       }
     });
 
-    await page.getByRole("button", { name: /^backup$/i }).click();
+    await openDriveAction(page, "backup");
     await page
       .getByTestId("backup-dialog")
       .getByRole("button", { name: /cancel/i })
       .click();
     await expect(page.getByTestId("backup-dialog")).not.toBeVisible();
 
-    await page.getByRole("button", { name: /^restore$/i }).click();
+    await openDriveAction(page, "restore");
     await page
       .getByTestId("restore-dialog")
       .getByRole("button", { name: /cancel/i })
