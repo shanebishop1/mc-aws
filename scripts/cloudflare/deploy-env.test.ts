@@ -28,8 +28,8 @@ describe("deployment build environment sanitization", () => {
     );
 
     execFileSync(
-      "pnpm",
-      ["exec", "tsx", helperPath, "sanitize-build-env", "--env-file", envFile, "--output", outputFile],
+      process.execPath,
+      ["--import", "tsx", helperPath, "sanitize-build-env", "--env-file", envFile, "--output", outputFile],
       {
         cwd: rootDir,
         stdio: "pipe",
@@ -68,11 +68,15 @@ describe("Worker secret upload entries", () => {
     const envFile = path.join(tempDir, "selected.env");
     fs.writeFileSync(envFile, "AUTH_SECRET=selected-file-secret\n");
 
-    const output = execFileSync("pnpm", ["exec", "tsx", helperPath, "worker-secret-entries", "--env-file", envFile], {
-      cwd: rootDir,
-      encoding: "utf8",
-      env: { ...process.env, CLOUDFLARE_API_TOKEN: "shell-deploy-token" },
-    });
+    const output = execFileSync(
+      process.execPath,
+      ["--import", "tsx", helperPath, "worker-secret-entries", "--env-file", envFile],
+      {
+        cwd: rootDir,
+        encoding: "utf8",
+        env: { ...process.env, CLOUDFLARE_API_TOKEN: "shell-deploy-token" },
+      }
+    );
 
     expect(output).toContain("AUTH_SECRET\t");
     expect(output).not.toContain("CLOUDFLARE_DNS_API_TOKEN");
