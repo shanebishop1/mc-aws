@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const rotationScript = path.resolve(process.cwd(), "scripts/cloudflare/rotate-worker-runtime-key.sh");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 function writeExecutable(filePath: string, source: string): void {
   writeFileSync(filePath, source, { mode: 0o700 });
@@ -15,6 +20,7 @@ type ProbeResponse = "success" | "404" | "502" | "503" | "transport" | "authFail
 
 function runRotation(options: { probeResponses?: ProbeResponse[]; noPriorKey?: boolean; maxAttempts?: number } = {}) {
   const tempDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-runtime-rotation-"));
+  temporaryDirectories.push(tempDirectory);
   const eventLog = path.join(tempDirectory, "events.log");
   const stateFile = path.join(tempDirectory, "state");
   const awsPath = path.join(tempDirectory, "aws-mock");

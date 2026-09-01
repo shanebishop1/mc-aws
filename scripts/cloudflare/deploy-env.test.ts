@@ -2,15 +2,21 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import { buildWorkerSecretUploadEntries } from "./deploy-env";
 
 const rootDir = path.resolve(process.cwd());
 const helperPath = path.join(rootDir, "scripts/cloudflare/deploy-env.ts");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
 
 describe("deployment build environment sanitization", () => {
   it("filters deployment-only keys across dotenv whitespace and export forms", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-aws-deploy-env-"));
+    temporaryDirectories.push(tempDir);
     const envFile = path.join(tempDir, "source.env");
     const outputFile = path.join(tempDir, "build.env");
     fs.writeFileSync(
@@ -65,6 +71,7 @@ describe("Worker secret upload entries", () => {
 
   it("never derives compatibility input from the shell deployment token", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-aws-deploy-secret-"));
+    temporaryDirectories.push(tempDir);
     const envFile = path.join(tempDir, "selected.env");
     fs.writeFileSync(envFile, "AUTH_SECRET=selected-file-secret\n");
 

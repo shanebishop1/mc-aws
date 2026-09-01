@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import * as dotenv from "dotenv";
@@ -22,7 +22,10 @@ interface DeployDependencies {
 }
 
 const defaultDependencies: DeployDependencies = {
-  run: (command, args, options) => spawnSync(command, args, { ...options, stdio: "inherit" }).status ?? 1,
+  run: (command, args, options) => {
+    if (options.env.TMPDIR) mkdirSync(options.env.TMPDIR, { recursive: true, mode: 0o700 });
+    return spawnSync(command, args, { ...options, stdio: "inherit" }).status ?? 1;
+  },
   materialize: materializeDnsSecrets,
 };
 
@@ -80,11 +83,13 @@ export async function orchestrateCdkDeploy(
   dependencies: DeployDependencies = defaultDependencies
 ): Promise<void> {
   const target = resolveDeployTarget(environment);
+  const cdkTemporaryDirectory = path.join(ROOT, ".local-artifacts/cdk-tmp");
   const childEnvironment = {
     ...environment,
     AWS_DEFAULT_REGION: target.region,
     CDK_DEFAULT_ACCOUNT: target.account,
     CDK_DEFAULT_REGION: target.region,
+    TMPDIR: cdkTemporaryDirectory,
   };
 
   const guardStatus = dependencies.run(

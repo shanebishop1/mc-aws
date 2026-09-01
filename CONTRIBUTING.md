@@ -11,6 +11,15 @@ Contributions are welcome. Keep each change focused, explain its operational imp
 
 For AWS-free development, follow the [Mock Mode Quick Start](docs/QUICK_START_MOCK_MODE.md).
 
+## Local disk usage
+
+Supported build, test, preview, and CDK package commands remove the previous output for their artifact class before running, so repeated runs retain at most the latest output. Successful tests also remove their temporary fixtures. Supported commands place transient files under class-specific `.local-artifacts/` directories, and the next run removes any prior interrupted-run contents.
+
+- `pnpm clean` removes all reproducible local build, test, and CDK outputs.
+- `pnpm clean:build`, `pnpm clean:test`, and `pnpm clean:cdk` remove one output class.
+- Cleanup never removes environment files, deployment/recovery state, server profiles, mock state, or `node_modules`.
+- `node_modules` is one reconciled dependency tree rather than a per-run artifact. When the shared pnpm content-addressed store needs maintenance, run `pnpm clean:store`; this safely prunes packages unused by registered projects but can require later downloads.
+
 ## Change requirements
 
 - Add or update tests for behavior changes and current docs for user-visible changes.
