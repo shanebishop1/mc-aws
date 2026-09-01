@@ -1,10 +1,15 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 const setupWizardPath = path.resolve(process.cwd(), "scripts/setup/setup-wizard.sh");
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
+});
 
 describe("setup-wizard email optional contract", () => {
   it("collects disabled, notifications-only, inbound-only, and combined SES modes", () => {
@@ -125,6 +130,7 @@ describe("setup-wizard panel hosting contract", () => {
 
   it("executes the route-list preflight and fails closed on a denied response", () => {
     const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-route-preflight-"));
+    temporaryDirectories.push(directory);
     const curlMock = path.join(directory, "curl");
     writeFileSync(
       curlMock,

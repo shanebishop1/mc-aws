@@ -1,3 +1,4 @@
+import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { loadEnvironmentPreservingCdkTarget, orchestrateCdkDeploy, resolveDeployTarget } from "./deploy-cdk";
 

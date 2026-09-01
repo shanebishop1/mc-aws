@@ -115,7 +115,9 @@ write_env() {
   touch "$env_file"
 
   local tmp
-  tmp="$(mktemp "${env_file}.tmp.XXXXXX")"
+  tmp="${env_file}.mc-aws-tmp"
+  rm -f "$tmp"
+  (umask 077 && : >"$tmp")
 
   local found="0"
   while IFS= read -r line || [[ -n "${line}" ]]; do
@@ -608,6 +610,9 @@ main() {
   export AWS_DEFAULT_REGION="${AWS_DEFAULT_REGION:-$AWS_REGION}"
   export CDK_DEFAULT_REGION="${CDK_DEFAULT_REGION:-$AWS_REGION}"
   STACK_NAME="${STACK_NAME:-MinecraftStack}"
+  run_with_mise pnpm clean:cdk
+  CDK_TEMP_DIR="$PWD/.local-artifacts/cdk-tmp"
+  mkdir -p "$CDK_TEMP_DIR"
 
   local stack_state="unknown"
   local existing_stack_id=""
@@ -623,7 +628,7 @@ main() {
 
   (
     unset CLOUDFLARE_API_TOKEN
-    run_with_mise pnpm exec tsx scripts/aws/migrate-existing-deployment.ts \
+    TMPDIR="$CDK_TEMP_DIR" run_with_mise pnpm exec tsx scripts/aws/migrate-existing-deployment.ts \
       --assert-standard-deploy-safe \
       --account "$CDK_DEFAULT_ACCOUNT" \
       --stack-name "$STACK_NAME" \
@@ -695,7 +700,7 @@ main() {
   (
     cd infra
     unset CLOUDFLARE_API_TOKEN
-    run_with_mise pnpm exec cdk deploy "$STACK_NAME" --require-approval never
+    TMPDIR="$CDK_TEMP_DIR" run_with_mise pnpm exec cdk deploy "$STACK_NAME" --require-approval never
   )
   success "CDK deployment complete"
 

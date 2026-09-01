@@ -80,4 +80,27 @@ describe("Cloudflare deployment recovery contract", () => {
       source.lastIndexOf("PREFLIGHT_SECRET_ENTRIES_OUTPUT")
     );
   });
+
+  it("bounds interrupted local build scratch files to fixed recoverable slots", () => {
+    expect(source).toContain('NEXT_BUILD_ENV_BACKUP_FILE="${NEXT_BUILD_ENV_FILE}.mc-aws-backup"');
+    expect(source).toContain('NEXT_BUILD_ENV_MARKER_FILE="${NEXT_BUILD_ENV_FILE}.mc-aws-generated"');
+    expect(source).toContain("recover_interrupted_next_build_env_file");
+    expect(source).toContain('WRANGLER_DEPLOY_CONFIG_FILE=".wrangler.deploy.jsonc"');
+    expect(source).not.toContain('mktemp "${NEXT_BUILD_ENV_FILE}.backup.XXXXXX"');
+    expect(source).not.toContain('mktemp "wrangler.deploy.XXXXXX.jsonc"');
+  });
+
+  it("excludes concurrent deploys before recovering fixed local or provider state", () => {
+    const lock = source.indexOf("acquire_deployment_lock || exit 1");
+    const localRecovery = source.indexOf("recover_interrupted_next_build_env_file", lock);
+    const providerRecovery = source.lastIndexOf("recover_pending_deployment");
+    expect(lock).toBeGreaterThan(-1);
+    expect(lock).toBeLessThan(localRecovery);
+    expect(lock).toBeLessThan(providerRecovery);
+    expect(source).toContain('kill -0 "$owner_pid"');
+    expect(source).toContain('ln -s "$$" "$DEPLOY_LOCK_DIR"');
+    expect(source).toContain('readlink "$DEPLOY_LOCK_DIR"');
+    expect(source).toContain("A stale Cloudflare deployment lock remains");
+    expect(source).toContain("release_deployment_lock");
+  });
 });

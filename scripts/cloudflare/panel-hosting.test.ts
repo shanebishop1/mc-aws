@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   buildWranglerDeployArgs,
   deriveWorkersDevPanel,
@@ -14,9 +14,15 @@ import {
 const workerName = "mc-aws-panel";
 const kvId = "0123456789abcdef0123456789abcdef";
 const kvPreviewId = "fedcba9876543210fedcba9876543210";
+const temporaryDirectories: string[] = [];
+
+afterEach(() => {
+  for (const directory of temporaryDirectories.splice(0)) fs.rmSync(directory, { recursive: true, force: true });
+});
 
 const createWranglerFixture = (): { sourcePath: string; outputPath: string } => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "mc-aws-panel-hosting-"));
+  temporaryDirectories.push(tempDir);
   const sourcePath = path.join(tempDir, "wrangler.jsonc");
   const outputPath = path.join(tempDir, "wrangler.deploy.jsonc");
   fs.writeFileSync(
