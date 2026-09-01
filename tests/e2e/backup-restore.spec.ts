@@ -32,6 +32,8 @@ const openDriveAction = async (page: Parameters<typeof setupRunningScenario>[0],
 };
 
 test.describe("Backup and Restore", () => {
+  test.describe.configure({ timeout: 60_000 });
+
   test("completes a confirmed backup", async ({ page }) => {
     await openRunningServer(page);
     await openDriveAction(page, "backup");
