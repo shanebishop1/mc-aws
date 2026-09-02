@@ -15,6 +15,34 @@ afterEach(async () => {
 });
 
 describe("MockStateStore file persistence", () => {
+  it("bounds command history in memory and on disk", async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), "mc-aws-mock-state-history-"));
+    temporaryDirectories.push(directory);
+    const persistencePath = path.join(directory, "state.json");
+    const store = new MockStateStore();
+
+    for (let index = 0; index <= 1_000; index += 1) {
+      await store.addCommand([`command-${index}`]);
+    }
+
+    const commands = await store.getCommands();
+    const persistedStore = new MockStateStore({ enablePersistence: true, persistencePath });
+    await persistedStore.addCommand(["seed"]);
+    const persistedState = JSON.parse(await readFile(persistencePath, "utf-8"));
+    persistedState.ssm.commands = Array.from({ length: 1_001 }, (_, index) => ({
+      ...persistedState.ssm.commands[0],
+      commandId: `persisted-${index}`,
+      commands: [`persisted-command-${index}`],
+    }));
+    await writeFile(persistencePath, JSON.stringify(persistedState), "utf-8");
+    const loadedCommands = await new MockStateStore({ enablePersistence: true, persistencePath }).getCommands();
+
+    expect(commands).toHaveLength(1_000);
+    expect(commands[0]?.commands).toEqual(["command-1"]);
+    expect(loadedCommands).toHaveLength(1_000);
+    expect(loadedCommands[0]?.commands).toEqual(["persisted-command-1"]);
+  });
+
   it("keeps separate route-runtime stores coherent", async () => {
     const directory = await mkdtemp(path.join(tmpdir(), "mc-aws-mock-state-"));
     temporaryDirectories.push(directory);
@@ -130,6 +158,17 @@ describe("MockStateStore file persistence", () => {
 });
 
 describe("MockStateStore singleton reset", () => {
+  it("can release completed transition timers without resetting state", async () => {
+    vi.useFakeTimers();
+    const store = getMockStateStore();
+    const timeout = setTimeout(() => store.unregisterTimeout(timeout), 1_000);
+    store.registerTimeout(timeout);
+
+    expect((await store.getState()).pendingTimeouts).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect((await store.getState()).pendingTimeouts).toHaveLength(0);
+  });
+
   it("cancels pending transitions before replacing the store", async () => {
     vi.useFakeTimers();
     let transitionCompleted = false;

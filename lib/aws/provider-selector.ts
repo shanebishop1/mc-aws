@@ -5,15 +5,13 @@
  */
 
 import { getBackendMode } from "../env";
-import { awsProvider } from "./aws-provider";
-import { mockProvider } from "./mock-provider";
 import type { AwsProvider } from "./types";
 
 /**
  * Cached provider instance
  * Initialized lazily on first call
  */
-let cachedProvider: AwsProvider | null = null;
+let cachedProvider: Promise<AwsProvider> | null = null;
 
 /**
  * Get the AWS provider based on the current backend mode
@@ -21,7 +19,7 @@ let cachedProvider: AwsProvider | null = null;
  *
  * @returns The appropriate provider (aws or mock)
  */
-export function getProvider(): AwsProvider {
+export function getProvider(): Promise<AwsProvider> {
   // Return cached provider if already initialized
   if (cachedProvider) {
     return cachedProvider;
@@ -32,10 +30,10 @@ export function getProvider(): AwsProvider {
 
   if (backendMode === "mock") {
     console.log("[Provider] Using mock provider (MC_BACKEND_MODE=mock)");
-    cachedProvider = mockProvider;
+    cachedProvider = import("./mock-provider").then(({ mockProvider }) => mockProvider);
   } else {
     console.log("[Provider] Using AWS provider (MC_BACKEND_MODE=aws)");
-    cachedProvider = awsProvider;
+    cachedProvider = import("./aws-provider").then(({ awsProvider }) => awsProvider);
   }
 
   return cachedProvider;

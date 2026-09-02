@@ -10,76 +10,67 @@ import { getProvider } from "./provider-selector";
 export type { CostBreakdown } from "./cost-client";
 export type { AwsProvider, InstanceDetails, PlayerCount, BackupInfo, ParameterStoreEntry } from "./types";
 
-// Re-export constants for backward compatibility
-export { MAX_POLL_ATTEMPTS, POLL_INTERVAL_MS } from "./ec2-client";
-
-// Re-export AWS SDK clients for backward compatibility (only available in AWS mode)
-// Note: These will throw errors in mock mode if accessed
-export { ec2 } from "./ec2-client";
-export { ssm } from "./ssm-client";
-export { cloudformation } from "./cloudformation-client";
-
 // Instance resolution (shared utility)
 export async function findInstanceId(): Promise<string> {
-  return getProvider().findInstanceId();
+  return (await getProvider()).findInstanceId();
 }
 
 export async function resolveInstanceId(instanceId?: string): Promise<string> {
-  return getProvider().resolveInstanceId(instanceId);
+  return (await getProvider()).resolveInstanceId(instanceId);
 }
 
 // EC2 operations
 export async function getInstanceState(instanceId?: string) {
-  return getProvider().getInstanceState(instanceId);
+  return (await getProvider()).getInstanceState(instanceId);
 }
 
 export async function getInstanceDetails(instanceId?: string) {
-  return getProvider().getInstanceDetails(instanceId);
+  return (await getProvider()).getInstanceDetails(instanceId);
 }
 
 export async function startInstance(instanceId?: string): Promise<void> {
-  return getProvider().startInstance(instanceId);
+  return (await getProvider()).startInstance(instanceId);
 }
 
 export async function stopInstance(instanceId?: string): Promise<void> {
-  return getProvider().stopInstance(instanceId);
+  return (await getProvider()).stopInstance(instanceId);
 }
 
 export async function getPublicIp(instanceId: string, timeoutSeconds?: number): Promise<string> {
-  return getProvider().getPublicIp(instanceId, timeoutSeconds);
+  return (await getProvider()).getPublicIp(instanceId, timeoutSeconds);
 }
 
 export async function waitForInstanceRunning(instanceId: string, timeoutSeconds?: number): Promise<void> {
-  return getProvider().waitForInstanceRunning(instanceId, timeoutSeconds);
+  return (await getProvider()).waitForInstanceRunning(instanceId, timeoutSeconds);
 }
 
 export async function waitForInstanceStopped(instanceId: string, timeoutSeconds?: number): Promise<void> {
-  return getProvider().waitForInstanceStopped(instanceId, timeoutSeconds);
+  return (await getProvider()).waitForInstanceStopped(instanceId, timeoutSeconds);
 }
 
 // SSM operations
 export async function executeSSMCommand(instanceId: string, commands: string[]): Promise<string> {
-  return getProvider().executeSSMCommand(instanceId, commands);
+  return (await getProvider()).executeSSMCommand(instanceId, commands);
 }
 
 export async function listBackups(instanceId?: string) {
-  return getProvider().listBackups(instanceId);
+  return (await getProvider()).listBackups(instanceId);
 }
 
 export async function getEmailAllowlist(): Promise<string[]> {
-  return getProvider().getEmailAllowlist();
+  return (await getProvider()).getEmailAllowlist();
 }
 
 export async function updateEmailAllowlist(emails: string[]): Promise<void> {
-  return getProvider().updateEmailAllowlist(emails);
+  return (await getProvider()).updateEmailAllowlist(emails);
 }
 
 export async function getPlayerCount(): Promise<{ count: number; lastUpdated: string }> {
-  return getProvider().getPlayerCount();
+  return (await getProvider()).getPlayerCount();
 }
 
 export async function getParameter(name: string): Promise<string | null> {
-  return getProvider().getParameter(name);
+  return (await getProvider()).getParameter(name);
 }
 
 export async function putParameter(
@@ -88,41 +79,41 @@ export async function putParameter(
   type?: "String" | "SecureString",
   overwrite?: boolean
 ): Promise<void> {
-  return getProvider().putParameter(name, value, type, overwrite);
+  return (await getProvider()).putParameter(name, value, type, overwrite);
 }
 
 export async function deleteParameter(name: string): Promise<void> {
-  return getProvider().deleteParameter(name);
+  return (await getProvider()).deleteParameter(name);
 }
 
 export async function listParametersByPath(path: string) {
-  return getProvider().listParametersByPath(path);
+  return (await getProvider()).listParametersByPath(path);
 }
 
 // Volume operations
 export async function detachAndDeleteVolumes(instanceId?: string): Promise<void> {
-  return getProvider().detachAndDeleteVolumes(instanceId);
+  return (await getProvider()).detachAndDeleteVolumes(instanceId);
 }
 
 export async function handleResume(instanceId?: string): Promise<void> {
-  return getProvider().handleResume(instanceId);
+  return (await getProvider()).handleResume(instanceId);
 }
 
 // Cost Explorer operations
 export async function getCosts(periodType?: "current-month" | "last-month" | "last-30-days"): Promise<CostData> {
-  return getProvider().getCosts(periodType);
+  return (await getProvider()).getCosts(periodType);
 }
 
 // CloudFormation operations
 export async function getStackStatus(stackName?: string) {
-  return getProvider().getStackStatus(stackName);
+  return (await getProvider()).getStackStatus(stackName);
 }
 
 export async function checkStackExists(stackName?: string): Promise<boolean> {
-  return getProvider().checkStackExists(stackName);
+  return (await getProvider()).checkStackExists(stackName);
 }
 
 // Lambda operations
 export async function invokeLambda(functionName: string, payload: unknown): Promise<void> {
-  return getProvider().invokeLambda(functionName, payload);
+  return (await getProvider()).invokeLambda(functionName, payload);
 }

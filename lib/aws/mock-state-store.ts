@@ -170,6 +170,7 @@ interface PersistenceLockHandle {
 }
 
 const persistenceLockRetryMs = 10;
+const maxCommandHistory = 1_000;
 
 // ============================================================================
 // Default Fixtures
@@ -439,6 +440,9 @@ export class MockStateStore {
 
       // Initialize pendingTimeouts (not persisted)
       parsed.pendingTimeouts = [];
+      if (Array.isArray(parsed.ssm?.commands)) {
+        parsed.ssm.commands = parsed.ssm.commands.slice(-maxCommandHistory);
+      }
 
       return parsed as MockState;
     } catch (error) {
@@ -466,7 +470,7 @@ export class MockStateStore {
 
       const data = JSON.stringify(serializableState, null, 2);
       temporaryPath = `${this.options.persistencePath}.${process.pid}.${randomUUID()}.tmp`;
-      temporaryFile = fs.openSync(temporaryPath, "wx", 0o600);
+      temporaryFile = fs.openSync(/* turbopackIgnore: true */ temporaryPath, "wx", 0o600);
       fs.writeFileSync(temporaryFile, data, "utf-8");
       fs.fsyncSync(temporaryFile);
       fs.closeSync(temporaryFile);
@@ -1080,6 +1084,9 @@ export class MockStateStore {
         status: "Pending",
         createdAt: new Date().toISOString(),
       });
+      if (state.ssm.commands.length > maxCommandHistory) {
+        state.ssm.commands.splice(0, state.ssm.commands.length - maxCommandHistory);
+      }
     });
 
     return commandId;
@@ -1309,6 +1316,11 @@ export class MockStateStore {
    */
   registerTimeout(timeout: NodeJS.Timeout): void {
     this.state.pendingTimeouts.push(timeout);
+  }
+
+  unregisterTimeout(timeout: NodeJS.Timeout): void {
+    const index = this.state.pendingTimeouts.indexOf(timeout);
+    if (index !== -1) this.state.pendingTimeouts.splice(index, 1);
   }
 
   /**

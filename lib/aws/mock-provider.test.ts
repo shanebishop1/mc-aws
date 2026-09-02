@@ -94,6 +94,7 @@ describe("Mock Provider Core", () => {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       state = await mockProvider.getInstanceState();
       expect(state).toBe("running");
+      expect((await stateStore.getState()).pendingTimeouts).toHaveLength(0);
     });
 
     it("should stop instance from running state", async () => {
@@ -115,6 +116,7 @@ describe("Mock Provider Core", () => {
       await new Promise((resolve) => setTimeout(resolve, 3000));
       state = await mockProvider.getInstanceState();
       expect(state).toBe("stopped");
+      expect((await stateStore.getState()).pendingTimeouts).toHaveLength(0);
     });
 
     it("should not start instance that is already running", async () => {
@@ -568,6 +570,7 @@ describe("Mock Provider Core", () => {
 
       const lock = await stateStore.getParameter("/minecraft/server-action");
       expect(lock).toBeNull();
+      expect((await stateStore.getState()).pendingTimeouts).toHaveLength(0);
     });
 
     it("rejects a conflicting operation instance ID without consuming transport faults", async () => {

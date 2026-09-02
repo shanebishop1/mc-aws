@@ -13,6 +13,10 @@ const nextConfig: NextConfig = {
   // Hide dev toolbar
   devIndicators: false,
 
+  experimental: {
+    turbopackMemoryEviction: "auto",
+  },
+
   // Security headers for all responses
   async headers() {
     return [

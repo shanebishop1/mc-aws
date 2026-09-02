@@ -16,6 +16,7 @@ import type {
 interface CounterEntry {
   count: number;
   windowStartedAtMs: number;
+  expiresAtMs: number;
 }
 
 interface SnapshotEntry {
@@ -26,6 +27,19 @@ interface SnapshotEntry {
 
 const counters = new Map<string, CounterEntry>();
 const snapshots = new Map<string, SnapshotEntry>();
+const maxCounterEntries = 10_000;
+
+const pruneCounters = (nowMs: number): void => {
+  for (const [key, counter] of counters) {
+    if (nowMs >= counter.expiresAtMs) counters.delete(key);
+  }
+
+  while (counters.size >= maxCounterEntries) {
+    const oldestKey = counters.keys().next().value;
+    if (typeof oldestKey !== "string") break;
+    counters.delete(oldestKey);
+  }
+};
 
 export function resetInMemoryRuntimeStateAdapterState(): void {
   counters.clear();
@@ -85,9 +99,11 @@ const incrementCounter = async ({
 
   if (!current || nowMs - current.windowStartedAtMs >= windowMs) {
     const nextCount = incrementBy;
+    if (!current && counters.size >= maxCounterEntries) pruneCounters(nowMs);
     counters.set(key, {
       count: nextCount,
       windowStartedAtMs: nowMs,
+      expiresAtMs: nowMs + windowMs,
     });
 
     return {
@@ -106,6 +122,7 @@ const incrementCounter = async ({
   counters.set(key, {
     count: nextCount,
     windowStartedAtMs: current.windowStartedAtMs,
+    expiresAtMs: current.expiresAtMs,
   });
 
   return {
@@ -136,6 +153,7 @@ const checkCounter = async ({ key, limit, windowMs }: CounterCheckInput): Promis
   const current = counters.get(key);
 
   if (!current || nowMs - current.windowStartedAtMs >= windowMs) {
+    if (current) counters.delete(key);
     return {
       ok: true,
       data: {

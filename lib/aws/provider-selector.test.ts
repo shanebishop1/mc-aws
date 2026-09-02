@@ -15,65 +15,65 @@ describe("Provider Selector", () => {
   });
 
   describe("getProvider()", () => {
-    it("should return mock provider when MC_BACKEND_MODE is 'mock'", () => {
+    it("should return mock provider when MC_BACKEND_MODE is 'mock'", async () => {
       // Mock environment variable
       vi.stubEnv("MC_BACKEND_MODE", "mock");
 
-      const provider = getProvider();
+      const provider = await getProvider();
 
       expect(provider).toBe(mockProvider);
       expect(provider).not.toBe(awsProvider);
     });
 
-    it("should return AWS provider when MC_BACKEND_MODE is 'aws'", () => {
+    it("should return AWS provider when MC_BACKEND_MODE is 'aws'", async () => {
       // Mock environment variable
       vi.stubEnv("MC_BACKEND_MODE", "aws");
 
-      const provider = getProvider();
+      const provider = await getProvider();
 
       expect(provider).toBe(awsProvider);
       expect(provider).not.toBe(mockProvider);
     });
 
-    it("should return AWS provider when MC_BACKEND_MODE is not set (default)", () => {
+    it("should return AWS provider when MC_BACKEND_MODE is not set (default)", async () => {
       // Mock environment variable as undefined
       vi.stubEnv("MC_BACKEND_MODE", undefined);
 
-      const provider = getProvider();
+      const provider = await getProvider();
 
       expect(provider).toBe(awsProvider);
       expect(provider).not.toBe(mockProvider);
     });
 
-    it("should return cached provider on subsequent calls", () => {
+    it("should return cached provider on subsequent calls", async () => {
       vi.stubEnv("MC_BACKEND_MODE", "mock");
 
       const firstCall = getProvider();
       const secondCall = getProvider();
 
       expect(firstCall).toBe(secondCall);
-      expect(firstCall).toBe(mockProvider);
+      await expect(firstCall).resolves.toBe(mockProvider);
     });
 
-    it("should handle case-insensitive mode values", () => {
+    it("should handle case-insensitive mode values", async () => {
       // Test uppercase
       vi.stubEnv("MC_BACKEND_MODE", "MOCK");
-      expect(getProvider()).toBe(mockProvider);
+      await expect(getProvider()).resolves.toBe(mockProvider);
 
       resetProvider();
 
       // Test mixed case
       vi.stubEnv("MC_BACKEND_MODE", "Aws");
-      expect(getProvider()).toBe(awsProvider);
+      await expect(getProvider()).resolves.toBe(awsProvider);
     });
   });
 
   describe("resetProvider()", () => {
-    it("should clear the cached provider", () => {
+    it("should clear the cached provider", async () => {
       vi.stubEnv("MC_BACKEND_MODE", "mock");
 
       // Get provider and cache it
-      const firstProvider = getProvider();
+      const firstProvider = await getProvider();
       expect(firstProvider).toBe(mockProvider);
 
       // Reset the cache
@@ -81,14 +81,14 @@ describe("Provider Selector", () => {
 
       // Change mode and get provider again
       vi.stubEnv("MC_BACKEND_MODE", "aws");
-      const secondProvider = getProvider();
+      const secondProvider = await getProvider();
 
       // Should get the new provider, not the cached one
       expect(secondProvider).toBe(awsProvider);
       expect(secondProvider).not.toBe(firstProvider);
     });
 
-    it("should be idempotent (safe to call multiple times)", () => {
+    it("should be idempotent (safe to call multiple times)", async () => {
       vi.stubEnv("MC_BACKEND_MODE", "mock");
       getProvider();
 
@@ -101,7 +101,7 @@ describe("Provider Selector", () => {
 
       // Should still work after multiple resets
       vi.stubEnv("MC_BACKEND_MODE", "aws");
-      const provider = getProvider();
+      const provider = await getProvider();
       expect(provider).toBe(awsProvider);
     });
   });

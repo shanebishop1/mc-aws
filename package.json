@@ -15,9 +15,9 @@
     "clean:cdk": "tsx scripts/operations/clean-local-artifacts.ts cdk",
     "clean:store": "pnpm store prune",
     "predev": "pnpm clean:build",
-    "dev": "mkdir -p .local-artifacts/build-tmp && TMPDIR=\"$PWD/.local-artifacts/build-tmp\" ENABLE_DEV_LOGIN=true next dev -p 3000",
+    "dev": "mkdir -p .local-artifacts/build-tmp && TMPDIR=\"$PWD/.local-artifacts/build-tmp\" ENABLE_DEV_LOGIN=true next dev --turbopack --disable-source-maps -p 3000",
     "predev:mock": "pnpm clean:build",
-    "dev:mock": "mkdir -p .local-artifacts/build-tmp && TMPDIR=\"$PWD/.local-artifacts/build-tmp\" MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev -p 3000",
+    "dev:mock": "mkdir -p .local-artifacts/build-tmp && TMPDIR=\"$PWD/.local-artifacts/build-tmp\" MC_BACKEND_MODE=mock ENABLE_DEV_LOGIN=true next dev --turbopack --disable-source-maps -p 3000",
     "setup": "./setup.sh",
     "doctor": "tsx scripts/validation/doctor.ts",
     "repo:doctor": "tsx scripts/validation/doctor.ts",
@@ -112,15 +112,15 @@
     "clsx": "^2.1.1",
     "framer-motion": "^12.24.10",
     "jose": "^6.1.3",
-    "next": "^15.5.21",
-    "react": "^19.0.0",
-    "react-dom": "^19.0.0",
+    "next": "^16.3.4",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
     "tailwind-merge": "^3.4.0"
   },
   "devDependencies": {
     "@aws-sdk/client-ses": "^3.1096.0",
     "@biomejs/biome": "^1.9.4",
-    "@opennextjs/cloudflare": "^1.20.2",
+    "@opennextjs/cloudflare": "^1.20.6",
     "@playwright/test": "^1.57.0",
     "@testing-library/react": "^16.3.1",
     "@types/node": "^22",
@@ -140,7 +140,7 @@
     "typescript": "^5",
     "vite": "^8.1.5",
     "vitest": "^4.1.10",
-    "wrangler": "^4.123.0"
+    "wrangler": "^4.128.0"
   },
   "pnpm": {
     "overrides": {

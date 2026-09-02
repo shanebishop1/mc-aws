@@ -1,10 +1,14 @@
-import { inMemoryRuntimeStateAdapter } from "@/lib/runtime-state/in-memory-adapter";
+import {
+  inMemoryRuntimeStateAdapter,
+  resetInMemoryRuntimeStateAdapterState,
+} from "@/lib/runtime-state/in-memory-adapter";
 import { advanceFrozenTimeBy, freezeTime, restoreTime } from "@/tests/fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 
 describe("in-memory runtime-state adapter", () => {
   afterEach(() => {
     restoreTime();
+    resetInMemoryRuntimeStateAdapterState();
   });
 
   describe("strict counter correctness", () => {
@@ -112,6 +116,31 @@ describe("in-memory runtime-state adapter", () => {
           retryAfterSeconds: 0,
         },
       });
+    });
+
+    it("removes expired identities and bounds active counter cardinality", async () => {
+      freezeTime("2026-01-02T03:04:05.000Z");
+
+      await inMemoryRuntimeStateAdapter.incrementCounter({ key: "counter:expired", limit: 1, windowMs: 1_000 });
+      advanceFrozenTimeBy(1_001);
+      await expect(
+        inMemoryRuntimeStateAdapter.checkCounter({ key: "counter:expired", limit: 1, windowMs: 1_000 })
+      ).resolves.toMatchObject({ ok: true, data: { count: 0 } });
+
+      for (let index = 0; index <= 10_000; index += 1) {
+        await inMemoryRuntimeStateAdapter.incrementCounter({
+          key: `counter:identity-${index}`,
+          limit: 1,
+          windowMs: 60_000,
+        });
+      }
+
+      await expect(
+        inMemoryRuntimeStateAdapter.checkCounter({ key: "counter:identity-0", limit: 1, windowMs: 60_000 })
+      ).resolves.toMatchObject({ ok: true, data: { count: 0 } });
+      await expect(
+        inMemoryRuntimeStateAdapter.checkCounter({ key: "counter:identity-10000", limit: 1, windowMs: 60_000 })
+      ).resolves.toMatchObject({ ok: true, data: { count: 1 } });
     });
   });
 

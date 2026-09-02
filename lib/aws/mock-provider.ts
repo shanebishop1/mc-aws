@@ -621,7 +621,8 @@ function scheduleMockLambdaCommandCompletion(
       .then((finalized) => {
         if (finalized) console.log(`[MOCK] Finalized ${commandName} and cleared its server-action lock`);
       })
-      .catch(() => console.error(`[MOCK] Failed to finalize ${commandName} operation`));
+      .catch(() => console.error(`[MOCK] Failed to finalize ${commandName} operation`))
+      .finally(() => stateStore.unregisterTimeout(completeTimeout));
   }, delayMs);
   stateStore.registerTimeout(completeTimeout);
 }
@@ -807,8 +808,12 @@ export const mockProvider: AwsProvider = {
 
     // Simulate AWS delay before transitioning to running
     const timeout = setTimeout(async () => {
-      console.log("[MOCK] Managed instance transitioning to running state");
-      await stateStore.updateInstanceState(ServerState.Running);
+      try {
+        console.log("[MOCK] Managed instance transitioning to running state");
+        await stateStore.updateInstanceState(ServerState.Running);
+      } finally {
+        stateStore.unregisterTimeout(timeout);
+      }
     }, PENDING_DELAY_MS);
     stateStore.registerTimeout(timeout);
   },
@@ -836,8 +841,12 @@ export const mockProvider: AwsProvider = {
 
     // Simulate AWS delay before transitioning to stopped
     const timeout = setTimeout(async () => {
-      console.log("[MOCK] Managed instance transitioning to stopped state");
-      await stateStore.updateInstanceState(ServerState.Stopped);
+      try {
+        console.log("[MOCK] Managed instance transitioning to stopped state");
+        await stateStore.updateInstanceState(ServerState.Stopped);
+      } finally {
+        stateStore.unregisterTimeout(timeout);
+      }
     }, STOPPING_DELAY_MS);
     stateStore.registerTimeout(timeout);
   },
