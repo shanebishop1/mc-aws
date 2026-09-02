@@ -21,7 +21,7 @@ const generateDefaultBackupName = (): string => {
 
 export const BackupDialog = ({ isOpen, onClose, onConfirm, isLoading = false }: BackupDialogProps) => {
   const [backupName, setBackupName] = useState("");
-  const modalRef = useAccessibleDialog(isOpen, onClose);
+  const modalRef = useAccessibleDialog(isOpen, onClose, !isLoading);
 
   // Reset and set default name when modal opens
   useEffect(() => {

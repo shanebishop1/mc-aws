@@ -2,10 +2,7 @@
 
 import { ArtDecoBorder } from "@/components/ArtDecoBorder";
 import { ControlsSection } from "@/components/ControlsSection";
-import { CostDashboard } from "@/components/CostDashboard";
-import { EmailManagementPanel } from "@/components/EmailManagementPanel";
 import { PageHeader } from "@/components/PageHeader";
-import { ResumeModal } from "@/components/ResumeModal";
 import { ServerStatus } from "@/components/ServerStatus";
 import { useAuth } from "@/components/auth/auth-provider";
 import { useButtonVisibility } from "@/hooks/useButtonVisibility";
@@ -24,7 +21,19 @@ import {
 import { ServerState } from "@/lib/types";
 import { useQuery } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import dynamic from "next/dynamic";
 import { useCallback, useEffect, useRef, useState } from "react";
+
+const CostDashboard = dynamic(() => import("@/components/CostDashboard").then((module) => module.CostDashboard), {
+  ssr: false,
+});
+const EmailManagementPanel = dynamic(
+  () => import("@/components/EmailManagementPanel").then((module) => module.EmailManagementPanel),
+  { ssr: false }
+);
+const ResumeModal = dynamic(() => import("@/components/ResumeModal").then((module) => module.ResumeModal), {
+  ssr: false,
+});
 
 type MessageKind = "progress" | "success" | "error";
 
@@ -390,7 +399,7 @@ export default function Home() {
         {/* Footer - Fixed Small Height */}
         <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center">
           <OperationFeedback message={message} kind={messageKind} />
-          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
+          <p className="font-sans uppercase text-[10px] text-charcoal/70 tracking-[0.2em]">Shane Bishop | 2025</p>
         </footer>
       </main>
     );
@@ -452,24 +461,20 @@ export default function Home() {
         {/* Footer - Fixed Small Height */}
         <footer className="shrink-0 h-8 md:h-20 flex flex-col items-center justify-center text-center gap-2">
           <OperationFeedback message={message} kind={messageKind} />
-          <p className="font-sans uppercase text-[10px] text-charcoal/30 tracking-[0.2em]">Shane Bishop | 2025</p>
+          <p className="font-sans uppercase text-[10px] text-charcoal/70 tracking-[0.2em]">Shane Bishop | 2025</p>
         </footer>
       </main>
 
       {/* Resume Modal */}
-      {isAdmin && (
-        <ResumeModal
-          isOpen={isResumeModalOpen}
-          onClose={() => setIsResumeModalOpen(false)}
-          onResume={handleResumeFromModal}
-        />
+      {isAdmin && isResumeModalOpen && (
+        <ResumeModal isOpen onClose={() => setIsResumeModalOpen(false)} onResume={handleResumeFromModal} />
       )}
 
       {/* Email Management Panel */}
-      {isAdmin && <EmailManagementPanel isOpen={isEmailPanelOpen} onClose={() => setIsEmailPanelOpen(false)} />}
+      {isAdmin && isEmailPanelOpen && <EmailManagementPanel isOpen onClose={() => setIsEmailPanelOpen(false)} />}
 
       {/* Cost Dashboard */}
-      {isAdmin && <CostDashboard isOpen={isCostDashboardOpen} onClose={() => setIsCostDashboardOpen(false)} />}
+      {isAdmin && isCostDashboardOpen && <CostDashboard isOpen onClose={() => setIsCostDashboardOpen(false)} />}
     </>
   );
 }

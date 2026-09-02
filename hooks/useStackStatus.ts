@@ -20,6 +20,7 @@ export function useStackStatus(): UseStackStatusReturn {
     queryKey: queryKeys.stackStatus,
     queryFn: fetchStackStatus,
     enabled: isPageFocused,
+    staleTime: 30_000,
   });
 
   const refetch = async () => {

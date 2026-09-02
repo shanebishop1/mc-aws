@@ -27,6 +27,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fetchControllerRef = useRef<AbortController | null>(null);
+  const previousViewRef = useRef(view);
   const dialogRef = useAccessibleDialog(isOpen, onClose);
 
   // Reset state when modal closes
@@ -45,6 +46,21 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
       void queryClient.cancelQueries({ queryKey: queryKeys.backups(false) });
     };
   }, [isOpen, queryClient]);
+
+  useEffect(() => {
+    if (!isOpen) {
+      previousViewRef.current = "choice";
+      return;
+    }
+    if (previousViewRef.current === view) return;
+
+    previousViewRef.current = view;
+    const frame = requestAnimationFrame(() => {
+      const titleId = view === "choice" ? "resume-modal-title" : "resume-backups-title";
+      dialogRef.current?.querySelector<HTMLElement>(`#${titleId}`)?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [dialogRef, isOpen, view]);
 
   // Fetch backups when switching to backup view
   const fetchBackups = async () => {
@@ -154,7 +170,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
                 className="p-5 pt-14 sm:p-8"
               >
                 <div className="text-center mb-8">
-                  <h2 id="resume-modal-title" className="font-serif text-2xl italic text-charcoal mb-2">
+                  <h2 id="resume-modal-title" tabIndex={-1} className="font-serif text-2xl italic text-charcoal mb-2">
                     Resume World
                   </h2>
                   <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">
@@ -186,7 +202,7 @@ export const ResumeModal = ({ isOpen, onClose, onResume }: ResumeModalProps) => 
                 className="p-5 pt-14 sm:p-8"
               >
                 <div className="text-center mb-8">
-                  <h2 id="resume-backups-title" className="font-serif text-2xl italic text-charcoal mb-2">
+                  <h2 id="resume-backups-title" tabIndex={-1} className="font-serif text-2xl italic text-charcoal mb-2">
                     Select Backup
                   </h2>
                   <p className="font-sans text-xs tracking-widest text-charcoal/60 uppercase">

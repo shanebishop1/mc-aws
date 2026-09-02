@@ -16,7 +16,7 @@ export const CostDashboard = ({ isOpen, onClose }: CostDashboardProps) => {
   const { costData, cachedAt, isLoading, error, isStale, setError, fetchCosts, refresh } = useCostData();
   // Show confirmation only if no cached data exists
   const [showConfirmation, setShowConfirmation] = useState(!costData);
-  const dialogRef = useAccessibleDialog(isOpen, onClose);
+  const dialogRef = useAccessibleDialog(isOpen, onClose, !isLoading);
 
   // Update showConfirmation when costData loads from localStorage
   useEffect(() => {

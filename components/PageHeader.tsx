@@ -41,13 +41,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
   };
 
   return (
-    <motion.header
-      data-testid="page-header"
-      initial={{ y: -20, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      transition={{ duration: 0.8, ease: "easeOut" }}
-      className="relative shrink-0 pt-2 pb-1 md:pt-8 md:pb-4"
-    >
+    <motion.header data-testid="page-header" initial={false} className="relative shrink-0 pt-2 pb-1 md:pt-8 md:pb-4">
       <div className="grid grid-cols-1 items-center gap-y-2 text-center xl:grid-cols-[1fr_auto_1fr] xl:gap-y-0 xl:h-12">
         <div className="hidden xl:block" aria-hidden="true" />
 

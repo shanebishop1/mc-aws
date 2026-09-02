@@ -31,7 +31,7 @@ export const ServerStatus = ({ state, domain, publicIp, playerCount, className, 
 
   // Determine color: Neutral for loading, Red for unknown/error, Green for running, Black for others
   const renderColor = () => {
-    if (isLoading) return "text-charcoal/50 animate-pulse";
+    if (isLoading) return "text-charcoal/70";
     if (state === "unknown") return "text-red-800";
     return "text-green";
   };
@@ -39,6 +39,7 @@ export const ServerStatus = ({ state, domain, publicIp, playerCount, className, 
   return (
     <div
       data-testid="server-status"
+      aria-busy={isLoading}
       className={`relative flex flex-col items-center justify-center space-y-12 ${className}`}
     >
       {/* Always render to prevent layout shift - component handles visibility internally */}
@@ -79,8 +80,10 @@ export const ServerStatus = ({ state, domain, publicIp, playerCount, className, 
             className="relative inline-flex overflow-hidden pb-2 whitespace-nowrap pr-[0.12em] -mr-[0.12em]"
           >
             <AnimatePresence initial={false} mode="popLayout">
-              <motion.span
+              <motion.output
                 key={label}
+                aria-live="polite"
+                aria-atomic="true"
                 initial={{ opacity: 0, y: 60 }}
                 animate={{ opacity: 1, y: 0 }}
                 exit={{
@@ -94,16 +97,16 @@ export const ServerStatus = ({ state, domain, publicIp, playerCount, className, 
                 className={`italic ${renderColor()} whitespace-nowrap`}
               >
                 {label}
-              </motion.span>
+              </motion.output>
             </AnimatePresence>
           </motion.span>
         </h2>
 
-        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-2">
+        <motion.div initial={false} className="space-y-2">
           {/* Domain - always reserve space to prevent layout shift */}
           <div className="h-6 flex items-center justify-center">
             {!isLoading && connectionAddress ? (
-              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/50 uppercase">{connectionAddress}</span>
+              <span className="font-sans text-xs tracking-[0.2em] text-charcoal/70 uppercase">{connectionAddress}</span>
             ) : (
               <span className="font-sans text-xs tracking-[0.2em] text-transparent uppercase">mc.example.com</span>
             )}
