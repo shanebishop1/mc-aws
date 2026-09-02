@@ -2,6 +2,8 @@
 
 import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
 import { ResumeModal } from "@/components/ResumeModal";
+import { BackupSelectionList } from "@/components/backup/BackupSelectionList";
+import { AddEmailForm } from "@/components/email/AddEmailForm";
 import { EmailListItem } from "@/components/email/EmailListItem";
 import { BackupDialog } from "@/components/ui/BackupDialog";
 import { useAccessibleDialog } from "@/hooks/useAccessibleDialog";
@@ -79,6 +81,46 @@ describe("modal and icon button accessibility", () => {
     expect(screen.getByRole("button", { name: "Remove player@example.com" })).toBeTruthy();
   });
 
+  it("labels invalid allowlist email input and announces its error", () => {
+    render(<AddEmailForm onAdd={vi.fn()} disabled={false} />);
+    const input = screen.getByRole("textbox", { name: "Email address to allow" });
+
+    fireEvent.change(input, { target: { value: "invalid" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const error = screen.getByRole("alert");
+    expect(error.textContent).toBe("Invalid email format");
+    expect(input.getAttribute("aria-invalid")).toBe("true");
+    expect(input.getAttribute("aria-describedby")).toBe(error.id);
+  });
+
+  it("exposes the selected backup state", () => {
+    render(
+      <BackupSelectionList
+        backups={["backup-one", "backup-two"]}
+        selectedBackup="backup-two"
+        onSelect={vi.fn()}
+        isLoading={false}
+      />
+    );
+
+    expect(screen.getByRole("button", { name: "backup-one" }).getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: "backup-two" }).getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("moves focus to the heading when the resume dialog changes views", async () => {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <QueryClientProvider client={queryClient}>
+        <ResumeModal isOpen onClose={vi.fn()} onResume={vi.fn()} />
+      </QueryClientProvider>
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Restore from Backup" }));
+
+    await waitFor(() => expect(screen.getByRole("heading", { name: "Select Backup" })).toBe(document.activeElement));
+  });
+
   it("wraps Tab in both directions, including when focus starts outside", () => {
     const outside = document.createElement("button");
     document.body.append(outside);
@@ -131,7 +173,7 @@ describe("modal and icon button accessibility", () => {
     opener.remove();
   });
 
-  it("keeps the backup backdrop disabled during loading but allows Escape without focusing disabled controls", async () => {
+  it("keeps all backup dialog close mechanisms disabled during loading", async () => {
     const onClose = vi.fn();
     const { rerender } = render(<BackupDialog isOpen onClose={onClose} onConfirm={vi.fn()} isLoading={false} />);
     await waitFor(() => expect(screen.getByLabelText("Backup Name")).toBe(document.activeElement));
@@ -142,11 +184,11 @@ describe("modal and icon button accessibility", () => {
     );
     fireEvent.click(screen.getByTestId("backup-dialog"));
     fireEvent.keyDown(document, { key: "Escape" });
-    expect(onClose).toHaveBeenCalledOnce();
+    expect(onClose).not.toHaveBeenCalled();
 
     rerender(<BackupDialog isOpen onClose={onClose} onConfirm={vi.fn()} isLoading={false} />);
     fireEvent.click(screen.getByTestId("backup-dialog"));
-    expect(onClose).toHaveBeenCalledTimes(2);
+    expect(onClose).toHaveBeenCalledOnce();
   });
 
   it("cleans up the Google OAuth popup and ignores completion after close", async () => {

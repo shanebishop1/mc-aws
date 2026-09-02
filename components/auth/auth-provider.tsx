@@ -32,6 +32,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     queryKey: queryKeys.authMe,
     queryFn: fetchAuthMe,
     enabled: isPageFocused,
+    staleTime: 30_000,
   });
 
   const logoutMutation = useMutation({
@@ -58,7 +59,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(async (): Promise<void> => {
     await logoutMutation.mutateAsync();
     await queryClient.invalidateQueries({ queryKey: queryKeys.authMe });
-    await queryClient.refetchQueries({ queryKey: queryKeys.authMe });
   }, [logoutMutation, queryClient]);
 
   const value: AuthContextValue = {

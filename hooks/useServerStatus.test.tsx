@@ -92,7 +92,7 @@ describe("useServerStatus", () => {
     vi.mocked(fetchPlayers).mockResolvedValue(buildPlayersResponse(0));
 
     const queryClient = createTestClient();
-    const { result, rerender } = renderHook(() => useServerStatus(), {
+    const { result } = renderHook(() => useServerStatus(), {
       wrapper: createWrapper(queryClient),
     });
 
@@ -109,13 +109,11 @@ describe("useServerStatus", () => {
     act(() => {
       vi.advanceTimersByTime(PENDING_ACTION_TIMEOUT_MS - 1);
     });
-    rerender();
     expect(result.current.status).toBe(ServerState.Pending);
 
     act(() => {
       vi.advanceTimersByTime(2);
     });
-    rerender();
     expect(result.current.status).toBe(ServerState.Stopped);
   });
 
@@ -140,6 +138,34 @@ describe("useServerStatus", () => {
     await waitFor(() => {
       expect(fetchStatus).toHaveBeenCalledTimes(2);
     });
+  });
+
+  it("suspends regular status polling while an operation is pending", async () => {
+    vi.mocked(fetchStatus).mockResolvedValue(buildStatusResponse(ServerState.Stopped));
+    vi.mocked(fetchPlayers).mockResolvedValue(buildPlayersResponse(0));
+
+    const queryClient = createTestClient();
+    const { result } = renderHook(() => useServerStatus(), {
+      wrapper: createWrapper(queryClient),
+    });
+
+    await waitFor(() => expect(fetchStatus).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      result.current.setPendingAction("start");
+    });
+    await waitFor(() => expect(result.current.status).toBe(ServerState.Pending));
+    const callsWhilePending = vi.mocked(fetchStatus).mock.calls.length;
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(10_000);
+    });
+    expect(fetchStatus).toHaveBeenCalledTimes(callsWhilePending);
+
+    act(() => {
+      result.current.setPendingAction(null);
+    });
+    await waitFor(() => expect(fetchStatus).toHaveBeenCalledTimes(callsWhilePending + 1));
   });
 
   it("refreshes players only when transitioning into running and cancels when leaving running", async () => {

@@ -12,9 +12,9 @@ interface BackupSelectionListProps {
 export const BackupSelectionList = ({ backups, selectedBackup, onSelect, isLoading }: BackupSelectionListProps) => {
   if (isLoading) {
     return (
-      <div className="flex justify-center py-8">
-        <div className="w-6 h-6 border-2 border-green/30 border-t-green rounded-full animate-spin" />
-      </div>
+      <output className="flex justify-center py-8" aria-label="Loading backups">
+        <div aria-hidden="true" className="w-6 h-6 border-2 border-green/30 border-t-green rounded-full animate-spin" />
+      </output>
     );
   }
 
@@ -32,6 +32,7 @@ export const BackupSelectionList = ({ backups, selectedBackup, onSelect, isLoadi
           animate={{ opacity: 1 }}
           transition={{ delay: index * 0.02 }}
           onClick={() => onSelect(backup)}
+          aria-pressed={selectedBackup === backup}
           className={`w-full text-left p-3 rounded-sm border transition-colors cursor-pointer ${
             selectedBackup === backup ? "border-green bg-green/10" : "border-charcoal/10 hover:border-green/50"
           }`}

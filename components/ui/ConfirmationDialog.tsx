@@ -31,7 +31,7 @@ export const ConfirmationDialog = ({
   isLoading = false,
 }: ConfirmationDialogProps) => {
   const [typedConfirmation, setTypedConfirmation] = useState("");
-  const modalRef = useAccessibleDialog(isOpen, onClose);
+  const modalRef = useAccessibleDialog(isOpen, onClose, !isLoading);
 
   // Reset typed confirmation when modal opens/closes
   useEffect(() => {

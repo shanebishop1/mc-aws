@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, motion } from "framer-motion";
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
 import { useEffect, useState } from "react";
 
 interface ZParticle {
@@ -18,10 +18,11 @@ interface SleepingZsProps {
 
 export const SleepingZs = ({ show = true }: SleepingZsProps) => {
   const [particles, setParticles] = useState<ZParticle[]>([]);
+  const shouldReduceMotion = useReducedMotion();
 
   useEffect(() => {
     // Only create particles when shown
-    if (!show) {
+    if (!show || shouldReduceMotion) {
       setParticles([]);
       return;
     }
@@ -41,7 +42,7 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
     }, 800); // New Z every 800ms
 
     return () => clearInterval(interval);
-  }, [show]);
+  }, [shouldReduceMotion, show]);
 
   // Remove particles after animation completes
   useEffect(() => {
@@ -54,7 +55,7 @@ export const SleepingZs = ({ show = true }: SleepingZsProps) => {
   }, [particles]);
 
   return (
-    <div data-testid="sleeping-zs" className="absolute inset-0 pointer-events-none overflow-hidden">
+    <div aria-hidden="true" data-testid="sleeping-zs" className="absolute inset-0 pointer-events-none overflow-hidden">
       <AnimatePresence>
         {particles.map((particle) => (
           <motion.span

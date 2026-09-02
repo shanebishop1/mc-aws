@@ -65,7 +65,7 @@ export const EmailManagementPanel = ({ isOpen, onClose }: EmailManagementPanelPr
     isSaving,
   } = useEmailData();
   const canClose = !isLoading && !isSaving;
-  const dialogRef = useAccessibleDialog(isOpen, onClose);
+  const dialogRef = useAccessibleDialog(isOpen, onClose, canClose);
 
   const handleAdd = (email: string) => {
     if (!allowlist.includes(email)) {

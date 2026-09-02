@@ -37,7 +37,11 @@ export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
   return (
     <div data-testid="add-email-form" className="space-y-2">
       <div className="flex gap-2">
+        <label htmlFor="allowed-email" className="sr-only">
+          Email address to allow
+        </label>
         <input
+          id="allowed-email"
           type="email"
           value={newEmail}
           onChange={(e) => {
@@ -47,6 +51,8 @@ export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
           onKeyDown={handleKeyDown}
           placeholder="email@example.com"
           disabled={disabled}
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={error ? "allowed-email-error" : undefined}
           className="flex-1 px-3 py-2 font-sans text-sm bg-white border border-charcoal/20 rounded-sm focus:outline-none focus:border-green disabled:opacity-50"
         />
         <button
@@ -58,7 +64,11 @@ export const AddEmailForm = ({ onAdd, disabled }: AddEmailFormProps) => {
           Add
         </button>
       </div>
-      {error && <p className="font-sans text-xs text-red-500">{error}</p>}
+      {error && (
+        <p id="allowed-email-error" role="alert" className="font-sans text-xs text-red-800">
+          {error}
+        </p>
+      )}
     </div>
   );
 };

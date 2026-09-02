@@ -52,8 +52,8 @@ export function useServerStatus(): UseServerStatusReturn {
   const statusQuery = useQuery({
     queryKey: queryKeys.status,
     queryFn: fetchStatus,
-    enabled: isPageFocused && !isUserIdle,
-    refetchInterval: STATUS_POLL_INTERVAL_MS,
+    enabled: isPageFocused && !isUserIdle && !pendingAction,
+    refetchInterval: pendingAction ? false : STATUS_POLL_INTERVAL_MS,
     refetchIntervalInBackground: false,
   });
 
@@ -108,6 +108,21 @@ export function useServerStatus(): UseServerStatusReturn {
       setPendingActionState(null);
     }
   }, [actualStatus, pendingAction]);
+
+  useEffect(() => {
+    if (!pendingAction) return;
+
+    const remainingMs = PENDING_ACTION_TIMEOUT_MS - (Date.now() - pendingAction.timestamp);
+    if (remainingMs <= 0) {
+      setPendingActionState(null);
+      return;
+    }
+
+    const timeoutId = setTimeout(() => {
+      setPendingActionState((current) => (current?.timestamp === pendingAction.timestamp ? null : current));
+    }, remainingMs);
+    return () => clearTimeout(timeoutId);
+  }, [pendingAction]);
 
   useEffect(() => {
     let inactivityTimeoutId: ReturnType<typeof setTimeout> | null = null;

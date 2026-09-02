@@ -1,15 +1,28 @@
 "use client";
 
-import { GoogleDriveSetupPrompt } from "@/components/GoogleDriveSetupPrompt";
 import { useAuth } from "@/components/auth/auth-provider";
-import { RestoreDialog } from "@/components/backup/RestoreDialog";
-import { BackupDialog } from "@/components/ui/BackupDialog";
 import { LuxuryButton } from "@/components/ui/Button";
-import { ConfirmationDialog } from "@/components/ui/ConfirmationDialog";
-import { fetchAuthMe, fetchGDriveStatus, queryKeys } from "@/lib/client-api";
+import { fetchGDriveStatus, queryKeys } from "@/lib/client-api";
 import { useQueryClient } from "@tanstack/react-query";
 import { motion } from "framer-motion";
+import dynamic from "next/dynamic";
 import { useState } from "react";
+
+const BackupDialog = dynamic(() => import("@/components/ui/BackupDialog").then((module) => module.BackupDialog), {
+  ssr: false,
+});
+const ConfirmationDialog = dynamic(
+  () => import("@/components/ui/ConfirmationDialog").then((module) => module.ConfirmationDialog),
+  { ssr: false }
+);
+const GoogleDriveSetupPrompt = dynamic(
+  () => import("@/components/GoogleDriveSetupPrompt").then((module) => module.GoogleDriveSetupPrompt),
+  { ssr: false }
+);
+const RestoreDialog = dynamic(
+  () => import("@/components/backup/RestoreDialog").then((module) => module.RestoreDialog),
+  { ssr: false }
+);
 
 interface ControlsSectionProps {
   status: string;
@@ -106,18 +119,6 @@ export const ControlsSection = ({
     }
   };
 
-  const isSignedIn = async (): Promise<boolean> => {
-    try {
-      const data = await queryClient.fetchQuery({
-        queryKey: queryKeys.authMe,
-        queryFn: fetchAuthMe,
-      });
-      return data.authenticated === true;
-    } catch {
-      return false;
-    }
-  };
-
   const openLoginPopup = (onSuccess?: () => void) => {
     const popup = window.open("/api/auth/login?popup=1", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
 
@@ -128,8 +129,8 @@ export const ControlsSection = ({
 
     async function complete() {
       cleanup();
-      await refetch();
-      if (onSuccess && (await isSignedIn())) {
+      const user = await refetch();
+      if (onSuccess && user) {
         onSuccess();
       }
     }
@@ -198,9 +199,7 @@ export const ControlsSection = ({
     <motion.div
       data-testid="controls-section"
       className="shrink-0 w-full flex items-center justify-center py-4 md:py-0 min-h-24 md:min-h-48"
-      initial={{ y: 20, opacity: 0 }}
-      animate={{ y: 0, opacity: 1 }}
-      transition={{ duration: 0.8, ease: "easeOut" }}
+      initial={false}
     >
       {isAdmin ? (
         <>
@@ -224,46 +223,54 @@ export const ControlsSection = ({
             onRestoreClick={handleRestoreClick}
           />
 
-          <ConfirmationDialogs
-            showHibernateConfirm={showHibernateConfirm}
-            isActionPending={isActionPending}
-            onHibernateClose={() => setShowHibernateConfirm(false)}
-            onHibernateConfirm={() => {
-              setShowHibernateConfirm(false);
-              void handleAction("Hibernate", "/api/hibernate");
-            }}
-          />
+          {showHibernateConfirm && (
+            <ConfirmationDialogs
+              showHibernateConfirm
+              isActionPending={isActionPending}
+              onHibernateClose={() => setShowHibernateConfirm(false)}
+              onHibernateConfirm={() => {
+                setShowHibernateConfirm(false);
+                void handleAction("Hibernate", "/api/hibernate");
+              }}
+            />
+          )}
 
-          <BackupDialog
-            isOpen={showBackupDialog}
-            onClose={() => setShowBackupDialog(false)}
-            onConfirm={(backupName) => {
-              setShowBackupDialog(false);
-              void handleAction("Backup", "/api/backup", { name: backupName });
-            }}
-            isLoading={isActionPending}
-          />
+          {showBackupDialog && (
+            <BackupDialog
+              isOpen
+              onClose={() => setShowBackupDialog(false)}
+              onConfirm={(backupName) => {
+                setShowBackupDialog(false);
+                void handleAction("Backup", "/api/backup", { name: backupName });
+              }}
+              isLoading={isActionPending}
+            />
+          )}
 
-          <RestoreDialog
-            open={showRestoreDialog}
-            onOpenChange={setShowRestoreDialog}
-            onConfirm={(backupName) => {
-              setShowRestoreDialog(false);
-              setIsRestoring(true);
-              onRestoreStateChange?.(true, "Restoring backup... server will restart");
-              void handleAction("Restore", "/api/restore", { backupName }).finally(() => {
-                setIsRestoring(false);
-              });
-            }}
-          />
+          {showRestoreDialog && (
+            <RestoreDialog
+              open
+              onOpenChange={setShowRestoreDialog}
+              onConfirm={(backupName) => {
+                setShowRestoreDialog(false);
+                setIsRestoring(true);
+                onRestoreStateChange?.(true, "Restoring backup... server will restart");
+                void handleAction("Restore", "/api/restore", { backupName }).finally(() => {
+                  setIsRestoring(false);
+                });
+              }}
+            />
+          )}
 
-          <GoogleDriveSetupPrompt
-            isOpen={showGDrivePrompt}
-            onClose={handleGDrivePromptClose}
-            onSetupComplete={handleGDriveSetupComplete}
-            allowSkip={false}
-            context={pendingAction?.action === "Backup" ? "backup" : "restore"}
-          />
+          {showGDrivePrompt && (
+            <GoogleDriveSetupPrompt
+              isOpen
+              onClose={handleGDrivePromptClose}
+              onSetupComplete={handleGDriveSetupComplete}
+              allowSkip={false}
+              context={pendingAction?.action === "Backup" ? "backup" : "restore"}
+            />
+          )}
 
           {gdriveError && <GDriveErrorToast message={gdriveError} onDismiss={() => setGdriveError(null)} />}
         </>

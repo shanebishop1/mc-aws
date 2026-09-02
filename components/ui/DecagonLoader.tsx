@@ -1,7 +1,7 @@
 "use client";
 
 import { cn } from "@/lib/utils";
-import { motion } from "framer-motion";
+import { motion, useReducedMotion } from "framer-motion";
 import { useState } from "react";
 
 import { ServerState } from "@/lib/types";
@@ -34,6 +34,7 @@ const rotateAnimation = {
 
 export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderProps) => {
   const [isHovered, setIsHovered] = useState(false);
+  const shouldReduceMotion = useReducedMotion();
 
   const breatheAnimation = {
     scale: [1, 1.12, 1],
@@ -51,7 +52,10 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
 
   return (
     <div data-testid="decagon-loader" className={cn("relative flex items-center justify-center w-24 h-24", className)}>
-      <motion.div animate={rotateAnimation} className="absolute inset-0 flex items-center justify-center">
+      <motion.div
+        animate={shouldReduceMotion ? { rotate: 0 } : rotateAnimation}
+        className="absolute inset-0 flex items-center justify-center"
+      >
         <motion.svg
           viewBox="0 0 100 100"
           className={cn("w-full h-full touch-none", colorClass)}
@@ -72,7 +76,11 @@ export const DecagonLoader = ({ status, isLoading, className }: DecagonLoaderPro
             scale: { duration: 0.2 },
             strokeWidth: { duration: 0.2 },
           }}
-          animate={isRunning || isLoading ? breatheAnimation : { scale: 1, strokeWidth: 1.5 }}
+          animate={
+            !shouldReduceMotion && (isRunning || isLoading)
+              ? breatheAnimation
+              : { scale: 1, opacity: 1, strokeWidth: 1.5 }
+          }
         >
           {/* Decagon Shape with animated fill */}
           <motion.polygon
