@@ -20,7 +20,7 @@ NEXT_BUILD_ENV_FILE=".env.production.local"
 NEXT_BUILD_ENV_BACKUP_FILE="${NEXT_BUILD_ENV_FILE}.mc-aws-backup"
 NEXT_BUILD_ENV_MARKER_FILE="${NEXT_BUILD_ENV_FILE}.mc-aws-generated"
 NEXT_BUILD_ENV_PREPARED="0"
-CLOUDFLARE_DEPLOY_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-${CLOUDFLARE_API_TOKEN:-}}"
+MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN:-}"
 DEPLOYMENT_MANIFEST_FILE="${MC_AWS_DEPLOYMENT_MANIFEST:-.mc-aws-deployment.json}"
 RECOVERY_RECORD_FILE="${MC_AWS_CLOUDFLARE_RECOVERY_RECORD:-${DEPLOYMENT_MANIFEST_FILE}.cloudflare-recovery.json}"
 RECOVERY_HISTORY_FILE="${RECOVERY_RECORD_FILE}.last"
@@ -214,7 +214,7 @@ wrangler() {
     TERM="${TERM:-}" \
     USER="${USER:-}" \
     TMPDIR="$TMPDIR" \
-    CLOUDFLARE_API_TOKEN="${CLOUDFLARE_DEPLOY_API_TOKEN:-}" \
+    CLOUDFLARE_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN:-}" \
     "$WRANGLER_BIN" "$@"
 }
 
@@ -762,7 +762,7 @@ process.stdout.write([r.cloudflare.worker.name,r.cloudflare.panelHostingMode,r.c
   ZONE_NAME="$DOMAIN"
   PANEL_DNS_MANAGEMENT="managed"
   [[ "$PANEL_DNS_PREFLIGHT_STATE" == "unmanaged" ]] && PANEL_DNS_MANAGEMENT="external"
-  CF_DNS_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN"
+  CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN"
   if [[ -f "$ENV_FILE" && "$PANEL_DNS_MANAGEMENT" == "managed" ]]; then
     CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
   fi
@@ -853,12 +853,12 @@ CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
 if [[ "$PANEL_HOSTING_MODE" == "custom" && "$PANEL_DNS_MANAGEMENT" == "external" && -z "$CF_DNS_API_TOKEN" ]]; then
   # External mode never calls DNS APIs. Reuse the shell-only Wrangler credential
   # transiently for the zone-scoped route ownership checks only.
-  CF_DNS_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN"
+  CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN"
 fi
 CF_ZONE_ID="$(get_env_value "CLOUDFLARE_PANEL_ZONE_ID")"
 if [[ "$PANEL_HOSTING_MODE" == "custom" && -z "$CF_DNS_API_TOKEN" ]]; then
   echo "❌ Error: Custom panel route ownership checks require a Cloudflare API token."
-  echo "   Set CLOUDFLARE_PANEL_DNS_API_TOKEN for managed DNS, or export CLOUDFLARE_API_TOKEN for external DNS."
+  echo "   Set CLOUDFLARE_PANEL_DNS_API_TOKEN for managed DNS, or export MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN for external DNS."
   exit 1
 fi
 fi
@@ -1358,7 +1358,7 @@ run_runtime_rotation() {
     RUNTIME_IAM_USER_NAME="$(recovery_value runtimeIdentity.userName)" \
     WRANGLER_CONFIG_FILE="${WRANGLER_DEPLOY_CONFIG_FILE:-/dev/null}" \
     WRANGLER_HOME_DIR="$WRANGLER_HOME_DIR" \
-    CLOUDFLARE_DEPLOY_API_TOKEN="$CLOUDFLARE_DEPLOY_API_TOKEN" \
+    MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN" \
     MC_AWS_CLOUDFLARE_RECOVERY_RECORD="$RECOVERY_RECORD_FILE" \
     ROTATION_MODE="$mode" bash scripts/cloudflare/rotate-worker-runtime-key.sh
 }

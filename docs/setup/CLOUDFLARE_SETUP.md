@@ -15,7 +15,7 @@ No custom domain or DNS token is required. Find the account Workers subdomain in
 The domain must be in an active Cloudflare zone. Use a hostname such as `panel.example.com`.
 
 - **Managed DNS:** create a zone-scoped panel token with **DNS Read/Edit** and **Workers Routes Read/Edit**. Setup may create or proxy the panel record and records ownership for teardown.
-- **External DNS:** create a proxied record yourself. A proxied `A` record to placeholder `192.0.2.1` is valid because the Worker route handles requests. Before setup, export `CLOUDFLARE_DEPLOY_API_TOKEN` (or the supported `CLOUDFLARE_API_TOKEN` alias) with account access for Worker scripts, secrets, and KV, plus zone read and **Workers Routes Read/Edit** for the panel zone. The wizard verifies token, zone, and route-list access before returning to chargeable AWS deployment. Setup does not read or modify panel DNS and never persists this shell token.
+- **External DNS:** create a proxied record yourself. A proxied `A` record to placeholder `192.0.2.1` is valid because the Worker route handles requests. Before setup, export `MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN` with account access for Worker scripts, secrets, and KV, plus zone read and **Workers Routes Read/Edit** for the panel zone. The wizard verifies token, zone, and route-list access before returning to chargeable AWS deployment. Setup does not read or modify panel DNS and never persists this shell token.
 
 Do not save the external shell deployment token in `.env.local` or `.env.production`.
 
@@ -43,7 +43,7 @@ If you do not want Cloudflare Minecraft DNS, choose [DuckDNS](DUCKDNS_SETUP.md) 
 ## Troubleshooting
 
 - Browser login repeats: setup's isolated Wrangler session is separate from the normal Wrangler session; let setup open the browser.
-- External panel mode fails before deploy: confirm `CLOUDFLARE_API_TOKEN` is exported in the setup shell and has Workers/route access to the correct zone.
+- External panel mode fails before deploy: confirm `MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN` is exported in the setup shell and has Workers/route access to the correct zone.
 - Minecraft DNS does not update: confirm the DNS-only record exists, the zone ID and hostname match it, and the runtime token has DNS Edit for that zone.
 - Panel DNS and Minecraft DNS may use different zones and tokens. Do not interchange them.
 
