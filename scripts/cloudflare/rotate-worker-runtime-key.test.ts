@@ -114,7 +114,7 @@ process.stdout.write(status);
       WRANGLER_HOME_DIR: tempDirectory,
       MC_AWS_DEPLOYMENT_MANIFEST: path.join(tempDirectory, "deployment-manifest.json"),
       CLOUDFLARE_API_TOKEN: "",
-      MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN: "",
+      MC_AWS_CLOUDFLARE_DEPLOY_TOKEN: "",
     },
   });
 

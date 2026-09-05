@@ -20,7 +20,7 @@ NEXT_BUILD_ENV_FILE=".env.production.local"
 NEXT_BUILD_ENV_BACKUP_FILE="${NEXT_BUILD_ENV_FILE}.mc-aws-backup"
 NEXT_BUILD_ENV_MARKER_FILE="${NEXT_BUILD_ENV_FILE}.mc-aws-generated"
 NEXT_BUILD_ENV_PREPARED="0"
-MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN:-}"
+MC_AWS_CLOUDFLARE_DEPLOY_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_TOKEN:-}"
 DEPLOYMENT_MANIFEST_FILE="${MC_AWS_DEPLOYMENT_MANIFEST:-.mc-aws-deployment.json}"
 RECOVERY_RECORD_FILE="${MC_AWS_CLOUDFLARE_RECOVERY_RECORD:-${DEPLOYMENT_MANIFEST_FILE}.cloudflare-recovery.json}"
 RECOVERY_HISTORY_FILE="${RECOVERY_RECORD_FILE}.last"
@@ -49,15 +49,17 @@ release_deployment_lock() {
   if [[ "$DEPLOY_LOCK_ACQUIRED" != "1" || ! -L "$DEPLOY_LOCK_DIR" ]]; then
     return 0
   fi
-  local owner_pid=""
-  owner_pid="$(readlink "$DEPLOY_LOCK_DIR" 2>/dev/null || true)"
+  local owner_target="" owner_pid=""
+  owner_target="$(readlink "$DEPLOY_LOCK_DIR" 2>/dev/null || true)"
+  owner_pid="${owner_target#/proc/}"
   if [[ "$owner_pid" == "$$" ]]; then
     rm -f "$DEPLOY_LOCK_DIR"
   fi
 }
 
 acquire_deployment_lock() {
-  if ln -s "$$" "$DEPLOY_LOCK_DIR" 2>/dev/null; then
+  # Point at the owning process so filesystem scanners do not encounter a dangling symlink.
+  if ln -s "/proc/$$" "$DEPLOY_LOCK_DIR" 2>/dev/null; then
     DEPLOY_LOCK_ACQUIRED="1"
     return 0
   fi
@@ -66,8 +68,9 @@ acquire_deployment_lock() {
     return 1
   fi
 
-  local owner_pid=""
-  owner_pid="$(readlink "$DEPLOY_LOCK_DIR" 2>/dev/null || true)"
+  local owner_target="" owner_pid=""
+  owner_target="$(readlink "$DEPLOY_LOCK_DIR" 2>/dev/null || true)"
+  owner_pid="${owner_target#/proc/}"
   if [[ "$owner_pid" =~ ^[1-9][0-9]*$ ]] && kill -0 "$owner_pid" 2>/dev/null; then
     echo "❌ Error: Another Cloudflare deployment is active (PID $owner_pid)." >&2
     return 1
@@ -214,7 +217,7 @@ wrangler() {
     TERM="${TERM:-}" \
     USER="${USER:-}" \
     TMPDIR="$TMPDIR" \
-    CLOUDFLARE_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN:-}" \
+    CLOUDFLARE_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_TOKEN:-}" \
     "$WRANGLER_BIN" "$@"
 }
 
@@ -762,7 +765,7 @@ process.stdout.write([r.cloudflare.worker.name,r.cloudflare.panelHostingMode,r.c
   ZONE_NAME="$DOMAIN"
   PANEL_DNS_MANAGEMENT="managed"
   [[ "$PANEL_DNS_PREFLIGHT_STATE" == "unmanaged" ]] && PANEL_DNS_MANAGEMENT="external"
-  CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN"
+  CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_TOKEN"
   if [[ -f "$ENV_FILE" && "$PANEL_DNS_MANAGEMENT" == "managed" ]]; then
     CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
   fi
@@ -853,12 +856,12 @@ CF_DNS_API_TOKEN="$(get_env_value "CLOUDFLARE_PANEL_DNS_API_TOKEN")"
 if [[ "$PANEL_HOSTING_MODE" == "custom" && "$PANEL_DNS_MANAGEMENT" == "external" && -z "$CF_DNS_API_TOKEN" ]]; then
   # External mode never calls DNS APIs. Reuse the shell-only Wrangler credential
   # transiently for the zone-scoped route ownership checks only.
-  CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN"
+  CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_TOKEN"
 fi
 CF_ZONE_ID="$(get_env_value "CLOUDFLARE_PANEL_ZONE_ID")"
 if [[ "$PANEL_HOSTING_MODE" == "custom" && -z "$CF_DNS_API_TOKEN" ]]; then
   echo "❌ Error: Custom panel route ownership checks require a Cloudflare API token."
-  echo "   Set CLOUDFLARE_PANEL_DNS_API_TOKEN for managed DNS, or export MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN for external DNS."
+  echo "   Set CLOUDFLARE_PANEL_DNS_API_TOKEN for managed DNS, or export MC_AWS_CLOUDFLARE_DEPLOY_TOKEN for external DNS."
   exit 1
 fi
 fi
@@ -1358,7 +1361,7 @@ run_runtime_rotation() {
     RUNTIME_IAM_USER_NAME="$(recovery_value runtimeIdentity.userName)" \
     WRANGLER_CONFIG_FILE="${WRANGLER_DEPLOY_CONFIG_FILE:-/dev/null}" \
     WRANGLER_HOME_DIR="$WRANGLER_HOME_DIR" \
-    MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN" \
+    MC_AWS_CLOUDFLARE_DEPLOY_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_TOKEN" \
     MC_AWS_CLOUDFLARE_RECOVERY_RECORD="$RECOVERY_RECORD_FILE" \
     ROTATION_MODE="$mode" bash scripts/cloudflare/rotate-worker-runtime-key.sh
 }
@@ -1377,7 +1380,8 @@ assert_lifecycle_recovery_unblocked() {
   dynamo_output="$(AWS_PAGER="" aws dynamodb get-item --table-name "$lifecycle_table" \
     --key '{"lockKey":{"S":"minecraft-server-lifecycle"}}' --consistent-read --output json)" || return 1
   if ! printf '%s' "$dynamo_output" | node -e '
-const fs=require("node:fs"); const item=JSON.parse(fs.readFileSync(0,"utf8")).Item;
+const fs=require("node:fs"); const input=fs.readFileSync(0,"utf8").trim();
+const item=input ? JSON.parse(input).Item : undefined;
 if(!item)process.exit(0); if(item.released?.BOOL===true)process.exit(0);
 const lease=Number(item.leaseExpiresAt?.N); if(Number.isFinite(lease)&&lease<Date.now())process.exit(0); process.exit(1);
 '; then
