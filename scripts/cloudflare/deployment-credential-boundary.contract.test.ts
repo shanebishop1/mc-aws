@@ -37,7 +37,7 @@ describe("deployment credential boundary", () => {
     expect(workerSecretAllowlist).not.toContain("CLOUDFLARE_PANEL_DNS_API_TOKEN");
     expect(workerSecretAllowlist).not.toContain("PANEL_DNS_MANAGEMENT");
     expect(deployOnlyIgnoredSecretNames.has("CLOUDFLARE_API_TOKEN")).toBe(true);
-    expect(deployOnlyIgnoredSecretNames.has("MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN")).toBe(true);
+    expect(deployOnlyIgnoredSecretNames.has("MC_AWS_CLOUDFLARE_DEPLOY_TOKEN")).toBe(true);
     expect(deployOnlyIgnoredSecretNames.has("CLOUDFLARE_PANEL_DNS_API_TOKEN")).toBe(true);
     expect(deployOnlyIgnoredSecretNames.has("PANEL_DNS_MANAGEMENT")).toBe(true);
     expect(deploySource).toContain("scripts/cloudflare/deploy-env.ts worker-secret-entries");
@@ -57,7 +57,7 @@ describe("deployment credential boundary", () => {
     const deploySource = readFileSync(path.resolve(process.cwd(), "scripts/cloudflare/deploy-cloudflare.sh"), "utf8");
 
     expect(deploySource).toContain('PANEL_DNS_MANAGEMENT" == "external" && -z "$CF_DNS_API_TOKEN"');
-    expect(deploySource).toContain('CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN"');
+    expect(deploySource).toContain('CF_DNS_API_TOKEN="$MC_AWS_CLOUDFLARE_DEPLOY_TOKEN"');
     const managedDnsBranch = deploySource.indexOf('"$PANEL_DNS_MANAGEMENT" == "managed" ]]; then');
     expect(managedDnsBranch).toBeGreaterThan(-1);
     expect(deploySource.indexOf("ensure_panel_dns", managedDnsBranch)).toBeGreaterThan(managedDnsBranch);

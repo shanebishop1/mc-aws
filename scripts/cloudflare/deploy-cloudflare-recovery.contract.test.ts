@@ -98,9 +98,14 @@ describe("Cloudflare deployment recovery contract", () => {
     expect(lock).toBeLessThan(localRecovery);
     expect(lock).toBeLessThan(providerRecovery);
     expect(source).toContain('kill -0 "$owner_pid"');
-    expect(source).toContain('ln -s "$$" "$DEPLOY_LOCK_DIR"');
+    expect(source).toContain('ln -s "/proc/$$" "$DEPLOY_LOCK_DIR"');
     expect(source).toContain('readlink "$DEPLOY_LOCK_DIR"');
+    expect(source).toContain('owner_pid="${owner_target#/proc/}"');
     expect(source).toContain("A stale Cloudflare deployment lock remains");
     expect(source).toContain("release_deployment_lock");
+  });
+
+  it("accepts the AWS CLI's empty successful response for an absent lifecycle row", () => {
+    expect(source).toContain("const item=input ? JSON.parse(input).Item : undefined;");
   });
 });

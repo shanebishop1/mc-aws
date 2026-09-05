@@ -109,7 +109,7 @@ describe("setup-wizard panel hosting contract", () => {
             ...process.env,
             MC_AWS_SETUP_LIBRARY_ONLY: "1",
             CLOUDFLARE_API_TOKEN: "",
-            MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN: "",
+            MC_AWS_CLOUDFLARE_DEPLOY_TOKEN: "",
           },
         }
       );

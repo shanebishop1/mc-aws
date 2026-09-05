@@ -44,7 +44,7 @@ readonly LOCAL_ENV_FILE=".env.local"
 readonly PRODUCTION_ENV_FILE=".env.production"
 # Capture a shell deployment token before resume files are loaded. This value is
 # used only for optional read-only external-zone validation and is never written.
-CLOUDFLARE_SETUP_DEPLOY_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN:-}"
+CLOUDFLARE_SETUP_DEPLOY_API_TOKEN="${MC_AWS_CLOUDFLARE_DEPLOY_TOKEN:-}"
 CURL_BIN="${CURL_BIN:-curl}"
 
 template_for_env_file() {
@@ -875,7 +875,7 @@ collect_panel_hosting() {
           log "External mode will not read, create, modify, or record panel DNS."
           if [[ -z "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" ]]; then
             log_error "External custom panel hosting requires a shell-only route-capable Cloudflare token."
-            log_error "Export MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN with Workers Routes Read/Edit, then rerun setup."
+            log_error "Export MC_AWS_CLOUDFLARE_DEPLOY_TOKEN with Workers Routes Read/Edit, then rerun setup."
             exit 1
           fi
           validate_cloudflare_token "$CLOUDFLARE_SETUP_DEPLOY_API_TOKEN" || exit 1

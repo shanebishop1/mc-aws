@@ -27,7 +27,7 @@ describe("deployment build environment sanitization", () => {
         "export    AWS_SECRET_ACCESS_KEY=local-only",
         "\texport\tAWS_SESSION_TOKEN \t= local-only",
         " export CLOUDFLARE_API_TOKEN = deploy-only",
-        "MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN = deploy-only",
+        "MC_AWS_CLOUDFLARE_DEPLOY_TOKEN = deploy-only",
         " export   CLOUDFLARE_PANEL_DNS_API_TOKEN=panel-only",
         "  PANEL_DNS_MANAGEMENT = external",
       ].join("\n")
@@ -46,7 +46,7 @@ describe("deployment build environment sanitization", () => {
     expect(output).toContain("SAFE_SETTING=retained");
     expect(output).toContain("AWS_ACCESS_KEY_ID=\nAWS_SECRET_ACCESS_KEY=\nAWS_SESSION_TOKEN=");
     expect(output).not.toContain("CLOUDFLARE_API_TOKEN");
-    expect(output).not.toContain("MC_AWS_CLOUDFLARE_DEPLOY_API_TOKEN");
+    expect(output).not.toContain("MC_AWS_CLOUDFLARE_DEPLOY_TOKEN");
     expect(output).not.toContain("CLOUDFLARE_PANEL_DNS_API_TOKEN");
     expect(output).not.toContain("PANEL_DNS_MANAGEMENT");
   });
