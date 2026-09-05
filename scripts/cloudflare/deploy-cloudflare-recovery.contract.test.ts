@@ -106,6 +106,6 @@ describe("Cloudflare deployment recovery contract", () => {
   });
 
   it("accepts the AWS CLI's empty successful response for an absent lifecycle row", () => {
-    expect(source).toContain('const item=input ? JSON.parse(input).Item : undefined;');
+    expect(source).toContain("const item=input ? JSON.parse(input).Item : undefined;");
   });
 });
