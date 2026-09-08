@@ -11,4 +11,5 @@ export * from "@/lib/agent/policy";
 export * from "@/lib/agent/presets";
 export * from "@/lib/agent/providers";
 export * from "@/lib/agent/state";
+export * from "@/lib/agent/tool-definitions";
 export * from "@/lib/agent/validators";

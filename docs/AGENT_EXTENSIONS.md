@@ -20,6 +20,21 @@ mc-aws extensions are versioned, data-only bundles loaded through the public `lo
 `lib/agent/`. The schema-v1 example is [`examples/agent-extensions/status-report/extension.json`](../examples/agent-extensions/status-report/extension.json),
 with its referenced skill beside it. Adding that bundle requires no Pi adapter or portal edit.
 
+## Packaged production loading (G2 slice)
+
+The gateway configuration contains a bounded `extensions` object. Omitted configuration is disabled; enabling it
+accepts only up to eight canonical `extensions/<bundle>/extension.json` paths from the immutable runtime release.
+The packaged gateway and executor each load those root-owned, non-writable files through `loadAgentExtensionRegistry`;
+workspace paths, executable modules, callbacks, and arbitrary resource execution are not accepted. Bundle bytes are
+bounded at 256 KiB each and 1 MiB total, and the registry still enforces schema, compatibility, trusted `mc-aws`
+provenance, SHA-256 integrity, existing capability schemas, and trusted hook mappings.
+
+The runtime bridge derives Pi tools from the validated mc-aws capability definitions. Extension tools are aliases only:
+they use an existing capability's exact input schema and remain subject to the normal policy, approval, backup, path,
+and effect budgets. Hook references are inert strings; the sample read-evidence hook resolves to a small trusted
+mc-aws action and never imports extension code. Executable plugin installation remains unavailable until its separate
+reviewed rollout path is implemented and qualified.
+
 ## Bundle rules
 
 - Declare schema version, stable extension/tool/skill/hook IDs, SemVer, contract/platform compatibility, and SHA-256

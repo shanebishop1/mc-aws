@@ -6,6 +6,7 @@ import type {
   JsonValue,
   MutationCommit,
   PermissionPolicy,
+  ToolDefinition,
   ToolInvocation,
   ToolProgress,
   ToolResult,
@@ -152,6 +153,8 @@ export interface DirectLiveExecutorConfig {
   requireDownloadAuthorization?: true;
   /** Returns backup-required so the gateway can use the typed backup adapter. */
   externalBackupCoordinator?: true;
+  /** Validated data-only aliases loaded from the immutable runtime release. */
+  extensionTools?: readonly ToolDefinition[];
 }
 
 export type GatewayApprovalAuthorization = InvocationAuthorization;

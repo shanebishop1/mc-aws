@@ -991,7 +991,9 @@ export class ProductionDirectLiveHostEffects implements DirectLiveHostEffects {
   }
 
   async loadExtension(_value: string, _signal: AbortSignal): Promise<HostEffectResult> {
-    throw new Error("Production extension loading is disabled until signed bundles are implemented.");
+    throw new Error(
+      "Workspace extension loading is unavailable; configured bundles load only from the immutable runtime release."
+    );
   }
 
   private anchor(parent: FileHandle, leaf: string): string {

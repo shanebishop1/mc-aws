@@ -4,14 +4,16 @@ import { access, chmod, readFile } from "node:fs/promises";
 import { streamSimple as streamOpenAiCompatible } from "@earendil-works/pi-ai/api/openai-completions";
 import { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { AgentHarnessAdapter } from "../../lib/agent/adapters";
-import type { JsonObject, TargetScope, ToolDefinition } from "../../lib/agent/contracts";
+import type { AgentCapability, JsonObject, TargetScope, ToolDefinition } from "../../lib/agent/contracts";
 import {
   PiHarnessAdapter,
   type PiToolBridge,
   createPiSdkRuntime,
   createSecretAwareEventRedactor,
 } from "../../lib/agent/harness/pi";
+import { DIRECT_LIVE_TOOL_DEFINITIONS } from "../../lib/agent/tool-definitions";
 import { GatewayDownloadRelayServer } from "./download-relay";
+import { extensionSystemPrompt, loadInstalledAgentExtensionRegistry } from "./extensions";
 import { AgentRuntimeGateway, HttpRuntimeControlTransport } from "./gateway";
 import { type GatewayProviderProfile, assertGatewayProfileBinding, parseGatewayConfig } from "./gateway-config";
 import { PinnedHttpsTransport } from "./pinned-https";
@@ -37,66 +39,37 @@ function waitForFencePoll(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, 250));
 }
 
-function tools(): PiToolBridge[] {
-  const definitions: Array<
-    [string, string, ToolDefinition["capability"], ToolDefinition["sideEffect"], (args: JsonObject) => TargetScope]
-  > = [
-    ["workspace_read", "workspace.read", "workspace.read", "read", (args) => scope("workspace", pathArgument(args))],
-    [
-      "workspace_write",
-      "workspace.write",
-      "workspace.write",
-      "write",
-      (args) => scope("workspace", pathArgument(args)),
-    ],
-    [
-      "workspace_delete",
-      "workspace.delete",
-      "workspace.delete",
-      "delete",
-      (args) => scope("workspace", pathArgument(args)),
-    ],
-    ["shell_execute", "shell.execute", "shell.execute", "execute", () => scope("workspace", ".")],
-    ["console_execute", "console.execute", "console.execute", "execute", () => scope("console", "minecraft")],
-    [
-      "network_download",
-      "network.download",
-      "network.outbound",
-      "network",
-      (args) => scope("workspace", pathArgument(args)),
-    ],
-    ["backup_request", "backup.request", "backup.create", "backup", () => scope("workspace", ".")],
-  ];
-  return definitions.map(([name, toolId, capability, sideEffect, resolveTargetScope]) => ({
-    name,
-    definition: {
-      schemaVersion: 1,
-      toolId,
-      displayName: toolId,
-      description:
-        toolId === "shell.execute"
-          ? "Run the read-only /runtime/commands/workspace boundary: list [--recursive] [paths], search <literal> [paths], stat <paths>, or compare <left> <right>."
-          : `Invoke the guarded mc-aws ${toolId} capability.`,
-      capability,
-      sideEffect,
-      inputSchema: (toolId === "network.download"
-        ? {
-            type: "object",
-            additionalProperties: false,
-            required: ["url", "destination", "timeoutMs", "maxBytes", "expectedSha256", "expectedBytes"],
-            properties: {
-              url: { type: "string", pattern: "^https://" },
-              destination: { type: "string" },
-              timeoutMs: { type: "integer", minimum: 1 },
-              maxBytes: { type: "integer", minimum: 1 },
-              expectedSha256: { type: "string", pattern: "^[a-f0-9]{64}$" },
-              expectedBytes: { type: "integer", minimum: 1 },
-            },
-          }
-        : { type: "object", additionalProperties: true }) as JsonObject,
-    },
-    resolveTargetScope,
-  }));
+function piToolName(toolId: string): string {
+  return toolId.replaceAll(/[^A-Za-z0-9_-]/g, "_");
+}
+
+function targetScopeForCapability(capability: AgentCapability, args: JsonObject): TargetScope {
+  if (
+    capability === "workspace.read" ||
+    capability === "workspace.write" ||
+    capability === "workspace.delete" ||
+    capability === "extension.load"
+  ) {
+    return scope("workspace", pathArgument(args));
+  }
+  if (capability === "network.outbound") return scope("workspace", pathArgument(args));
+  if (capability === "console.execute") return scope("console", "minecraft");
+  return scope("workspace", ".");
+}
+
+/** Builds Pi bridges from validated mc-aws definitions, including extension aliases. */
+export function tools(definitions: readonly ToolDefinition[]): PiToolBridge[] {
+  const names = new Set<string>();
+  return definitions.map((definition) => {
+    const name = piToolName(definition.toolId);
+    if (names.has(name)) throw new Error(`Duplicate Pi tool name ${name}.`);
+    names.add(name);
+    return {
+      name,
+      definition,
+      resolveTargetScope: (args: JsonObject) => targetScopeForCapability(definition.capability, args),
+    };
+  });
 }
 
 async function main(): Promise<void> {
@@ -104,6 +77,7 @@ async function main(): Promise<void> {
   const configPath = process.env.MC_AGENT_GATEWAY_CONFIG ?? "/etc/mc-agent/world-roots-current/gateway.json";
   await assertProtectedConfig(configPath);
   const config = parseGatewayConfig(JSON.parse(await readFile(configPath, "utf8")) as unknown);
+  const extensionRegistry = await loadInstalledAgentExtensionRegistry(config.extensions, "/opt/mc-agent/current");
   const runtimeBearer = (await readProtectedFile(systemdCredentialPath("runtime-bearer"), 8192)).trim();
   const privateKeyMaterial = (await readProtectedFile(systemdCredentialPath("gateway-private-key"), 32 * 1024)).trim();
   const privateKey = createPrivateKey(privateKeyMaterial);
@@ -143,7 +117,12 @@ async function main(): Promise<void> {
       };
     },
   };
-  const bridges = tools();
+  // Workspace extension.load remains unavailable: production bundles are loaded
+  // only from the fixed release source above, never from an agent path.
+  const bridges = tools([
+    ...DIRECT_LIVE_TOOL_DEFINITIONS.filter((definition) => definition.toolId !== "extension.load"),
+    ...extensionRegistry.tools,
+  ]);
   const harnesses = {
     create: ({
       toolExecutor,
@@ -153,6 +132,7 @@ async function main(): Promise<void> {
       const runtime = createPiSdkRuntime({
         cwd: "/var/lib/mc-agent-gateway/work",
         agentDir: "/var/lib/mc-agent-gateway/pi",
+        systemPrompt: extensionSystemPrompt(extensionRegistry),
         resolveSessionConfiguration: async ({ providerProfileId, model }) => {
           const profile = profiles.get(providerProfileId);
           if (!profile || !profile.allowedModels.includes(model))
@@ -228,6 +208,7 @@ async function main(): Promise<void> {
     }),
     providers,
     harnesses,
+    extensionHooks: extensionRegistry.hooks,
     runtimeExactSecrets,
   });
   const controller = new AbortController();

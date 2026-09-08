@@ -6,6 +6,7 @@ import {
   type JsonObject,
   type JsonValue,
   type MutationCommit,
+  type ToolDefinition,
   type ToolInvocation,
   type ToolProgress,
   type ToolResult,
@@ -44,6 +45,10 @@ import {
   findImmutableBoundaryViolation,
 } from "@/lib/agent/policy";
 import { boundToolResult } from "@/lib/agent/response-limits";
+import {
+  existingToolDefinitionForCapability,
+  extensionToolMatchesExistingCapability,
+} from "@/lib/agent/tool-definitions";
 import { agentSchemas } from "@/lib/agent/validators";
 
 const TOOL_CAPABILITIES = {
@@ -162,6 +167,7 @@ function assertHostSecurityCapabilities(effects: DirectLiveHostEffects, toolId: 
   }
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Alias validation is part of the one-time executor construction boundary.
 export function createDirectLiveExecutor(
   effects: DirectLiveHostEffects,
   config: DirectLiveExecutorConfig,
@@ -190,6 +196,20 @@ export function createDirectLiveExecutor(
     maxProgressEvents: config.maxProgressEvents ?? 32,
   };
   const persistentWorldRoots = canonicalPersistentWorldRoots(config.persistentWorldRoots);
+  const extensionToolIds = new Map<string, ToolId>();
+  for (const definition of config.extensionTools ?? []) {
+    agentSchemas.toolDefinition.parse(definition);
+    if (!extensionToolMatchesExistingCapability(definition)) {
+      throw new TypeError(`Extension tool ${definition.toolId} does not use an existing capability schema.`);
+    }
+    if (definition.toolId in TOOL_CAPABILITIES || extensionToolIds.has(definition.toolId)) {
+      throw new TypeError(`Extension tool ${definition.toolId} collides with an existing tool.`);
+    }
+    extensionToolIds.set(
+      definition.toolId,
+      existingToolDefinitionForCapability(definition.capability).toolId as ToolId
+    );
+  }
 
   return {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Security sequencing is intentionally linear so every tool shares one fail-closed policy/backup/approval gate.
@@ -213,8 +233,9 @@ export function createDirectLiveExecutor(
       try {
         const invocation = agentSchemas.toolInvocation.parse(request.invocation);
         const policy = agentSchemas.permissionPolicy.parse(request.policy);
-        const toolId = invocation.toolId as ToolId;
-        if (!(toolId in TOOL_CAPABILITIES) || TOOL_CAPABILITIES[toolId] !== invocation.capability)
+        const declaredToolId = invocation.toolId as ToolId;
+        const toolId = declaredToolId in TOOL_CAPABILITIES ? declaredToolId : extensionToolIds.get(invocation.toolId);
+        if (!toolId || TOOL_CAPABILITIES[toolId] !== invocation.capability)
           throw new Error("Tool and capability do not match");
         assertKnownArguments(toolId, invocation.arguments);
         assertHostSecurityCapabilities(effects, toolId);

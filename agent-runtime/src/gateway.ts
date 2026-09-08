@@ -24,6 +24,7 @@ import type {
   RuntimeExecutionContext,
 } from "@/lib/agent/executor";
 import { inspectMinecraftCommand, riskFacts } from "@/lib/agent/executor/guards";
+import { applyTrustedAfterInvocationHooks } from "@/lib/agent/hooks";
 import { DEFAULT_PERSISTENT_WORLD_ROOTS, canonicalPersistentWorldRoots } from "@/lib/agent/minecraft-security";
 import { exactNetworkDownloadResource, networkDownloadApprovalScope } from "@/lib/agent/network-download";
 import {
@@ -173,6 +174,8 @@ export interface RuntimeGatewayOptions {
   harnesses: RuntimeHarnessFactory;
   /** Exact gateway-only runtime secrets added to provider values for redaction and pre-execution rejection. */
   runtimeExactSecrets?: readonly string[];
+  /** Inert bundle hook declarations resolved only by trusted mc-aws code. */
+  extensionHooks?: readonly import("@/lib/agent/contracts").HookDefinition[];
   /** Must match the executor's authoritative canonical workspace-relative world roots. */
   persistentWorldRoots?: readonly string[];
   leaseDurationMs?: number;
@@ -466,7 +469,8 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
     private readonly fenceRenewIntervalMs: number,
     private readonly now: () => Date,
     private readonly exactSecrets: readonly string[],
-    private readonly persistentWorldRoots: readonly string[]
+    private readonly persistentWorldRoots: readonly string[],
+    private readonly extensionHooks: readonly import("@/lib/agent/contracts").HookDefinition[]
   ) {
     this.reconciliationTimeoutMs =
       (executor as DirectLiveExecutor & { reconciliationTimeoutMs?: number }).reconciliationTimeoutMs ?? 120_000;
@@ -545,8 +549,9 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
             "Host effect finished without the latest lifecycle fence generation."
           );
         }
+        const displayResult = applyTrustedAfterInvocationHooks(this.extensionHooks, invocation, result);
         await this.rememberTerminal(executionRequest, result, finalAuthorization);
-        return result;
+        return displayResult;
       }
       const output = asRecord(result.output);
       const code = output?.code;
@@ -760,8 +765,9 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
         });
         continue;
       }
+      const displayResult = applyTrustedAfterInvocationHooks(this.extensionHooks, invocation, result);
       await this.rememberTerminal(executionRequest, result);
-      return result;
+      return displayResult;
     }
     return failed(invocation, this.now, "Runtime retry bound was reached.", "runtime-retry-bound");
   }
@@ -1272,7 +1278,8 @@ export class AgentRuntimeGateway {
         this.options.fenceRenewIntervalMs ?? BACKUP_FENCE_RENEW_INTERVAL_MS,
         this.now,
         exactSecrets,
-        this.persistentWorldRoots
+        this.persistentWorldRoots,
+        this.options.extensionHooks ?? []
       );
       const harness = this.options.harnesses.create({ toolExecutor, exactSecrets });
       for await (const event of harness.run({

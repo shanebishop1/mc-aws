@@ -90,6 +90,7 @@ describe("agent runtime host services", () => {
     );
     expect(gateway).toContain("RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6");
     expect(gateway).toContain("ReadOnlyPaths=/opt/mc-agent /run/mc-agent");
+    expect(gateway).not.toContain("ReadWritePaths=/opt/mc-agent");
     expect(gateway).toContain("ExecStartPre=/usr/bin/python3 /usr/local/bin/mc-agent-world-roots.py verify");
     expect(gateway).toContain("MC_AGENT_GATEWAY_CONFIG=/etc/mc-agent/world-roots-current/gateway.json");
     expect(gateway).toContain("ReadWritePaths=/var/lib/mc-agent-gateway /run/mc-agent-download");
@@ -100,11 +101,15 @@ describe("agent runtime host services", () => {
     expect(gateway).toContain("MemoryHigh=192M");
     expect(gateway).toContain("MemoryMax=256M");
     expect(gateway).toContain("TasksMax=64");
+    expect(gatewayConfig).toContain('"extensions": {');
+    expect(gatewayConfig).toContain('"bundlePaths": ["extensions/status-report/extension.json"]');
     expect(gateway).toContain("Environment=MC_AGENT_MAINTENANCE_FENCE=/run/mc-agent/maintenance-state.json");
     expect(gateway).toContain("Restart=on-failure");
     const gatewayCli = readFileSync(path.resolve(process.cwd(), "agent-runtime/src/gateway-cli.ts"), "utf8");
     expect(gatewayCli).toContain('process.once("SIGUSR1"');
     expect(gatewayCli).toContain("Runtime maintenance fence could not be inspected");
+    expect(gatewayCli).toContain("loadInstalledAgentExtensionRegistry");
+    expect(gatewayCli).toContain("DIRECT_LIVE_TOOL_DEFINITIONS");
     expect(gatewayCli.indexOf("access(maintenanceFence)")).toBeLessThan(gatewayCli.indexOf("gateway.runOnce"));
   });
 

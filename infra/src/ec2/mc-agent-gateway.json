@@ -6,6 +6,10 @@
   "backupPath": "/api/agent/runtime/backups",
   "persistentWorldRoots": ["world", "world_nether", "world_the_end"],
   "providerCredentialNames": ["provider-openrouter"],
+  "extensions": {
+    "enabled": true,
+    "bundlePaths": ["extensions/status-report/extension.json"]
+  },
   "profiles": [
     {
       "schemaVersion": 1,

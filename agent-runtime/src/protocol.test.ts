@@ -5,6 +5,8 @@ import path from "node:path";
 import { canonicalJson } from "@/lib/agent/canonical-json";
 import type { AgentApproval, TerminalPublicationAuthorization, ToolResult } from "@/lib/agent/contracts";
 import { type ExecuteInvocationRequest, IndeterminateHostEffectError } from "@/lib/agent/executor";
+import { loadAgentExtensionRegistry } from "@/lib/agent/extensions";
+import { applyTrustedAfterInvocationHooks } from "@/lib/agent/hooks";
 import {
   createInvocationDigest,
   createInvocationSummaryDigest,
@@ -346,6 +348,65 @@ describe("authenticated executor Unix protocol", () => {
     });
     expect(executions).toBe(1);
     await server.close();
+  });
+
+  it("publishes and replays the original receipt when an enabled hook adds only display evidence", async () => {
+    const socket = await socketPath();
+    const gatewayKeys = generateKeyPairSync("ed25519");
+    const reconciliationStatePath = path.join(path.dirname(socket), "gateway-reconciliation.json");
+    let executions = 0;
+    const server = new ExecutorProtocolServer({
+      socketPath: socket,
+      gatewayPublicKey: gatewayKeys.publicKey,
+      statePath: journalPath(socket),
+      executor: {
+        async execute(input): Promise<ToolResult> {
+          executions += 1;
+          return successfulResult(input.invocation.invocationId);
+        },
+      },
+    });
+    await server.listen();
+    try {
+      const input = request();
+      const client = new ExecutorProtocolClient({
+        socketPath: socket,
+        gatewayPrivateKey: gatewayKeys.privateKey,
+        reconciliationStatePath,
+      });
+      const original = await client.execute(input);
+      const registry = await loadAgentExtensionRegistry([
+        JSON.parse(
+          await readFile(path.resolve(process.cwd(), "examples/agent-extensions/status-report/extension.json"), "utf8")
+        ),
+      ]);
+      const display = applyTrustedAfterInvocationHooks(registry.hooks, input.invocation, original);
+
+      expect(display.evidence).toHaveLength(1);
+      expect(original.evidence).toHaveLength(0);
+      const receipt = await client.terminalReceiptFor(input, original);
+      expect(receipt).toBeDefined();
+      await expect(client.terminalReceiptFor(input, display)).resolves.toBeUndefined();
+
+      await expect(client.reconcile(input)).resolves.toEqual(original);
+      await client.completeReconciliation(
+        input.invocation.invocationId,
+        input.runtimeContext,
+        await terminalPublicationAuthorization(client, input, original)
+      );
+
+      const replayClient = new ExecutorProtocolClient({
+        socketPath: socket,
+        gatewayPrivateKey: gatewayKeys.privateKey,
+        reconciliationStatePath: path.join(path.dirname(socket), "replay-reconciliation.json"),
+      });
+      const replayed = await replayClient.execute(input);
+      expect(replayed).toEqual(original);
+      await expect(replayClient.terminalReceiptFor(input, replayed)).resolves.toEqual(receipt);
+      expect(executions).toBe(1);
+    } finally {
+      await server.close();
+    }
   });
 
   it("rejects a current fence authorized for a retired receipt key before any host effect", async () => {

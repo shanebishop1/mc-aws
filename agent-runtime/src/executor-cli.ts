@@ -5,6 +5,8 @@ import { createDirectLiveExecutor } from "../../lib/agent/executor/executor";
 import type { DirectLiveExecutor } from "../../lib/agent/executor/types";
 import { canonicalPersistentWorldRoots } from "../../lib/agent/minecraft-security";
 import { GatewayDownloadRelayClient } from "./download-relay";
+import { loadInstalledAgentExtensionRegistry } from "./extensions";
+import { parseGatewayConfig } from "./gateway-config";
 import { ProductionDirectLiveHostEffects } from "./live-host-effects";
 import { assertProtectedConfig, readExecutorProtectedCredentials } from "./protected-input";
 import { ExecutorProtocolServer, systemdSocketActivationFd } from "./protocol";
@@ -96,6 +98,8 @@ async function main(): Promise<void> {
   const configPath = process.env.MC_AGENT_EXECUTOR_CONFIG ?? "/config/executor.json";
   await assertProtectedConfig(configPath);
   const config = parseConfig(JSON.parse(await readFile(configPath, "utf8")) as unknown);
+  const gatewayConfig = parseGatewayConfig(JSON.parse(await readFile("/config/gateway.json", "utf8")) as unknown);
+  const extensionRegistry = await loadInstalledAgentExtensionRegistry(gatewayConfig.extensions, "/runtime/current");
   const publicKey = createPublicKey(await readFile(config.gatewayPublicKeyPath));
   const backupFencePublicKey = createPublicKey(await readFile(config.backupFencePublicKeyPath));
   // LoadCredential is visible until the executor sandbox is asserted. Read and validate the exact
@@ -128,6 +132,7 @@ async function main(): Promise<void> {
     acceptGatewayAuthorizations: true,
     requireDownloadAuthorization: true,
     externalBackupCoordinator: true,
+    extensionTools: extensionRegistry.tools,
   });
   const scratchAware: DirectLiveExecutor = {
     execute: async (request) => {

@@ -12,6 +12,11 @@ export interface GatewayProviderProfile extends CanonicalProviderProfileMetadata
   maxTokens: number;
 }
 
+export interface GatewayExtensionConfig {
+  enabled: boolean;
+  bundlePaths: string[];
+}
+
 export interface GatewayConfig {
   schemaVersion: 1;
   controlBaseUrl: string;
@@ -21,6 +26,7 @@ export interface GatewayConfig {
   persistentWorldRoots: string[];
   providerCredentialNames: string[];
   profiles: GatewayProviderProfile[];
+  extensions: GatewayExtensionConfig;
 }
 
 export const PROVIDER_CREDENTIAL_NAME = /^provider-[a-z0-9][a-z0-9-]{0,62}$/;
@@ -43,10 +49,17 @@ export function assertProviderCredentialName(name: unknown): asserts name is str
   }
 }
 
-function exactRecord(value: unknown, keys: readonly string[], message: string): Record<string, unknown> {
+function exactRecord(
+  value: unknown,
+  keys: readonly string[],
+  message: string,
+  requiredKeys: readonly string[] = keys
+): Record<string, unknown> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) throw new Error(message);
   const item = value as Record<string, unknown>;
-  if (Object.keys(item).length !== keys.length || keys.some((key) => !(key in item))) throw new Error(message);
+  if (Object.keys(item).some((key) => !keys.includes(key)) || requiredKeys.some((key) => !(key in item))) {
+    throw new Error(message);
+  }
   return item;
 }
 
@@ -64,8 +77,9 @@ export function parseGatewayConfig(value: unknown): GatewayConfig {
     "persistentWorldRoots",
     "providerCredentialNames",
     "profiles",
+    "extensions",
   ];
-  const item = exactRecord(value, keys, "Gateway configuration schema is invalid.");
+  const item = exactRecord(value, keys, "Gateway configuration schema is invalid.", keys.slice(0, -1));
   if (item.schemaVersion !== 1) throw new Error("Gateway configuration schema is invalid.");
   const base = new URL(String(item.controlBaseUrl));
   if (base.protocol !== "https:" || base.username || base.password || base.search || base.hash)
@@ -148,6 +162,29 @@ export function parseGatewayConfig(value: unknown): GatewayConfig {
   ) {
     throw new Error("Provider credential allowlist must exactly match configured profiles.");
   }
+  const extensionValue = item.extensions ?? { enabled: false, bundlePaths: [] };
+  const extension = exactRecord(
+    extensionValue,
+    ["enabled", "bundlePaths"],
+    "Extension configuration schema is invalid."
+  );
+  if (typeof extension.enabled !== "boolean" || !Array.isArray(extension.bundlePaths)) {
+    throw new Error("Extension configuration schema is invalid.");
+  }
+  if (extension.bundlePaths.length > 8 || (extension.enabled && extension.bundlePaths.length === 0)) {
+    throw new Error("Extension bundle count is outside its bound.");
+  }
+  const bundlePaths = extension.bundlePaths.map((candidate) => {
+    if (
+      typeof candidate !== "string" ||
+      !/^extensions\/[A-Za-z0-9][A-Za-z0-9._-]{0,63}\/extension\.json$/.test(candidate) ||
+      candidate.includes("..")
+    ) {
+      throw new Error("Extension bundle path is not a protected installed source.");
+    }
+    return candidate;
+  });
+  if (new Set(bundlePaths).size !== bundlePaths.length) throw new Error("Extension bundle paths must be unique.");
   return {
     schemaVersion: 1,
     controlBaseUrl: base.toString(),
@@ -157,6 +194,7 @@ export function parseGatewayConfig(value: unknown): GatewayConfig {
     persistentWorldRoots,
     providerCredentialNames,
     profiles,
+    extensions: { enabled: extension.enabled, bundlePaths },
   } as GatewayConfig;
 }
 

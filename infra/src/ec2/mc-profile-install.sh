@@ -683,7 +683,9 @@ with open(service_path, encoding="utf-8") as source:
     unit = source.read()
 allowed = config.get("providerCredentialNames")
 profiles = config.get("profiles")
+extensions = config.get("extensions", {"enabled": False, "bundlePaths": []})
 pattern = re.compile(r"^provider-[a-z0-9][a-z0-9-]{0,62}$")
+extension_pattern = re.compile(r"^extensions/[A-Za-z0-9][A-Za-z0-9._-]{0,63}/extension[.]json$")
 forbidden = re.compile(r"(?:^|-)(?:runtime-bearer|signing-key|private-key|public-key)(?:-|$)")
 if not isinstance(allowed, list) or not isinstance(profiles, list) or len(allowed) > 32:
     raise SystemExit("invalid provider credential allowlist")
@@ -692,6 +694,13 @@ if len(set(allowed)) != len(allowed) or any(not isinstance(name, str) or not pat
 used = [profile.get("credentialName") for profile in profiles if isinstance(profile, dict)]
 if len(used) != len(profiles) or set(used) != set(allowed):
     raise SystemExit("provider profiles do not exactly match the credential allowlist")
+if (not isinstance(extensions, dict) or set(extensions) != {"enabled", "bundlePaths"} or
+        not isinstance(extensions["enabled"], bool) or not isinstance(extensions["bundlePaths"], list) or
+        len(extensions["bundlePaths"]) > 8 or
+        (extensions["enabled"] and len(extensions["bundlePaths"]) == 0) or
+        len(set(extensions["bundlePaths"])) != len(extensions["bundlePaths"]) or
+        any(not isinstance(item, str) or not extension_pattern.fullmatch(item) or ".." in item for item in extensions["bundlePaths"])):
+    raise SystemExit("extension bundle configuration is invalid")
 if os.environ.get("MC_AGENT_ENABLE", "0") == "1" and re.search(r"replace-with|\.invalid|placeholder|example\.com", open(config_path, encoding="utf-8").read(), re.I):
     raise SystemExit("enabled gateway configuration contains a packaged placeholder")
 loaded = set(re.findall(r"^LoadCredential=([^:]+):", unit, re.MULTILINE))

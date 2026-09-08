@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import type { AgentExtensionBundle } from "@/lib/agent/contracts";
 import { computeExtensionIntegrity, loadAgentExtensionRegistry } from "@/lib/agent/extensions";
+import { applyTrustedAfterInvocationHooks } from "@/lib/agent/hooks";
 import { describe, expect, it } from "vitest";
 
 function sample(): AgentExtensionBundle {
@@ -105,5 +106,33 @@ describe("public agent extension registry", () => {
     (altered.tools[0].inputSchema.properties as Record<string, Record<string, string>>).checksum.integrity =
       "sha256:tampered";
     await expect(loadAgentExtensionRegistry([altered])).rejects.toThrow("integrity mismatch");
+  });
+
+  it("resolves the reviewed read hook without importing or executing bundle code", async () => {
+    const registry = await loadAgentExtensionRegistry([sample()]);
+    const result = applyTrustedAfterInvocationHooks(
+      registry.hooks,
+      {
+        schemaVersion: 1,
+        invocationId: "invocation-read",
+        sessionId: "session-read",
+        toolId: "example.status-report.read",
+        capability: "workspace.read",
+        targetScope: { schemaVersion: 1, kind: "workspace", normalizedTarget: "status.txt" },
+        arguments: { path: "status.txt" },
+        requestedAt: "2026-09-02T12:00:00.000Z",
+      },
+      {
+        schemaVersion: 1,
+        invocationId: "invocation-read",
+        status: "succeeded",
+        completedAt: "2026-09-02T12:00:00.000Z",
+        summary: "Read a workspace file.",
+        output: { content: "ok" },
+        evidence: [],
+      }
+    );
+    expect(result.evidence).toHaveLength(1);
+    expect(result.evidence[0]?.description).toContain("Trusted extension hook");
   });
 });

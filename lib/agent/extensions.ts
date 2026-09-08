@@ -1,5 +1,6 @@
 import { AGENT_SCHEMA_VERSION, type AgentExtensionBundle, type ExtensionProvenanceSource } from "@/lib/agent/contracts";
-import { orderHookDefinitions } from "@/lib/agent/hooks";
+import { isTrustedExtensionHookRef, orderHookDefinitions } from "@/lib/agent/hooks";
+import { DIRECT_LIVE_TOOL_DEFINITIONS, extensionToolMatchesExistingCapability } from "@/lib/agent/tool-definitions";
 import { AgentContractValidationError, agentSchemas } from "@/lib/agent/validators";
 
 export interface ExtensionRegistryOptions {
@@ -100,6 +101,21 @@ async function validateBundle(
     throw new AgentContractValidationError(
       `agentExtensionBundle.provenance: integrity mismatch for ${bundle.extensionId}`
     );
+  }
+  for (const tool of bundle.tools) {
+    if (DIRECT_LIVE_TOOL_DEFINITIONS.some((existing) => existing.toolId === tool.toolId)) {
+      throw new AgentContractValidationError(`toolDefinition: ${tool.toolId} collides with a live tool`);
+    }
+    if (!extensionToolMatchesExistingCapability(tool)) {
+      throw new AgentContractValidationError(
+        `toolDefinition: ${tool.toolId} must use the existing ${tool.capability} capability schema`
+      );
+    }
+  }
+  for (const hook of bundle.hooks) {
+    if (!isTrustedExtensionHookRef(hook.handlerRef)) {
+      throw new AgentContractValidationError(`hookDefinition: ${hook.handlerRef} is not a trusted hook mapping`);
+    }
   }
   for (const skill of bundle.skills) validateSkill(bundle, skill);
   return bundle;

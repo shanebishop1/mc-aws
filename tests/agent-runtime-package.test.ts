@@ -158,6 +158,8 @@ describe("standalone agent runtime package", () => {
     expect(listing.stdout).toContain("gateway-cli.mjs");
     expect(listing.stdout).toContain("executor-cli.mjs");
     expect(listing.stdout).toContain("bundle-manifest.json");
+    expect(listing.stdout).toContain("extensions/status-report/extension.json");
+    expect(listing.stdout).toContain("extensions/status-report/SKILL.md");
     expect(listing.stdout).not.toMatch(/(?:^|\/)(?:\.agents|docs?|research|tests?|secrets?)(?:\/|$)/im);
     const content = spawnSync(
       "python3",

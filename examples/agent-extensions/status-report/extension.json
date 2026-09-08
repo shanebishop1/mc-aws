@@ -9,26 +9,23 @@
   "provenance": {
     "source": "mc-aws",
     "reference": "examples/agent-extensions/status-report/extension.json",
-    "integrity": "sha256:9e18618ef2e16379c95471066533f81dacc8c8b42f7dd462b16482dfe30f01f8"
+    "integrity": "sha256:ddf3ad8c4458ecf5c9f591e4ffebbe9a0a003576529fff505d9b5c5f47dc735a"
   },
   "tools": [
     {
       "schemaVersion": 1,
       "toolId": "example.status-report.read",
       "displayName": "Read server status inputs",
-      "description": "Reads operator-selected status files inside the mounted Minecraft workspace.",
+      "description": "Reads one operator-selected status file inside the mounted Minecraft workspace.",
       "capability": "workspace.read",
       "sideEffect": "read",
       "inputSchema": {
         "type": "object",
         "additionalProperties": false,
-        "required": ["paths"],
+        "required": ["path"],
         "properties": {
-          "paths": {
-            "type": "array",
-            "items": { "type": "string" },
-            "maxItems": 10
-          }
+          "path": { "type": "string" },
+          "maxBytes": { "type": "integer", "minimum": 1 }
         }
       }
     }
@@ -50,7 +47,7 @@
       "provenance": {
         "source": "mc-aws",
         "reference": "examples/agent-extensions/status-report/extension.json",
-        "integrity": "sha256:9e18618ef2e16379c95471066533f81dacc8c8b42f7dd462b16482dfe30f01f8"
+        "integrity": "sha256:ddf3ad8c4458ecf5c9f591e4ffebbe9a0a003576529fff505d9b5c5f47dc735a"
       }
     }
   ],

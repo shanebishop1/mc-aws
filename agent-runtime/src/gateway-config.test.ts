@@ -13,6 +13,29 @@ function config(): ReturnType<typeof parseGatewayConfig> {
 }
 
 describe("gateway provider profile configuration", () => {
+  it("defaults extension loading off when older configuration omits the optional block", () => {
+    const candidate = structuredClone(source) as Record<string, unknown>;
+    candidate.extensions = undefined;
+    expect(parseGatewayConfig(candidate).extensions).toEqual({ enabled: false, bundlePaths: [] });
+  });
+
+  it("keeps extension sources bounded and installed-release relative", () => {
+    expect(config().extensions).toEqual({
+      enabled: true,
+      bundlePaths: ["extensions/status-report/extension.json"],
+    });
+    for (const bundlePaths of [
+      [],
+      ["workspace/extension.json"],
+      ["extensions/status-report/../extension.json"],
+      Array.from({ length: 9 }, (_, index) => `extensions/bundle-${index}/extension.json`),
+    ]) {
+      expect(() =>
+        parseGatewayConfig({ ...structuredClone(source), extensions: { enabled: true, bundlePaths } })
+      ).toThrow(/extension/i);
+    }
+  });
+
   it("supplies exact canonical persistent world roots to production policy", () => {
     expect(config().persistentWorldRoots).toEqual(["world", "world_nether", "world_the_end"]);
   });

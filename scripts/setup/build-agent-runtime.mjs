@@ -126,6 +126,9 @@ async function buildStage(stage) {
     metafile: true,
   });
   for (const name of ["gateway-cli.mjs", "executor-cli.mjs"]) await chmod(path.join(stage, name), 0o755);
+  await cp(path.join(root, "examples/agent-extensions/status-report"), path.join(stage, "extensions/status-report"), {
+    recursive: true,
+  });
   await writeFile(
     path.join(stage, "dependency-inventory.json"),
     `${JSON.stringify(stable(await dependencyInventory(buildResult.metafile.inputs)), null, 2)}\n`,
