@@ -9,16 +9,20 @@ import {
   LifecycleLockConflictError,
   acquireLifecycleLock,
   assertLifecycleLockOwned,
-  bridgeLegacyLifecycleLock,
   releaseLifecycleLock,
 } from "./lifecycle-lock.js";
 // Notifications
 import { getSanitizedErrorMessage, sendNotification } from "./notifications.js";
-import { claimOperationExecution, getOperationState, updateOperationState } from "./operation-state.js";
+import {
+  claimOperationExecution,
+  claimResumeIntentPointer,
+  completeResumeIntentPointer,
+  getOperationState,
+  updateOperationState,
+} from "./operation-state.js";
 
 // SSM command execution
 import {
-  deleteParameter,
   executeSSMCommand,
   getParameter,
   putParameter,
@@ -87,7 +91,6 @@ async function claimExecutionAttempt(input, attempt) {
       route: input.route,
       requestedAt: input.requestedAt,
     });
-    if (input.command === "resume") await cleanupResumeMarker(input.operationId);
     return { claimed: false, reason: "reconciled_side_effect", state: claim.state, executionToken };
   }
 
@@ -108,22 +111,20 @@ async function claimExecutionAttempt(input, attempt) {
     return { claimed: false, reason: "reconciled_stopped", state: claim.state, executionToken };
   }
 
-  if (!claim.state.remoteCommandId && (input.command === "start" || input.command === "resume")) {
+  const restoreMustBeDispatched =
+    input.command === "resume" && ["latest", "named"].includes(claim.state.resumeIntent?.mode);
+  if (
+    !claim.state.remoteCommandId &&
+    (input.command === "start" || (input.command === "resume" && !restoreMustBeDispatched))
+  ) {
     const state = await getInstanceState(input.instanceId);
     if (state === "running") {
-      const pendingResume =
-        input.command === "resume" ? parseResumeMarker(await getParameter("/minecraft/resume-pending")) : null;
-      if (pendingResume && pendingResume.operationId !== input.operationId) {
-        throw new RetryableLifecycleError("Resume side effect is owned by another pending operation", {
-          code: "resume_reconciliation_pending",
-          retainLifecycleLock: true,
-        });
-      }
       const publicIp = await getPublicIp(input.instanceId);
       await runWithOperationExecutionContext(
         {
           operationId: input.operationId,
           command: input.command,
+          instanceId: input.instanceId,
           executionToken: claim.state.executionToken,
           deadlineMs: attempt.deadlineMs,
         },
@@ -142,7 +143,6 @@ async function claimExecutionAttempt(input, attempt) {
         route: input.route,
         requestedAt: input.requestedAt,
       });
-      if (input.command === "resume") await cleanupResumeMarker(input.operationId);
       return { claimed: false, reason: "reconciled_game_ready", state: claim.state, executionToken };
     }
   }
@@ -182,7 +182,6 @@ async function claimExecutionAttempt(input, attempt) {
       route: input.route,
       requestedAt: input.requestedAt,
     });
-    if (input.command === "resume") await cleanupResumeMarker(input.operationId);
     return { claimed: false, reason: "reconciled_terminal", state: claim.state, executionToken };
   }
   claim = await claimOperationExecution({
@@ -207,6 +206,9 @@ export const handler = async (event, context) => {
   if (event.invocationType === "api") {
     return handleApiInvocation(event, attempt);
   }
+  if (event.invocationType === "serviceStatus") {
+    return handleServiceStatusInvocation(event);
+  }
   if (event.invocationType === "scheduledBackup") {
     return handleScheduledBackupInvocation(event, attempt);
   }
@@ -225,8 +227,11 @@ export const handler = async (event, context) => {
  */
 function validateApiInvocation(event) {
   const lifecycleCommands = new Set(["start", "stop", "backup", "restore", "hibernate", "resume"]);
+  const managedInstanceId = process.env.INSTANCE_ID?.trim();
   if (
+    !managedInstanceId ||
     typeof event?.instanceId !== "string" ||
+    event.instanceId !== managedInstanceId ||
     typeof event?.userEmail !== "string" ||
     typeof event?.command !== "string" ||
     !Array.isArray(event?.args ?? []) ||
@@ -235,6 +240,22 @@ function validateApiInvocation(event) {
     return false;
   }
   if (event.command === "refreshBackups") return true;
+  const agentBackup = event.command === "backup" && event.operationRoute === "/api/agent/runtime/backups";
+  if (event.operationRoute !== undefined && !agentBackup) {
+    return false;
+  }
+  if (
+    agentBackup
+      ? event.requireAlreadyRunning !== true ||
+        event.requireServiceActive !== true ||
+        event.retainLockForAgentEffect !== true ||
+        event.agentTwoPhase !== true
+      : event.requireAlreadyRunning !== undefined ||
+        event.requireServiceActive !== undefined ||
+        event.retainLockForAgentEffect !== undefined
+  ) {
+    return false;
+  }
   return (
     lifecycleCommands.has(event.command) &&
     typeof event.operationId === "string" &&
@@ -245,15 +266,41 @@ function validateApiInvocation(event) {
   );
 }
 
+async function handleServiceStatusInvocation(event) {
+  const managedInstanceId = process.env.INSTANCE_ID?.trim();
+  if (!managedInstanceId || event?.instanceId !== managedInstanceId) {
+    return { statusCode: 400, body: "Unsupported service-status payload." };
+  }
+
+  const instanceState = await getInstanceState(managedInstanceId);
+  const instanceRunning = instanceState === "running";
+  let serviceActive = false;
+  if (instanceRunning) {
+    serviceActive = await isMinecraftServiceActive(managedInstanceId);
+  }
+
+  // This response is an intentionally small allowlisted projection. Never
+  // return the SSM command ID, stdout, stderr, or the command error itself.
+  return {
+    statusCode: 200,
+    body: JSON.stringify({ instanceState, instanceRunning, serviceActive }),
+  };
+}
+
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Keep retry classification, durable terminal persistence, and lock finalization auditable in one orchestrator.
 async function handleApiInvocation(event, attempt) {
   const { instanceId, userEmail, command, args, lockId, fencingToken, operationId } = event;
+  const operationRoute = event.operationRoute ?? `/api/${command}`;
+  const retainLockForAgentEffect =
+    command === "backup" &&
+    operationRoute === "/api/agent/runtime/backups" &&
+    event.requireAlreadyRunning === true &&
+    event.requireServiceActive === true &&
+    event.retainLockForAgentEffect === true;
   const isLifecycleCommand = command !== "refreshBackups";
   console.log(`[API] Authorized async command '${command}' received`);
 
   if (!validateApiInvocation(event)) {
-    if (lockId && command) await releaseServerActionLockIfOwned(lockId, fencingToken, command, userEmail);
-
     console.error("[API] Invalid API payload; payload omitted");
     return { statusCode: 400, body: "Invalid payload" };
   }
@@ -270,7 +317,7 @@ async function handleApiInvocation(event, attempt) {
       error: "Configuration error",
       code: "configuration_error",
     });
-    if (lockId && command) await releaseServerActionLockIfOwned(lockId, fencingToken, command, userEmail);
+    if (lockId && command) await releaseServerActionLockIfOwned(lockId, fencingToken, command, userEmail, operationId);
 
     return envResult.error;
   }
@@ -284,38 +331,15 @@ async function handleApiInvocation(event, attempt) {
   let executionError;
   let retainLock = false;
   let executionToken;
-  let lifecycleFencingToken = fencingToken;
-  let bridgedLegacyPayload = false;
+  const lifecycleFencingToken = fencingToken;
 
   try {
     if (isLifecycleCommand) {
       if (!lockId) throw new Error(`Lifecycle command '${command}' requires a lockId`);
       if (Number.isSafeInteger(fencingToken)) {
-        try {
-          await assertLifecycleLockOwned(lockId, fencingToken, command);
-        } catch (error) {
-          if (!(error instanceof LifecycleLockConflictError)) throw error;
-          const bridged = await bridgeLegacyLifecycleLock(lockId, command, userEmail);
-          lifecycleFencingToken = bridged.fencingToken;
-          bridgedLegacyPayload = true;
-        }
+        await assertLifecycleLockOwned(lockId, fencingToken, command);
       } else {
-        const bridged = await bridgeLegacyLifecycleLock(lockId, command, userEmail);
-        lifecycleFencingToken = bridged.fencingToken;
-        bridgedLegacyPayload = true;
-      }
-      if (bridgedLegacyPayload && !(await getOperationState(operationId))) {
-        await updateOperationState({
-          operationId,
-          command,
-          status: "accepted",
-          phase: "dispatching",
-          userEmail,
-          instanceId,
-          lockId,
-          fencingToken: lifecycleFencingToken,
-          route: `/api/${command}`,
-        });
+        throw new LifecycleLockConflictError(null);
       }
       const claim = await claimExecutionAttempt(
         {
@@ -325,22 +349,34 @@ async function handleApiInvocation(event, attempt) {
           fencingToken: lifecycleFencingToken,
           instanceId,
           userEmail,
-          route: `/api/${command}`,
+          route: operationRoute,
         },
         attempt
       );
       executionToken = claim.executionToken;
       if (!claim.claimed) {
-        if (command === "resume" && claim.reason === "terminal") await cleanupResumeMarker(operationId);
         console.log(`[API] Duplicate invocation skipped (${claim.reason})`);
-        retainLock = false;
+        retainLock = retainLockForAgentEffect && claim.state?.status === "completed";
         return { statusCode: 202, body: `Async command '${command}' already recorded` };
       }
     }
 
     await runWithOperationExecutionContext(
-      { operationId, command, executionToken, deadlineMs: attempt.deadlineMs },
-      async () => await executeApiCommand(command, instanceId, userEmail, notificationEmail, args, event.restoreMode)
+      {
+        operationId,
+        command,
+        instanceId,
+        executionToken,
+        deadlineMs: attempt.deadlineMs,
+        lockId,
+        fencingToken: lifecycleFencingToken,
+      },
+      async () =>
+        await executeApiCommand(command, instanceId, userEmail, notificationEmail, args, event.restoreMode, {
+          ...(retainLockForAgentEffect
+            ? { requireAlreadyRunning: true, requireServiceActive: true, strictAgentBackup: true, agentTwoPhase: true }
+            : {}),
+        })
     );
 
     try {
@@ -355,7 +391,7 @@ async function handleApiInvocation(event, attempt) {
         fencingToken: lifecycleFencingToken,
         expectedExecutionToken: executionToken,
       });
-      if (command === "resume") await cleanupResumeMarker(operationId);
+      if (retainLockForAgentEffect) retainLock = true;
     } catch (error) {
       retainLock = true;
       throw new RetryableLifecycleError("Terminal operation state persistence failed", {
@@ -388,6 +424,7 @@ async function handleApiInvocation(event, attempt) {
         error: getSanitizedErrorMessage(command),
         code: classification.code,
       });
+      if (command === "resume") await failResumeIntentPointerIfOwned(operationId, executionToken);
     } catch (persistenceError) {
       retainLock = true;
       throw new RetryableLifecycleError("Terminal failure state persistence failed", {
@@ -401,7 +438,7 @@ async function handleApiInvocation(event, attempt) {
       if (retainLock || shouldRetainLifecycleLock(executionError)) {
         console.error(`[API] Retaining lifecycle lock for unresolved remote command in '${command}'`);
       } else {
-        await releaseServerActionLockIfOwned(lockId, lifecycleFencingToken, command, userEmail);
+        await releaseServerActionLockIfOwned(lockId, lifecycleFencingToken, command, userEmail, operationId);
       }
     }
   }
@@ -560,7 +597,15 @@ async function handleScheduledBackupInvocation(event, attempt) {
     try {
       // This mode rechecks state after lock acquisition and never calls StartInstances.
       await runWithOperationExecutionContext(
-        { operationId, command: "backup", executionToken, deadlineMs: attempt.deadlineMs },
+        {
+          operationId,
+          command: "backup",
+          instanceId,
+          executionToken,
+          deadlineMs: attempt.deadlineMs,
+          lockId: lock.lockId,
+          fencingToken: lock.fencingToken,
+        },
         async () =>
           await handleBackup(instanceId, [operationId], "", {
             requireAlreadyRunning: true,
@@ -619,7 +664,13 @@ async function handleScheduledBackupInvocation(event, attempt) {
     return { statusCode: 200, body: "Scheduled backup failed permanently." };
   } finally {
     if (lock && !retainLock && !shouldRetainLifecycleLock(executionError)) {
-      await releaseServerActionLockIfOwned(lock.lockId, lock.fencingToken, "backup", SCHEDULED_BACKUP_OWNER);
+      await releaseServerActionLockIfOwned(
+        lock.lockId,
+        lock.fencingToken,
+        "backup",
+        SCHEDULED_BACKUP_OWNER,
+        operationId
+      );
     }
   }
 }
@@ -666,14 +717,50 @@ async function persistOperationStateSafely(input) {
   }
 }
 
-async function releaseServerActionLockIfOwned(lockId, fencingToken, command, ownerEmail) {
+async function releaseServerActionLockIfOwned(lockId, fencingToken, command, ownerEmail, operationId) {
   if (!lockId) {
     console.warn(`[API] No lockId provided for '${command}', skipping lock release`);
     return;
   }
 
   try {
-    const released = await releaseLifecycleLock(lockId, fencingToken, command, ownerEmail);
+    let releaseOptions;
+    const operation = operationId ? await getOperationState(operationId).catch(() => null) : null;
+    if (operation?.route === "/api/agent/runtime/backups") {
+      if (
+        operation.id !== operationId ||
+        !["completed", "failed"].includes(operation.status) ||
+        operation.phase !== "terminal" ||
+        operation.lockId !== lockId ||
+        operation.fencingToken !== fencingToken ||
+        operation.requestedBy?.trim().toLowerCase() !== ownerEmail.trim().toLowerCase() ||
+        !Number.isSafeInteger(operation.lockLeaseGeneration) ||
+        !operation.dispatchOwnerId
+      ) {
+        console.warn(`[API] Agent fence cleanup proof is not current for '${command}', skipping lock release`);
+        return;
+      }
+      const current = await assertLifecycleLockOwned(lockId, fencingToken, command);
+      if (
+        !current?.agentFenceActive ||
+        current.leaseGeneration !== operation.lockLeaseGeneration ||
+        current.operationId !== operation.id ||
+        current.operationOwnerId !== operation.dispatchOwnerId ||
+        current.ownerEmail.trim().toLowerCase() !== ownerEmail.trim().toLowerCase()
+      ) {
+        console.warn(`[API] Agent fence identity changed for '${command}', skipping lock release`);
+        return;
+      }
+      releaseOptions = {
+        expectedLeaseGeneration: current.leaseGeneration,
+        requireAgentFenceActive: true,
+        operationId: operation.id,
+        operationOwnerId: operation.dispatchOwnerId,
+      };
+    }
+    const released = releaseOptions
+      ? await releaseLifecycleLock(lockId, fencingToken, command, ownerEmail, releaseOptions)
+      : await releaseLifecycleLock(lockId, fencingToken, command, ownerEmail);
     console.log(`[API] Lifecycle lock release for '${command}': ${released ? "released" : "not-owned"}`);
   } catch {
     // Do not fail the entire invocation because lock cleanup failed.
@@ -684,12 +771,20 @@ async function releaseServerActionLockIfOwned(lockId, fencingToken, command, own
 /**
  * Execute API command based on command type
  */
-async function executeApiCommand(command, instanceId, userEmail, notificationEmail, args, restoreMode) {
+async function executeApiCommand(
+  command,
+  instanceId,
+  userEmail,
+  notificationEmail,
+  args,
+  restoreMode,
+  backupOptions = {}
+) {
   const handlers = {
     start: () => handleStartCommand(instanceId, userEmail, notificationEmail),
     stop: () => handleStopCommand(instanceId),
     resume: () => handleResumeCommand(instanceId, userEmail, notificationEmail, args, restoreMode),
-    backup: () => handleBackup(instanceId, args || [], notificationEmail),
+    backup: () => handleBackup(instanceId, args || [], notificationEmail, backupOptions),
     restore: () => handleRestore(instanceId, args || [], notificationEmail),
     hibernate: () => handleHibernate(instanceId, args || [], notificationEmail),
     refreshBackups: () => handleRefreshBackups(instanceId),
@@ -801,12 +896,19 @@ async function executeEmailLifecycleCommand(input) {
     );
     executionToken = claim.executionToken;
     if (!claim.claimed) {
-      if (command === "resume" && claim.reason === "terminal") await cleanupResumeMarker(operationId);
       return { statusCode: 200, body: `Command already recorded as ${claim.state?.status || claim.reason}.` };
     }
 
     const response = await runWithOperationExecutionContext(
-      { operationId, command, executionToken, deadlineMs: input.attempt.deadlineMs },
+      {
+        operationId,
+        command,
+        instanceId,
+        executionToken,
+        deadlineMs: input.attempt.deadlineMs,
+        lockId: lock.lockId,
+        fencingToken: lock.fencingToken,
+      },
       async () => await executeCommand(parsedCommand, instanceId, senderEmail)
     );
     try {
@@ -823,7 +925,6 @@ async function executeEmailLifecycleCommand(input) {
         route: `/email/${command}`,
         requestedAt,
       });
-      if (command === "resume") await cleanupResumeMarker(operationId);
     } catch (error) {
       retainLock = true;
       throw new RetryableLifecycleError("Email terminal state persistence failed", {
@@ -860,6 +961,7 @@ async function executeEmailLifecycleCommand(input) {
         error: getSanitizedErrorMessage(command),
         code: conflict ? "operation_conflict" : classification.code,
       });
+      if (command === "resume") await failResumeIntentPointerIfOwned(operationId, executionToken);
     } catch (persistenceError) {
       console.error("[EMAIL] Terminal operation state persistence failed; retaining lifecycle lock");
       retainLock = true;
@@ -875,7 +977,7 @@ async function executeEmailLifecycleCommand(input) {
     };
   } finally {
     if (lock && !retainLock && !shouldRetainLifecycleLock(executionError)) {
-      await releaseServerActionLockIfOwned(lock.lockId, lock.fencingToken, command, senderEmail);
+      await releaseServerActionLockIfOwned(lock.lockId, lock.fencingToken, command, senderEmail, operationId);
     }
   }
 }
@@ -909,8 +1011,10 @@ async function executeCommand(parsedCommand, instanceId, senderEmail) {
     switch (parsedCommand.command) {
       case "start":
         return await handleStartCommand(instanceId, senderEmail, notificationEmail);
-      case "backup":
-        return { statusCode: 200, body: await handleBackup(instanceId, parsedCommand.args, notificationEmail) };
+      case "backup": {
+        const backupResult = await handleBackup(instanceId, parsedCommand.args, notificationEmail);
+        return { statusCode: 200, body: typeof backupResult === "string" ? backupResult : backupResult.message };
+      }
       case "restore":
         return {
           statusCode: 200,
@@ -971,7 +1075,6 @@ async function handleStartCommand(instanceId, senderEmail, notificationEmail) {
   if (notificationEmail) {
     await sendNotification(notificationEmail, "Minecraft Server Started", `Server ready at IP: ${publicIp}`);
   }
-  await deleteParameter("/minecraft/startup-triggered-by");
 
   return { statusCode: 200, body: `Instance started at IP: ${publicIp}` };
 }
@@ -997,14 +1100,18 @@ async function handleResumeCommand(instanceId, senderEmail, notificationEmail, a
 
   const executionContext = getOperationExecutionContext();
   if (!executionContext?.operationId) throw new Error("Resume requires durable operation ownership");
-  await ensureResumeMarker(executionContext.operationId, restoreStrategy);
+  await ensureResumeIntent(executionContext.operationId, executionContext.executionToken, restoreStrategy);
 
   console.log(`[RESUME] Restore strategy selected: ${restoreStrategy.mode}`);
 
   await handleResume(instanceId);
   await ensureInstanceRunning(instanceId);
   const publicIp = await getPublicIp(instanceId);
-  const resumeCommand = buildResumeCommand(restoreStrategy);
+  const resumeCommand = buildResumeCommand(
+    restoreStrategy,
+    executionContext.operationId,
+    executionContext.executionToken
+  );
   await executeSSMCommand(instanceId, [resumeCommand], {
     maxAttempts: RESUME_SSM_MAX_ATTEMPTS,
     timeoutSeconds: RESUME_SSM_TIMEOUT_SECONDS,
@@ -1012,6 +1119,11 @@ async function handleResumeCommand(instanceId, senderEmail, notificationEmail, a
     finalRemoteStep: false,
   });
   await waitForMinecraftReadiness(instanceId, publicIp);
+  await completeResumeIntentPointer({
+    operationId: executionContext.operationId,
+    ownerToken: executionContext.executionToken,
+    status: "completed",
+  });
 
   let restoreMsg = "\n\nFresh world requested (no backup restore).";
   if (restoreStrategy.mode === "latest") {
@@ -1025,83 +1137,59 @@ async function handleResumeCommand(instanceId, senderEmail, notificationEmail, a
   if (notificationEmail) {
     await sendNotification(notificationEmail, "Minecraft Server Resumed", `Resumed at IP: ${publicIp}${restoreMsg}`);
   }
-  await deleteParameter("/minecraft/startup-triggered-by");
 
   return { statusCode: 200, body: `Instance resumed at IP: ${publicIp}${restoreMsg}` };
 }
 
-function parseResumeMarker(raw) {
-  if (!raw) return null;
+async function failResumeIntentPointerIfOwned(operationId, ownerToken) {
+  if (!operationId || !ownerToken) return;
   try {
-    const marker = JSON.parse(raw);
-    if (
-      marker?.version !== 1 ||
-      typeof marker.operationId !== "string" ||
-      !["fresh", "latest", "named"].includes(marker.mode) ||
-      (marker.backupArchiveName !== null && typeof marker.backupArchiveName !== "string")
-    ) {
-      return null;
-    }
-    return marker;
-  } catch {
-    return null;
+    await completeResumeIntentPointer({ operationId, ownerToken, status: "failed" });
+  } catch (error) {
+    if (error instanceof Error && error.message === "Resume intent successor owns the pointer") return;
+    throw error;
   }
 }
 
-function resumeMarkerMatches(marker, operationId, strategy) {
-  return (
-    marker?.operationId === operationId &&
-    marker.mode === strategy.mode &&
-    marker.backupArchiveName === (strategy.backupArchiveName ?? null)
-  );
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Marker adoption and stale-owner cleanup are one operation-ownership boundary.
-async function ensureResumeMarker(operationId, strategy) {
-  const name = "/minecraft/resume-pending";
-  const payload = JSON.stringify({
-    version: 1,
-    operationId,
-    mode: strategy.mode,
-    backupArchiveName: strategy.backupArchiveName ?? null,
-    createdAt: new Date().toISOString(),
-  });
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      await putParameter(name, payload, "String", false);
-      return;
-    } catch (error) {
-      if (error?.name !== "ParameterAlreadyExists") throw error;
-      const existing = parseResumeMarker(await getParameter(name));
-      if (resumeMarkerMatches(existing, operationId, strategy)) return;
-      if (existing?.operationId) {
-        const owner = await getOperationState(existing.operationId);
-        if (isTerminalOperation(owner)) {
-          await cleanupResumeMarker(existing.operationId);
-          continue;
-        }
-      }
-      throw new RetryableLifecycleError("Resume marker is owned by another unresolved operation", {
-        code: "resume_marker_owned",
-        retainLifecycleLock: true,
-      });
-    }
-  }
-  throw new RetryableLifecycleError("Resume marker takeover could not be completed", {
-    code: "resume_marker_takeover_failed",
-    retainLifecycleLock: true,
-  });
-}
-
-async function cleanupResumeMarker(operationId) {
-  const name = "/minecraft/resume-pending";
-  const marker = parseResumeMarker(await getParameter(name));
-  if (!marker) return;
-  if (marker.operationId !== operationId) {
-    throw new RetryableLifecycleError("Resume marker ownership changed before cleanup", {
-      code: "resume_marker_cleanup_conflict",
+// Resume coordination is part of the operation-state DynamoDB record. This
+// avoids using a mutable SSM pointer as a lock and lets conditional versioned
+// updates reject delayed work without deleting a successor's evidence.
+async function ensureResumeIntent(operationId, ownerToken, strategy) {
+  const existing = await getOperationState(operationId);
+  if (!existing || existing.type !== "resume" || isTerminalOperation(existing)) {
+    throw new RetryableLifecycleError("Resume operation authority is unavailable or terminal", {
+      code: "resume_operation_authority_unavailable",
       retainLifecycleLock: true,
     });
   }
-  await deleteParameter(name);
+  const resumeIntent = {
+    mode: strategy.mode,
+    backupArchiveName: strategy.backupArchiveName ?? null,
+  };
+  if (
+    existing.resumeIntent &&
+    (existing.resumeIntent.mode !== resumeIntent.mode ||
+      existing.resumeIntent.backupArchiveName !== resumeIntent.backupArchiveName)
+  ) {
+    throw new RetryableLifecycleError("Resume operation intent changed", {
+      code: "resume_operation_intent_conflict",
+      retainLifecycleLock: true,
+    });
+  }
+  const updated = await updateOperationState({
+    operationId,
+    command: "resume",
+    status: existing.status === "accepted" ? "running" : existing.status,
+    source: "lambda",
+    phase: "executing",
+    expectedExecutionToken: existing.executionToken,
+    resumeIntent,
+  });
+  await claimResumeIntentPointer({
+    operationId,
+    ownerToken,
+    operationVersion: Number.isSafeInteger(updated?.version) ? updated.version : existing.version,
+    intent: resumeIntent,
+  });
+  return updated;
 }

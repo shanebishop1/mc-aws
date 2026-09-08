@@ -1,0 +1,11 @@
+[Unit]
+Description=Reassert mc-aws reboot-persistent maintenance inhibition
+DefaultDependencies=no
+After=local-fs.target
+Before=network.target multi-user.target sockets.target
+ConditionPathExists=/var/lib/mc-aws/maintenance-boot-hold.json
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/mc-maintenance-boot.py reassert
+RemainAfterExit=yes

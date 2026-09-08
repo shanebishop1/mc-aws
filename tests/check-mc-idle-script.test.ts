@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,10 +16,11 @@ interface Harness {
   rootDir: string;
   runScript: () => void;
   readAwsCalls: () => string;
+  readHostCalls: () => string;
   readLogs: () => string;
 }
 
-const createHarness = (sequence: string[], requiredObservations = 3): Harness => {
+const createHarness = (sequence: string[], requiredObservations = 3, hostIdle = true): Harness => {
   const rootDir = mkdtempSync(path.join(os.tmpdir(), "mc-idle-test-"));
   const binDir = path.join(rootDir, "bin");
   const stateDir = path.join(rootDir, "state");
@@ -30,11 +31,22 @@ const createHarness = (sequence: string[], requiredObservations = 3): Harness =>
   const indexPath = path.join(stateDir, "mcstatus-index.txt");
   const awsLogPath = path.join(stateDir, "aws-calls.log");
   const loggerLogPath = path.join(stateDir, "logger.log");
+  const hostLogPath = path.join(stateDir, "host-calls.log");
 
   writeFileSync(sequencePath, `${sequence.join("\n")}\n`, "utf8");
   writeFileSync(indexPath, "0", "utf8");
   writeFileSync(awsLogPath, "", "utf8");
   writeFileSync(loggerLogPath, "", "utf8");
+  writeFileSync(hostLogPath, "", "utf8");
+
+  makeExecutable(
+    path.join(binDir, "mc-host-operation.py"),
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf "%s\n" "$*" >> "${hostLogPath}"
+exit ${hostIdle ? "0" : "1"}
+`
+  );
 
   makeExecutable(
     path.join(binDir, "mcstatus"),
@@ -118,6 +130,13 @@ exit 0
         MC_IDLE_MARKER: path.join(stateDir, "idle.marker"),
         MC_EMPTY_STREAK_FILE: path.join(stateDir, "idle.streak"),
         MC_MAINTENANCE_LOCK: path.join(stateDir, "maintenance.lock"),
+        MC_OPERATION_LOCK: path.join(stateDir, "operation.lock"),
+        MC_HOST_OPERATION_HELPER: path.join(binDir, "mc-host-operation.py"),
+        MC_EXECUTOR_JOURNAL: path.join(stateDir, "executor-effect-journal.json"),
+        MC_EXECUTOR_JOURNAL_CREDENTIAL: path.join(stateDir, "executor-journal-hmac.key"),
+        MC_GATEWAY_RECONCILIATION_JOURNAL: path.join(stateDir, "executor-reconciliations.json"),
+        MC_AGENT_DRAIN_INTERVAL: "0",
+        MC_AGENT_DRAIN_MAX_ATTEMPTS: "2",
         MC_IDLE_REQUIRED_EMPTY_OBSERVATIONS: String(requiredObservations),
       },
       encoding: "utf8",
@@ -130,6 +149,7 @@ exit 0
     rootDir,
     runScript,
     readAwsCalls: () => readFileSync(awsLogPath, "utf8"),
+    readHostCalls: () => readFileSync(hostLogPath, "utf8"),
     readLogs: () => readFileSync(loggerLogPath, "utf8"),
   };
 };
@@ -152,6 +172,7 @@ describe("check-mc-idle.sh", () => {
     const awsCalls = harness.readAwsCalls();
     expect(awsCalls).toContain("ssm put-parameter");
     expect(awsCalls).toContain("ec2 stop-instances --instance-ids i-test123 --region us-west-2");
+    expect(harness.readHostCalls()).toContain("executor-idle --journal");
   });
 
   it("suppresses idle progression when probe command fails", () => {
@@ -185,5 +206,17 @@ describe("check-mc-idle.sh", () => {
 
     expect(stopCallCount).toBe(1);
     expect(awsCalls).toContain("--region us-west-2");
+  });
+
+  it("fails closed when the authenticated executor journal is not idle", () => {
+    const harness = createHarness(["ok:0"], 1, false);
+    cleanupDirs.push(harness.rootDir);
+
+    harness.runScript();
+
+    expect(harness.readHostCalls()).toContain("executor-idle --journal");
+    expect(harness.readAwsCalls()).not.toContain("ec2 stop-instances");
+    expect(harness.readLogs()).toContain("executor journal is not authoritatively idle");
+    expect(existsSync(path.join(harness.rootDir, "state", "maintenance.lock"))).toBe(false);
   });
 });

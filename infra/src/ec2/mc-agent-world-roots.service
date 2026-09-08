@@ -1,0 +1,49 @@
+[Unit]
+Description=mc-aws authenticated world-root transaction broker
+After=local-fs.target
+Before=mc-agent-executor.service
+
+[Service]
+Type=simple
+User=root
+Group=mc-agent
+UMask=0007
+ExecStart=/usr/local/bin/mc-agent-world-roots.py serve
+Restart=on-failure
+RestartSec=2s
+RuntimeDirectory=mc-agent-world-roots
+RuntimeDirectoryMode=0750
+StateDirectory=mc-agent-world-roots
+StateDirectoryMode=0700
+
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_CHOWN CAP_DAC_OVERRIDE CAP_FOWNER
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+PrivateNetwork=true
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+KeyringMode=private
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=~@mount @privileged @resources @reboot @swap @obsolete
+RestrictAddressFamilies=AF_UNIX
+ReadWritePaths=/opt/minecraft/server /etc/mc-agent /var/lib/mc-agent-world-roots /run/mc-agent-world-roots
+InaccessiblePaths=/root /home /var/lib/amazon/ssm /var/lib/amazon/ssm-agent /run/amazon-ssm-agent
+
+[Install]
+WantedBy=multi-user.target

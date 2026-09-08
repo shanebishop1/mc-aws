@@ -5,6 +5,9 @@ const mocks = vi.hoisted(() => ({
   getParameter: vi.fn(),
   putParameter: vi.fn(),
   deleteParameter: vi.fn(),
+  getParameterRecord: vi.fn(),
+  putParameterIfCurrent: vi.fn(),
+  deleteParameterIfCurrent: vi.fn(),
   randomUUID: vi.fn(),
 }));
 vi.mock("node:crypto", () => ({ randomUUID: mocks.randomUUID }));
@@ -12,6 +15,9 @@ vi.mock("./ssm.js", () => ({
   getParameter: mocks.getParameter,
   putParameter: mocks.putParameter,
   deleteParameter: mocks.deleteParameter,
+  getParameterRecord: mocks.getParameterRecord,
+  putParameterIfCurrent: mocks.putParameterIfCurrent,
+  deleteParameterIfCurrent: mocks.deleteParameterIfCurrent,
 }));
 vi.mock("./clients.js", async () => {
   const actual = await vi.importActual<typeof import("./clients.js")>("./clients.js");
@@ -22,6 +28,7 @@ import {
   acquireLifecycleLock,
   assertLifecycleLockOwned,
   bridgeLegacyLifecycleLock,
+  getCurrentLifecycleLock,
   releaseLifecycleLock,
 } from "./lifecycle-lock.js";
 
@@ -41,18 +48,43 @@ const legacy = JSON.stringify({
   ownerEmail: "admin@example.com",
   createdAt: "2026-04-13T12:00:00.000Z",
   expiresAt: "2026-04-13T12:45:00.000Z",
+  claimToken: "email-lock",
 });
+const parameterValues = new Map<string, string>();
 
 describe("Lambda DynamoDB lifecycle lock", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.ddbSend.mockReset();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-04-13T12:00:00.000Z"));
     vi.stubEnv("MC_LIFECYCLE_LOCK_TABLE_NAME", "locks-table");
+    vi.stubEnv("MC_OPERATION_STATE_TABLE_NAME", "operations-table");
     mocks.randomUUID.mockReturnValue("email-lock");
-    mocks.getParameter.mockResolvedValue(legacy);
-    mocks.putParameter.mockResolvedValue(undefined);
-    mocks.deleteParameter.mockResolvedValue(undefined);
+    parameterValues.clear();
+    mocks.getParameter.mockImplementation(async (name: string) => parameterValues.get(name) ?? null);
+    mocks.putParameter.mockImplementation(async (name: string, value: string, _type: string, overwrite = true) => {
+      if (!overwrite && parameterValues.has(name)) {
+        throw Object.assign(new Error("held"), { name: "ParameterAlreadyExists" });
+      }
+      parameterValues.set(name, value);
+      return 1;
+    });
+    mocks.deleteParameter.mockImplementation(async (name: string) => {
+      parameterValues.delete(name);
+    });
+    mocks.getParameterRecord.mockImplementation(async (name: string) => {
+      const value = parameterValues.get(name);
+      return value === undefined ? null : { name, value, type: "String", version: 1 };
+    });
+    mocks.putParameterIfCurrent.mockImplementation(async (name: string, value: string) => {
+      parameterValues.set(name, value);
+      return true;
+    });
+    mocks.deleteParameterIfCurrent.mockImplementation(async (name: string) => {
+      parameterValues.delete(name);
+      return true;
+    });
   });
 
   it("uses the same conditional acquisition fields as the Worker", async () => {
@@ -62,82 +94,138 @@ describe("Lambda DynamoDB lifecycle lock", () => {
       fencingToken: 9,
     });
     expect(mocks.ddbSend.mock.calls[1][0].input.ConditionExpression).toContain("leaseExpiresAt < :now");
-    const bridgePayload = JSON.parse(
-      mocks.putParameter.mock.calls.find(([name]) => name === "/minecraft/server-action")?.[1]
-    );
-    expect(bridgePayload.expiresAt).toBe("2026-04-13T13:30:00.000Z");
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+    expect(mocks.putParameterIfCurrent).not.toHaveBeenCalled();
   });
 
   it("asserts and releases only the exact lock id and fencing token", async () => {
     mocks.ddbSend
       .mockResolvedValueOnce(metadata)
       .mockResolvedValueOnce({ Item: item("email-lock", 9) })
+      .mockResolvedValueOnce({ Item: item("email-lock", 9) })
+      .mockResolvedValueOnce({ Item: item("email-lock", 9) })
       .mockResolvedValueOnce({});
     await expect(assertLifecycleLockOwned("email-lock", 9, "hibernate")).resolves.toMatchObject({ fencingToken: 9 });
     await expect(releaseLifecycleLock("email-lock", 9, "hibernate", "admin@example.com")).resolves.toBe(true);
     expect(mocks.ddbSend.mock.calls[2][0].input.ConditionExpression).toContain("fencingToken = :token");
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+    expect(mocks.deleteParameterIfCurrent).not.toHaveBeenCalled();
   });
 
-  it("adopts an old Worker SSM lock into DynamoDB without replacing the legacy owner", async () => {
+  it("requires the current agent-fence generation and operation owner for cleanup", async () => {
+    mocks.ddbSend.mockResolvedValueOnce({});
+
+    await expect(
+      releaseLifecycleLock("agent-lock", 17, "backup", "agent@example.com", {
+        expectedLeaseGeneration: 4,
+        requireAgentFenceActive: true,
+        operationId: "agent-operation",
+        operationOwnerId: "agent-owner",
+      })
+    ).resolves.toBe(true);
+
+    const input = mocks.ddbSend.mock.calls[0][0].input;
+    expect(input.ConditionExpression).toContain("leaseGeneration = :generation");
+    expect(input.ConditionExpression).toContain("agentFenceActive = :agentFenceActive");
+    expect(input.ConditionExpression).toContain("operationId = :operationId");
+    expect(input.ConditionExpression).toContain("operationOwnerId = :operationOwnerId");
+    expect(input.ExpressionAttributeValues[":generation"]).toEqual({ N: "4" });
+    expect(input.ExpressionAttributeValues[":agentFenceActive"]).toEqual({ BOOL: true });
+  });
+
+  it("parses the operator destroy fence as an active lifecycle owner", async () => {
+    mocks.ddbSend.mockResolvedValueOnce({
+      Item: {
+        ...item("destroy-lock", 10),
+        action: { S: "destroy" },
+        agentFenceActive: { BOOL: true },
+        operationId: { S: "destroy-12345678-1234-4234-8234-123456789012" },
+        operationOwnerId: { S: "destroy-12345678-1234-4234-8234-123456789012" },
+      },
+    });
+
+    await expect(getCurrentLifecycleLock()).resolves.toMatchObject({
+      action: "destroy",
+      lockId: "destroy-lock",
+      fencingToken: 10,
+      agentFenceActive: true,
+    });
+  });
+
+  it("does not let a Lambda mint an operator destroy fence", async () => {
+    await expect(acquireLifecycleLock("destroy", "admin@example.com")).rejects.toThrow(
+      "Unsupported lifecycle lock action: destroy"
+    );
+    expect(mocks.ddbSend).not.toHaveBeenCalled();
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+  });
+
+  it("refuses to adopt an old Worker SSM lock without an authoritative DynamoDB owner", async () => {
+    parameterValues.set("/minecraft/server-action", legacy);
     mocks.ddbSend
       .mockResolvedValueOnce(metadata)
       .mockResolvedValueOnce({})
       .mockResolvedValueOnce({ Attributes: item("email-lock", 10) });
 
-    await expect(bridgeLegacyLifecycleLock("email-lock", "hibernate", "admin@example.com")).resolves.toMatchObject({
-      lockId: "email-lock",
-      fencingToken: 10,
-    });
+    await expect(bridgeLegacyLifecycleLock("email-lock", "hibernate", "admin@example.com")).rejects.toThrow(
+      "Another lifecycle operation is already in progress"
+    );
     expect(mocks.putParameter).not.toHaveBeenCalled();
     expect(mocks.deleteParameter).not.toHaveBeenCalled();
   });
 
-  it("uses an old-compatible delete claim before replacing an expired SSM bridge lock", async () => {
+  it("does not replace an expired SSM bridge lock or create a delete claim", async () => {
     vi.setSystemTime(new Date("2026-04-13T13:00:00.000Z"));
-    mocks.randomUUID.mockReturnValueOnce("new-lock").mockReturnValueOnce("claim-new");
-    mocks.putParameter
-      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }))
-      .mockResolvedValue(undefined);
+    parameterValues.set("/minecraft/server-action", legacy);
+    mocks.randomUUID.mockReturnValueOnce("new-lock");
     mocks.ddbSend.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("new-lock", 11) });
 
     await expect(acquireLifecycleLock("hibernate", "admin@example.com")).resolves.toMatchObject({
       lockId: "new-lock",
       fencingToken: 11,
     });
-    expect(mocks.putParameter).toHaveBeenCalledWith(
-      "/minecraft/server-action-delete-claim/email-lock",
-      expect.stringContaining('"claimId":"claim-new"'),
-      "String",
-      false
-    );
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action-delete-claim/email-lock");
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameterIfCurrent).not.toHaveBeenCalled();
+    expect(parameterValues.get("/minecraft/server-action")).toBe(legacy);
   });
 
-  it("takes over an expired legacy delete-claim lease", async () => {
-    vi.setSystemTime(new Date("2026-04-13T13:00:00.000Z"));
-    mocks.randomUUID.mockReturnValueOnce("new-lock").mockReturnValueOnce("claim-new");
-    mocks.getParameter
-      .mockResolvedValueOnce(legacy)
-      .mockResolvedValueOnce(
-        JSON.stringify({
-          claimId: "stale",
-          createdAt: "2026-04-13T12:00:00.000Z",
-          expiresAt: "2026-04-13T12:01:00.000Z",
-        })
-      )
-      .mockResolvedValueOnce(legacy);
-    mocks.putParameter
-      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }))
-      .mockRejectedValueOnce(Object.assign(new Error("claim held"), { name: "ParameterAlreadyExists" }))
-      .mockResolvedValue(undefined);
+  it("preserves a malformed legacy bridge without proof", async () => {
+    const malformed = '{"lockId":"legacy","action":"hibernate"}';
+    parameterValues.set("/minecraft/server-action", malformed);
     mocks.ddbSend.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("new-lock", 12) });
 
     await expect(acquireLifecycleLock("hibernate", "admin@example.com")).resolves.toMatchObject({
       lockId: "new-lock",
       fencingToken: 12,
     });
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action-delete-claim/email-lock");
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameter).not.toHaveBeenCalled();
+    expect(mocks.putParameterIfCurrent).not.toHaveBeenCalled();
+    expect(mocks.deleteParameterIfCurrent).not.toHaveBeenCalled();
+    expect(parameterValues.get("/minecraft/server-action")).toBe(malformed);
+  });
+
+  it("preserves an expired legacy delete-claim lease", async () => {
+    vi.setSystemTime(new Date("2026-04-13T13:00:00.000Z"));
+    parameterValues.set("/minecraft/server-action", legacy);
+    mocks.randomUUID.mockReturnValueOnce("new-lock");
+    parameterValues.set(
+      "/minecraft/server-action-delete-claim/email-lock",
+      JSON.stringify({
+        claimToken: "stale",
+        createdAt: "2026-04-13T12:00:00.000Z",
+        resourceVersion: 1,
+        expiresAt: "2026-04-13T12:01:00.000Z",
+      })
+    );
+    mocks.ddbSend.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("new-lock", 12) });
+
+    await expect(acquireLifecycleLock("hibernate", "admin@example.com")).resolves.toMatchObject({
+      lockId: "new-lock",
+      fencingToken: 12,
+    });
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameterIfCurrent).not.toHaveBeenCalled();
+    expect(parameterValues.get("/minecraft/server-action-delete-claim/email-lock")).toContain('"claimToken":"stale"');
   });
 
   it("reconciles an ambiguous DynamoDB acquisition that committed", async () => {
@@ -179,20 +267,17 @@ describe("Lambda DynamoDB lifecycle lock", () => {
     expect(mocks.deleteParameter).not.toHaveBeenCalledWith("/minecraft/server-action");
   });
 
-  it("self-heals an active SSM bridge after its matching DynamoDB owner was released", async () => {
-    mocks.randomUUID.mockReturnValueOnce("new-lock").mockReturnValueOnce("claim-new");
-    mocks.putParameter
-      .mockRejectedValueOnce(Object.assign(new Error("held"), { name: "ParameterAlreadyExists" }))
-      .mockResolvedValue(undefined);
-    mocks.ddbSend
-      .mockResolvedValueOnce(metadata)
-      .mockResolvedValueOnce({ Item: { ...item("email-lock", 9), released: { BOOL: true } } })
-      .mockResolvedValueOnce({ Attributes: item("new-lock", 10) });
+  it("does not self-heal or rewrite an active SSM bridge", async () => {
+    parameterValues.set("/minecraft/server-action", legacy);
+    mocks.randomUUID.mockReturnValueOnce("new-lock");
+    mocks.ddbSend.mockResolvedValueOnce(metadata).mockResolvedValueOnce({ Attributes: item("new-lock", 10) });
 
     await expect(acquireLifecycleLock("hibernate", "admin@example.com")).resolves.toMatchObject({
       lockId: "new-lock",
       fencingToken: 10,
     });
-    expect(mocks.deleteParameter).toHaveBeenCalledWith("/minecraft/server-action");
+    expect(mocks.putParameter).not.toHaveBeenCalled();
+    expect(mocks.deleteParameterIfCurrent).not.toHaveBeenCalled();
+    expect(parameterValues.get("/minecraft/server-action")).toBe(legacy);
   });
 });

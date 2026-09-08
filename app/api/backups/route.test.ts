@@ -21,15 +21,31 @@ vi.mock("@/lib/aws", () => ({
 
 import { GET } from "./route";
 
-const backup = { name: "hibernate.tar.gz", size: "10", date: "2026-01-01" };
-const legacyStaleCache = JSON.stringify({ backups: [backup], cachedAt: 1 });
+const backup = {
+  name: "hibernate.tar.gz",
+  size: "42",
+  date: "2026-09-04T00:00:00Z",
+  backupId: "b".repeat(32),
+  digest: "a".repeat(64),
+  generation: 7,
+  createdAt: "2026-09-04T00:00:00Z",
+  instanceId: "i-abc123456",
+  serverId: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/stable-id",
+  authenticationKeyId: "key-old",
+  operationKey: null,
+};
+const authenticatedReadyCache = JSON.stringify({ status: "ready", backups: [backup], cachedAt: 1 });
+const legacyUnauthenticatedCache = JSON.stringify({
+  backups: [{ name: "hibernate.tar.gz", size: "42", date: "2026-09-04T00:00:00Z" }],
+  cachedAt: 1,
+});
 
 describe("GET /api/backups cache lifecycle", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.requireAdmin.mockResolvedValue({ email: "admin@example.com" });
-    mocks.findInstanceId.mockResolvedValue("i-abc123");
-    mocks.getParameter.mockResolvedValue(legacyStaleCache);
+    mocks.findInstanceId.mockResolvedValue("i-abc123456");
+    mocks.getParameter.mockResolvedValue(authenticatedReadyCache);
     mocks.invokeLambda.mockResolvedValue(undefined);
   });
 
@@ -41,6 +57,18 @@ describe("GET /api/backups cache lifecycle", () => {
 
     expect(response.status).toBe(202);
     expect(body.data?.status).toBe("caching");
+    expect(mocks.invokeLambda).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not serve a legacy unauthenticated cache as a listing", async () => {
+    mocks.getParameter.mockResolvedValueOnce(legacyUnauthenticatedCache);
+
+    const response = await GET(createMockNextRequest("http://localhost/api/backups"));
+    const body = await parseNextResponse<ApiResponse<ListBackupsResponse>>(response);
+
+    expect(response.status).toBe(202);
+    expect(body.data?.status).toBe("caching");
+    expect(body.data?.backups).toEqual([]);
     expect(mocks.invokeLambda).toHaveBeenCalledTimes(1);
   });
 
@@ -123,7 +151,7 @@ describe("GET /api/backups cache lifecycle", () => {
     expect(mocks.invokeLambda).toHaveBeenCalledWith("StartMinecraftServer", {
       invocationType: "api",
       command: "refreshBackups",
-      instanceId: "i-abc123",
+      instanceId: "i-abc123456",
       userEmail: "admin@example.com",
     });
   });

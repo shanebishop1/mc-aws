@@ -8,7 +8,11 @@ const mocks = vi.hoisted(() => ({
   invokeLambda: vi.fn(),
   findInstanceId: vi.fn().mockResolvedValue("i-1234"),
   getInstanceState: vi.fn().mockResolvedValue("running"),
-  executeSSMCommand: vi.fn().mockResolvedValue("active"),
+  getMinecraftServiceStatus: vi.fn().mockResolvedValue({
+    instanceState: "running",
+    instanceRunning: true,
+    serviceActive: true,
+  }),
   acquireServerActionLock: vi.fn().mockResolvedValue({ lockId: "lock-restore-123" }),
   releaseServerActionLock: vi.fn().mockResolvedValue(true),
   isServerActionLockConflictError: vi.fn().mockReturnValue(false),
@@ -30,7 +34,7 @@ vi.mock("@/lib/aws", () => ({
   invokeLambda: mocks.invokeLambda,
   findInstanceId: mocks.findInstanceId,
   getInstanceState: mocks.getInstanceState,
-  executeSSMCommand: mocks.executeSSMCommand,
+  getMinecraftServiceStatus: mocks.getMinecraftServiceStatus,
 }));
 
 // Mock requireAdmin to return a fake admin user
@@ -58,7 +62,11 @@ describe("POST /api/restore", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.getInstanceState.mockResolvedValue("running");
-    mocks.executeSSMCommand.mockResolvedValue("active");
+    mocks.getMinecraftServiceStatus.mockResolvedValue({
+      instanceState: "running",
+      instanceRunning: true,
+      serviceActive: true,
+    });
     mocks.requireAdmin.mockResolvedValue({ email: "admin@example.com", role: "admin" });
     mocks.enforceMutatingRouteThrottle.mockResolvedValue(null);
     mocks.isServerActionLockConflictError.mockReturnValue(false);
@@ -305,7 +313,7 @@ describe("POST /api/restore", () => {
     const throttleOrder = mocks.enforceMutatingRouteThrottle.mock.invocationCallOrder[0];
     const findInstanceOrder = mocks.findInstanceId.mock.invocationCallOrder[0];
     const stateValidationOrder = mocks.getInstanceState.mock.invocationCallOrder[0];
-    const serviceValidationOrder = mocks.executeSSMCommand.mock.invocationCallOrder[0];
+    const serviceValidationOrder = mocks.getMinecraftServiceStatus.mock.invocationCallOrder[0];
     const lockOrder = mocks.acquireServerActionLock.mock.invocationCallOrder[0];
     const invokeOrder = mocks.invokeLambda.mock.invocationCallOrder[0];
 

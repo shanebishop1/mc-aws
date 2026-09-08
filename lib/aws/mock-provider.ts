@@ -8,7 +8,15 @@ import { randomUUID } from "node:crypto";
 import type { Stack } from "@aws-sdk/client-cloudformation";
 import { type CostData, type OperationStatus, type OperationType, ServerState } from "../types";
 import { type MockState, getMockStateStore } from "./mock-state-store";
-import type { AwsProvider, BackupInfo, InstanceDetails, ParameterStoreEntry, PlayerCount } from "./types";
+import type {
+  AwsProvider,
+  BackupInfo,
+  InstanceDetails,
+  MinecraftServiceStatus,
+  ParameterStoreEntry,
+  PlayerCount,
+  SsmMutationProof,
+} from "./types";
 
 // Re-export scenario engine functions for convenience
 export {
@@ -405,10 +413,12 @@ function hasExactCurrentLifecycleLock(
 }
 
 function writeOperationState(state: MockState, operation: MockOperationState): void {
+  const previous = state.ssm.parameters[getOperationStateParameterName(operation.id)];
   state.ssm.parameters[getOperationStateParameterName(operation.id)] = {
     value: JSON.stringify(operation),
     type: "String",
     lastModified: operation.updatedAt,
+    version: (previous?.version ?? 0) + 1,
   };
 }
 
@@ -1055,6 +1065,17 @@ export const mockProvider: AwsProvider = {
     return output;
   },
 
+  getMinecraftServiceStatus: async (_instanceId?: string): Promise<MinecraftServiceStatus> => {
+    await applyFaultInjection("getMinecraftServiceStatus");
+    const instance = await getMockStateStore().getInstance();
+    const instanceRunning = instance.state === ServerState.Running;
+    return {
+      instanceState: instance.state,
+      instanceRunning,
+      serviceActive: instanceRunning,
+    };
+  },
+
   listBackups: async (_instanceId?: string): Promise<BackupInfo[]> => {
     await applyFaultInjection("listBackups");
     console.log("[MOCK] listBackups called");
@@ -1077,12 +1098,17 @@ export const mockProvider: AwsProvider = {
     return stateStore.getParameter(name);
   },
 
+  getParameterRecord: async (name: string): Promise<ParameterStoreEntry | null> => {
+    await applyFaultInjection("getParameter");
+    return getMockStateStore().getParameterRecord(name);
+  },
+
   putParameter: async (
     name: string,
     value: string,
     type?: "String" | "SecureString",
     overwrite = true
-  ): Promise<void> => {
+  ): Promise<number | undefined> => {
     await applyFaultInjection("putParameter");
     const parameterType = type ?? "String";
     console.log("[MOCK] putParameter called", {
@@ -1098,6 +1124,18 @@ export const mockProvider: AwsProvider = {
       (error as Error & { name: string }).name = "ParameterAlreadyExists";
       throw error;
     }
+    return typeof written === "number" ? written : undefined;
+  },
+
+  putParameterIfCurrent: async (
+    name: string,
+    value: string,
+    proof: SsmMutationProof,
+    type?: "String" | "SecureString",
+    overwrite = true
+  ): Promise<boolean> => {
+    await applyFaultInjection("putParameter");
+    return getMockStateStore().putParameterIfCurrent(name, value, proof, type ?? "String", overwrite);
   },
 
   deleteParameter: async (name: string): Promise<void> => {
@@ -1105,6 +1143,11 @@ export const mockProvider: AwsProvider = {
     console.log("[MOCK] deleteParameter called for:", name);
     const stateStore = getMockStateStore();
     await stateStore.deleteParameter(name);
+  },
+
+  deleteParameterIfCurrent: async (name: string, proof: SsmMutationProof): Promise<boolean> => {
+    await applyFaultInjection("deleteParameter");
+    return getMockStateStore().deleteParameterIfCurrent(name, proof);
   },
 
   listParametersByPath: async (path: string): Promise<ParameterStoreEntry[]> => {
@@ -1125,6 +1168,7 @@ export const mockProvider: AwsProvider = {
         name,
         value: parameter.value,
         type: parameter.type,
+        version: parameter.version,
         lastModifiedAt: parameter.lastModified,
       }));
   },

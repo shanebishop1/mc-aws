@@ -99,7 +99,7 @@ export const validateRuntimeStateDeploySetup = ({ envFile, wranglerConfig }: Cli
       [
         "Runtime-state deploy setup is incomplete.",
         errorLines,
-        "Action: create KV namespace ids, set RUNTIME_STATE_SNAPSHOT_KV_ID (and optional RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID), and ensure wrangler.jsonc has runtime-state durable object + migration bindings.",
+        "Action: create KV namespace ids, set RUNTIME_STATE_SNAPSHOT_KV_ID (and optional RUNTIME_STATE_SNAPSHOT_KV_PREVIEW_ID), and ensure wrangler.jsonc has runtime-state plus legacy, index, and sharded agent-session durable object migration bindings.",
       ].join("\n")
     );
   }

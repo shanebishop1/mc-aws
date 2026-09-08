@@ -1,0 +1,93 @@
+[Unit]
+Description=mc-aws agent harness gateway
+After=network-online.target systemd-tmpfiles-setup.service mc-agent-executor.socket
+Wants=network-online.target
+Requires=mc-agent-executor.socket
+
+[Service]
+Type=simple
+User=mc-agent-gateway
+Group=mc-agent
+UMask=0077
+WorkingDirectory=/var/lib/mc-agent-gateway/work
+ExecStartPre=/usr/bin/python3 /usr/local/bin/mc-agent-world-roots.py verify
+ExecStart=/opt/mc-agent/node-current/bin/node --disallow-code-generation-from-strings /opt/mc-agent/current/gateway-cli.mjs
+Restart=on-failure
+RestartSec=5s
+TimeoutStopSec=30s
+MemoryHigh=192M
+MemoryMax=256M
+TasksMax=64
+StateDirectory=mc-agent-gateway
+StateDirectoryMode=0700
+RuntimeDirectory=mc-agent-gateway
+RuntimeDirectoryMode=0700
+LoadCredential=runtime-bearer:/etc/mc-agent/runtime-bearer
+LoadCredential=gateway-private-key:/etc/mc-agent/gateway-private.pem
+LoadCredential=provider-openrouter:/etc/mc-agent/provider-openrouter
+Environment=MC_AGENT_GATEWAY_CONFIG=/etc/mc-agent/world-roots-current/gateway.json
+Environment=MC_AGENT_MAINTENANCE_FENCE=/run/mc-agent/maintenance-state.json
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+KeyringMode=private
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=~@mount @privileged @resources @reboot @swap @obsolete
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# systemd applies longest-prefix precedence: permit only the EC2 AmazonProvidedDNS
+# link-local resolver while the broader link-local range and metadata endpoints stay denied.
+IPAddressAllow=169.254.169.253/32
+IPAddressDeny=169.254.169.254/32
+IPAddressDeny=0.0.0.0/8
+IPAddressDeny=10.0.0.0/8
+IPAddressDeny=100.64.0.0/10
+IPAddressDeny=127.0.0.0/8
+IPAddressDeny=169.254.0.0/16
+IPAddressDeny=172.16.0.0/12
+IPAddressDeny=192.0.0.0/24
+IPAddressDeny=192.0.2.0/24
+IPAddressDeny=192.88.99.0/24
+IPAddressDeny=192.168.0.0/16
+IPAddressDeny=198.18.0.0/15
+IPAddressDeny=198.51.100.0/24
+IPAddressDeny=203.0.113.0/24
+IPAddressDeny=224.0.0.0/4
+IPAddressDeny=240.0.0.0/4
+IPAddressDeny=::/128
+IPAddressDeny=::1/128
+IPAddressDeny=::ffff:0:0/96
+IPAddressDeny=64:ff9b::/96
+IPAddressDeny=100::/64
+IPAddressDeny=2001::/32
+IPAddressDeny=2001:10::/28
+IPAddressDeny=2001:20::/28
+IPAddressDeny=2001:db8::/32
+IPAddressDeny=2002::/16
+IPAddressDeny=fc00::/7
+IPAddressDeny=fe80::/10
+IPAddressDeny=ff00::/8
+IPAddressDeny=fd00:ec2::254/128
+ReadOnlyPaths=/opt/mc-agent /run/mc-agent
+ReadOnlyPaths=/etc/mc-agent/world-roots-current
+ReadWritePaths=/var/lib/mc-agent-gateway /run/mc-agent-download
+InaccessiblePaths=/root /home /opt/setup /etc/minecraft /var/lib/amazon/ssm /var/lib/amazon/ssm-agent /run/amazon-ssm-agent /root/.aws /opt/minecraft/server
+
+[Install]
+WantedBy=multi-user.target

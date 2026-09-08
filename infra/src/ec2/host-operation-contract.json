@@ -1,0 +1,165 @@
+{
+  "contract": "mc-aws-host-operation",
+  "schemaVersion": 3,
+  "executorJournal": {
+    "schemaVersion": 3,
+    "path": "/var/lib/mc-agent-executor/executor-effect-journal.json",
+    "credentialPath": "/etc/mc-agent/executor-journal-hmac.key",
+    "macPrefix": "mc-aws-executor-journal",
+    "format": "manifest-checkpoint-transaction-v1",
+    "checkpointSuffixes": [".checkpoint.0", ".checkpoint.1"],
+    "appendSuffixes": [".append.0", ".append.1"],
+    "floorSuffix": ".generation-floor",
+    "manifestFields": [
+      "schemaVersion",
+      "format",
+      "generation",
+      "checkpointGeneration",
+      "appendGeneration",
+      "generationFloor",
+      "checkpointSlot",
+      "appendSlot",
+      "mac"
+    ],
+    "checkpointFields": [
+      "schemaVersion",
+      "format",
+      "generation",
+      "entries",
+      "cancellationTombstones",
+      "evidence",
+      "mac"
+    ],
+    "appendFields": ["schemaVersion", "generation", "mutations", "mac"],
+    "mutationFields": ["operation", "key", "value"],
+    "mutationOperations": [
+      "upsert-entry",
+      "delete-entry",
+      "upsert-tombstone",
+      "delete-tombstone",
+      "upsert-evidence",
+      "delete-evidence"
+    ],
+    "floorFields": ["schemaVersion", "generationFloor", "mac"],
+    "evidenceFields": [
+      "schemaVersion",
+      "recordSequence",
+      "acknowledgedCount",
+      "latestTerminalSequence",
+      "aggregateDigest",
+      "replayFilter",
+      "mac"
+    ],
+    "replayFilterBytes": 1048576,
+    "replayFilterHashes": 7,
+    "acknowledgementFields": [
+      "invocationId",
+      "invocationDigest",
+      "taskId",
+      "leaseGeneration",
+      "journalSequence",
+      "resultDigest",
+      "authorization",
+      "acknowledgedAt"
+    ],
+    "statuses": ["reserved", "in-progress", "waiting", "committed"],
+    "entryFields": [
+      "schemaVersion",
+      "recordSequence",
+      "invocationId",
+      "invocationDigest",
+      "effectFingerprint",
+      "taskId",
+      "leaseGeneration",
+      "behaviorFingerprint",
+      "approvalsFingerprint",
+      "approvalsWithoutAuthorizationFingerprint",
+      "approvalAuthorizationFingerprint",
+      "backupAuthorizationFingerprint",
+      "executorEpoch",
+      "status",
+      "updatedAt",
+      "result",
+      "terminalReceipt",
+      "publicationAcknowledgement",
+      "mac"
+    ],
+    "tombstoneFields": [
+      "schemaVersion",
+      "recordSequence",
+      "invocationId",
+      "taskId",
+      "leaseGeneration",
+      "requestedAt",
+      "expiresAt",
+      "mac"
+    ],
+    "maxEntries": 100000,
+    "maxCancellationTombstones": 1024,
+    "maxBytes": 67108864,
+    "maxGeneration": 9007199254740991
+  },
+  "gatewayReconciliationJournal": {
+    "schemaVersion": 1,
+    "path": "/var/lib/mc-agent-gateway/executor-reconciliations.json",
+    "stateFields": ["schemaVersion", "entries"],
+    "entryFields": [
+      "schemaVersion",
+      "key",
+      "runtimeId",
+      "sessionId",
+      "taskId",
+      "leaseId",
+      "leaseGeneration",
+      "invocationId",
+      "invocationDigest",
+      "state",
+      "payload",
+      "updatedAt",
+      "expectedJournalSequence",
+      "terminalJournalSequence",
+      "terminalResult",
+      "terminalReceipt"
+    ],
+    "states": ["awaiting-backup", "awaiting-executor", "dispatching"],
+    "maxEntries": 128,
+    "maxBytes": 16777216
+  },
+  "backupJournal": {
+    "version": 3,
+    "path": "/var/lib/mc-aws/mc-backup-journal.json",
+    "phases": [
+      "prepared",
+      "quiescing",
+      "quiesced",
+      "uploading",
+      "archive-uploaded",
+      "publishing-manifest",
+      "uploaded",
+      "restoring-services",
+      "restart-complete"
+    ],
+    "modes": ["ordinary", "hibernate", "destroy", "replacement"],
+    "maxGeneration": 9007199254740991
+  },
+  "serviceState": {
+    "units": [
+      "minecraft-dns.service",
+      "minecraft.service",
+      "mc-agent-world-roots.service",
+      "mc-agent-executor.socket",
+      "mc-agent-executor.service",
+      "mc-agent-gateway.service"
+    ],
+    "enablementStates": [
+      "enabled",
+      "enabled-runtime",
+      "disabled",
+      "static",
+      "indirect",
+      "masked",
+      "masked-runtime",
+      "not-found"
+    ]
+  }
+}

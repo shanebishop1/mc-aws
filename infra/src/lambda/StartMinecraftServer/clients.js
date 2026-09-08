@@ -1,10 +1,17 @@
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import {
+  DynamoDBClient,
+  GetItemCommand,
+  PutItemCommand,
+  TransactWriteItemsCommand,
+  UpdateItemCommand,
+} from "@aws-sdk/client-dynamodb";
 import {
   AttachVolumeCommand,
   CreateVolumeCommand,
   DeleteVolumeCommand,
   DescribeImagesCommand,
   DescribeInstancesCommand,
+  DescribeSnapshotsCommand,
   DescribeVolumesCommand,
   DetachVolumeCommand,
   EC2Client,
@@ -14,7 +21,6 @@ import {
 import { SESClient, SendEmailCommand } from "@aws-sdk/client-ses";
 import {
   CancelCommandCommand,
-  DeleteParameterCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
@@ -36,20 +42,22 @@ export { dynamodb, ec2, ses, ssm };
 export {
   AttachVolumeCommand,
   GetItemCommand,
+  PutItemCommand,
   CreateVolumeCommand,
   DeleteVolumeCommand,
   DescribeImagesCommand,
   DescribeInstancesCommand,
+  DescribeSnapshotsCommand,
   DescribeVolumesCommand,
   DetachVolumeCommand,
   StartInstancesCommand,
   StopInstancesCommand,
   UpdateItemCommand,
+  TransactWriteItemsCommand,
   SendEmailCommand,
   CancelCommandCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
-  DeleteParameterCommand,
   SendCommandCommand,
 };

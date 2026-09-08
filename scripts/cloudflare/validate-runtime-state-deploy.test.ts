@@ -41,6 +41,18 @@ describe("scripts/cloudflare/validate-runtime-state-deploy", () => {
                 name: "RUNTIME_STATE_DURABLE_OBJECT",
                 class_name: "RuntimeStateDurableObject",
               },
+              {
+                name: "AGENT_SESSION_DURABLE_OBJECT",
+                class_name: "AgentSessionDurableObject",
+              },
+              {
+                name: "AGENT_SESSION_INDEX_DURABLE_OBJECT",
+                class_name: "AgentSessionIndexDurableObject",
+              },
+              {
+                name: "AGENT_SESSION_SHARD_DURABLE_OBJECT",
+                class_name: "AgentSessionShardDurableObject",
+              },
             ],
           },
           kv_namespaces: [
@@ -54,6 +66,14 @@ describe("scripts/cloudflare/validate-runtime-state-deploy", () => {
             {
               tag: "v1-runtime-state-durable-object",
               new_sqlite_classes: ["RuntimeStateDurableObject"],
+            },
+            {
+              tag: "v2-agent-session-durable-object",
+              new_sqlite_classes: ["AgentSessionDurableObject"],
+            },
+            {
+              tag: "v3-agent-session-shards",
+              new_sqlite_classes: ["AgentSessionIndexDurableObject", "AgentSessionShardDurableObject"],
             },
           ],
         },

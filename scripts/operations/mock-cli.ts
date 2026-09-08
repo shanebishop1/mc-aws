@@ -9,6 +9,7 @@
  *   pnpm mock:scenario <name>    - Apply a specific scenario
  */
 
+import { resetMockAgentState } from "@/lib/agent/state";
 import { applyScenario, getAvailableScenarios, getCurrentScenario } from "@/lib/aws/mock-scenarios";
 import { resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
@@ -83,6 +84,7 @@ async function applyScenarioByName(name: string): Promise<void> {
 async function resetState(): Promise<void> {
   try {
     info("Resetting mock state to defaults...");
+    resetMockAgentState();
     await resetToDefaultScenario();
     success("Mock state reset successfully!");
   } catch (err) {

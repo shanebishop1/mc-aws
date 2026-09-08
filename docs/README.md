@@ -19,6 +19,8 @@
 - [Mock mode developer guide](MOCK_MODE_DEVELOPER_GUIDE.md)
 - [API reference](API.md)
 - [AWS Provider Extension Contract](provider-implementation.md)
+- [Agent extensions and local maintenance](AGENT_EXTENSIONS.md)
+- Focused cloud-free agent release evidence: `pnpm test:agent:e2e` (details in the agent extensions guide)
 - [Release process](RELEASING.md)
 
 Start at the [project README](../README.md) for a short overview.

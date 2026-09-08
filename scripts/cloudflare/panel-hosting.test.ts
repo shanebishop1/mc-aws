@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  bindWranglerDeploymentAttestation,
   buildWranglerDeployArgs,
   deriveWorkersDevPanel,
   googleOAuthCallbackUrl,
@@ -90,6 +91,7 @@ describe("Wrangler panel hosting deployment contract", () => {
 
     expect(config.workers_dev).toBe(true);
     expect(config.vars).toMatchObject({
+      MC_BACKEND_MODE: "aws",
       MC_LIFECYCLE_LOCK_TABLE_NAME: "mc-aws-lifecycle-lock",
       MC_OPERATION_STATE_TABLE_NAME: "mc-aws-operation-state",
     });
@@ -102,8 +104,24 @@ describe("Wrangler panel hosting deployment contract", () => {
     ]);
   });
 
+  it("rejects a non-AWS backend mode for the production Worker config", () => {
+    const { sourcePath, outputPath } = createWranglerFixture();
+    expect(() =>
+      prepareWranglerDeployConfig({
+        sourcePath,
+        outputPath,
+        runtimeStateSnapshotKvId: kvId,
+        runtimeStateSnapshotKvPreviewId: kvPreviewId,
+        panelHostingMode: "workers_dev",
+        backendMode: "mock",
+        lifecycleLockTableName: "mc-aws-lifecycle-lock",
+        operationStateTableName: "mc-aws-operation-state",
+      })
+    ).toThrow('MC_BACKEND_MODE must be "aws"');
+  });
+
   it.each([false, true])(
-    "deliberately configures custom-host workers_dev=%s and includes the safe route",
+    "deliberately configures custom-host workers_dev=%s without implicit route mutation",
     (enabled) => {
       const { sourcePath, outputPath } = createWranglerFixture();
       const config = prepareWranglerDeployConfig({
@@ -123,21 +141,20 @@ describe("Wrangler panel hosting deployment contract", () => {
           configPath: outputPath,
           workerName,
           panelHostingMode: "custom",
-          customHostname: "panel.example.com",
         })
-      ).toEqual(["deploy", "--config", outputPath, "--name", workerName, "--route", "panel.example.com/*"]);
+      ).toEqual(["deploy", "--config", outputPath, "--name", workerName]);
     }
   );
 
-  it("rejects a custom deploy without a valid route hostname", () => {
-    expect(() =>
-      buildWranglerDeployArgs({
-        configPath: "wrangler.deploy.jsonc",
-        workerName,
-        panelHostingMode: "custom",
-        customHostname: "panel.example.com/unsafe",
-      })
-    ).toThrow("valid custom panel hostname");
+  it("binds content and effective upload-config identities as plain-text Worker variables", () => {
+    const { sourcePath, outputPath } = createWranglerFixture();
+    fs.copyFileSync(sourcePath, outputPath);
+    const config = bindWranglerDeploymentAttestation(outputPath, "a".repeat(64), "b".repeat(64), "c".repeat(64));
+    expect(config.vars).toEqual({
+      MC_AWS_ARTIFACT_MERKLE_SHA256: "a".repeat(64),
+      MC_AWS_RECEIPT_VERIFIER_SET_SHA256: "b".repeat(64),
+      MC_AWS_UPLOAD_CONFIG_SHA256: "c".repeat(64),
+    });
   });
 });
 

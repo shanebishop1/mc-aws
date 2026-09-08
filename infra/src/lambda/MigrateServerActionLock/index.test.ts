@@ -1,13 +1,23 @@
 import { GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { GetParameterCommand } from "@aws-sdk/client-ssm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ send: vi.fn() }));
+const mocks = vi.hoisted(() => ({ send: vi.fn(), ssmSend: vi.fn() }));
 vi.mock("@aws-sdk/client-dynamodb", async () => {
   const actual = await vi.importActual<typeof import("@aws-sdk/client-dynamodb")>("@aws-sdk/client-dynamodb");
   return {
     ...actual,
     DynamoDBClient: class DynamoDBClient {
       send = mocks.send;
+    },
+  };
+});
+vi.mock("@aws-sdk/client-ssm", async () => {
+  const actual = await vi.importActual<typeof import("@aws-sdk/client-ssm")>("@aws-sdk/client-ssm");
+  return {
+    ...actual,
+    SSMClient: class SSMClient {
+      send = mocks.ssmSend;
     },
   };
 });
@@ -23,7 +33,10 @@ const event = (requestType: string, tableName = "locks-a") => ({
 });
 
 describe("replacement-safe lifecycle bridge metadata", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.ssmSend.mockRejectedValue(Object.assign(new Error("missing"), { name: "ParameterNotFound" }));
+  });
 
   it("initializes and strongly verifies metadata in the exact lock table", async () => {
     mocks.send.mockResolvedValueOnce({}).mockResolvedValueOnce({
@@ -31,6 +44,8 @@ describe("replacement-safe lifecycle bridge metadata", () => {
         protocolVersion: { S: "dual-v1" },
         markerVersion: { S: "2" },
         ownerToken: { S: "stack-1:MigrateServerActionLock" },
+        cutoverState: { S: "provider-authoritative" },
+        legacyBridgeState: { S: "absent" },
       },
     });
 
@@ -39,6 +54,15 @@ describe("replacement-safe lifecycle bridge metadata", () => {
     expect(mocks.send.mock.calls[0][0].input.Key).toEqual({ lockKey: { S: metadataKey } });
     expect(mocks.send.mock.calls[1][0]).toBeInstanceOf(GetItemCommand);
     expect(mocks.send.mock.calls[1][0].input.ConsistentRead).toBe(true);
+    expect(mocks.ssmSend).toHaveBeenCalledTimes(2);
+    expect(mocks.ssmSend.mock.calls[0][0]).toBeInstanceOf(GetParameterCommand);
+    expect(mocks.ssmSend.mock.calls[1][0]).toBeInstanceOf(GetParameterCommand);
+  });
+
+  it.each(["active", "malformed"])("hard-stops when the legacy bridge is %s", async (kind) => {
+    mocks.ssmSend.mockResolvedValue({ Parameter: { Value: kind === "active" ? '{"lockId":"old"}' : "not-json" } });
+    await expect(handler(event("Create"))).rejects.toThrow("Legacy /minecraft/server-action bridge is still present");
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("does not delete metadata when an old replacement resource is deleted late", async () => {

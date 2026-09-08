@@ -1,11 +1,27 @@
 import { resolve } from "node:path";
 import type { NextConfig } from "next";
 
+// These paths are repository-local inputs, never runtime dependencies. The
+// same Next trace is consumed by OpenNext, so keeping this list here protects
+// both the standalone tree and the Cloudflare bundle.
+export const buildArtifactTracingExcludes = [
+  "./.mock-state.json",
+  "./.mock-state.json.*",
+  "./.local-artifacts/**/*",
+  "./.env*",
+  "./**/.mock-state.json",
+  "./**/.mock-state.json.*",
+];
+
 const nextConfig: NextConfig = {
   // OpenNext expects standalone output rooted at this app.
   // Using the parent directory causes Next.js to nest files under .next/standalone/<project>/...
   // which breaks OpenNext's manifest lookups.
   outputFileTracingRoot: resolve(__dirname),
+  // Local agent instructions are developer-only and must never enter panel artifacts.
+  outputFileTracingExcludes: {
+    "*": [".agents/**/*", ...buildArtifactTracingExcludes],
+  },
 
   // Required by OpenNext adapters (generates .next/standalone output).
   output: "standalone",

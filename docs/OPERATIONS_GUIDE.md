@@ -21,7 +21,7 @@ Allowlist behavior differs by update path:
 
 - **Start** boots a stopped instance that still has its root volume.
 - **Stop** stops EC2 but keeps the root EBS volume, which continues to cost money.
-- **Hibernate** creates a Drive backup, refreshes the backup cache, stops EC2, and deletes the managed root volume. Do not use it until you have verified a backup and restore.
+- **Hibernate** creates an authenticated terminal Drive backup, proves the host is still quiesced immediately before stopping EC2, and deletes the managed root volume. Do not use it until you have verified a backup and restore.
 - **Resume** normally reconstructs a stopped, hibernated instance that has no root volume, then starts fresh or restores Drive data. On an ordinary stopped instance with an attached root volume, it reuses that disk and may still run the selected restore; use Start when no restore is intended.
 
 Resume choices are explicit:
@@ -44,9 +44,152 @@ Backups use Google Drive and require the server to be running. A backup:
 4. uploads it to Drive;
 5. restarts Minecraft and refreshes the cached backup list.
 
-Most failures attempt to restart Minecraft. A partial failure is possible: the archive may already be in Drive while Minecraft fails to restart, or the backup may succeed while the cached list fails to refresh. Check Drive directly, check service status, and start the service before retrying. Test a restore during planned downtime before relying on backups.
+The host journals the exact active and enablement state of Minecraft, DNS, the executor socket/service, and gateway before masking any activation path. A reboot or process crash resumes that journal and restores exactly the recorded state without repeating an already-published remote backup. Recovery keeps the durable boot hold until exact service-state verification succeeds. Check Drive and the journaled recovery result before manually changing service state, and test a restore during planned downtime before relying on backups.
 
-A restore replaces the server directory from Drive, reapplies the current server profile, and restarts Minecraft. If the restored server does not start, rollback to the prior local directory is attempted; rollback can also fail. Keep an independent backup.
+Hibernation uses a terminal backup mode. After the authenticated archive is published, the host verifies that the
+Minecraft protocol is closed, Minecraft/gateway activation paths are stopped and runtime-masked, and the root
+maintenance fence is still held. It returns that quiescence evidence to Lambda and does not restore those services;
+Lambda stops EC2 and deletes the exact managed root volume only after EC2 reaches `stopped`. A stop, mask, verification,
+stale-boot, or missing-evidence failure leaves the root volume in place. Teardown of an already-hibernated host accepts
+only the matching durable operation-state transaction; the cached backup list is not durability evidence. Ordinary manual
+backups retain their prior service states and restore them after upload.
+
+A restore stages the Drive archive and current profile together, verifies the complete staged tree, and only then replaces
+the server directory. Before either profile or server replacement it acquires the host maintenance owner, drains the
+gateway's runtime-wide execution slot, and runtime-masks then stops the gateway, executor socket, executor, and Minecraft.
+This prevents socket activation during the swap. Failures before commit roll back to the prior local directory. After the
+authenticated generation is committed, recovery never rolls it back; startup/readiness failure leaves the committed
+journal for a later recovery attempt. Keep an independent backup.
+
+Restore journals the pre-swap server inode/device identity, exact service state, boot/attempt identity, exact prior and
+active world-root generations, and their canonical root records. A staged archive may carry hidden canonical metadata for
+custom roots; restore records those reviewed roots durably, publishes the selected generation before activation, and
+removes the metadata file from the installed server tree. If the level name is unchanged, the full reviewed allowlist is
+preserved; if it changes, derived dimensions are combined only with reviewed additions. Precommit recovery atomically
+checkpoints the prior directory and exact prior root generation together before restoring services. Once the authenticated generation and restore floor are committed,
+recovery moves forward and never rolls the accepted world back. The boot generator masks all five service activation
+paths for every non-restoration phase, including after reboot, so incomplete evidence fails closed.
+
+Every new Drive backup is an immutable `.tar.gz` plus a detached `.tar.gz.manifest.json`. The strict canonical JSON
+manifest is authenticated with HMAC-SHA256 and binds the archive SHA-256 and byte size, exact archive and backup name,
+random backup ID, authenticated monotonic generation, UTC creation time, archive/manifest format versions, source EC2 instance ID, stable stack/server
+identity, and key ID. The root backup path uploads the archive first and the manifest last; the manifest is the completion
+marker. `latest` ignores Drive `ModTime`: it downloads and authenticates every bounded candidate manifest, rejects
+conflicting generations, and selects the greatest authenticated generation. Restore downloads the exact named pair and
+verifies canonical encoding, schema, server identity, HMAC key, generation, name, size, and digest before extraction and
+before stopping or replacing Minecraft. A changed archive (including `paper.jar` or a plugin), changed manifest, swapped
+name, cross-server manifest, unknown/retired key, or missing half of the pair fails closed.
+
+The root-only local generation checkpoint and accepted restore floor are mirrored to retained SSM String parameters
+`/minecraft/backup-generation-checkpoint` and `/minecraft/restore-generation-floor`. Both replicas are canonical and
+HMAC-authenticated with the same rotatable keyring. One surviving replica heals the other; missing or conflicting copies
+fail closed. Named and latest authenticated restores must be strictly newer than the accepted floor, so renaming or
+re-uploading an old valid pair cannot turn it into `latest`. Restore commits the floor and durable `committed` journal
+before unmasking any service or starting Minecraft. Crash recovery may roll back only precommit phases.
+
+The HMAC keyring is `/minecraft/backup-auth-keyring`, an SSM `SecureString` outside Drive and the EC2 root volume.
+`/minecraft/backup-server-identity` is stable stack-managed identity metadata. The EC2 role reads only those exact
+parameters, with KMS decryption scoped to the exact SecureString ARN. The Worker, lifecycle Lambda, agent gateway,
+executor, and Minecraft service cannot read the keyring. Only the root-owned `0750` helper fetches it; key material is not
+written to disk, put in argv/environment, archives/manifests, or logs. Stack deletion does not delete the externally
+provisioned SecureString; the reviewed teardown workflow owns disposal.
+
+### Authenticated recovery capsule and backup-state teardown policy
+
+The destroy inventory uses a closed exact-name classification for all backup state. The six exact SSM records
+`/minecraft/backup-server-identity`, `/minecraft/backup-generation-checkpoint`, `/minecraft/restore-generation-floor`,
+`/minecraft/backup-auth-keyring`, `/minecraft/backup-verifier-metadata`, and
+`/minecraft/backup-recovery-adoption-lock` form the authenticated recovery capsule outside Drive. They remain available
+through the final authenticated Drive backup or final EBS snapshot gate and remain after decommission by default.
+The capsule, state, verifier, and deployment provenance all use schema version 3. The manifest records their exact names, authenticated HMAC/state formats, key-ID source, and checkpoint/floor
+continuity, but never records key material or state secrets.
+The stack custom-resource delete callback is intentionally non-destructive so
+teardown, rather than CloudFormation, controls that order.
+
+The keyring is retained by default so retained authenticated archives and verify-only rotation keys remain recoverable.
+An operator may delete the capsule only by naming all six exact parameters with `--consent-delete-ssm`, then entering
+the second exact phrase printed after preservation evidence. The warning explicitly says that archives become
+unrecoverable. This is an exact-name decision, not a prefix or namespace delete.
+Pre-existing, unproven, lookalike, and otherwise unclassified parameters are
+preserved and block automated teardown. A rerun reuses the same final
+preservation evidence and deletes only the exact owned leftovers; an
+already-absent stack follows the same rule after its durable evidence or
+explicit second confirmation is present.
+
+The guarded setup/deploy path provisions an initial keyring if absent. Explicit operator provisioning and rotation use
+non-secret key IDs (never key material in arguments):
+
+```bash
+pnpm backup-auth:keyring -- provision --key-id initial-2026-09
+pnpm backup-auth:keyring -- rotate --key-id rotation-2027-01 --confirm-key-id rotation-2027-01
+```
+
+Rotation makes the new key the sole signer and retains older keys as `verify-only`, so old archives and durable state
+replicas remain verifiable and are rewritten with the active key on the next state advance. Do
+not remove a verify-only key while a retained backup uses it. The bounded keyring accepts eight keys; archive or expire
+backups before reaching that limit. SSM survives instance/root-volume destruction. To restore an operator-escrowed
+keyring envelope after account-level loss, first put the exact JSON in a root/operator-only `0600` file, verify target and
+recovery source out of band, then run:
+
+```bash
+pnpm backup-auth:keyring -- recover --from-file /secure/offline/keyring.json \
+  --confirm-parameter /minecraft/backup-auth-keyring
+```
+
+The command validates the complete keyring before replacing the SecureString and never prints its material. Keep escrow
+encrypted outside Drive, EC2, and this repository. Losing both the SSM recovery capsule and escrow makes the archives
+intentionally unrecoverable.
+
+For a replacement or recovery stack, first place the private capsule in a root/operator-only `0600` file and set
+`MC_BACKUP_RECOVERY_CAPSULE_FILE` when running setup. Setup authenticates the capsule MAC before importing the complete
+keyring (including every retained verifier key), server identity, verifier metadata, checkpoint, and restore floor into
+SSM. Existing records must match or be authenticated newer state; lower state is advanced and rollback/conflict is
+rejected. Adoption first claims the retained, account-scoped `/minecraft/backup-recovery-adoption-lock` with atomic
+`PutParameter(Overwrite=false)`; it does not use the replacement stack's lifecycle table. The claim binds the capsule
+digest, account, region, stack, key IDs, and monotonic generations. Every read/write phase rechecks that claim and
+SSM versions, so a concurrent generation advance is preserved and retried and a stale failure cannot undo a later
+backup. The claim is retained as durable recovery state, making a lost setup or CloudFormation response safe to rerun
+for the same capsule while a different capsule fails closed. A failed import is rolled back before deployment starts.
+Key material is never written to logs, deployment manifests, or environment artifacts; only non-secret content digests
+are recorded. CDK's post-stack custom resource verifies the already-activated claim and exact imported values without
+depending on the destroyed lifecycle table. The replacement therefore accepts old signed archives while the
+authenticated floor continues to reject replay or generation collisions. A replacement without this explicit adoption
+is refused. The verifier value `UNINITIALIZED` is the explicit first-install sentinel and is adoptable; any real,
+different verifier metadata is a conflict.
+
+All capsule writers—including checkpoint allocation, restore-floor commits, keyring rotation/recovery, capsule adoption,
+and DNS credential materialization—serialize through the account-scoped `/minecraft/backup-recovery-migration-lock`.
+The lock is an atomic SSM no-overwrite claim and each owner verifies its exact value before and after mutation. SSM writes
+also re-read the parameter version and final value, so a lost or concurrent write fails closed rather than silently
+overwriting newer recovery authority. Runtime checkpoint and floor writers use the same lock; do not bypass the reviewed
+helpers with direct `aws ssm put-parameter` commands.
+
+DNS credentials are setup-owned only after the pre-deployment manifest records an exact absent/owned observation. A
+pre-existing credential or `/minecraft/dns-mode` value with no matching manifest claim is preserved and blocks overwrite;
+provider changes delete only exact manifest-claimed parameters. The stack's `/minecraft/stack-ownership-claim` is likewise
+created with an atomic no-overwrite claim and is reconciled on retries, while the `McAwsClaimToken` CloudFormation tag
+must match the manifest before an existing stack is adopted.
+
+Backups created before this format remain unsigned persisted data and are not shown as authenticated backups. Normal
+named/latest restore rejects them. During planned downtime, a root operator may repeat one exact name as a separate
+confirmation:
+
+```bash
+sudo /usr/local/bin/mc-restore.sh --legacy-unsigned old-backup.tar.gz \
+  --confirm-legacy-unsigned old-backup.tar.gz
+```
+
+This override never accepts `latest`, emits a `SECURITY_AUDIT` warning, and is not exposed through panel, resume,
+scheduled, or agent flows. It excludes unauthenticated `paper.jar` and all `plugins/`, sourcing those executable inputs
+from the current local installation before profile reapplication. Treat all other legacy data as untrusted and replace it
+with a newly authenticated backup after validation.
+
+Hibernate is stricter than an ordinary backup: the host must have the current authenticated backup tooling, quiesce the
+runtime, and publish a fresh manifest bound to the exact hibernate operation and current instance/server identity. The
+Lambda validates the detached archive/manifest pair cryptographically, including its digest, non-zero monotonic
+generation, creation time, and restoreability metadata, before it can stop, detach, or delete the root volume. Missing,
+stale, tampered, manifest-less, ambiguous, or legacy-host results fail closed and preserve the volume. A cached pair is
+never used as a substitute for that exact fresh hibernate proof.
 
 ### Scheduled backup policy
 
@@ -86,6 +229,79 @@ This stack does not create a paid durable CloudTrail trail. AWS CloudTrail **Eve
 
 See [Server Profiles](SERVER_PROFILES.md) for when profile content is applied and how to validate it.
 
+### Host release integrity
+
+Bootstrap and existing-host maintenance consume one versioned host release from `/minecraft/server-profile-manifest`.
+The release contains the agent runtime, backup/restore/authentication helpers, world-root helper, host-operation
+contract, all cooperating scripts, and their systemd units/configuration. Its `release-manifest.json` and the installed
+`/var/lib/mc-aws/runtime-hashes.sha256` record the exact SHA-256 and byte size of every member. A missing, stale,
+extra, or digest-mismatched member fails closed; members from an older release are never mixed with a new one.
+Before activation, the canonical `dual-v1` lifecycle owner is acquired, the gateway is drained, authenticated executor
+idle is proven, and Minecraft, DNS, the executor socket/service, and gateway are masked and stopped. A root-owned durable
+maintenance marker is fsynced before activation; the boot generator masks all five paths after a reboot and the recovery
+unit only recreates the volatile gateway fence. A rerun consumes a matching committed journal idempotently or exactly
+rolls back an unresolved precommit journal, restoring only units recorded active and preserving enable/mask state.
+Corrupt evidence keeps boot inhibition in place. Validation-only deferred profiles and restore staging do not mutate
+live release, systemd, credential, runtime-link, or Minecraft destinations.
+
+### Executor receipt authority and indeterminate recovery
+
+The executor alone holds `/etc/mc-agent/executor-receipt-private.pem` through the
+`executor-receipt-private` systemd credential. The gateway, Minecraft process, runtime bearer, Worker, and deployment
+manifest receive no private receipt material. The public Ed25519 SPKI and its SHA-256-derived key ID are emitted as
+`/etc/mc-agent/executor-receipt-verifier.json`. Fresh setup reads that public file only after bootstrap, records it in
+`.mc-aws-deployment.json`, and writes the exact bounded verifier set to `MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS` before
+deploying the Worker. Existing-host `rollout-runtime` performs the same local manifest/env update and deliberately does
+not deploy the Worker automatically. A routine rollout that rediscovers the same receipt key ID, public key, and epoch
+is a no-op for receipt authority and requires no rotation cutoff. Every rollout still holds global lifecycle exclusion
+through host drain, activation, readiness, and receipt pinning. Before host mutation, standalone rollout promotes that
+lock to protected ownership and fsyncs `.mc-aws-runtime-rollout.json`. It fsyncs the authoritative manifest and both
+dotenv files before conditional release. If the host later becomes unavailable after verifier pinning, run
+`pnpm host:upgrade -- reconcile-runtime-receipt` with the exact stack, instance, and pins confirmations recorded by the
+failed rollout; this local-only reconciliation does not require an SSM-online host and deliberately retains both
+maintenance authorities. Rerun the exact `rollout-runtime` command when the host is available to reconcile host release
+and conditional lifecycle-lock release.
+If verifier authority is new or rotated, release keeps the executor socket/service and gateway disabled so the
+undeployed Worker cannot receive an effect signed by unknown authority. Deploy the reviewed Worker verifier set, then
+rerun the exact rollout; unchanged verifier authority allows agent service activation.
+
+An indeterminate executor effect or backup fence has **no time-based recovery**. Do not delete the journal, operation,
+lock, or credential; do not edit DynamoDB/SSM state; and do not synthesize a terminal result. The fence remains held even
+after service timeouts, lock expiry timestamps, process restart horizons, or arbitrarily long wall-clock delay. First
+reconcile the exact invocation normally. If that cannot produce an authoritative terminal receipt, inspect the host and
+durable operation identity, then use the authorized clean-start path only after deciding that a hard stop is required:
+
+1. Keep new agent work quiesced. Runtime-mask and stop `mc-agent-gateway.service`, `mc-agent-executor.socket`, and
+   `mc-agent-executor.service`. Confirm all three units are inactive and masked. This hard stop kills the executor cgroup;
+   do not use the procedure while any unit can still socket-activate.
+2. As root, run
+   `mc-agent-install.sh rotate-clean-start-epoch --confirm-hard-stop ROTATE-EXECUTOR-CLEAN-START-EPOCH`.
+   The command independently refuses unless all three units are inactive and masked, atomically creates a new root-only
+   epoch, and leaves services masked.
+3. Unmask and start the executor socket/service and gateway through the reviewed maintenance path. Reconcile the same
+   invocation. The changed root-controlled epoch permits only a signed `clean-start-no-active` receipt for the old
+   journal owner; the Worker still checks the exact runtime/session/task/lease/invocation/backup/lock generations before
+   atomically releasing anything. If reconciliation or publication fails, retain the fence and investigate.
+
+Receipt-key rotation uses the same hard-stop prerequisite, but a service stop alone is not sufficient. Before a bounded
+history entry is retired or removed, the existing-host rotation path scans the current retiring key (not just older
+history) in strongly consistent durable operation state and in the authenticated executor and gateway journals. Committed
+results without terminal receipts, gateway handoffs, backup fences, or incomplete terminal-publication evidence all
+remain blockers; a complete durable receipt is the boundary that makes an old private signer unnecessary. Migrate or
+reconcile that operation first, then retain the old verifier until no in-flight receipt can use it. The host keeps a
+root-only copy and a 0600 crash-safe rotation journal until the new private key and epoch are durably published; an
+interrupted precommit restores the old key before any credential repair. The host increments its root-owned receipt-key epoch atomically
+with the new private key. Run
+`mc-agent-install.sh rotate-receipt-key --confirm-hard-stop ROTATE-EXECUTOR-RECEIPT-KEY`, capture only the emitted public
+verifier JSON, and add it with `scripts/shared/deployment-manifest.mjs executor-receipt --key-id ... --public-key-spki ...`.
+Pass an explicit `--rotation-cutoff-at` for the prior key. That command derives and checks the key ID and epoch, makes the
+new key current, retains at most two prior verifiers only through their recorded cutoff, and rejects mismatched or duplicate
+material. Active operations are renewed onto the new fence epoch before dispatch; an operation that remains on the old epoch
+must retain that exact old private key and is accepted only through its cutoff. Put `executor-receipt-state`'s exact JSON into
+`MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS`, deploy and validate the reviewed Worker environment, and only then unmask agent
+services. Never remove a prior verifier while an operation signed by it can remain in flight; if three retained keys are
+already present, quiesce and reconcile old operations before rotating again.
+
 ## SSM access
 
 Use the panel first. For a running instance, advanced access is available through AWS Systems Manager:
@@ -123,12 +339,18 @@ The standard deploy command loads `.env.production` with the same target-preserv
 The DynamoDB lifecycle-lock and operation-state rollout is a mixed-version `dual-v1` migration. Deploy it in this order; do not deploy the new Worker before its AWS tables, IAM permissions, Lambda environment, and protocol metadata exist:
 
 1. Quiesce new panel and email lifecycle actions, then run `pnpm cdk:diff`. Refuse unexpected EC2 replacement or destructive table changes. The lifecycle lock table must synthesize `UpdateReplacePolicy: Retain` and `DeletionPolicy: Delete`: replacement rollback stays safe without leaving PII/billing after teardown.
-2. Before a Lambda release depends on a new host helper, run the confirmed `pnpm host:upgrade -- rollout-runtime ...` stage. It takes a legacy-compatible maintenance lock, checks `dual-v1` metadata/current lock state when the table exists, transfers checksum-verified `mc-wait-ready.sh` and the rollout helper through SSM, applies exact bootstrap pins idempotently, and verifies dependency versions, runtime hashes, and readiness. The exact lock is released only after every check succeeds. On partial upgrade it is deliberately non-expiring for practical purposes, so lifecycle operations cannot resume automatically against mixed helpers/dependencies; do not delete it until the old files are restored or a complete reviewed rollout is proven.
+2. Before enabling a Worker/panel release that depends on new host runtime, publish the reviewed content-addressed agent ZIP and atomic stack manifest through the reviewed non-instance infrastructure bridge, then immediately run the confirmed `pnpm host:upgrade -- rollout-runtime ...` stage. The command locally rebuilds the reviewed ZIP and requires its digest, exact size, and bundle-manifest digest to equal the published manifest; a previous live SSM artifact is never accepted as a substitute. It takes a legacy-compatible maintenance lock, checks `dual-v1` metadata/current lock state when the table exists, transfers checksum-verified helpers through SSM, and delegates one bounded host transaction to the helper from that exact release. The transaction journals content-addressed pre-state for every cooperating destination and records service enabled/masked/active state before quiescing. It verifies dependency versions, runtime hashes, the exact runtime transition, installed manifest, three-way world roots, loopback Minecraft protocol and plugin initialization, and functional local executor/gateway sockets before commit. Minecraft readiness runs from a private copy/reflink of the complete server tree while live Minecraft remains stopped, so startup migrations, plugin data, player activity, and world writes cannot escape before the journal commit. `active` alone is never readiness. Existing valid custom roots are preserved; malformed or conflicting configs stop the rollout and restore its backed-up inputs. No-transition failures never invoke runtime rollback, and stale global previous-runtime markers are never consulted. A verified rollback restores exact prior state; failed rollback leaves the attempt journal and runtime masks in place. The exact lifecycle lock is released only after every check succeeds. Publication, transfer, digest, activation, root equality, or health failure keeps the Worker disabled and leaves the lock for recovery; do not delete it until old inputs are restored or a complete reviewed rollout is proven.
 3. Deploy AWS infrastructure with the reviewed non-instance bridge or replacement path. The metadata custom resource initializes `protocol#dual-v1` before the lifecycle Lambda update. The old Worker remains compatible because the rollout preserves `/minecraft/server-action` and `/minecraft/server-action-delete-claim/*`.
 4. Persist `InstanceId`, `LifecycleLockTableName`, and `OperationStateTableName` before any Worker deploy. Fresh setup and host replacement do this automatically. For an existing bridge, run `pnpm migrate:existing -- --region "$MC_AWS_REGION" --stage sync-worker-env --execute --confirm-stack-id "$STACK_ID" --env-file .env.production`, then `pnpm bootstrap:check -- --env-file .env.production`. The table names become validated Wrangler plain-text variables, not Worker secrets; the bootstrap digest is deploy provenance only.
 5. Run Worker environment validation, deploy the Worker, and verify one lifecycle action plus operation polling before reopening mutations.
 
 For rollback, restore the previous Worker version first, while the SSM compatibility lock and its IAM permissions still exist. Quiesce and drain lifecycle deliveries before a reviewed Lambda/CDK rollback; do not apply an old template that deletes bridge metadata, retained lifecycle state, operation state, or SSM compatibility paths while current deliveries can still run. Recovery refuses to report success while either lifecycle lock remains active or malformed.
+
+### Teardown lifecycle ordering
+
+`pnpm destroy:execute` is itself a global lifecycle operation. After read-only inventory and exact confirmations, it records a stable destroy operation/lock identity in `.mc-aws-deployment.json`, conditionally acquires the `dual-v1` DynamoDB lock with a monotonically incremented fencing token, mirrors it to SSM, marks it non-expiry-takeover eligible, and renews its lease generation during long preservation/deletion waits. Any current lifecycle owner or active agent effect blocks acquisition. Once acquired, new or delayed start/resume/restore/backup/hibernate/stop/allowlist work, runtime rollout, and agent backup/fence acquisition fail closed against that owner.
+
+Under the barrier, teardown stops new agent leases at the host gateway, proves the executor effect journal and shared backup/restore flock idle, and stops the executor socket/service before final preservation. It durably enters `preserving` before the final Drive backup or EBS snapshot. From that phase onward failures retain resumable destroy state; reruns reuse only preservation created under the same fenced operation, so no post-preservation host mutation can force an unsafe duplicate or stale snapshot. Worker routes/Worker are disabled before runtime IAM credentials are revoked, and both precede exact StackId deletion. The barrier is never automatically released. Explicit `--safe-abort-destroy` is available only before preservation, and the full recovery contract is in [Safe Teardown](TEARDOWN.md).
 
 Paper, rclone, mcstatus, and the AL2023 image never refresh during a routine deployment. Follow [Reviewed Bootstrap and OS Upgrades](BOOTSTRAP_UPGRADES.md) for checksum-verified artifact changes and the intentional OS security-maintenance path.
 
@@ -140,14 +362,24 @@ The required S4 check forces an authenticated status snapshot write, then requir
 
 ## Operation record cleanup
 
-Current operation records live in the DynamoDB operation-state table and are eligible for deletion 30 days after their last update by default. DynamoDB TTL is eventual; the operator cleanup scans the exact table and conditionally deletes only the version/timestamp it reviewed. Always preview first:
+Current operation records live in the DynamoDB operation-state table. Nonterminal records have no TTL and cannot be
+retention-deleted. Terminal records without retained lifecycle identity become TTL-eligible after 30 days by default;
+terminal records that still carry lifecycle identity remain TTL-free for reviewed cleanup. Compatibility cleanup also
+retains a terminal mirror while its exact authoritative DynamoDB lifecycle lock is still owned. DynamoDB TTL is eventual; the
+operator cleanup first proves that both configured table names are outputs of the exact claim-tagged stack in
+`.mc-aws-deployment.json`, then scans the exact operation table and conditionally deletes only the version/timestamp it
+reviewed. Always preview first:
 
 ```bash
 pnpm operations:cleanup -- --dry-run
 pnpm operations:cleanup
 ```
 
-The command requires `MC_OPERATION_STATE_TABLE_NAME` and a local operator identity with table-scoped `dynamodb:Scan` and `dynamodb:DeleteItem`; these permissions are intentionally not granted to the Worker. Use `--retention-days=<days>` or `MC_OPERATION_STATE_RETENTION_DAYS` to change the cutoff and `--max-deletions=<count>` to bound one run.
+The command requires `MC_OPERATION_STATE_TABLE_NAME`, `MC_LIFECYCLE_LOCK_TABLE_NAME`, the secure deployment manifest,
+and a local operator identity with `cloudformation:DescribeStacks` plus table-scoped `dynamodb:Scan` and
+`dynamodb:DeleteItem`; these permissions are intentionally not granted to the Worker. Use
+`--retention-days=<days>` or `MC_OPERATION_STATE_RETENTION_DAYS` to change the cutoff and
+`--max-deletions=<count>` to bound one run.
 
 During the DynamoDB dual-read migration, legacy PII-bearing SSM records remain readable as fallback. Preview and clean them only after quiescing operations and keeping the required rollback/retention window:
 

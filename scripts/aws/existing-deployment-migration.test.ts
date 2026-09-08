@@ -70,19 +70,37 @@ describe("existing deployment Worker output synchronization", () => {
 });
 
 describe("dual-v1 rolling deployment compatibility", () => {
-  it("initializes bridge metadata before Lambda, exports handoff values, and preserves old Worker SSM acquisition order", () => {
+  it("orders bridge cutover barriers, exports handoff values, and preserves old Worker SSM acquisition order", () => {
     const stackSource = readFileSync(path.resolve("infra/lib/minecraft-stack.ts"), "utf8");
     const workerLockSource = readFileSync(path.resolve("lib/server-action-lock.ts"), "utf8");
     const lambdaSource = readFileSync(path.resolve("infra/src/lambda/StartMinecraftServer/index.js"), "utf8");
+    const lifecycleLockSource = readFileSync(
+      path.resolve("infra/src/lambda/StartMinecraftServer/lifecycle-lock.js"),
+      "utf8"
+    );
     const migrationCli = readFileSync(path.resolve("scripts/aws/migrate-existing-deployment.ts"), "utf8");
 
-    expect(stackSource).toContain("startLambda.node.addDependency(migrateLockResource)");
+    expect(stackSource).not.toContain("startLambda.node.addDependency(migrateLockResource)");
+    for (const denyPolicy of [
+      "migrateLockLegacyBridgeDenyPolicy",
+      "ec2LegacyBridgeDenyPolicy",
+      "startLambdaLegacyBridgeDenyPolicy",
+      "workerRuntimeLegacyBridgeDenyPolicy",
+    ]) {
+      expect(stackSource).toContain(`migrateLockResource.node.addDependency(${denyPolicy})`);
+    }
+    expect(stackSource).toContain("const startLambdaLegacyBridgeDenyPolicy = new iam.Policy");
+    expect(stackSource).toContain("statements: [legacyBridgeMutationDenyStatement()]");
+    expect(lambdaSource).not.toContain("bridgeLegacyLifecycleLock");
+    expect(lifecycleLockSource).toContain("async function acquireLegacyBridgeLock");
+    expect(lifecycleLockSource).not.toContain("PutParameterCommand");
+    expect(lifecycleLockSource).not.toContain("DeleteParameterCommand");
     expect(stackSource).toContain('new cdk.CfnOutput(this, "LifecycleLockTableName"');
     expect(stackSource).toContain('new cdk.CfnOutput(this, "OperationStateTableName"');
     expect(workerLockSource.indexOf("acquireLegacyBridgeLock")).toBeLessThan(
       workerLockSource.indexOf("acquireServerActionLock")
     );
-    expect(lambdaSource).toContain("bridgeLegacyLifecycleLock");
+    expect(lambdaSource).toContain("claimResumeIntentPointer");
     expect(migrationCli).toContain('"sync-worker-env"');
     expect(migrationCli).toContain("Synchronized INSTANCE_ID and DynamoDB table outputs");
   });

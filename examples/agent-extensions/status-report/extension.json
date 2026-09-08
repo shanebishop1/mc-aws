@@ -1,0 +1,67 @@
+{
+  "schemaVersion": 1,
+  "extensionId": "mc-aws.example.status-report",
+  "version": "1.0.0",
+  "compatibility": {
+    "contractSchemaVersions": [1],
+    "platforms": ["mc-aws-agent"]
+  },
+  "provenance": {
+    "source": "mc-aws",
+    "reference": "examples/agent-extensions/status-report/extension.json",
+    "integrity": "sha256:9e18618ef2e16379c95471066533f81dacc8c8b42f7dd462b16482dfe30f01f8"
+  },
+  "tools": [
+    {
+      "schemaVersion": 1,
+      "toolId": "example.status-report.read",
+      "displayName": "Read server status inputs",
+      "description": "Reads operator-selected status files inside the mounted Minecraft workspace.",
+      "capability": "workspace.read",
+      "sideEffect": "read",
+      "inputSchema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["paths"],
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": { "type": "string" },
+            "maxItems": 10
+          }
+        }
+      }
+    }
+  ],
+  "skills": [
+    {
+      "schemaVersion": 1,
+      "skillId": "mc-aws.example.status-report",
+      "version": "1.0.0",
+      "displayName": "Minecraft status report",
+      "description": "Summarizes selected workspace status files without changing the server.",
+      "compatibility": {
+        "contractSchemaVersions": [1],
+        "platforms": ["mc-aws-agent"]
+      },
+      "instructions": "Read only operator-selected workspace-relative files. Cite evidence, do not mutate state, and do not request credentials, host paths, metadata, cloud APIs, deployment, or provider secrets.",
+      "resources": ["SKILL.md"],
+      "requestedTools": ["example.status-report.read"],
+      "provenance": {
+        "source": "mc-aws",
+        "reference": "examples/agent-extensions/status-report/extension.json",
+        "integrity": "sha256:9e18618ef2e16379c95471066533f81dacc8c8b42f7dd462b16482dfe30f01f8"
+      }
+    }
+  ],
+  "hooks": [
+    {
+      "schemaVersion": 1,
+      "hookId": "mc-aws.example.status-report.evidence",
+      "hookPoint": "after-invocation",
+      "priority": 500,
+      "failureBehavior": "fail-closed",
+      "handlerRef": "mc-aws.record-read-evidence"
+    }
+  ]
+}

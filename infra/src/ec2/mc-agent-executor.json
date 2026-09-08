@@ -1,0 +1,19 @@
+{
+  "schemaVersion": 1,
+  "socketPath": "/run/mc-agent/executor.sock",
+  "downloadSocketPath": "/run/mc-agent-download/download.sock",
+  "gatewayPublicKeyPath": "/config/gateway-public.pem",
+  "backupFencePublicKeyPath": "/config/backup-fence-public.pem",
+  "journalCredentialName": "executor-journal-hmac",
+  "receiptCredentialName": "executor-receipt-private",
+  "cleanStartEpochCredentialName": "executor-clean-start-epoch",
+  "receiptKeyIdPath": "/config/executor-receipt-key-id",
+  "receiptKeyEpochPath": "/config/executor-receipt-key-epoch",
+  "statePath": "/scratch/executor-effect-journal.json",
+  "workspaceRoot": "/workspace",
+  "scratchRoot": "/scratch",
+  "persistentWorldRoots": ["world", "world_nether", "world_the_end"],
+  "allowedExecutables": {
+    "workspace": "/runtime/commands/workspace"
+  }
+}

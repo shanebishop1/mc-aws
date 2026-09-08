@@ -47,12 +47,15 @@ describe("Cloudflare legacy secret pruning deployment contract", () => {
 
   it.each([
     ["put_secret", "wrangler secret put"],
-    ["put_secret_base64", "wrangler secret put"],
+    ["put_secret_from_selected_env", "wrangler secret put"],
     ["prune_obsolete_worker_secrets_bulk", "wrangler secret bulk"],
   ])("does not let successful identity recording mask a failed mutation in %s", (helperName, mutationCommand) => {
     const body = helperBody(helperName);
     const mutation = body.indexOf(mutationCommand);
-    const failurePropagation = body.indexOf("|| return 1", mutation);
+    const failurePropagation = Math.max(
+      body.indexOf("|| return 1", mutation),
+      body.indexOf("then\n    return 1", mutation)
+    );
     const identityRecording = body.indexOf("record_worker_deployment_identity");
 
     expect(mutation).toBeGreaterThan(-1);

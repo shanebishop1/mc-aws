@@ -26,6 +26,11 @@ function mutationHandlers(): Map<string, string> {
 }
 
 const cookieAuthenticatedMutations = [
+  "POST /api/agent/sessions",
+  "POST /api/agent/sessions/[sessionId]/approvals/[approvalId]/decision",
+  "POST /api/agent/sessions/[sessionId]/approvals/[approvalId]/revoke",
+  "POST /api/agent/sessions/[sessionId]/cancel",
+  "POST /api/agent/sessions/[sessionId]/continue",
   "POST /api/backup",
   "PUT /api/emails/allowlist",
   "POST /api/hibernate",
@@ -40,17 +45,34 @@ const cookieAuthenticatedMutations = [
   "POST /api/stop",
 ] as const;
 
+const runtimeBearerMutations = [
+  "POST /api/agent/runtime/backups",
+  "POST /api/agent/runtime/leases/[leaseId]/[action]",
+  "POST /api/agent/runtime/work",
+] as const;
+
 describe("state-changing API same-origin coverage", () => {
   it("keeps an explicit inventory of every state-changing route handler", () => {
     expect([...mutationHandlers().keys()].sort()).toEqual(
-      [...cookieAuthenticatedMutations, "POST /api/auth/logout"].sort()
+      [...cookieAuthenticatedMutations, ...runtimeBearerMutations, "POST /api/auth/logout"].sort()
     );
   });
 
   it.each(cookieAuthenticatedMutations)("protects %s through centralized cookie authentication", (handler) => {
     const source = mutationHandlers().get(handler);
     expect(source).toBeDefined();
-    expect(source).toMatch(/require(?:Allowed|Admin)\s*\(/);
+    expect(source).toMatch(/(?:require(?:Allowed|Admin)|authenticateAgentAdmin)\s*\(/);
+  });
+
+  it("keeps the agent authentication wrapper admin-only", () => {
+    const source = readFileSync(path.resolve(process.cwd(), "lib/agent/control-plane/http.ts"), "utf8");
+    expect(source).toMatch(/requireAdmin\s*\(request\)/);
+  });
+
+  it.each(runtimeBearerMutations)("protects %s with the non-cookie runtime bearer", (handler) => {
+    const source = mutationHandlers().get(handler);
+    expect(source).toBeDefined();
+    expect(source).toMatch(/authenticateAgentRuntime\s*\(/);
   });
 
   it("protects logout before clearing the session cookie", () => {

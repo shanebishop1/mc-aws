@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { pathToFileURL } from "node:url";
+import { type BackendMode, parseBackendMode } from "@/lib/runtime-config-schema";
 import dotenv from "dotenv";
 import { readWranglerConfig } from "./wrangler-config";
 
@@ -20,6 +21,7 @@ interface PrepareWranglerConfigOptions {
   runtimeStateSnapshotKvPreviewId: string;
   panelHostingMode: PanelHostingMode;
   customWorkersDevEnabled?: boolean;
+  backendMode?: BackendMode;
   lifecycleLockTableName: string;
   operationStateTableName: string;
 }
@@ -133,27 +135,41 @@ export const buildWranglerDeployArgs = ({
   configPath,
   workerName,
   panelHostingMode,
-  customHostname,
 }: {
   configPath: string;
   workerName: string;
   panelHostingMode: PanelHostingMode;
-  customHostname?: string;
 }): string[] => {
   validateWorkerName(workerName);
   if (!panelHostingModes.includes(panelHostingMode)) {
     throw new Error("Panel hosting mode must be workers_dev or custom.");
   }
   const args = ["deploy", "--config", configPath, "--name", workerName];
-
-  if (panelHostingMode === "custom") {
-    if (!customHostname || !hostnamePattern.test(customHostname.toLowerCase()) || customHostname.includes("/")) {
-      throw new Error("A valid custom panel hostname is required for routed deployment.");
-    }
-    args.push("--route", `${customHostname.toLowerCase()}/*`);
-  }
-
   return args;
+};
+
+export const bindWranglerDeploymentAttestation = (
+  configPath: string,
+  artifactMerkleSha256: string,
+  receiptVerifierSetSha256: string,
+  uploadConfigSha256?: string
+): Record<string, unknown> => {
+  if (!/^[a-f0-9]{64}$/.test(artifactMerkleSha256) || !/^[a-f0-9]{64}$/.test(receiptVerifierSetSha256)) {
+    throw new Error("Worker deployment attestation digests must be lowercase SHA-256 values.");
+  }
+  if (uploadConfigSha256 !== undefined && !/^[a-f0-9]{64}$/.test(uploadConfigSha256)) {
+    throw new Error("Worker upload config attestation digest must be a lowercase SHA-256 value.");
+  }
+  const config = readWranglerConfig(configPath);
+  const vars = config.vars && typeof config.vars === "object" && !Array.isArray(config.vars) ? config.vars : {};
+  config.vars = {
+    ...vars,
+    MC_AWS_ARTIFACT_MERKLE_SHA256: artifactMerkleSha256,
+    MC_AWS_RECEIPT_VERIFIER_SET_SHA256: receiptVerifierSetSha256,
+    ...(uploadConfigSha256 === undefined ? {} : { MC_AWS_UPLOAD_CONFIG_SHA256: uploadConfigSha256 }),
+  };
+  fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
+  return config;
 };
 
 export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOptions): Record<string, unknown> => {
@@ -171,6 +187,10 @@ export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOption
   }
   if (!dynamoTableNamePattern.test(options.operationStateTableName)) {
     throw new Error("MC_OPERATION_STATE_TABLE_NAME must be a valid DynamoDB table name.");
+  }
+  const backendMode = options.backendMode ?? "aws";
+  if (backendMode !== "aws" || parseBackendMode(backendMode) !== "aws") {
+    throw new Error('MC_BACKEND_MODE must be "aws" for a production Worker deployment.');
   }
 
   const config = readWranglerConfig(options.sourcePath);
@@ -190,6 +210,7 @@ export const prepareWranglerDeployConfig = (options: PrepareWranglerConfigOption
   const vars = config.vars && typeof config.vars === "object" && !Array.isArray(config.vars) ? config.vars : {};
   config.vars = {
     ...vars,
+    MC_BACKEND_MODE: backendMode,
     MC_LIFECYCLE_LOCK_TABLE_NAME: options.lifecycleLockTableName,
     MC_OPERATION_STATE_TABLE_NAME: options.operationStateTableName,
   };
@@ -290,6 +311,7 @@ const runCli = (): void => {
       runtimeStateSnapshotKvPreviewId: getArg(args, "--kv-preview-id"),
       panelHostingMode: getArg(args, "--mode") as PanelHostingMode,
       customWorkersDevEnabled: getArg(args, "--custom-workers-dev") === "true",
+      backendMode: args.includes("--backend-mode") ? (getArg(args, "--backend-mode") as BackendMode) : "aws",
       lifecycleLockTableName: getArg(args, "--lifecycle-lock-table"),
       operationStateTableName: getArg(args, "--operation-state-table"),
     });
@@ -301,9 +323,18 @@ const runCli = (): void => {
       configPath: getArg(args, "--config"),
       workerName: getArg(args, "--worker-name"),
       panelHostingMode: getArg(args, "--mode") as PanelHostingMode,
-      customHostname: args.includes("--hostname") ? getArg(args, "--hostname") : undefined,
     });
     process.stdout.write(`${deploymentArgs.join("\n")}\n`);
+    return;
+  }
+
+  if (command === "bind-attestation") {
+    bindWranglerDeploymentAttestation(
+      getArg(args, "--config"),
+      getArg(args, "--artifact-merkle-sha256"),
+      getArg(args, "--receipt-verifier-set-sha256"),
+      args.includes("--upload-config-sha256") ? getArg(args, "--upload-config-sha256") : undefined
+    );
     return;
   }
 

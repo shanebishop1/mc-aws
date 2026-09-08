@@ -6,9 +6,63 @@ export const DEFAULT_PROFILE_DIRECTORY = "config";
 export const LOCAL_PROFILE_DIRECTORY = "server-profile";
 export const PROFILE_LIMITS = {
   files: 2_000,
+  directories: 512,
+  pathDepth: 32,
   fileBytes: 32 * 1024 * 1024,
   totalBytes: 128 * 1024 * 1024,
 } as const;
+
+/** Only these repository directories can be selected without an external approval. */
+export const APPROVED_REPOSITORY_PROFILE_DIRECTORIES = [DEFAULT_PROFILE_DIRECTORY, LOCAL_PROFILE_DIRECTORY] as const;
+export const APPROVED_EXTERNAL_PROFILE_ENV = "MC_SERVER_PROFILE_APPROVED_EXTERNAL_PATH";
+
+const allowedRootFiles = new Set([
+  "banned-ips.json",
+  "banned-players.json",
+  "bukkit.yml",
+  "commands.yml",
+  "eula.txt",
+  "help.yml",
+  "ops.json",
+  "paper-global.yml",
+  "paper-world-defaults.yml",
+  "permissions.yml",
+  PROFILE_MANIFEST_NAME,
+  "server-icon.png",
+  "server.properties",
+  "spigot.yml",
+  "usercache.json",
+  "whitelist.json",
+]);
+// These tracked repository controls share config/ with the default profile but
+// are never copied into the Minecraft asset. They are still scanned when config/
+// is used as the source so a repository control file cannot smuggle secrets into
+// the staging tree.
+const repositorySupportFiles = new Set(["bootstrap-pins.json", "mise-pins.json"]);
+const allowedDirectories = new Set([
+  "config",
+  "datapacks",
+  "plugins",
+  "resourcepacks",
+  "world",
+  "world_nether",
+  "world_the_end",
+]);
+const allowedExtensions = new Set([
+  ".cfg",
+  ".conf",
+  ".ini",
+  ".json",
+  ".json5",
+  ".mcfunction",
+  ".mcmeta",
+  ".png",
+  ".properties",
+  ".toml",
+  ".txt",
+  ".yml",
+  ".yaml",
+]);
 
 export interface PluginLockEntry {
   name: string;
@@ -32,19 +86,23 @@ export interface ValidatedServerProfile {
 const forbiddenBasename = (name: string): boolean => {
   const lower = name.toLowerCase();
   return (
+    lower === ".agents" ||
     lower === ".git" ||
+    lower === ".local-artifacts" ||
     lower === "rclone.conf" ||
     lower === "credentials" ||
     lower === "credentials.json" ||
     lower === "id_rsa" ||
     lower === "id_ed25519" ||
-    lower.includes("credential") ||
     lower.endsWith(".pem") ||
     lower.endsWith(".key") ||
     lower.endsWith(".p12") ||
     lower.endsWith(".pfx") ||
     lower.endsWith(".jar") ||
-    /^\.env(?:\.|$)/i.test(name)
+    /^(?:\.env|env)(?:\.|$)/i.test(name) ||
+    /^(?:\.?mock-state\.json)(?:\.|$)/i.test(name) ||
+    /(?:^|[-_.])credentials?(?:$|[-_.])/i.test(name) ||
+    /(?:^|[-_.])oauth(?:$|[-_.])/i.test(name)
   );
 };
 
@@ -95,6 +153,7 @@ export function validatePluginLock(value: unknown): PluginLock {
       (url.port && url.port !== "443") ||
       !url.pathname ||
       url.pathname === "/" ||
+      !url.pathname.toLowerCase().endsWith(".jar") ||
       entry.url !== url.toString()
     ) {
       throw new Error(`plugins[${index}].url must be canonical HTTPS without credentials, query, or fragment.`);
@@ -141,9 +200,36 @@ function validatePlayerList(value: unknown, file: string): void {
   }
 }
 
+const isWithin = (candidate: string, parent: string): boolean => {
+  const relative = path.relative(parent, candidate);
+  return relative === "" || (!relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative));
+};
+
+function assertSecureExternalPath(directory: string, approvedRoot: string): void {
+  if (!isWithin(directory, approvedRoot)) {
+    throw new Error("MC_SERVER_PROFILE_DIR must resolve within the approved external profile path.");
+  }
+  const currentUid = typeof process.getuid === "function" ? process.getuid() : undefined;
+  let cursor = directory;
+  while (true) {
+    const stat = fs.lstatSync(cursor);
+    if (!stat.isDirectory() || stat.isSymbolicLink())
+      throw new Error("Approved external profile path must contain real directories.");
+    if (currentUid !== undefined && stat.uid !== currentUid && stat.uid !== 0) {
+      throw new Error("Approved external profile path must be owned by the operator or root.");
+    }
+    if ((stat.mode & 0o022) !== 0) throw new Error("Approved external profile path has an insecure writable parent.");
+    const parent = path.dirname(cursor);
+    if (cursor === approvedRoot) break;
+    if (parent === cursor) throw new Error("Approved external profile path has an invalid trust root.");
+    cursor = parent;
+  }
+}
+
 export function resolveServerProfileDirectory(
   rootDirectory: string,
-  configured = process.env.MC_SERVER_PROFILE_DIR
+  configured = process.env.MC_SERVER_PROFILE_DIR,
+  approvedExternalPath = process.env[APPROVED_EXTERNAL_PROFILE_ENV]
 ): string {
   const root = fs.realpathSync(rootDirectory);
   const explicit = configured?.trim();
@@ -151,18 +237,38 @@ export function resolveServerProfileDirectory(
     explicit ||
     (fs.existsSync(path.join(root, LOCAL_PROFILE_DIRECTORY)) ? LOCAL_PROFILE_DIRECTORY : DEFAULT_PROFILE_DIRECTORY);
   const candidate = path.resolve(root, selected);
+  if (!fs.existsSync(candidate)) throw new Error("MC_SERVER_PROFILE_DIR must point to an existing profile directory.");
   if (fs.lstatSync(candidate).isSymbolicLink()) {
     throw new Error("MC_SERVER_PROFILE_DIR must not be a symlink.");
   }
   const actual = fs.realpathSync(candidate);
-  if (actual === root || actual === path.parse(actual).root) {
-    throw new Error("MC_SERVER_PROFILE_DIR must resolve to a profile subdirectory, not a worktree or filesystem root.");
+  const approvedRepositoryDirectories = APPROVED_REPOSITORY_PROFILE_DIRECTORIES.filter((name) =>
+    fs.existsSync(path.join(root, name))
+  ).map((name) => fs.realpathSync(path.join(root, name)));
+  if (approvedRepositoryDirectories.some((approvedRoot) => isWithin(actual, approvedRoot))) return actual;
+  if (actual === root || actual === path.parse(actual).root || !explicit) {
+    throw new Error(
+      "MC_SERVER_PROFILE_DIR must select an approved profile subdirectory under config/ or server-profile/, not an arbitrary root."
+    );
   }
+  if (!approvedExternalPath?.trim()) {
+    throw new Error(`External profiles require ${APPROVED_EXTERNAL_PROFILE_ENV} as explicit operator approval.`);
+  }
+  const approvedCandidate = path.resolve(root, approvedExternalPath.trim());
+  if (!fs.existsSync(approvedCandidate) || fs.lstatSync(approvedCandidate).isSymbolicLink()) {
+    throw new Error(`${APPROVED_EXTERNAL_PROFILE_ENV} must name an existing real directory.`);
+  }
+  const approved = fs.realpathSync(approvedCandidate);
+  if (!isWithin(actual, approved)) {
+    throw new Error("MC_SERVER_PROFILE_DIR must resolve within the approved external profile path.");
+  }
+  assertSecureExternalPath(actual, approved);
   return actual;
 }
 
 const containsForbiddenCredential = (descriptor: number): boolean => {
-  const pattern = /-----BEGIN [A-Z ]{0,64}PRIVATE KEY-----|aws_access_key_id\s*=|github_token\s*=/i;
+  const pattern =
+    /-----BEGIN [A-Z0-9 ]{0,64}PRIVATE KEY-----|["']?\b(?:aws_(?:access_key_id|secret_access_key)|github_token|client[_-]?secret|access[_-]?token|refresh[_-]?token|oauth(?:[_-]?(?:token|secret|client))?|securestring|password|secret|token|api[_-]?key)["']?[ \t]*[:=][ \t]*(?:"[^"\r\n]+"|'[^'\r\n]+'|[^\s,}\]]+)/i;
   const buffer = Buffer.alloc(64 * 1024);
   let carry = "";
   let position = 0;
@@ -172,9 +278,42 @@ const containsForbiddenCredential = (descriptor: number): boolean => {
     position += bytesRead;
     const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
     if (pattern.test(text)) return true;
-    carry = text.slice(-256);
+    carry = text.slice(-512);
   }
 };
+
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: fail-closed path allowlisting is intentionally explicit.
+function validateAllowlistedProfilePath(root: string, target: string, isDirectory: boolean): void {
+  const relative = path.relative(root, target);
+  const parts = relative.split(path.sep).filter(Boolean);
+  if (parts.length === 0 || parts.length > PROFILE_LIMITS.pathDepth) {
+    throw new Error(`Profile path is outside the allowlisted depth: ${relative || "."}.`);
+  }
+  const [topLevel] = parts;
+  if (parts.length === 1 && isDirectory) {
+    if (!allowedDirectories.has(topLevel.toLowerCase())) {
+      throw new Error(`Profile directory is not an allowlisted Minecraft path: ${relative}.`);
+    }
+    return;
+  }
+  if (parts.length === 1 && !isDirectory) {
+    if (!allowedRootFiles.has(topLevel.toLowerCase()) && !repositorySupportFiles.has(topLevel.toLowerCase())) {
+      throw new Error(`Profile file is not an allowlisted Minecraft path: ${relative}.`);
+    }
+    return;
+  }
+  if (!allowedDirectories.has(topLevel.toLowerCase())) {
+    throw new Error(`Profile path is not an allowlisted Minecraft directory: ${relative}.`);
+  }
+  if (topLevel.toLowerCase().startsWith("world") && parts[1]?.toLowerCase() !== "datapacks") {
+    throw new Error(`Only world/datapacks paths are allowlisted in a profile: ${relative}.`);
+  }
+  if (isDirectory) return;
+  const extension = path.extname(parts[parts.length - 1]).toLowerCase();
+  if (!allowedExtensions.has(extension)) {
+    throw new Error(`Profile file extension is not allowlisted: ${relative}.`);
+  }
+}
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: traversal limits and entry-type checks must fail as one pass.
 export function validateServerProfile(
@@ -186,7 +325,9 @@ export function validateServerProfile(
   const rootStat = fs.lstatSync(root);
   if (!rootStat.isDirectory() || rootStat.isSymbolicLink())
     throw new Error("Server profile root must be a real directory.");
+  if (forbiddenBasename(path.basename(root))) throw new Error(`Forbidden server profile root: ${path.basename(root)}.`);
   let fileCount = 0;
+  let directoryCount = 0;
   let totalBytes = 0;
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: recursive traversal validates every entry before asseting.
   const visit = (current: string): void => {
@@ -202,12 +343,20 @@ export function validateServerProfile(
       const target = path.join(current, entry.name);
       const stat = fs.lstatSync(target);
       if (stat.isSymbolicLink() || (!stat.isDirectory() && !stat.isFile())) {
-        throw new Error(`Profile entries must be regular files or directories: ${path.relative(root, target)}.`);
+        throw new Error(
+          `Profile entries must be regular files or directories and may not escape the root: ${path.relative(root, target)}.`
+        );
       }
       if (stat.isDirectory()) {
+        directoryCount += 1;
+        if (directoryCount > PROFILE_LIMITS.directories) {
+          throw new Error(`Profile exceeds ${PROFILE_LIMITS.directories} directories.`);
+        }
+        validateAllowlistedProfilePath(root, target, true);
         visit(target);
         continue;
       }
+      validateAllowlistedProfilePath(root, target, false);
       if (stat.nlink !== 1) throw new Error(`Hard-linked profile file is not allowed: ${path.relative(root, target)}.`);
       fileCount += 1;
       totalBytes += stat.size;
@@ -216,8 +365,12 @@ export function validateServerProfile(
         throw new Error(`Profile file exceeds ${PROFILE_LIMITS.fileBytes} bytes.`);
       if (totalBytes > PROFILE_LIMITS.totalBytes)
         throw new Error(`Profile exceeds ${PROFILE_LIMITS.totalBytes} bytes.`);
-      const descriptor = fs.openSync(target, "r");
+      const descriptor = fs.openSync(target, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
       try {
+        const opened = fs.fstatSync(descriptor);
+        if (!opened.isFile() || opened.dev !== stat.dev || opened.ino !== stat.ino) {
+          throw new Error(`Profile changed during validation: ${path.relative(root, target)}.`);
+        }
         if (containsForbiddenCredential(descriptor)) {
           throw new Error(`Credential or private-key content is forbidden: ${path.relative(root, target)}.`);
         }

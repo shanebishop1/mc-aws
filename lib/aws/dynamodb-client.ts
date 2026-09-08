@@ -1,5 +1,5 @@
 import { env } from "@/lib/env";
-import { DynamoDBClient, GetItemCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
+import { DynamoDBClient, GetItemCommand, TransactWriteItemsCommand, UpdateItemCommand } from "@aws-sdk/client-dynamodb";
 import { getAwsClientConfig } from "./aws-client-config";
 
 let client: DynamoDBClient | null = null;
@@ -11,4 +11,4 @@ export function getDynamoDbClient(): DynamoDBClient {
   return client;
 }
 
-export { GetItemCommand, UpdateItemCommand };
+export { GetItemCommand, TransactWriteItemsCommand, UpdateItemCommand };

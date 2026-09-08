@@ -135,20 +135,40 @@ fi
 log "Public IP: $PUBLIC_IP"
 log "AWS Region: $AWS_REGION"
 
-# Fetch DNS provider config and email config from SSM
+# Fetch only the selected provider. The mode is an authoritative deployment
+# record; a legacy fallback requires a complete provider, so stale half-written
+# credentials cannot select a provider or make Minecraft startup fail.
 log "Fetching DNS configuration from SSM..."
-ZONE_ID=$(get_ssm_parameter /minecraft/cloudflare-zone-id)
-DOMAIN=$(get_ssm_parameter /minecraft/cloudflare-domain)
-API_TOKEN=$(get_ssm_parameter /minecraft/cloudflare-api-token true)
-DUCKDNS_DOMAIN=$(get_ssm_parameter /minecraft/duckdns-domain)
-DUCKDNS_TOKEN=$(get_ssm_parameter /minecraft/duckdns-token true)
-if [[ -n "$DUCKDNS_DOMAIN" || -n "$DUCKDNS_TOKEN" ]]; then
-  dns_update_duckdns "$PUBLIC_IP" "$DUCKDNS_DOMAIN" "$DUCKDNS_TOKEN"
-elif [[ -n "$ZONE_ID" || -n "$DOMAIN" || -n "$API_TOKEN" ]]; then
-  dns_update_cloudflare "$PUBLIC_IP" "$ZONE_ID" "$DOMAIN" "$API_TOKEN"
-else
-  log "[DNS] No provider configured; skipping DNS update. Public IP: $PUBLIC_IP"
-fi
+DNS_MODE=$(get_ssm_parameter /minecraft/dns-mode)
+case "$DNS_MODE" in
+  cloudflare)
+    ZONE_ID=$(get_ssm_parameter /minecraft/cloudflare-zone-id)
+    DOMAIN=$(get_ssm_parameter /minecraft/cloudflare-domain)
+    if [[ -z "$ZONE_ID" || -z "$DOMAIN" ]]; then
+      log "[DNS] Cloudflare mode is incomplete; skipping DNS update (Minecraft is not blocked)."
+    else
+      API_TOKEN=$(get_ssm_parameter /minecraft/cloudflare-api-token true)
+      [[ -n "$API_TOKEN" ]] && dns_update_cloudflare "$PUBLIC_IP" "$ZONE_ID" "$DOMAIN" "$API_TOKEN" || \
+        log "[DNS] Cloudflare credentials are incomplete; skipping DNS update (Minecraft is not blocked)."
+    fi
+    ;;
+  duckdns)
+    DUCKDNS_DOMAIN=$(get_ssm_parameter /minecraft/duckdns-domain)
+    if [[ -z "$DUCKDNS_DOMAIN" ]]; then
+      log "[DNS] DuckDNS mode is incomplete; skipping DNS update (Minecraft is not blocked)."
+    else
+      DUCKDNS_TOKEN=$(get_ssm_parameter /minecraft/duckdns-token true)
+      [[ -n "$DUCKDNS_TOKEN" ]] && dns_update_duckdns "$PUBLIC_IP" "$DUCKDNS_DOMAIN" "$DUCKDNS_TOKEN" || \
+        log "[DNS] DuckDNS credentials are incomplete; skipping DNS update (Minecraft is not blocked)."
+    fi
+    ;;
+  raw_ip|none|"")
+    log "[DNS] No provider configured; skipping DNS update. Public IP: $PUBLIC_IP"
+    ;;
+  *)
+    log "[DNS] Unknown provider mode '$DNS_MODE'; skipping DNS update (Minecraft is not blocked)."
+    ;;
+esac
 
 # Clear sensitive variables
 unset API_TOKEN

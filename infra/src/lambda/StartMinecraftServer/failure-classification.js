@@ -32,6 +32,9 @@ function classifyLifecycleFailure(error) {
   if (error?.name === "LifecycleLockConflictError") {
     return { retryable: false, retainLock: false, code: "operation_conflict" };
   }
+  if (error?.hostRecoveryRequired === true) {
+    return { retryable: true, retainLock: true, code: error.code || "host_recovery_required" };
+  }
   if (error instanceof TerminalLifecycleError || error?.ssmTerminal === true) {
     return { retryable: false, retainLock: false, code: error.code || "terminal_execution_failure" };
   }

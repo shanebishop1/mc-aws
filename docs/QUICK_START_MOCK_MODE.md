@@ -14,6 +14,7 @@ mise exec -- pnpm dev:mock
 ```
 
 `.env.local` is gitignored. In this workflow it contains local mock settings; do not reuse a production credential file.
+Mock state is written to `.local-artifacts/mock-state.json`, which is excluded from Next.js/OpenNext tracing and source control.
 
 Open `http://localhost:3000/api/auth/dev-login`, then use the panel at `http://localhost:3000`.
 

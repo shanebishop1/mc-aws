@@ -26,6 +26,16 @@ export interface PlayerCount {
 }
 
 /**
+ * Sanitized service state returned by the lifecycle Lambda. The Worker never
+ * receives the underlying SSM command ID or command output.
+ */
+export interface MinecraftServiceStatus {
+  instanceState: ServerState;
+  instanceRunning: boolean;
+  serviceActive: boolean;
+}
+
+/**
  * Backup information
  */
 export interface BackupInfo {
@@ -41,7 +51,17 @@ export interface ParameterStoreEntry {
   name: string;
   value: string;
   type?: string;
+  /** SSM's monotonically increasing resource version. */
+  version?: number;
   lastModifiedAt?: string;
+}
+
+/** Proof used by the conditional SSM mutation protocol. */
+export interface SsmMutationProof {
+  claimToken: string;
+  parameterVersion: number;
+  claimParameterName?: string;
+  claimVersion?: number;
 }
 
 /**
@@ -66,12 +86,27 @@ export interface AwsProvider {
 
   // SSM - Command Execution
   executeSSMCommand(instanceId: string, commands: string[]): Promise<string>;
+  getMinecraftServiceStatus(instanceId?: string): Promise<MinecraftServiceStatus>;
   listBackups(instanceId?: string): Promise<BackupInfo[]>;
 
   // SSM - Parameter Store
   getParameter(name: string): Promise<string | null>;
-  putParameter(name: string, value: string, type?: "String" | "SecureString", overwrite?: boolean): Promise<void>;
+  getParameterRecord(name: string): Promise<ParameterStoreEntry | null>;
+  putParameter(
+    name: string,
+    value: string,
+    type?: "String" | "SecureString",
+    overwrite?: boolean
+  ): Promise<number | undefined>;
+  putParameterIfCurrent(
+    name: string,
+    value: string,
+    proof: SsmMutationProof,
+    type?: "String" | "SecureString",
+    overwrite?: boolean
+  ): Promise<boolean>;
   deleteParameter(name: string): Promise<void>;
+  deleteParameterIfCurrent(name: string, proof: SsmMutationProof): Promise<boolean>;
   listParametersByPath(path: string): Promise<ParameterStoreEntry[]>;
 
   // SSM - Application-Specific Parameters

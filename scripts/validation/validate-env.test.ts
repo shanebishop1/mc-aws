@@ -8,7 +8,11 @@ const baseWorkerValues: Record<string, string> = {
   CLOUDFLARE_MC_DOMAIN: "mc.example.com",
   CLOUDFLARE_DNS_API_TOKEN: "token",
   RUNTIME_STATE_SNAPSHOT_KV_ID: "0123456789abcdef0123456789abcdef",
-  AUTH_SECRET: "very-secret-value",
+  AUTH_SECRET: Buffer.from([
+    0xd3, 0x1a, 0xf7, 0x0c, 0x5e, 0x92, 0xb8, 0x4f, 0x01, 0x69, 0xc4, 0xe7, 0xab, 0x2d, 0x53, 0x81, 0xf6, 0xa0, 0xce,
+    0x9d, 0x34, 0x78, 0xb2, 0x15, 0xc7, 0xe3, 0xf9, 0x02, 0x6d, 0x4a, 0xb1, 0xe8, 0xf0, 0xc5, 0xa7, 0xd2, 0xe9, 0xb3,
+    0x14, 0x68, 0x9f, 0x03, 0xdc, 0x76, 0x2a, 0xe1, 0x58, 0xc0,
+  ]).toString("base64url"),
   ADMIN_EMAIL: "admin@example.com",
   GOOGLE_CLIENT_ID: "google-client-id",
   GOOGLE_CLIENT_SECRET: "google-client-secret",
@@ -16,6 +20,7 @@ const baseWorkerValues: Record<string, string> = {
   MC_LIFECYCLE_LOCK_TABLE_NAME: "lifecycle-lock-table",
   MC_OPERATION_STATE_TABLE_NAME: "operation-state-table",
   MC_OPERATION_STATE_RETENTION_DAYS: "30",
+  MC_AGENT_RUNTIME_ENABLED: "false",
 };
 
 const baseLambdaValues: Record<string, string> = {

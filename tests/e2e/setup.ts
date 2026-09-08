@@ -90,10 +90,13 @@ async function createDevToken(): Promise<string> {
   const token = await new SignJWT({
     email: "dev@localhost",
     role: "admin",
+    purpose: "session",
   })
-    .setProtectedHeader({ alg: "HS256" })
+    .setProtectedHeader({ alg: "HS256", typ: "JWT" })
     .setIssuedAt()
     .setExpirationTime("30d")
+    .setIssuer("mc-aws")
+    .setAudience("mc-aws-panel")
     .sign(secret);
   return token;
 }

@@ -5,6 +5,10 @@
  * targets, and requirement levels so later stories can enforce stricter rules.
  */
 
+import { parsePublicAgentProviderCatalog } from "@/lib/agent/control-plane/provider-catalog";
+import { parseExecutorReceiptVerifierSetJson } from "@/lib/agent/runtime/executor-receipt";
+import { AUTH_SECRET_REQUIREMENTS, validateProductionAuthSecret } from "@/lib/auth-secret";
+
 export const runtimeTargets = ["worker", "lambda", "ec2", "local-dev", "ci"] as const;
 
 export type RuntimeTarget = (typeof runtimeTargets)[number];
@@ -220,6 +224,100 @@ export const envRuntimeSchema = {
       ci: { level: "forbidden" },
     }),
   },
+  MC_AGENT_RUNTIME_ENABLED: {
+    description: "Canonical Worker authorization switch for the outbound Minecraft agent runtime",
+    valueType: "enum",
+    enumValues: ["true", "false"],
+    ownership: withOwnership({
+      worker: {
+        level: "required",
+        note: "Must be uploaded on every deploy; false is the explicit runtime decommission state.",
+      },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_RUNTIME_ID: {
+    description: "Narrow identity assigned to the outbound Minecraft agent gateway",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "optional" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_RUNTIME_TOKEN_SHA256: {
+    description: "Lowercase SHA-256 verifier for the outbound agent runtime bearer; never the bearer itself",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_RUNTIME_TOKEN: {
+    description: "Outbound gateway bearer; injected only into the gateway and never uploaded to the Worker",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "forbidden" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "optional" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8: {
+    description: "Base64 PKCS#8 Ed25519 key used only by the control plane to sign exact backup fence authorizations",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS: {
+    description:
+      "Bounded public Ed25519 verifier set for executor-signed terminal receipts; current key first, retired keys retained only for in-flight receipts",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional" },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden", note: "The executor receives only its matching private key through LoadCredential." },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_PUBLIC_PROVIDER_CATALOG: {
+    description: "Bounded public provider profile metadata for the Agent UI; credentials and credential refs forbidden",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Credential-free public metadata uploaded only to the Worker." },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
+  MC_AGENT_RUNTIME_PROVIDER_PROFILES: {
+    description:
+      "Bounded credential-free runtime profile metadata used to verify the Worker catalog against gateway profiles",
+    valueType: "string",
+    ownership: withOwnership({
+      worker: { level: "optional", note: "Credential-free public metadata uploaded only to the Worker." },
+      lambda: { level: "forbidden" },
+      ec2: { level: "forbidden" },
+      "local-dev": { level: "optional" },
+      ci: { level: "optional" },
+    }),
+  },
   CLOUDFORMATION_STACK_NAME: {
     description: "CloudFormation stack name for lookup operations",
     valueType: "string",
@@ -372,7 +470,7 @@ export const envRuntimeSchema = {
     ownership: withOwnership({}),
   },
   AUTH_SECRET: {
-    description: "JWT/session signing secret",
+    description: "JWT/session signing secret generated from at least 32 cryptographically random bytes",
     valueType: "string",
     placeholderValues: ["your-secret-here", "dev-secret-change-in-production"],
     ownership: withOwnership({
@@ -544,7 +642,17 @@ export const workerSecretAllowlist = [
   "GOOGLE_CLIENT_SECRET",
   "NEXT_PUBLIC_APP_URL",
   "MC_OPERATION_STATE_RETENTION_DAYS",
+  "MC_AGENT_RUNTIME_ENABLED",
+  "MC_AGENT_RUNTIME_ID",
+  "MC_AGENT_RUNTIME_TOKEN_SHA256",
+  "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8",
+  "MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS",
+  "MC_AGENT_PUBLIC_PROVIDER_CATALOG",
+  "MC_AGENT_RUNTIME_PROVIDER_PROFILES",
 ] as const;
+
+/** Non-secret Worker vars that must be present in generated Wrangler config. */
+export const workerVariableAllowlist = ["MC_BACKEND_MODE"] as const;
 
 export const workerManagedAwsCredentialSecretNames = [
   "AWS_ACCESS_KEY_ID",
@@ -760,6 +868,166 @@ const validateImmutablePins = (
   }
 };
 
+const validateAgentRuntimeIdentity = (
+  values: Record<string, string | undefined>,
+  target: RuntimeTarget,
+  issues: EnvSchemaValidationIssue[]
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Cross-target hash/raw-secret ownership is intentionally validated together to prevent boundary drift.
+): void => {
+  const enabled = getResolvedString(values, "MC_AGENT_RUNTIME_ENABLED").toLowerCase();
+  if (target === "worker" && enabled !== "true") return;
+
+  const runtimeId = getResolvedString(values, "MC_AGENT_RUNTIME_ID");
+  const verifier = getResolvedString(values, "MC_AGENT_RUNTIME_TOKEN_SHA256");
+  const bearer = getResolvedString(values, "MC_AGENT_RUNTIME_TOKEN");
+  const backupFencePrivateKey = getResolvedString(values, "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8");
+  const executorReceiptVerifiers = getResolvedString(values, "MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS");
+  const configured = Boolean(runtimeId || verifier || bearer || backupFencePrivateKey || executorReceiptVerifiers);
+  if (!configured) return;
+  if (!runtimeId || !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(runtimeId)) {
+    issues.push(
+      createIssue("MC_AGENT_RUNTIME_ID", runtimeId ? "invalid" : "missing", "MC_AGENT_RUNTIME_ID is invalid.")
+    );
+  }
+  if ((target === "worker" || target === "ci" || target === "local-dev") && !/^[a-f0-9]{64}$/.test(verifier)) {
+    issues.push(
+      createIssue(
+        "MC_AGENT_RUNTIME_TOKEN_SHA256",
+        verifier ? "invalid" : "missing",
+        "MC_AGENT_RUNTIME_TOKEN_SHA256 must be a lowercase SHA-256 verifier."
+      )
+    );
+  }
+  if ((target === "ec2" || target === "local-dev") && !bearer) {
+    issues.push(
+      createIssue("MC_AGENT_RUNTIME_TOKEN", "missing", "MC_AGENT_RUNTIME_TOKEN is required by the gateway runtime.")
+    );
+  } else if ((target === "ec2" || target === "local-dev") && bearer.length < 32) {
+    issues.push(
+      createIssue("MC_AGENT_RUNTIME_TOKEN", "invalid", "MC_AGENT_RUNTIME_TOKEN must contain at least 32 characters.")
+    );
+  }
+  if (target === "worker" && !backupFencePrivateKey) {
+    issues.push(
+      createIssue(
+        "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8",
+        "missing",
+        "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8 is required when MC_AGENT_RUNTIME_ENABLED=true."
+      )
+    );
+  } else if (
+    backupFencePrivateKey &&
+    (backupFencePrivateKey.length > 512 ||
+      backupFencePrivateKey.length % 4 !== 0 ||
+      !/^[A-Za-z0-9+/]+={0,2}$/.test(backupFencePrivateKey))
+  ) {
+    issues.push(
+      createIssue(
+        "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8",
+        "invalid",
+        "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8 must be canonical base64 PKCS#8."
+      )
+    );
+  }
+  if (target === "worker" && !executorReceiptVerifiers) {
+    issues.push(
+      createIssue(
+        "MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS",
+        "missing",
+        "MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS is required when MC_AGENT_RUNTIME_ENABLED=true."
+      )
+    );
+  } else if (executorReceiptVerifiers) {
+    try {
+      parseExecutorReceiptVerifierSetJson(executorReceiptVerifiers);
+    } catch {
+      issues.push(
+        createIssue(
+          "MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS",
+          "invalid",
+          "MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS must be a bounded exact-schema public Ed25519 verifier set."
+        )
+      );
+    }
+  }
+};
+
+const validateAgentProviderCatalog = (
+  values: Record<string, string | undefined>,
+  target: RuntimeTarget,
+  issues: EnvSchemaValidationIssue[]
+  // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Enabled/disabled and cross-catalog completeness are kept together so no partial Worker authorization state bypasses validation.
+): void => {
+  if (target === "lambda" || target === "ec2") return;
+  if (target === "worker" && getResolvedString(values, "MC_AGENT_RUNTIME_ENABLED").toLowerCase() !== "true") return;
+
+  const resolvedPublicCatalog = resolveEnvValue(values, "MC_AGENT_PUBLIC_PROVIDER_CATALOG")?.value;
+  const resolvedRuntimeProfiles = resolveEnvValue(values, "MC_AGENT_RUNTIME_PROVIDER_PROFILES")?.value;
+  const publicCatalog = resolvedPublicCatalog?.trim() ? resolvedPublicCatalog : "";
+  const runtimeProfiles = resolvedRuntimeProfiles?.trim() ? resolvedRuntimeProfiles : "";
+  if (target === "worker" && (!publicCatalog || !runtimeProfiles)) {
+    if (!publicCatalog) {
+      issues.push(
+        createIssue(
+          "MC_AGENT_PUBLIC_PROVIDER_CATALOG",
+          "missing",
+          "MC_AGENT_PUBLIC_PROVIDER_CATALOG is required when MC_AGENT_RUNTIME_ENABLED=true."
+        )
+      );
+    }
+    if (!runtimeProfiles) {
+      issues.push(
+        createIssue(
+          "MC_AGENT_RUNTIME_PROVIDER_PROFILES",
+          "missing",
+          "MC_AGENT_RUNTIME_PROVIDER_PROFILES is required when MC_AGENT_RUNTIME_ENABLED=true."
+        )
+      );
+    }
+    return;
+  }
+  if (!publicCatalog && !runtimeProfiles) return;
+
+  if (!publicCatalog) {
+    issues.push(
+      createIssue(
+        "MC_AGENT_PUBLIC_PROVIDER_CATALOG",
+        "missing",
+        "MC_AGENT_PUBLIC_PROVIDER_CATALOG is required when the runtime provider profile inventory is configured."
+      )
+    );
+  }
+  if (!runtimeProfiles) {
+    issues.push(
+      createIssue(
+        "MC_AGENT_RUNTIME_PROVIDER_PROFILES",
+        "missing",
+        "MC_AGENT_RUNTIME_PROVIDER_PROFILES is required when the public provider catalog is configured."
+      )
+    );
+  }
+  if (!publicCatalog || !runtimeProfiles) return;
+
+  try {
+    parsePublicAgentProviderCatalog(publicCatalog, runtimeProfiles);
+  } catch {
+    issues.push(
+      createIssue(
+        "MC_AGENT_PUBLIC_PROVIDER_CATALOG",
+        "invalid",
+        "Agent provider metadata must satisfy the bounded public catalog schema and exactly match the runtime profile metadata inventory."
+      )
+    );
+    issues.push(
+      createIssue(
+        "MC_AGENT_RUNTIME_PROVIDER_PROFILES",
+        "invalid",
+        "Agent runtime profiles must satisfy the bounded metadata inventory schema and exactly match the public catalog."
+      )
+    );
+  }
+};
+
 const validateRuleAndPresence = ({
   name,
   target,
@@ -818,6 +1086,18 @@ const isValidValueType = (entry: EnvSchemaEntry, value: string): boolean => {
   return false;
 };
 
+const getInvalidValueMessage = (
+  entry: EnvSchemaEntry,
+  name: EnvVarName,
+  target: RuntimeTarget,
+  value: string
+): string | null => {
+  if (name === "AUTH_SECRET" && (target === "worker" || target === "ci")) {
+    return validateProductionAuthSecret(value).valid ? null : AUTH_SECRET_REQUIREMENTS;
+  }
+  return isValidValueType(entry, value) ? null : `${name} value is invalid for type ${entry.valueType}.`;
+};
+
 const isPlaceholderValue = (entry: EnvSchemaEntry, value: string): boolean => {
   const normalized = value.trim();
   if (!normalized) {
@@ -859,8 +1139,9 @@ export const validateEnvForTarget = (
       issues.push(createIssue(name, "deprecated", `${resolved.sourceName} is deprecated. Use ${name}.`));
     }
 
-    if (!isValidValueType(entry, resolved.value)) {
-      issues.push(createIssue(name, "invalid", `${name} value is invalid for type ${entry.valueType}.`));
+    const invalidValueMessage = getInvalidValueMessage(entry, name, target, resolved.value);
+    if (invalidValueMessage) {
+      issues.push(createIssue(name, "invalid", invalidValueMessage));
       continue;
     }
 
@@ -879,6 +1160,8 @@ export const validateEnvForTarget = (
   validateSesConfig(values, issues);
   validateObservabilityConfig(values, issues);
   validateImmutablePins(values, issues);
+  validateAgentRuntimeIdentity(values, target, issues);
+  validateAgentProviderCatalog(values, target, issues);
 
   return {
     target,
@@ -895,6 +1178,12 @@ export const getEnvVarNamesByRequirement = (target: RuntimeTarget, level: Requir
 export const runtimeStateWranglerSchema = {
   durableObjectBindingName: "RUNTIME_STATE_DURABLE_OBJECT",
   durableObjectClassName: "RuntimeStateDurableObject",
+  agentDurableObjectBindingName: "AGENT_SESSION_DURABLE_OBJECT",
+  agentDurableObjectClassName: "AgentSessionDurableObject",
+  agentIndexDurableObjectBindingName: "AGENT_SESSION_INDEX_DURABLE_OBJECT",
+  agentIndexDurableObjectClassName: "AgentSessionIndexDurableObject",
+  agentShardDurableObjectBindingName: "AGENT_SESSION_SHARD_DURABLE_OBJECT",
+  agentShardDurableObjectClassName: "AgentSessionShardDurableObject",
   snapshotKvBindingName: "RUNTIME_STATE_SNAPSHOT_KV",
   placeholderKvIdPattern: /^REPLACE_WITH_RUNTIME_STATE_SNAPSHOT_KV(_PREVIEW)?_ID$/,
   migrationTagPattern: /^v\d+-runtime-state-durable-object$/,
@@ -927,6 +1216,23 @@ const hasExpectedDurableObjectBinding = (root: UnknownRecord): boolean => {
     );
   });
 };
+
+const hasDurableObjectBinding = (root: UnknownRecord, name: string, className: string): boolean => {
+  const durableObjects = asRecord(root.durable_objects);
+  const bindings = Array.isArray(durableObjects?.bindings) ? durableObjects.bindings : [];
+
+  return bindings.some((binding) => {
+    const record = asRecord(binding);
+    return record?.name === name && record?.class_name === className;
+  });
+};
+
+const hasExpectedAgentDurableObjectBinding = (root: UnknownRecord): boolean =>
+  hasDurableObjectBinding(
+    root,
+    runtimeStateWranglerSchema.agentDurableObjectBindingName,
+    runtimeStateWranglerSchema.agentDurableObjectClassName
+  );
 
 const validateKvNamespaceId = (value: unknown, field: "id" | "preview_id", errors: string[]): void => {
   const id = typeof value === "string" ? value.trim() : "";
@@ -972,6 +1278,24 @@ const hasExpectedDurableObjectMigration = (root: UnknownRecord): boolean => {
   });
 };
 
+const hasExpectedAgentDurableObjectMigration = (root: UnknownRecord): boolean => {
+  const migrations = Array.isArray(root.migrations) ? root.migrations : [];
+  return migrations.some((migration) => {
+    const record = asRecord(migration);
+    const classes = Array.isArray(record?.new_sqlite_classes) ? record.new_sqlite_classes : [];
+    return classes.includes(runtimeStateWranglerSchema.agentDurableObjectClassName);
+  });
+};
+
+const hasDurableObjectMigration = (root: UnknownRecord, className: string): boolean => {
+  const migrations = Array.isArray(root.migrations) ? root.migrations : [];
+  return migrations.some((migration) => {
+    const record = asRecord(migration);
+    const classes = Array.isArray(record?.new_sqlite_classes) ? record.new_sqlite_classes : [];
+    return classes.includes(className);
+  });
+};
+
 export const validateRuntimeStateWranglerConfig = (config: unknown): RuntimeStateWranglerValidationReport => {
   const errors: string[] = [];
   const root = asRecord(config);
@@ -989,12 +1313,43 @@ export const validateRuntimeStateWranglerConfig = (config: unknown): RuntimeStat
     );
   }
 
+  if (!hasExpectedAgentDurableObjectBinding(root)) {
+    errors.push(
+      `durable_objects.bindings must include ${runtimeStateWranglerSchema.agentDurableObjectBindingName} -> ${runtimeStateWranglerSchema.agentDurableObjectClassName}.`
+    );
+  }
+
+  for (const [bindingName, className] of [
+    [
+      runtimeStateWranglerSchema.agentIndexDurableObjectBindingName,
+      runtimeStateWranglerSchema.agentIndexDurableObjectClassName,
+    ],
+    [
+      runtimeStateWranglerSchema.agentShardDurableObjectBindingName,
+      runtimeStateWranglerSchema.agentShardDurableObjectClassName,
+    ],
+  ] as const) {
+    if (!hasDurableObjectBinding(root, bindingName, className)) {
+      errors.push(`durable_objects.bindings must include ${bindingName} -> ${className}.`);
+    }
+  }
+
   validateKvNamespaces(root, errors);
 
   if (!hasExpectedDurableObjectMigration(root)) {
     errors.push(
       `migrations must include ${runtimeStateWranglerSchema.durableObjectClassName} with tag matching ${String(runtimeStateWranglerSchema.migrationTagPattern)}.`
     );
+  }
+
+  if (!hasExpectedAgentDurableObjectMigration(root)) {
+    errors.push(`migrations must include ${runtimeStateWranglerSchema.agentDurableObjectClassName}.`);
+  }
+  for (const className of [
+    runtimeStateWranglerSchema.agentIndexDurableObjectClassName,
+    runtimeStateWranglerSchema.agentShardDurableObjectClassName,
+  ]) {
+    if (!hasDurableObjectMigration(root, className)) errors.push(`migrations must include ${className}.`);
   }
 
   return {

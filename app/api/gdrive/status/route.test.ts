@@ -6,7 +6,7 @@ import { GET } from "./route";
 const mocks = vi.hoisted(() => ({
   isMockMode: vi.fn(() => false),
   requireAdmin: vi.fn().mockResolvedValue({ email: "admin@example.com" }),
-  getParameter: vi.fn(),
+  invokeGdriveTokenBroker: vi.fn(),
   mockStoreGetParameter: vi.fn(),
 }));
 
@@ -19,7 +19,7 @@ vi.mock("@/lib/api-auth", () => ({
 }));
 
 vi.mock("@/lib/aws", () => ({
-  getParameter: mocks.getParameter,
+  invokeGdriveTokenBroker: mocks.invokeGdriveTokenBroker,
 }));
 
 vi.mock("@/lib/aws/mock-state-store", () => ({
@@ -33,7 +33,7 @@ describe("GET /api/gdrive/status", () => {
     vi.clearAllMocks();
     mocks.isMockMode.mockReturnValue(false);
     mocks.requireAdmin.mockResolvedValue({ email: "admin@example.com" });
-    mocks.getParameter.mockResolvedValue("token");
+    mocks.invokeGdriveTokenBroker.mockResolvedValue({ configured: true });
     mocks.mockStoreGetParameter.mockResolvedValue("token");
   });
 
@@ -55,11 +55,11 @@ describe("GET /api/gdrive/status", () => {
 
     if (isMock) {
       expect(mocks.mockStoreGetParameter).toHaveBeenCalledWith("/minecraft/gdrive-token");
-      expect(mocks.getParameter).not.toHaveBeenCalled();
+      expect(mocks.invokeGdriveTokenBroker).not.toHaveBeenCalled();
       return;
     }
 
-    expect(mocks.getParameter).toHaveBeenCalledWith("/minecraft/gdrive-token");
+    expect(mocks.invokeGdriveTokenBroker).toHaveBeenCalledWith({ operation: "get" });
     expect(mocks.mockStoreGetParameter).not.toHaveBeenCalled();
   });
 
@@ -74,7 +74,7 @@ describe("GET /api/gdrive/status", () => {
     const res = await GET(req);
 
     expect(res.status).toBe(401);
-    expect(mocks.getParameter).not.toHaveBeenCalled();
+    expect(mocks.invokeGdriveTokenBroker).not.toHaveBeenCalled();
     expect(mocks.mockStoreGetParameter).not.toHaveBeenCalled();
   });
 
@@ -87,7 +87,7 @@ describe("GET /api/gdrive/status", () => {
     if (isMock) {
       mocks.mockStoreGetParameter.mockRejectedValue(new Error("store failure"));
     } else {
-      mocks.getParameter.mockRejectedValue(new Error("ssm failure"));
+      mocks.invokeGdriveTokenBroker.mockRejectedValue(new Error("broker failure"));
     }
 
     const req = createMockNextRequest("http://localhost/api/gdrive/status");

@@ -38,6 +38,14 @@ describe("minecraft service", () => {
     );
   });
 
+  it("loads the persisted operation-state table for later resume invocations", () => {
+    expect(resumeScript).toContain("/etc/minecraft/operation-state-table-name");
+    expect(resumeScript).toContain("IFS= read -r MC_OPERATION_STATE_TABLE_NAME");
+    expect(resumeScript.indexOf("operation-state-table-name")).toBeLessThan(
+      resumeScript.indexOf("aws dynamodb get-item --table-name")
+    );
+  });
+
   it("requires successful DNS publication before Minecraft on every boot", () => {
     expect(service).toContain("Requires=minecraft-dns.service");
     expect(service).toContain("After=network-online.target minecraft-dns.service");

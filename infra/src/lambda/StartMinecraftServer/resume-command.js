@@ -6,22 +6,34 @@ const RESUME_SCRIPT = "/usr/local/bin/mc-resume.sh";
 const BOOTSTRAP_WAIT_ATTEMPTS = 48;
 const BOOTSTRAP_WAIT_SECONDS = 5;
 
-export function buildResumeInvocation(restoreStrategy) {
+export function buildResumeInvocation(restoreStrategy, operationId, ownerToken = operationId) {
   const argumentsByMode = {
     fresh: ["fresh"],
     latest: ["latest"],
     named: ["named", restoreStrategy.backupArchiveName],
   };
   const arguments_ = argumentsByMode[restoreStrategy.mode];
-  if (!arguments_ || arguments_.some((argument) => typeof argument !== "string" || !argument)) {
+  if (
+    !arguments_ ||
+    arguments_.some((argument) => typeof argument !== "string" || !argument) ||
+    typeof operationId !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(operationId) ||
+    typeof ownerToken !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(ownerToken)
+  ) {
     throw new Error("Cannot build resume command for an invalid restore strategy");
   }
 
-  return [RESUME_SCRIPT, ...arguments_].map(quotePosixShellArgument).join(" ");
+  return `env MC_RESUME_OPERATION_ID=${quotePosixShellArgument(operationId)} MC_RESUME_OPERATION_OWNER_TOKEN=${quotePosixShellArgument(ownerToken)} ${[
+    RESUME_SCRIPT,
+    ...arguments_,
+  ]
+    .map(quotePosixShellArgument)
+    .join(" ")}`;
 }
 
-export function buildResumeCommand(restoreStrategy) {
-  const invocation = buildResumeInvocation(restoreStrategy);
+export function buildResumeCommand(restoreStrategy, operationId, ownerToken = operationId) {
+  const invocation = buildResumeInvocation(restoreStrategy, operationId, ownerToken);
   const script = [
     "set -euo pipefail",
     "attempt=0",

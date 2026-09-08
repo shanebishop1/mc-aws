@@ -16,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   getMockStateStore: vi.fn(() => ({
     setParameter: mocks.mockStoreSetParameter,
   })),
-  putParameter: vi.fn().mockResolvedValue(undefined),
+  invokeGdriveTokenBroker: vi.fn().mockResolvedValue({ configured: true }),
   cookieStore: {
     set: vi.fn(),
     get: vi.fn(),
@@ -46,7 +46,7 @@ vi.mock("@/lib/aws/mock-state-store", () => ({
 }));
 
 vi.mock("@/lib/aws", () => ({
-  putParameter: mocks.putParameter,
+  invokeGdriveTokenBroker: mocks.invokeGdriveTokenBroker,
 }));
 
 vi.mock("next/headers", () => ({
@@ -124,9 +124,9 @@ describe("GET /api/gdrive/callback", () => {
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toContain("?gdrive=success");
 
-      const [, storedValue, storedType] = mocks.putParameter.mock.calls[0];
-      const envelope = JSON.parse(storedValue) as Record<string, unknown>;
-      expect(storedType).toBe("SecureString");
+      const [brokerRequest] = mocks.invokeGdriveTokenBroker.mock.calls[0];
+      const envelope = JSON.parse(brokerRequest.value) as Record<string, unknown>;
+      expect(brokerRequest.operation).toBe("put");
       expect(envelope).toMatchObject({
         version: 1,
         client_id: "test-client-id",
@@ -234,7 +234,7 @@ describe("GET /api/gdrive/callback", () => {
       } as Response);
 
       // Mock SSM failure
-      mocks.putParameter.mockRejectedValueOnce(new Error("SSM Error"));
+      mocks.invokeGdriveTokenBroker.mockRejectedValueOnce(new Error("broker error"));
 
       const req = createMockNextRequest("http://localhost/api/gdrive/callback?code=test_code&state=valid-state");
       const res = await GET(req);

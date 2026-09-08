@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "strategy": "pnpm-workspace-lock-plus-pi-published-shrinkwrap",
+  "productionDirectDependencies": {
+    "@earendil-works/pi-ai": "0.84.4",
+    "@earendil-works/pi-coding-agent": "0.84.4",
+    "typebox": "1.3.7",
+    "undici": "8.9.0"
+  },
+  "piPublishedShrinkwrap": {
+    "path": "@earendil-works/pi-coding-agent/npm-shrinkwrap.json",
+    "sha256": "a137fbb6530359fda4aa1212eb1d8ad54157bddced042ea24d8e566eea21ec54",
+    "packageEntries": 136,
+    "licenses": ["0BSD", "Apache-2.0", "BSD-3-Clause", "BlueOak-1.0.0", "ISC", "MIT"]
+  },
+  "piLicense": {
+    "spdx": "MIT",
+    "source": "https://github.com/earendil-works/pi/blob/main/LICENSE"
+  }
+}

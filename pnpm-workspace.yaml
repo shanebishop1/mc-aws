@@ -1,3 +1,6 @@
+packages:
+  - agent-runtime
+
 onlyBuiltDependencies:
   - '@biomejs/biome'
   - esbuild

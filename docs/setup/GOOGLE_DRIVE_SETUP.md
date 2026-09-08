@@ -20,7 +20,11 @@ After deployment:
 4. Test restoring that backup and confirm the server data is correct.
 5. Only after both tests pass, set `MC_SCHEDULED_BACKUP_ENABLED=true` (or choose the wizard opt-in) and redeploy if you want unattended backups.
 
-Do not use hibernate until both backup and restore have been tested. Hibernate backs up and then deletes the project-managed root volume; an unverified backup is not a recovery plan.
+Do not rename or re-upload backup pairs to influence `latest`. Drive modification time is ignored; each new manifest
+authenticates a server-bound monotonic generation, and restore rejects a generation at or below its retained accepted
+floor. Preserve the stack-managed generation/floor SSM parameters together with the backup-auth keyring during recovery.
+
+Do not use hibernate until both backup and restore have been tested. Hibernate backs up and then deletes the project-managed root volume; an unverified backup is not a recovery plan. Hibernation now requires the current host authentication helper and a fresh, post-quiescence manifest bound to the exact operation, instance, and server generation. Missing manifests, zero/old generations, tampered pairs, ambiguous retries, and legacy hosts fail closed and preserve the volume.
 
 Authorization stores a persistent refresh token together with the OAuth client secret in an encrypted SSM credential bundle. Treat that bundle as full access to the authorized account's Drive. When Drive is configured, a root-only rclone configuration exists on EC2 after boot and backup or restore operations. Do not copy either into shell commands or other files.
 

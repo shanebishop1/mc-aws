@@ -1,0 +1,78 @@
+#!/usr/bin/env python3
+"""Mask host activation paths after reboot while durable maintenance is unresolved."""
+
+from __future__ import annotations
+
+import json
+import os
+import stat
+import sys
+from pathlib import Path
+
+
+UNITS = (
+    "minecraft-dns.service",
+    "minecraft.service",
+    "mc-agent-world-roots.service",
+    "mc-agent-executor.socket",
+    "mc-agent-executor.service",
+    "mc-agent-gateway.service",
+)
+MARKER = Path(os.environ.get("MC_MAINTENANCE_BOOT_HOLD", "/var/lib/mc-aws/maintenance-boot-hold.json"))
+BOOT_ID = Path(os.environ.get("MC_BOOT_ID_FILE", "/proc/sys/kernel/random/boot_id"))
+
+
+def valid_current_boot_restoration() -> bool:
+    try:
+        metadata = MARKER.lstat()
+        expected_uid = os.geteuid()
+        if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_uid != expected_uid or stat.S_IMODE(metadata.st_mode) != 0o644:
+            return False
+        value = json.loads(MARKER.read_text(encoding="ascii"))
+        return (
+            isinstance(value, dict)
+            and set(value) == {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId"}
+            and value.get("schemaVersion") == 1
+            and value.get("operation")
+            in ("runtime-rollout", "restore", "backup", "hibernate", "destroy", "replacement", "host-replacement")
+            and isinstance(value.get("owner"), str)
+            and bool(value["owner"])
+            and value.get("phase") in {
+                "runtime-rollout": {"validating"},
+                "restore": {"restoring-services", "rollback-restoring-services"},
+                "backup": {"restoring-services"},
+                "hibernate": {"restoring-services"},
+                "destroy": {"restoring-services"},
+                "replacement": {"restoring-services"},
+                "host-replacement": {"recovery"},
+            }.get(value.get("operation"), set())
+            and value.get("bootId") == BOOT_ID.read_text(encoding="ascii").strip()
+        )
+    except (OSError, ValueError, TypeError):
+        return False
+
+
+def link(directory: Path, name: str, target: str) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    destination = directory / name
+    try:
+        destination.symlink_to(target)
+    except FileExistsError:
+        if not destination.is_symlink() or os.readlink(destination) != target:
+            raise
+
+
+def main() -> None:
+    if len(sys.argv) < 3 or not (MARKER.exists() or MARKER.is_symlink()):
+        return
+    # The early generator directory outranks /etc and /usr unit definitions.
+    output = Path(sys.argv[2])
+    link(output / "multi-user.target.wants", "mc-maintenance-recovery.service", "/etc/systemd/system/mc-maintenance-recovery.service")
+    if valid_current_boot_restoration():
+        return
+    for unit in UNITS:
+        link(output, unit, "/dev/null")
+
+
+if __name__ == "__main__":
+    main()

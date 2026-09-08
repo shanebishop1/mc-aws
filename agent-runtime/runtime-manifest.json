@@ -1,0 +1,87 @@
+{
+  "schemaVersion": 1,
+  "node": {
+    "version": "22.19.0",
+    "platform": "linux-arm64",
+    "url": "https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-arm64.tar.xz",
+    "sha256": "0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc",
+    "checksumSource": "https://nodejs.org/dist/v22.19.0/SHASUMS256.txt"
+  },
+  "pi": {
+    "package": "@earendil-works/pi-coding-agent",
+    "version": "0.84.4",
+    "license": "MIT",
+    "repository": "https://github.com/earendil-works/pi/tree/main/packages/coding-agent"
+  },
+  "runtime": {
+    "nodeEngine": "22.19.0",
+    "archiveFormat": "deterministic-zip-store",
+    "installScripts": false,
+    "runtimeNetworkInstall": false,
+    "maxArchiveBytes": 67108864,
+    "maxExpandedBytes": 134217728,
+    "maxFiles": 512
+  },
+  "executorJournal": {
+    "schemaVersion": 3,
+    "authentication": "HMAC-SHA-256",
+    "keyBytes": 32,
+    "credentialName": "executor-journal-hmac",
+    "format": "manifest-checkpoint-transaction-v1",
+    "appendFraming": "one-authenticated-transaction-per-generation",
+    "tornAppendRepair": "truncate-to-last-authenticated-complete-boundary-and-sync",
+    "publicationRecovery": "newest-durable-generation-no-in-memory-rollback",
+    "compaction": "atomic-checkpoint-only",
+    "checkpointSuffixes": [".checkpoint.0", ".checkpoint.1"],
+    "appendSuffixes": [".append.0", ".append.1"],
+    "generationFloorSuffix": ".generation-floor",
+    "evidenceFormat": "authenticated-folded-terminal-aggregate-v1",
+    "evidenceFields": [
+      "schemaVersion",
+      "recordSequence",
+      "acknowledgedCount",
+      "latestTerminalSequence",
+      "aggregateDigest",
+      "replayFilter",
+      "mac"
+    ],
+    "replayFilterBytes": 1048576,
+    "replayFilterHashes": 7,
+    "terminalAcknowledgementFields": [
+      "invocationId",
+      "invocationDigest",
+      "taskId",
+      "leaseGeneration",
+      "journalSequence",
+      "resultDigest",
+      "authorization",
+      "acknowledgedAt"
+    ],
+    "gatewaySequenceCheckpoint": true,
+    "gatewayTerminalAcknowledgement": true,
+    "monotonicGenerationFloor": true,
+    "terminalCapacityReservation": true,
+    "preDispatchReservation": "authenticated-reserved-before-gateway-dispatching",
+    "maxEntries": 100000,
+    "maxCancellationTombstones": 1024,
+    "maxBytes": 67108864
+  },
+  "executorTerminalReceipt": {
+    "schemaVersion": 1,
+    "algorithm": "Ed25519",
+    "privateCredentialName": "executor-receipt-private",
+    "receiptKeyEpochPath": "/config/executor-receipt-key-epoch",
+    "publicVerifierPath": "/etc/mc-agent/executor-receipt-verifier.json",
+    "cleanStartEpochCredentialName": "executor-clean-start-epoch",
+    "maxVerifierHistory": 3,
+    "lifecycleLeaseGenerationBound": true,
+    "executorKeyEpochBound": true
+  },
+  "gatewayExecutionFence": {
+    "schemaVersion": 1,
+    "scope": "runtime-wide",
+    "persistentAcrossRestart": true,
+    "executorAuthenticatedStatus": true,
+    "generationFencedClaims": true
+  }
+}

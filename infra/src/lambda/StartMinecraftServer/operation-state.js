@@ -20,6 +20,15 @@ import { GetItemCommand, UpdateItemCommand, dynamodb } from "./clients.js";
  * @property {string} [requestedBy]
  * @property {string} [lockId]
  * @property {number} [fencingToken]
+ * @property {number} [lockLeaseGeneration]
+ * @property {string} [lockLeaseExpiresAt]
+ * @property {string} [requestIdempotencyKey]
+ * @property {string} [dispatchOwnerId]
+ * @property {"awaiting-executor"|"active"|"needed"|"resolved"} [agentEffectReconciliationStatus]
+ * @property {string} [agentEffectReconciliationUpdatedAt]
+ * @property {string} [agentEffectSafetyExpiresAt]
+ * @property {Record<string, unknown>} [agentFenceAuthorization]
+ * @property {Record<string, unknown>} [agentTerminalReceipt]
  * @property {string} [instanceId]
  * @property {string} [executionToken]
  * @property {number} [executionAttempt]
@@ -33,12 +42,34 @@ import { GetItemCommand, UpdateItemCommand, dynamodb } from "./clients.js";
  * @property {string} [remoteCommandStatus]
  * @property {string} [managedVolumeId]
  * @property {string} [managedVolumeDevice]
+ * @property {string} [hibernateOriginalInstanceId]
+ * @property {string} [hibernateSourceImageId]
+ * @property {string} [hibernateReconstructionSnapshotId]
  * @property {string} [hibernatePhase]
+ * @property {string} [hibernateBackupId]
+ * @property {string} [hibernateBackupDigest]
+ * @property {number} [hibernateBackupSize]
+ * @property {number} [hibernateBackupGeneration]
+ * @property {string} [hibernateBackupCreatedAt]
+ * @property {string} [hibernateBackupOperationKey]
+ * @property {string} [hibernateBackupInstanceId]
+ * @property {string} [hibernateBackupServerId]
+ * @property {string} [hibernateBackupArchiveName]
+ * @property {string} [hibernateBackupAuthenticationKeyId]
+ * @property {Record<string, unknown>} [hibernateQuiescenceEvidence]
  * @property {string} [resumeVolumeClientToken]
  * @property {string} [resumeVolumeId]
  * @property {string} [resumeSnapshotId]
  * @property {string} [sideEffectCompletedAt]
  * @property {string} [sideEffectKey]
+ * @property {{mode: "fresh"|"latest"|"named", backupArchiveName?: string|null}} [resumeIntent]
+ * @property {string} [agentRuntimeId]
+ * @property {string} [agentSessionId]
+ * @property {string} [agentTaskId]
+ * @property {string} [agentLeaseId]
+ * @property {number} [agentLeaseGeneration]
+ * @property {string} [agentInvocationId]
+ * @property {string} [agentInvocationDigest]
  * @property {string} [lastError]
  * @property {string} [code]
  * @property {number} maxDurationMs
@@ -73,7 +104,21 @@ import { GetItemCommand, UpdateItemCommand, dynamodb } from "./clients.js";
  * @property {string} [remoteCommandStatus]
  * @property {string} [managedVolumeId]
  * @property {string} [managedVolumeDevice]
+ * @property {string} [hibernateOriginalInstanceId]
+ * @property {string} [hibernateSourceImageId]
+ * @property {string} [hibernateReconstructionSnapshotId]
  * @property {string} [hibernatePhase]
+ * @property {string} [hibernateBackupId]
+ * @property {string} [hibernateBackupDigest]
+ * @property {number} [hibernateBackupSize]
+ * @property {number} [hibernateBackupGeneration]
+ * @property {string} [hibernateBackupCreatedAt]
+ * @property {string} [hibernateBackupOperationKey]
+ * @property {string} [hibernateBackupInstanceId]
+ * @property {string} [hibernateBackupServerId]
+ * @property {string} [hibernateBackupArchiveName]
+ * @property {string} [hibernateBackupAuthenticationKeyId]
+ * @property {Record<string, unknown>} [hibernateQuiescenceEvidence]
  * @property {string} [resumeVolumeClientToken]
  * @property {string} [resumeVolumeId]
  * @property {string} [resumeSnapshotId]
@@ -82,6 +127,8 @@ import { GetItemCommand, UpdateItemCommand, dynamodb } from "./clients.js";
  * @property {string} [error]
  * @property {string} [code]
  * @property {OperationPhase} [phase]
+ * @property {Record<string, unknown>} [agentTerminalReceipt]
+ * @property {{mode: "fresh"|"latest"|"named", backupArchiveName?: string|null}} [resumeIntent]
  */
 
 /** @type {Set<OperationType>} */
@@ -102,6 +149,9 @@ const maxExecutionLeaseSeconds = 15 * 60;
 const maxDurationMs = 17 * 60 * 1000;
 const apiOperationTypes = new Set(["start", "stop", "backup", "restore", "hibernate", "resume"]);
 const emailOperationTypes = new Set(["start", "backup", "restore", "hibernate", "resume", "allowlist"]);
+const resumeIntentPointerId = "mc-aws-resume-intent";
+
+/** @typedef {{schemaVersion: 1, kind: "mc-aws-resume-intent", operationId: string, ownerToken: string, status: "active"|"completed"|"failed", intent: {mode: "fresh"|"latest"|"named"|"replacement-convergence", backupArchiveName?: string|null, backupId?: string, generation?: number}, version: number, updatedAt: string}} ResumeIntentPointer */
 
 function tableName() {
   const value = process.env.MC_OPERATION_STATE_TABLE_NAME?.trim();
@@ -140,6 +190,7 @@ function executionLeaseMs() {
 /** @param {unknown} route @param {OperationType} type */
 function isValidOperationRoute(route, type) {
   if (typeof route !== "string") return false;
+  if (route === "/api/agent/runtime/backups") return type === "backup";
   if (route === `/api/${type}`) return apiOperationTypes.has(type);
   if (route === `/email/${type}`) return emailOperationTypes.has(type);
   return route === "/scheduled/backup" && type === "backup";
@@ -206,6 +257,7 @@ function parseState(raw) {
       typeof state.id !== "string" ||
       typeof state.type !== "string" ||
       !operationTypes.has(/** @type {OperationType} */ (state.type)) ||
+      typeof state.route !== "string" ||
       typeof state.status !== "string" ||
       !operationStatuses.has(/** @type {OperationStatus} */ (state.status)) ||
       !isValidOperationRoute(state.route, /** @type {OperationType} */ (state.type)) ||
@@ -223,6 +275,12 @@ function parseState(raw) {
     const history = parseHistory(state.history);
     if (!history) return null;
     if (state.fencingToken !== undefined && !Number.isSafeInteger(state.fencingToken)) return null;
+    const lockLeaseGeneration = state.lockLeaseGeneration;
+    if (
+      lockLeaseGeneration !== undefined &&
+      (typeof lockLeaseGeneration !== "number" || !Number.isSafeInteger(lockLeaseGeneration) || lockLeaseGeneration < 1)
+    )
+      return null;
     const executionAttempt = state.executionAttempt;
     if (
       executionAttempt !== undefined &&
@@ -230,10 +288,83 @@ function parseState(raw) {
     ) {
       return null;
     }
-    for (const candidate of [state.executionClaimedAt, state.executionLeaseExpiresAt, state.sideEffectCompletedAt]) {
+    for (const candidate of [
+      state.executionClaimedAt,
+      state.executionLeaseExpiresAt,
+      state.sideEffectCompletedAt,
+      state.lockLeaseExpiresAt,
+      state.agentEffectReconciliationUpdatedAt,
+      state.agentEffectSafetyExpiresAt,
+    ]) {
       if (candidate !== undefined && !isIsoDate(candidate)) return null;
     }
+    if (
+      state.hibernateBackupGeneration !== undefined &&
+      (typeof state.hibernateBackupGeneration !== "number" ||
+        !Number.isSafeInteger(state.hibernateBackupGeneration) ||
+        state.hibernateBackupGeneration < 1)
+    )
+      return null;
+    if (
+      state.hibernateBackupSize !== undefined &&
+      (typeof state.hibernateBackupSize !== "number" ||
+        !Number.isSafeInteger(state.hibernateBackupSize) ||
+        state.hibernateBackupSize < 1)
+    )
+      return null;
     if (state.remoteCommandFinal !== undefined && typeof state.remoteCommandFinal !== "boolean") return null;
+    const reconciliationStatus =
+      typeof state.agentEffectReconciliationStatus === "string" ? state.agentEffectReconciliationStatus : undefined;
+    if (
+      state.agentEffectReconciliationStatus !== undefined &&
+      !["awaiting-executor", "active", "needed", "resolved"].includes(reconciliationStatus ?? "")
+    ) {
+      return null;
+    }
+    if (
+      state.agentFenceAuthorization !== undefined &&
+      (!isRecord(state.agentFenceAuthorization) ||
+        state.agentFenceAuthorization.status !== "succeeded" ||
+        !Number.isSafeInteger(state.agentFenceAuthorization.lifecycleLeaseGeneration))
+    ) {
+      return null;
+    }
+    if (state.agentTerminalReceipt !== undefined && !isRecord(state.agentTerminalReceipt)) return null;
+    if (
+      state.resumeIntent !== undefined &&
+      (!isRecord(state.resumeIntent) ||
+        typeof state.resumeIntent.mode !== "string" ||
+        !["fresh", "latest", "named"].includes(state.resumeIntent.mode) ||
+        (state.resumeIntent.backupArchiveName !== undefined &&
+          state.resumeIntent.backupArchiveName !== null &&
+          typeof state.resumeIntent.backupArchiveName !== "string"))
+    )
+      return null;
+    const agentBinding = [
+      state.agentRuntimeId,
+      state.agentSessionId,
+      state.agentTaskId,
+      state.agentLeaseId,
+      state.agentLeaseGeneration,
+      state.agentInvocationId,
+      state.agentInvocationDigest,
+    ];
+    const hasAgentBinding = agentBinding.some((value) => value !== undefined);
+    const agentLeaseGeneration = state.agentLeaseGeneration;
+    if (
+      hasAgentBinding &&
+      (!agentBinding
+        .slice(0, 4)
+        .every((value) => typeof value === "string" && /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value)) ||
+        typeof agentLeaseGeneration !== "number" ||
+        !Number.isSafeInteger(agentLeaseGeneration) ||
+        agentLeaseGeneration < 1 ||
+        typeof state.agentInvocationId !== "string" ||
+        !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(state.agentInvocationId) ||
+        typeof state.agentInvocationDigest !== "string" ||
+        !/^[a-f0-9]{64}$/.test(state.agentInvocationDigest))
+    )
+      return null;
     const configuredDuration = typeof state.maxDurationMs === "number" ? state.maxDurationMs : Number.NaN;
     const duration =
       Number.isSafeInteger(configuredDuration) && configuredDuration > 0 ? configuredDuration : maxDurationMs;
@@ -252,6 +383,20 @@ function parseState(raw) {
       requestedBy: normalizeText(state.requestedBy),
       lockId: normalizeText(state.lockId),
       fencingToken: Number.isSafeInteger(state.fencingToken) ? /** @type {number} */ (state.fencingToken) : undefined,
+      lockLeaseGeneration,
+      lockLeaseExpiresAt: isIsoDate(state.lockLeaseExpiresAt) ? state.lockLeaseExpiresAt : undefined,
+      requestIdempotencyKey: normalizeText(state.requestIdempotencyKey),
+      dispatchOwnerId: normalizeText(state.dispatchOwnerId),
+      agentEffectReconciliationStatus:
+        /** @type {"awaiting-executor" | "active" | "needed" | "resolved" | undefined} */ (reconciliationStatus),
+      agentEffectReconciliationUpdatedAt: isIsoDate(state.agentEffectReconciliationUpdatedAt)
+        ? state.agentEffectReconciliationUpdatedAt
+        : undefined,
+      agentEffectSafetyExpiresAt: isIsoDate(state.agentEffectSafetyExpiresAt)
+        ? state.agentEffectSafetyExpiresAt
+        : undefined,
+      agentFenceAuthorization: isRecord(state.agentFenceAuthorization) ? state.agentFenceAuthorization : undefined,
+      agentTerminalReceipt: isRecord(state.agentTerminalReceipt) ? state.agentTerminalReceipt : undefined,
       instanceId: normalizeText(state.instanceId),
       executionToken: normalizeText(state.executionToken),
       executionAttempt: Number.isSafeInteger(state.executionAttempt)
@@ -267,12 +412,43 @@ function parseState(raw) {
       remoteCommandStatus: normalizeText(state.remoteCommandStatus),
       managedVolumeId: normalizeText(state.managedVolumeId),
       managedVolumeDevice: normalizeText(state.managedVolumeDevice),
+      hibernateOriginalInstanceId: normalizeText(state.hibernateOriginalInstanceId),
+      hibernateSourceImageId: normalizeText(state.hibernateSourceImageId),
+      hibernateReconstructionSnapshotId: normalizeText(state.hibernateReconstructionSnapshotId),
       hibernatePhase: normalizeText(state.hibernatePhase),
+      hibernateBackupId: normalizeText(state.hibernateBackupId),
+      hibernateBackupDigest: normalizeText(state.hibernateBackupDigest),
+      hibernateBackupSize:
+        typeof state.hibernateBackupSize === "number" && Number.isSafeInteger(state.hibernateBackupSize)
+          ? state.hibernateBackupSize
+          : undefined,
+      hibernateBackupGeneration: Number.isSafeInteger(state.hibernateBackupGeneration)
+        ? /** @type {number} */ (state.hibernateBackupGeneration)
+        : undefined,
+      hibernateBackupCreatedAt: isIsoDate(state.hibernateBackupCreatedAt) ? state.hibernateBackupCreatedAt : undefined,
+      hibernateBackupOperationKey: normalizeText(state.hibernateBackupOperationKey),
+      hibernateBackupInstanceId: normalizeText(state.hibernateBackupInstanceId),
+      hibernateBackupServerId: normalizeText(state.hibernateBackupServerId),
+      hibernateBackupArchiveName: normalizeText(state.hibernateBackupArchiveName),
+      hibernateBackupAuthenticationKeyId: normalizeText(state.hibernateBackupAuthenticationKeyId),
+      hibernateQuiescenceEvidence: isRecord(state.hibernateQuiescenceEvidence)
+        ? state.hibernateQuiescenceEvidence
+        : undefined,
       resumeVolumeClientToken: normalizeText(state.resumeVolumeClientToken),
       resumeVolumeId: normalizeText(state.resumeVolumeId),
       resumeSnapshotId: normalizeText(state.resumeSnapshotId),
       sideEffectCompletedAt: isIsoDate(state.sideEffectCompletedAt) ? state.sideEffectCompletedAt : undefined,
       sideEffectKey: normalizeText(state.sideEffectKey),
+      resumeIntent: isRecord(state.resumeIntent)
+        ? /** @type {{mode: "fresh"|"latest"|"named", backupArchiveName?: string|null}} */ (state.resumeIntent)
+        : undefined,
+      agentRuntimeId: normalizeText(state.agentRuntimeId),
+      agentSessionId: normalizeText(state.agentSessionId),
+      agentTaskId: normalizeText(state.agentTaskId),
+      agentLeaseId: normalizeText(state.agentLeaseId),
+      agentLeaseGeneration: typeof agentLeaseGeneration === "number" ? agentLeaseGeneration : undefined,
+      agentInvocationId: normalizeText(state.agentInvocationId),
+      agentInvocationDigest: normalizeText(state.agentInvocationDigest),
       lastError: normalizeText(state.lastError),
       code: normalizeText(state.code),
       maxDurationMs: duration,
@@ -302,17 +478,173 @@ async function readRecord(operationId) {
   return { state: { ...state, version }, version };
 }
 
+/** @param {unknown} raw @returns {ResumeIntentPointer | null} */
+function parseResumeIntentPointer(raw) {
+  if (!raw) return null;
+  try {
+    const pointer = typeof raw === "string" ? JSON.parse(raw) : raw;
+    if (!isRecord(pointer) || pointer.schemaVersion !== 1 || pointer.kind !== "mc-aws-resume-intent") return null;
+    const status = pointer.status;
+    const version = pointer.version;
+    const intent = pointer.intent;
+    if (
+      typeof pointer.operationId !== "string" ||
+      typeof pointer.ownerToken !== "string" ||
+      typeof status !== "string" ||
+      !["active", "completed", "failed"].includes(status) ||
+      typeof version !== "number" ||
+      !Number.isSafeInteger(version) ||
+      version < 1 ||
+      !isIsoDate(pointer.updatedAt) ||
+      !isRecord(intent) ||
+      typeof intent.mode !== "string" ||
+      !["fresh", "latest", "named", "replacement-convergence"].includes(intent.mode)
+    )
+      return null;
+    if (
+      isRecord(intent) &&
+      intent.backupArchiveName !== undefined &&
+      intent.backupArchiveName !== null &&
+      typeof intent.backupArchiveName !== "string"
+    )
+      return null;
+    return /** @type {ResumeIntentPointer} */ (pointer);
+  } catch {
+    return null;
+  }
+}
+
+async function readResumeIntentPointer() {
+  const response = await dynamodb.send(
+    new GetItemCommand({
+      TableName: tableName(),
+      Key: { operationId: { S: resumeIntentPointerId } },
+      ConsistentRead: true,
+    })
+  );
+  if (!response.Item) return null;
+  const pointer = parseResumeIntentPointer(response.Item.payload?.S);
+  if (!pointer || pointer.version !== Number(response.Item.version?.N ?? Number.NaN)) {
+    throw new Error("Resume intent pointer is malformed");
+  }
+  return pointer;
+}
+
+/** @param {{operationId: string, ownerToken: string, operationVersion: number, intent: ResumeIntentPointer["intent"]}} input */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: this is the single conditional-write fence for the durable resume pointer.
+async function claimResumeIntentPointer(input) {
+  if (!input.operationId || !input.ownerToken || !Number.isSafeInteger(input.operationVersion) || !input.intent?.mode) {
+    throw new Error("Resume intent identity is invalid");
+  }
+  const operationRecord = await readRecord(input.operationId);
+  if (
+    !operationRecord ||
+    operationRecord.version !== input.operationVersion ||
+    operationRecord.state.type !== "resume" ||
+    operationRecord.state.status !== "running" ||
+    operationRecord.state.executionToken !== input.ownerToken
+  ) {
+    throw new Error("Resume operation execution ownership changed");
+  }
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const current = await readResumeIntentPointer();
+    if (current?.status === "active" && current.operationId !== input.operationId) {
+      throw new Error("Another resume intent is active");
+    }
+    const nextVersion = (current?.version || 0) + 1;
+    const pointer = {
+      schemaVersion: 1,
+      kind: "mc-aws-resume-intent",
+      operationId: input.operationId,
+      ownerToken: input.ownerToken,
+      status: "active",
+      intent: input.intent,
+      version: nextVersion,
+      updatedAt: new Date().toISOString(),
+    };
+    try {
+      await dynamodb.send(
+        new UpdateItemCommand({
+          TableName: tableName(),
+          Key: { operationId: { S: resumeIntentPointerId } },
+          ConditionExpression:
+            current?.version === undefined
+              ? "attribute_not_exists(operationId)"
+              : "#version = :expected AND (#status <> :active OR (operationIdOwner = :operationId AND ownerToken = :previousOwnerToken))",
+          UpdateExpression:
+            "SET payload = :payload, #version = :version, #status = :status, operationIdOwner = :operationId, ownerToken = :ownerToken, updatedAt = :updatedAt REMOVE ttlEpochSeconds",
+          ExpressionAttributeNames: { "#version": "version", "#status": "status" },
+          ExpressionAttributeValues: {
+            ...(current?.version === undefined ? {} : { ":expected": { N: String(current.version) } }),
+            ":active": { S: "active" },
+            ":payload": { S: JSON.stringify(pointer) },
+            ":version": { N: String(nextVersion) },
+            ":status": { S: "active" },
+            ":operationId": { S: input.operationId },
+            ":ownerToken": { S: input.ownerToken },
+            ":updatedAt": { S: pointer.updatedAt },
+            ...(current?.version === undefined ? {} : { ":previousOwnerToken": { S: current.ownerToken } }),
+          },
+        })
+      );
+      return pointer;
+    } catch (error) {
+      if (!isRecord(error) || error.name !== "ConditionalCheckFailedException") throw error;
+    }
+  }
+  throw new Error("Resume intent pointer contention exceeded retry budget");
+}
+
+/** @param {{operationId: string, ownerToken: string, status: "completed"|"failed"}} input */
+async function completeResumeIntentPointer(input) {
+  const current = await readResumeIntentPointer();
+  if (!current) return null;
+  if (
+    current.status !== "active" &&
+    current.operationId === input.operationId &&
+    current.ownerToken === input.ownerToken
+  )
+    return current;
+  if (current.operationId !== input.operationId || current.ownerToken !== input.ownerToken) {
+    throw new Error("Resume intent successor owns the pointer");
+  }
+  const next = { ...current, status: input.status, version: current.version + 1, updatedAt: new Date().toISOString() };
+  await dynamodb.send(
+    new UpdateItemCommand({
+      TableName: tableName(),
+      Key: { operationId: { S: resumeIntentPointerId } },
+      ConditionExpression:
+        "#version = :expected AND #status = :active AND operationIdOwner = :operationId AND ownerToken = :ownerToken",
+      UpdateExpression: "SET payload = :payload, #version = :version, #status = :status, updatedAt = :updatedAt",
+      ExpressionAttributeNames: { "#version": "version", "#status": "status" },
+      ExpressionAttributeValues: {
+        ":expected": { N: String(current.version) },
+        ":active": { S: "active" },
+        ":operationId": { S: input.operationId },
+        ":ownerToken": { S: input.ownerToken },
+        ":payload": { S: JSON.stringify(next) },
+        ":version": { N: String(next.version) },
+        ":status": { S: input.status },
+        ":updatedAt": { S: next.updatedAt },
+      },
+    })
+  );
+  return next;
+}
+
 /** @param {OperationState} state @param {number} expectedVersion @returns {Promise<OperationState>} */
 async function writeRecord(state, expectedVersion) {
   const nextVersion = expectedVersion + 1;
   const nextState = { ...state, version: nextVersion };
+  const ttlEligible = isTerminal(nextState.status) && !nextState.lockId;
   await dynamodb.send(
     new UpdateItemCommand({
       TableName: tableName(),
       Key: { operationId: { S: state.id } },
       ConditionExpression: expectedVersion === 0 ? "attribute_not_exists(operationId)" : "#version = :expected",
-      UpdateExpression:
-        "SET payload = :payload, #version = :next, #status = :status, phase = :phase, updatedAt = :updatedAt, ttlEpochSeconds = :ttl",
+      UpdateExpression: ttlEligible
+        ? "SET payload = :payload, #version = :next, #status = :status, phase = :phase, updatedAt = :updatedAt, ttlEpochSeconds = :ttl"
+        : "SET payload = :payload, #version = :next, #status = :status, phase = :phase, updatedAt = :updatedAt REMOVE ttlEpochSeconds",
       ExpressionAttributeNames: { "#version": "version", "#status": "status" },
       ExpressionAttributeValues: {
         ...(expectedVersion === 0 ? {} : { ":expected": { N: String(expectedVersion) } }),
@@ -321,7 +653,7 @@ async function writeRecord(state, expectedVersion) {
         ":status": { S: nextState.status },
         ":phase": { S: nextState.phase },
         ":updatedAt": { S: nextState.updatedAt },
-        ":ttl": { N: String(Math.floor(Date.now() / 1000) + retentionSeconds()) },
+        ...(ttlEligible ? { ":ttl": { N: String(Math.floor(Date.now() / 1000) + retentionSeconds()) } } : {}),
       },
     })
   );
@@ -370,6 +702,15 @@ function buildState(existing, input, now) {
     requestedBy: normalizeText(input.userEmail) || existing?.requestedBy,
     lockId: normalizeText(input.lockId) || existing?.lockId,
     fencingToken: Number.isSafeInteger(input.fencingToken) ? input.fencingToken : existing?.fencingToken,
+    lockLeaseGeneration: existing?.lockLeaseGeneration,
+    lockLeaseExpiresAt: existing?.lockLeaseExpiresAt,
+    requestIdempotencyKey: existing?.requestIdempotencyKey,
+    dispatchOwnerId: existing?.dispatchOwnerId,
+    agentEffectReconciliationStatus: existing?.agentEffectReconciliationStatus,
+    agentEffectReconciliationUpdatedAt: existing?.agentEffectReconciliationUpdatedAt,
+    agentEffectSafetyExpiresAt: existing?.agentEffectSafetyExpiresAt,
+    agentFenceAuthorization: existing?.agentFenceAuthorization,
+    agentTerminalReceipt: existing?.agentTerminalReceipt,
     instanceId: normalizeText(input.instanceId) || existing?.instanceId,
     executionToken: normalizeText(input.executionToken) || existing?.executionToken,
     executionAttempt: Number.isSafeInteger(input.executionAttempt)
@@ -392,7 +733,35 @@ function buildState(existing, input, now) {
       : normalizeText(input.remoteCommandStatus) || existing?.remoteCommandStatus,
     managedVolumeId: normalizeText(input.managedVolumeId) || existing?.managedVolumeId,
     managedVolumeDevice: normalizeText(input.managedVolumeDevice) || existing?.managedVolumeDevice,
+    hibernateOriginalInstanceId:
+      normalizeText(input.hibernateOriginalInstanceId) || existing?.hibernateOriginalInstanceId,
+    hibernateSourceImageId: normalizeText(input.hibernateSourceImageId) || existing?.hibernateSourceImageId,
+    hibernateReconstructionSnapshotId:
+      normalizeText(input.hibernateReconstructionSnapshotId) || existing?.hibernateReconstructionSnapshotId,
     hibernatePhase: normalizeText(input.hibernatePhase) || existing?.hibernatePhase,
+    hibernateBackupId: normalizeText(input.hibernateBackupId) || existing?.hibernateBackupId,
+    hibernateBackupDigest: normalizeText(input.hibernateBackupDigest) || existing?.hibernateBackupDigest,
+    hibernateBackupSize:
+      typeof input.hibernateBackupSize === "number" && Number.isSafeInteger(input.hibernateBackupSize)
+        ? input.hibernateBackupSize
+        : existing?.hibernateBackupSize,
+    hibernateBackupGeneration:
+      typeof input.hibernateBackupGeneration === "number" && Number.isSafeInteger(input.hibernateBackupGeneration)
+        ? input.hibernateBackupGeneration
+        : existing?.hibernateBackupGeneration,
+    hibernateBackupCreatedAt: isIsoDate(input.hibernateBackupCreatedAt)
+      ? input.hibernateBackupCreatedAt
+      : existing?.hibernateBackupCreatedAt,
+    hibernateBackupOperationKey:
+      normalizeText(input.hibernateBackupOperationKey) || existing?.hibernateBackupOperationKey,
+    hibernateBackupInstanceId: normalizeText(input.hibernateBackupInstanceId) || existing?.hibernateBackupInstanceId,
+    hibernateBackupServerId: normalizeText(input.hibernateBackupServerId) || existing?.hibernateBackupServerId,
+    hibernateBackupArchiveName: normalizeText(input.hibernateBackupArchiveName) || existing?.hibernateBackupArchiveName,
+    hibernateBackupAuthenticationKeyId:
+      normalizeText(input.hibernateBackupAuthenticationKeyId) || existing?.hibernateBackupAuthenticationKeyId,
+    hibernateQuiescenceEvidence: isRecord(input.hibernateQuiescenceEvidence)
+      ? input.hibernateQuiescenceEvidence
+      : existing?.hibernateQuiescenceEvidence,
     resumeVolumeClientToken: normalizeText(input.resumeVolumeClientToken) || existing?.resumeVolumeClientToken,
     resumeVolumeId: normalizeText(input.resumeVolumeId) || existing?.resumeVolumeId,
     resumeSnapshotId: normalizeText(input.resumeSnapshotId) || existing?.resumeSnapshotId,
@@ -400,6 +769,14 @@ function buildState(existing, input, now) {
       ? input.sideEffectCompletedAt
       : existing?.sideEffectCompletedAt,
     sideEffectKey: normalizeText(input.sideEffectKey) || existing?.sideEffectKey,
+    resumeIntent: isRecord(input.resumeIntent) ? input.resumeIntent : existing?.resumeIntent,
+    agentRuntimeId: existing?.agentRuntimeId,
+    agentSessionId: existing?.agentSessionId,
+    agentTaskId: existing?.agentTaskId,
+    agentLeaseId: existing?.agentLeaseId,
+    agentLeaseGeneration: existing?.agentLeaseGeneration,
+    agentInvocationId: existing?.agentInvocationId,
+    agentInvocationDigest: existing?.agentInvocationDigest,
     lastError: status === "failed" ? error || existing?.lastError || "Operation failed" : undefined,
     code: status === "failed" ? code || existing?.code : undefined,
     maxDurationMs: existing?.maxDurationMs || maxDurationMs,
@@ -434,6 +811,19 @@ async function updateOperationState(input) {
 
   for (let attempt = 0; attempt < 8; attempt++) {
     const record = await readRecord(operationId);
+    if (record?.state.lockId && input.lockId && record.state.lockId !== input.lockId) {
+      throw new Error(`Operation ${operationId} lifecycle lock ownership changed`);
+    }
+    if (
+      record?.state.fencingToken !== undefined &&
+      input.fencingToken !== undefined &&
+      record.state.fencingToken !== input.fencingToken
+    ) {
+      throw new Error(`Operation ${operationId} lifecycle fencing ownership changed`);
+    }
+    if (record && input.lockId && !record.state.lockId) {
+      throw new Error(`Operation ${operationId} is missing lifecycle lock proof`);
+    }
     if (input.expectedExecutionToken && record?.state.executionToken !== input.expectedExecutionToken) {
       throw new Error(`Operation ${operationId} execution ownership changed`);
     }
@@ -611,7 +1001,10 @@ async function getOperationState(operationId) {
 
 export {
   claimOperationExecution,
+  claimResumeIntentPointer,
+  completeResumeIntentPointer,
   getOperationState,
+  readResumeIntentPointer,
   heartbeatOperationExecution,
   isValidOperationRoute,
   recordOperationRemoteCommand,

@@ -438,7 +438,14 @@ validate_duckdns_token() {
 
 # Generate AUTH_SECRET
 generate_auth_secret_value() {
-  openssl rand -base64 48
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -base64 48 | tr '+/' '-_' | tr -d '='
+  elif command -v node >/dev/null 2>&1; then
+    node -e "process.stdout.write(require('node:crypto').randomBytes(48).toString('base64url'))"
+  else
+    log_error "OpenSSL or Node.js is required to generate AUTH_SECRET"
+    return 1
+  fi
 }
 
 # ============================================================================
@@ -1085,10 +1092,49 @@ collect_gdrive_settings() {
 generate_auth_secret() {
   step_section 9 "Generating AUTH_SECRET"
 
-  log "Generating a secure AUTH_SECRET for session encryption..."
+  log "Generating AUTH_SECRET from 48 cryptographically random bytes; its value will not be printed..."
+  if [[ -n "${AUTH_SECRET:-}" ]] && AUTH_SECRET="$AUTH_SECRET" pnpm exec tsx scripts/setup/validate-auth-secret.ts >/dev/null 2>&1; then
+    if [[ "${MC_AWS_ROTATE_AUTH_SECRET:-}" == "1" ]]; then
+      seed_env_file_if_missing "$PRODUCTION_ENV_FILE"
+      if ! ./node_modules/.bin/tsx scripts/setup/manage-auth-secret.ts ensure \
+        --env-file "$PRODUCTION_ENV_FILE" \
+        --secondary-env-file "$LOCAL_ENV_FILE" \
+        --rotate 1 >/dev/null; then
+        log_error "Could not prepare AUTH_SECRET rotation; no secret value was printed."
+        return 1
+      fi
+      log_warning "AUTH_SECRET rotated; the replacement value will not be printed."
+    else
+      log_success "Existing production AUTH_SECRET retained"
+    fi
+    return 0
+  fi
+  if [[ -n "${AUTH_SECRET:-}" ]]; then
+    log_warning "The existing AUTH_SECRET is not production-safe; generating replacement material."
+  fi
   echo ""
 
+  # An explicit rotation is journaled by the shared helper. This keeps an
+  # interrupted candidate from being replaced a second time by setup.sh.
+  if [[ "${MC_AWS_ROTATE_AUTH_SECRET:-}" == "1" ]]; then
+    seed_env_file_if_missing "$PRODUCTION_ENV_FILE"
+    if ! ./node_modules/.bin/tsx scripts/setup/manage-auth-secret.ts ensure \
+      --env-file "$PRODUCTION_ENV_FILE" \
+      --secondary-env-file "$LOCAL_ENV_FILE" \
+      --rotate 1 >/dev/null; then
+      log_error "Could not prepare AUTH_SECRET rotation; no secret value was printed."
+      return 1
+    fi
+    log_success "AUTH_SECRET rotation prepared; value will not be printed"
+    return 0
+  fi
+
   AUTH_SECRET=$(generate_auth_secret_value)
+
+  if ! AUTH_SECRET="$AUTH_SECRET" pnpm exec tsx scripts/setup/validate-auth-secret.ts >/dev/null; then
+    log_error "Generated AUTH_SECRET failed production validation"
+    return 1
+  fi
 
   log_success "AUTH_SECRET generated"
   echo ""
@@ -1097,6 +1143,20 @@ generate_auth_secret() {
   write_env_files "AUTH_SECRET" "$AUTH_SECRET"
 
   log_success "AUTH_SECRET saved"
+}
+
+persist_agent_runtime_deployment_state() {
+  MC_AGENT_RUNTIME_ENABLED="${MC_AGENT_RUNTIME_ENABLED:-false}"
+  if [[ "$MC_AGENT_RUNTIME_ENABLED" != "true" && "$MC_AGENT_RUNTIME_ENABLED" != "false" ]]; then
+    error_exit "MC_AGENT_RUNTIME_ENABLED must be exactly true or false"
+  fi
+
+  write_env_files "MC_AGENT_RUNTIME_ENABLED" "$MC_AGENT_RUNTIME_ENABLED"
+  if [[ "$MC_AGENT_RUNTIME_ENABLED" == "true" ]]; then
+    log_warning "Agent runtime remains enabled; deployment validation requires complete reviewed identity, verifier, catalog, and runtime profile metadata."
+  else
+    log_success "Agent runtime Worker authorization explicitly disabled"
+  fi
 }
 
 # ============================================================================
@@ -1130,6 +1190,7 @@ main() {
   collect_email_settings
   collect_gdrive_settings
   generate_auth_secret
+  persist_agent_runtime_deployment_state
 
   # Success message
   section "Setup Complete!"

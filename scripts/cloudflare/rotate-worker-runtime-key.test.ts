@@ -1,11 +1,12 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 const rotationScript = path.resolve(process.cwd(), "scripts/cloudflare/rotate-worker-runtime-key.sh");
 const temporaryDirectories: string[] = [];
+const runtimeSecretCanary = "new-runtime-secret";
 
 afterEach(() => {
   for (const directory of temporaryDirectories.splice(0)) rmSync(directory, { recursive: true, force: true });
@@ -54,12 +55,14 @@ if (command.includes("list-access-keys")) {
     `#!/usr/bin/env node
 const fs = require("node:fs");
 const args = process.argv.slice(2);
-let suffix = "";
-if (args.includes("bulk")) {
-  const payload = JSON.parse(fs.readFileSync(0, "utf8"));
-  suffix = " " + Object.keys(payload).sort().join(",");
-}
-fs.appendFileSync(${JSON.stringify(eventLog)}, "wrangler " + args.join(" ") + suffix + "\\n");
+const procArgv = fs.readFileSync("/proc/" + process.pid + "/cmdline").toString();
+const procEnv = fs.readFileSync("/proc/" + process.pid + "/environ").toString();
+const stdin = fs.readFileSync(0, "utf8");
+const name = args.at(-1);
+const argvExposure = procArgv.includes(${JSON.stringify(runtimeSecretCanary)}) || procArgv.includes("Bearer ");
+const envExposure = procEnv.includes(${JSON.stringify(runtimeSecretCanary)});
+if (args.includes("bulk")) process.exitCode = 9;
+fs.appendFileSync(${JSON.stringify(eventLog)}, "wrangler " + args.join(" ") + " stdin-present=" + Boolean(stdin) + " argv-secret=" + argvExposure + " env-secret=" + envExposure + "\\n");
 process.stdout.write("{}")
 `
   );
@@ -76,7 +79,9 @@ fs.writeFileSync(process.env.CURL_STATE_FILE, String(attempt + 1));
 const outputIndex = args.indexOf("--output");
 const outputFile = args[outputIndex + 1];
 const url = args.at(-1);
-fs.appendFileSync(process.env.EVENT_LOG, "curl " + url + " response=" + response + " http1=" + args.includes("--http1.1") + "\\n");
+  const procArgv = fs.readFileSync("/proc/" + process.pid + "/cmdline").toString();
+  const procEnv = fs.readFileSync("/proc/" + process.pid + "/environ").toString();
+  fs.appendFileSync(process.env.EVENT_LOG, "curl " + url + " response=" + response + " http1=" + args.includes("--http1.1") + " config-stdin=" + args.includes("--config") + " argv-secret=" + procArgv.includes("Bearer ") + " env-secret=" + procEnv.includes("PROBE_TOKEN") + "\\n");
 if (response === "transport") {
   process.stdout.write("000");
   process.exit(7);
@@ -112,14 +117,16 @@ process.stdout.write(status);
       VERIFY_URL: "https://panel.example.com",
       WRANGLER_CONFIG_FILE: "/dev/null",
       WRANGLER_HOME_DIR: tempDirectory,
+      TMPDIR: tempDirectory,
       MC_AWS_DEPLOYMENT_MANIFEST: path.join(tempDirectory, "deployment-manifest.json"),
+      MC_AWS_CLOUDFLARE_RECOVERY_RECORD: path.join(tempDirectory, "runtime-recovery.json"),
       CLOUDFLARE_API_TOKEN: "",
       CLOUDFLARE_DEPLOY_API_TOKEN: "",
     },
   });
 
   const events = readFileSync(eventLog, "utf8");
-  return { result, events };
+  return { result, events, tempDirectory };
 }
 
 describe("Worker runtime key rotation", { timeout: 20_000 }, () => {
@@ -127,17 +134,37 @@ describe("Worker runtime key rotation", { timeout: 20_000 }, () => {
     const source = readFileSync(rotationScript, "utf8");
     for (const phase of [
       "candidate-created",
+      "candidate-create-intent",
+      "candidate-staging",
       "candidate-staged",
       "candidate-verified",
+      "primary-promotion-intent",
       "primary-promoted",
       "prepared",
+      "commit-decided",
+      "primary-verification-intent",
+      "primary-verification-complete",
+      "prior-deactivation-intent",
       "prior-deactivated",
+      "temporary-secrets-removal-intent",
       "temporary-secrets-removed",
+      "prior-key-deletion-intent",
       "finalized",
+      "rollback-intent",
+      "rolled-back",
     ]) {
       expect(source).toContain(`runtime_journal ${phase}`);
     }
+    expect(source).toContain("durableReplaceFile");
+    expect(source).toContain("previousKeyIds");
+    expect(source).toContain("newKeyId");
     expect(source).toContain("refusing to delete unclassified recovery state");
+    expect(source).toContain("record_worker_identity_after_final_secret_mutation");
+    expect(
+      source.indexOf(
+        "record_worker_identity_after_final_secret_mutation adopt\n    fi\n    runtime_journal temporary-secrets-removed"
+      )
+    ).toBeGreaterThan(-1);
     expect(source).not.toContain("--status Active");
   });
   it("uploads and verifies replacement credentials before revoking the prior runtime key", () => {
@@ -145,9 +172,19 @@ describe("Worker runtime key rotation", { timeout: 20_000 }, () => {
 
     expect(result.status, `${result.stdout}\n${result.stderr}\n${events}`).toBe(0);
     expect(events).toContain(
-      "MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID,MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY,MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN"
+      "secret put --config /dev/null --name mc-aws-panel MC_AWS_RUNTIME_CANDIDATE_ACCESS_KEY_ID"
     );
-    expect(events).toContain("AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN");
+    expect(events).toContain(
+      "secret put --config /dev/null --name mc-aws-panel MC_AWS_RUNTIME_CANDIDATE_SECRET_ACCESS_KEY"
+    );
+    expect(events).toContain("secret put --config /dev/null --name mc-aws-panel MC_AWS_RUNTIME_CREDENTIAL_PROBE_TOKEN");
+    expect(events).toContain("secret put --config /dev/null --name mc-aws-panel AWS_ACCESS_KEY_ID");
+    expect(events).toContain("secret put --config /dev/null --name mc-aws-panel AWS_SECRET_ACCESS_KEY");
+    expect(events).toContain("secret put --config /dev/null --name mc-aws-panel AWS_SESSION_TOKEN");
+    expect(events).not.toContain("bulk");
+    expect(events).not.toContain(runtimeSecretCanary);
+    expect(events).not.toContain("argv-secret=true");
+    expect(events).not.toContain("env-secret=true");
 
     const candidateVerification = events.indexOf("mode=candidate");
     const primaryVerification = events.indexOf("mode=primary");
@@ -182,6 +219,13 @@ describe("Worker runtime key rotation", { timeout: 20_000 }, () => {
     expect(events).not.toContain("delete-access-key --user-name mc-aws-runtime-user --access-key-id AKIAOLD");
     expect(events).toContain("delete-access-key --user-name mc-aws-runtime-user --access-key-id AKIANEW");
     expect(result.stderr).toContain("did not succeed within 3 attempts");
+  });
+
+  it("removes the private verification response file after a failed run", () => {
+    const { result, tempDirectory } = runRotation({ probeResponses: ["502"], maxAttempts: 1 });
+
+    expect(result.status).not.toBe(0);
+    expect(readdirSync(tempDirectory).filter((entry) => entry.startsWith("mc-aws-runtime-verify."))).toEqual([]);
   });
 
   it("supports first deployment when the runtime identity has no prior key", () => {

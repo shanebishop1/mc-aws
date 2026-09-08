@@ -71,8 +71,38 @@ describe("setup-wizard server profile contract", () => {
     expect(source).not.toMatch(/collect_github_settings|write_env_files "GITHUB_(?:USER|REPO|TOKEN)"/);
     expect(source).toContain('step_section 8 "Optional: Google Drive Backups"');
     expect(source).toContain('write_env_files "MC_SCHEDULED_BACKUP_ENABLED" "$MC_SCHEDULED_BACKUP_ENABLED"');
+    expect(source).toContain('write_env_files "MC_AGENT_RUNTIME_ENABLED" "$MC_AGENT_RUNTIME_ENABLED"');
     expect(source).toContain("only if EC2 is already running");
     expect(source).toContain("missing Drive credentials cause a safe skip");
+  });
+});
+
+describe("setup-wizard AUTH_SECRET contract", () => {
+  it("generates validated random material and omits the value from output", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-wizard-auth-secret-"));
+    temporaryDirectories.push(directory);
+    const capturedEnv = path.join(directory, "captured.env");
+    const output = execFileSync(
+      "bash",
+      [
+        "-c",
+        'source scripts/setup/setup-wizard.sh; write_env_files() { printf "%s=%s\\n" "$1" "$2" > "$TEST_CAPTURED_ENV"; }; generate_auth_secret',
+      ],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          MC_AWS_SETUP_LIBRARY_ONLY: "1",
+          TEST_CAPTURED_ENV: capturedEnv,
+        },
+      }
+    );
+    const generated = readFileSync(capturedEnv, "utf8").trim().replace("AUTH_SECRET=", "");
+
+    expect(generated).toMatch(/^[A-Za-z0-9_-]{64}$/);
+    expect(output).toContain("value will not be printed");
+    expect(output).not.toContain(generated);
   });
 });
 

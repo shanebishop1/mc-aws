@@ -1,7 +1,6 @@
 import { createHash } from "node:crypto";
 import {
   CancelCommandCommand,
-  DeleteParameterCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
   PutParameterCommand,
@@ -67,13 +66,19 @@ class SSMCommandUnresolvedError extends Error {
 }
 
 class SSMCommandTerminalError extends Error {
-  constructor(status) {
+  constructor(status, responseCode) {
     const normalizedStatus = String(status).replaceAll(" ", "_").toUpperCase();
     super(`SSM_COMMAND_TERMINAL:${normalizedStatus}`);
     this.name = "SSMCommandTerminalError";
     this.code = "ssm_command_terminal";
     this.status = status;
+    this.responseCode = responseCode;
     this.ssmTerminal = true;
+    if (responseCode === 75) {
+      this.code = "host_service_restoration_pending";
+      this.hostRecoveryRequired = true;
+      this.retainLifecycleLock = true;
+    }
   }
 }
 
@@ -193,6 +198,7 @@ function wrapIdempotentRemoteCommands(commands, identity) {
   ).toString("base64");
   const stateDirectory = "/var/lib/mc-aws/ssm-operations";
   const backupJournal = "/var/lib/mc-aws/mc-backup-journal.json";
+  const hostOperationHelper = "/usr/local/bin/mc-host-operation.py";
   const script = `set -euo pipefail
 install -d -m 700 ${stateDirectory}
 exec 9>${stateDirectory}/${key}.lock
@@ -200,34 +206,7 @@ flock 9
 ack_backup_journal() {
   exec 8>/tmp/mc-operation.lock
   flock 8
-  python3 - ${backupJournal} ${key} <<'PY'
-import json
-import os
-import sys
-
-journal, expected_key = sys.argv[1:]
-try:
-    with open(journal, encoding="utf-8") as source:
-        value = json.load(source)
-except FileNotFoundError:
-    raise SystemExit(0)
-except (OSError, ValueError) as error:
-    raise SystemExit(f"backup journal acknowledgment failed: {error}")
-
-if (
-    value.get("version") != 1
-    or value.get("phase") != "restart-complete"
-    or value.get("operationKey") != expected_key
-):
-    raise SystemExit(0)
-
-os.unlink(journal)
-directory = os.open(os.path.dirname(journal), os.O_RDONLY)
-try:
-    os.fsync(directory)
-finally:
-    os.close(directory)
-PY
+  ${hostOperationHelper} backup-journal ack --journal ${backupJournal} --operation-key ${key} >/dev/null
   flock -u 8
 }
 if [[ -f ${stateDirectory}/${key}.done ]]; then
@@ -324,7 +303,7 @@ async function waitForSSMCompletion(commandId, instanceId, configuredMaxAttempts
       }
       if (SSM_FAILURE_STATUSES.has(status)) {
         console.error("SSM command failed; raw command output omitted from logs and exceptions.");
-        throw new SSMCommandTerminalError(status);
+        throw new SSMCommandTerminalError(status, response.ResponseCode);
       }
       assertKnownStatus(status);
     } catch (error) {
@@ -414,20 +393,6 @@ function shouldRetainLifecycleLock(error) {
   return error?.retainLifecycleLock === true;
 }
 
-async function deleteParameter(name) {
-  try {
-    await ssm.send(new DeleteParameterCommand({ Name: name }));
-    console.log("Successfully deleted managed parameter");
-  } catch (error) {
-    if (error.name === "ParameterNotFound") {
-      console.log("Managed parameter already deleted or not found");
-      return;
-    }
-    console.error("Error deleting managed parameter");
-    throw error;
-  }
-}
-
 async function putParameter(name, value, type = "String", overwrite = true) {
   try {
     const command = new PutParameterCommand({
@@ -436,8 +401,11 @@ async function putParameter(name, value, type = "String", overwrite = true) {
       Type: type,
       Overwrite: overwrite,
     });
-    await ssm.send(command);
+    const response = await ssm.send(command);
+    if (!Number.isSafeInteger(response.Version) || response.Version < 1)
+      throw new Error("SSM_PUT_PARAMETER_VERSION_MISSING");
     console.log("Successfully wrote managed parameter");
+    return response.Version;
   } catch (error) {
     console.error("Error writing managed parameter");
     throw error;
@@ -445,13 +413,26 @@ async function putParameter(name, value, type = "String", overwrite = true) {
 }
 
 async function getParameter(name) {
+  const record = await getParameterRecord(name);
+  return record?.value ?? null;
+}
+
+async function getParameterRecord(name) {
   try {
     const response = await ssm.send(
       new GetParameterCommand({
         Name: name,
       })
     );
-    return response.Parameter?.Value || null;
+    if (typeof response.Parameter?.Value !== "string") return null;
+    if (!Number.isSafeInteger(response.Parameter.Version) || response.Parameter.Version < 1) return null;
+    return {
+      name,
+      value: response.Parameter.Value,
+      type: response.Parameter.Type,
+      version: response.Parameter.Version,
+      lastModifiedAt: response.Parameter.LastModifiedDate?.toISOString(),
+    };
   } catch (error) {
     if (error.name === "ParameterNotFound") {
       return null;
@@ -460,11 +441,32 @@ async function getParameter(name) {
   }
 }
 
+async function deleteParameterIfCurrent(name, proof) {
+  void name;
+  void proof;
+  // SSM has no conditional DeleteParameter API. A read followed by delete is
+  // not a compare-and-swap, so production Lambda code fails closed.
+  return false;
+}
+
+async function putParameterIfCurrent(name, value, proof, type = "String", overwrite = true) {
+  void name;
+  void value;
+  void proof;
+  void type;
+  void overwrite;
+  // SSM has no conditional PutParameter counterpart; never emulate one with
+  // a read/put sequence that can overwrite a successor.
+  return false;
+}
+
 export {
-  deleteParameter,
+  deleteParameterIfCurrent,
   executeSSMCommand,
   getParameter,
+  getParameterRecord,
   putParameter,
+  putParameterIfCurrent,
   reconcileRemoteCommand,
   shouldRetainLifecycleLock,
   wrapIdempotentRemoteCommands,

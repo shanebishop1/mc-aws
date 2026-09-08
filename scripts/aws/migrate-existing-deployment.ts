@@ -56,6 +56,7 @@ interface Options {
   assertStandardDeploySafe: boolean;
   confirmExclusiveTagging: boolean;
   envFile: string;
+  assemblyDirectory?: string;
 }
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
@@ -111,6 +112,7 @@ Options:
   --stack-name <name>       Default: MinecraftStack
   --region <region>         Default: AWS_REGION/AWS_DEFAULT_REGION/us-west-1
   --account <12 digits>     Expected CDK deployment account (required by the standard-deploy guard)
+  --assembly-directory <dir>  Validate this already-synthesized canonical assembly instead of synthesizing again
   --assert-standard-deploy-safe  Read-only guard used by normal deployment entry points
   --confirm-exclusive-tagging    Tags stage only: confirms all other stack/EC2 lifecycle/tag writers are paused
 
@@ -143,6 +145,7 @@ function parseOptions(argv: string[]): Options {
     else if (argument === "--assert-standard-deploy-safe") options.assertStandardDeploySafe = true;
     else if (argument === "--confirm-exclusive-tagging") options.confirmExclusiveTagging = true;
     else if (argument === "--env-file") options.envFile = value();
+    else if (argument === "--assembly-directory") options.assemblyDirectory = value();
     else usage();
   }
   if (
@@ -304,11 +307,32 @@ function synthesizeCurrentTemplate(identity: StackIdentity, assemblyDirectory: s
       AWS_DEFAULT_REGION: identity.region,
     },
   });
+  const manifest = JSON.parse(readFileSync(path.join(assemblyDirectory, "manifest.json"), "utf8")) as JsonRecord;
+  const assetManifest = JSON.parse(readFileSync(path.join(assemblyDirectory, "MinecraftStack.assets.json"), "utf8"));
+  assertSynthesizedAssemblyIdentity(identity, { manifest, assetManifest });
+  const templateFile = manifest.artifacts?.MinecraftStack?.properties?.templateFile;
+  if (templateFile !== "MinecraftStack.template.json") throw new Error("CDK assembly templateFile is not canonical.");
+  return JSON.parse(readFileSync(path.join(assemblyDirectory, templateFile), "utf8"));
+}
+
+function readCurrentTemplate(identity: StackIdentity, assemblyDirectory: string): CloudFormationTemplate {
+  const manifestPath = path.join(assemblyDirectory, "manifest.json");
+  const assetManifestPath = path.join(assemblyDirectory, "MinecraftStack.assets.json");
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as JsonRecord;
+  const templateFile = manifest.artifacts?.MinecraftStack?.properties?.templateFile;
+  if (templateFile !== "MinecraftStack.template.json") throw new Error("CDK assembly templateFile is not canonical.");
+  const templatePath = path.join(assemblyDirectory, templateFile);
+  for (const file of [manifestPath, assetManifestPath, templatePath]) {
+    const status = lstatSync(file);
+    if (!status.isFile() || status.isSymbolicLink() || status.nlink !== 1) {
+      throw new Error(`Canonical CDK assembly file ${file} is not one regular file.`);
+    }
+  }
   assertSynthesizedAssemblyIdentity(identity, {
-    manifest: JSON.parse(readFileSync(path.join(assemblyDirectory, "manifest.json"), "utf8")),
-    assetManifest: JSON.parse(readFileSync(path.join(assemblyDirectory, "MinecraftStack.assets.json"), "utf8")),
+    manifest,
+    assetManifest: JSON.parse(readFileSync(assetManifestPath, "utf8")),
   });
-  return JSON.parse(readFileSync(path.join(assemblyDirectory, "MinecraftStack.template.json"), "utf8"));
+  return JSON.parse(readFileSync(templatePath, "utf8")) as CloudFormationTemplate;
 }
 
 function stackTemplateAssetObjectUrl(assemblyDirectory: string): unknown {
@@ -726,13 +750,17 @@ function assertStandardDeploySafe(options: Options): void {
       "Standard deployment blocked: this stack still manages legacy account-wide SES resources. Run pnpm migrate:existing."
     );
   }
-  const assemblyDirectory = mkdtempSync(path.join(tmpdir(), "mc-aws-deploy-guard-"));
+  const assemblyDirectory = options.assemblyDirectory
+    ? options.assemblyDirectory
+    : mkdtempSync(path.join(tmpdir(), "mc-aws-deploy-guard-"));
   try {
     const actualUserData = actualInstanceUserDataForInstance(identity, physicalInstanceId(identity));
-    const current = synthesizeCurrentTemplate(identity, assemblyDirectory);
+    const current = options.assemblyDirectory
+      ? readCurrentTemplate(identity, assemblyDirectory)
+      : synthesizeCurrentTemplate(identity, assemblyDirectory);
     assertStandardDeploymentInstanceSafe(live, current, actualUserData);
   } finally {
-    rmSync(assemblyDirectory, { recursive: true, force: true });
+    if (!options.assemblyDirectory) rmSync(assemblyDirectory, { recursive: true, force: true });
   }
 }
 

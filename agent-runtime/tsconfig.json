@@ -1,0 +1,11 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "incremental": false,
+    "rootDir": "..",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts", "../lib/agent/**/*.ts"],
+  "exclude": ["../.agents/**", "../**/*.test.ts"]
+}

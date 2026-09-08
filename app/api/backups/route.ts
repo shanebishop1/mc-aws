@@ -35,9 +35,39 @@ type FailedCache = {
   cachedAt?: number;
 };
 type BackupsCache = ReadyCache | PendingCache | FailedCache;
+type AuthenticatedBackupInfo = BackupInfo & {
+  backupId: string;
+  digest: string;
+  generation: number;
+  createdAt: string;
+  instanceId: string;
+  serverId: string;
+  authenticationKeyId: string;
+  operationKey: string | null;
+};
 
-function isBackupList(value: unknown): value is BackupInfo[] {
-  return Array.isArray(value);
+function isBackupList(value: unknown): value is AuthenticatedBackupInfo[] {
+  return (
+    Array.isArray(value) &&
+    value.every(
+      (item) =>
+        item &&
+        typeof item === "object" &&
+        typeof item.name === "string" &&
+        /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tar\.gz$/.test(item.name) &&
+        /^[a-f0-9]{32}$/.test(item.backupId) &&
+        /^[a-f0-9]{64}$/.test(item.digest) &&
+        Number.isSafeInteger(item.generation) &&
+        item.generation > 0 &&
+        typeof item.createdAt === "string" &&
+        !Number.isNaN(Date.parse(item.createdAt)) &&
+        /^i-[a-f0-9]{8,17}$/.test(item.instanceId) &&
+        typeof item.serverId === "string" &&
+        /^[A-Za-z0-9][A-Za-z0-9:/._-]{0,255}$/.test(item.serverId) &&
+        /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(item.authenticationKeyId) &&
+        (item.operationKey === null || /^[a-f0-9]{64}$/.test(item.operationKey))
+    )
+  );
 }
 
 function parseBackupsCache(raw: string | null): BackupsCache | null {
@@ -46,11 +76,8 @@ function parseBackupsCache(raw: string | null): BackupsCache | null {
     const parsed = JSON.parse(raw) as Record<string, unknown>;
     if (!isBackupList(parsed.backups)) return null;
 
-    // Backward compatibility for the original untagged ready cache payload.
-    if (parsed.status === undefined && typeof parsed.cachedAt === "number") {
-      return { status: "ready", backups: parsed.backups, cachedAt: parsed.cachedAt };
-    }
     if (parsed.status === "ready" && typeof parsed.cachedAt === "number") {
+      if (!isBackupList(parsed.backups)) return null;
       return { status: "ready", backups: parsed.backups, cachedAt: parsed.cachedAt };
     }
     if (parsed.status === "pending" && typeof parsed.startedAt === "number" && typeof parsed.updatedAt === "number") {

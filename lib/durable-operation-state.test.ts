@@ -136,6 +136,50 @@ describe("durable-operation-state", () => {
     });
   });
 
+  it("round-trips Lambda recovery fields through a Worker CAS", async () => {
+    resetDurableOperationStateStoreForTests();
+    const lambdaRecovery = {
+      remoteCommandIdentity: "remote-identity",
+      hibernateOriginalInstanceId: "i-original",
+      hibernateSourceImageId: "ami-source",
+      hibernateReconstructionSnapshotId: "snap-reconstruction",
+      hibernateBackupId: "backup-id",
+      hibernateBackupDigest: "a".repeat(64),
+      hibernateBackupSize: 42,
+      hibernateBackupGeneration: 7,
+      hibernateBackupCreatedAt: "2026-04-14T10:00:00.000Z",
+      hibernateBackupOperationKey: "b".repeat(64),
+      hibernateBackupInstanceId: "i-backup",
+      hibernateBackupServerId: "server-id",
+      hibernateBackupArchiveName: "hibernate.tar.gz",
+      hibernateBackupAuthenticationKeyId: "auth-key",
+      hibernateQuiescenceEvidence: { rootVolumeId: "vol-root", proof: "terminal" },
+      resumeVolumeClientToken: "volume-client-token",
+      resumeVolumeId: "vol-resume",
+      resumeSnapshotId: "snap-resume",
+      resumeIntent: { mode: "latest" },
+    };
+
+    await persistDurableOperationStateTransition({
+      operationId: "lambda-recovery-round-trip",
+      type: "resume",
+      route: "/api/resume",
+      status: "running",
+      source: "lambda",
+      timestamp: "2026-04-14T10:00:00.000Z",
+      ...(lambdaRecovery as Record<string, unknown>),
+    });
+    await persistDurableOperationStateTransition({
+      operationId: "lambda-recovery-round-trip",
+      type: "resume",
+      status: "running",
+      source: "api",
+      timestamp: "2026-04-14T10:00:01.000Z",
+    });
+
+    await expect(getDurableOperationState("lambda-recovery-round-trip")).resolves.toMatchObject(lambdaRecovery);
+  });
+
   it("does not regress operation status when late accepted update arrives", async () => {
     resetDurableOperationStateStoreForTests();
     const operationId = "backup-456";
@@ -238,7 +282,7 @@ describe("durable-operation-state", () => {
       limit: 2,
     });
 
-    expect(selected).toEqual(["/minecraft/operations/invalid-json", "/minecraft/operations/old-op-2"]);
+    expect(selected).toEqual(["/minecraft/operations/old-op-2"]);
   });
 
   it("deletes only expired operation states and respects max deletion limit", async () => {

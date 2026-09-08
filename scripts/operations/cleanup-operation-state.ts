@@ -1,8 +1,12 @@
+import { lstatSync, readFileSync } from "node:fs";
+import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
   cleanupExpiredDurableOperationStates,
   getDurableOperationStateRetentionMs,
+  isDurableOperationStateCleanupProtected,
 } from "@/lib/durable-operation-state";
+import { CloudFormationClient, DescribeStacksCommand, type Stack } from "@aws-sdk/client-cloudformation";
 import {
   type AttributeValue,
   DeleteItemCommand,
@@ -26,6 +30,7 @@ interface DynamoCandidate {
   version: number;
   updatedAt: string;
   timestampMs: number;
+  payload: string;
 }
 
 export function parsePositiveIntegerFlag(flag: string, value: string | undefined): number {
@@ -52,13 +57,62 @@ export function parseCliOptions(argv: string[]): CliOptions {
   return options;
 }
 
+export function assertCleanupTableBinding(input: {
+  stack: Pick<Stack, "StackId" | "Tags" | "Outputs">;
+  stackId: string;
+  claimToken: string;
+  operationTableName: string;
+  lifecycleLockTableName: string;
+}): void {
+  const outputs = Object.fromEntries((input.stack.Outputs ?? []).map((item) => [item.OutputKey, item.OutputValue]));
+  const claims = (input.stack.Tags ?? []).filter((item) => item.Key === "McAwsClaimToken");
+  if (
+    input.stack.StackId !== input.stackId ||
+    claims.length !== 1 ||
+    claims[0]?.Value !== input.claimToken ||
+    outputs.OperationStateTableName !== input.operationTableName ||
+    outputs.LifecycleLockTableName !== input.lifecycleLockTableName
+  ) {
+    throw new Error("Operation cleanup table names are not bound to the exact claimed deployment stack");
+  }
+}
+
+async function assertCleanupDeploymentBinding(region: string, operationTableName: string): Promise<void> {
+  const lifecycleLockTableName = process.env.MC_LIFECYCLE_LOCK_TABLE_NAME?.trim();
+  if (!lifecycleLockTableName) throw new Error("MC_LIFECYCLE_LOCK_TABLE_NAME is required for protected cleanup");
+  const manifestPath = path.resolve(process.env.MC_AWS_DEPLOYMENT_MANIFEST || ".mc-aws-deployment.json");
+  const metadata = lstatSync(manifestPath);
+  if (metadata.isSymbolicLink() || !metadata.isFile() || (metadata.mode & 0o777) !== 0o600) {
+    throw new Error("Deployment manifest must be one secure regular file for operation cleanup");
+  }
+  const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as {
+    aws?: { stack?: { id?: string; claimToken?: string } };
+  };
+  const stackId = manifest.aws?.stack?.id ?? "";
+  const claimToken = manifest.aws?.stack?.claimToken ?? "";
+  if (!stackId || !/^[a-f0-9-]{36}$/.test(claimToken)) {
+    throw new Error("Deployment manifest has no exact claimed stack authority for operation cleanup");
+  }
+  const response = await new CloudFormationClient({ region }).send(new DescribeStacksCommand({ StackName: stackId }));
+  if (response.Stacks?.length !== 1) throw new Error("Operation cleanup expected exactly one claimed deployment stack");
+  assertCleanupTableBinding({
+    stack: response.Stacks[0] as Stack,
+    stackId,
+    claimToken,
+    operationTableName,
+    lifecycleLockTableName,
+  });
+}
+
 function parseDynamoCandidate(item: Record<string, AttributeValue>): DynamoCandidate | null {
   const operationId = item?.operationId?.S;
   const updatedAt = item?.updatedAt?.S;
   const version = Number(item?.version?.N ?? Number.NaN);
+  const payload = item?.payload?.S;
   const timestampMs = Date.parse(updatedAt ?? "");
-  if (!operationId || !updatedAt || !Number.isSafeInteger(version) || Number.isNaN(timestampMs)) return null;
-  return { operationId, updatedAt, version, timestampMs };
+  if (!operationId || !updatedAt || !payload || !Number.isSafeInteger(version) || Number.isNaN(timestampMs))
+    return null;
+  return { operationId, updatedAt, version, timestampMs, payload };
 }
 
 // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: pagination, retention selection, dry-run, and conditional race handling stay visibly ordered.
@@ -76,7 +130,7 @@ export async function cleanupDynamoDbOperations(input: {
     const page = (await input.client.send(
       new ScanCommand({
         TableName: input.tableName,
-        ProjectionExpression: "operationId, #version, updatedAt",
+        ProjectionExpression: "operationId, #version, updatedAt, payload",
         ExpressionAttributeNames: { "#version": "version" },
         ExclusiveStartKey: exclusiveStartKey,
         ConsistentRead: true,
@@ -85,7 +139,13 @@ export async function cleanupDynamoDbOperations(input: {
     scanned += page.Items?.length ?? 0;
     for (const item of page.Items ?? []) {
       const candidate = parseDynamoCandidate(item);
-      if (candidate && candidate.timestampMs <= input.cutoffMs) candidates.push(candidate);
+      if (
+        candidate &&
+        candidate.timestampMs <= input.cutoffMs &&
+        !(await isDurableOperationStateCleanupProtected(candidate.payload))
+      ) {
+        candidates.push(candidate);
+      }
     }
     exclusiveStartKey = page.LastEvaluatedKey;
   } while (exclusiveStartKey);
@@ -141,8 +201,10 @@ export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (!options.legacySsmOnly) {
     const tableName = process.env.MC_OPERATION_STATE_TABLE_NAME?.trim();
     if (!tableName) throw new Error("MC_OPERATION_STATE_TABLE_NAME is required unless --legacy-ssm-only is used");
+    const region = process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1";
+    await assertCleanupDeploymentBinding(region, tableName);
     const client = new DynamoDBClient({
-      region: process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || "us-east-1",
+      region,
     });
     const result = await cleanupDynamoDbOperations({
       client,

@@ -1,16 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { GetItemCommand, UpdateItemCommand, dynamodb } from "./clients.js";
-import { deleteParameter, getParameter, putParameter } from "./ssm.js";
 
 const LOCK_KEY = "minecraft-server-lifecycle";
 const PROTOCOL_METADATA_KEY = "protocol#dual-v1";
-const LEGACY_LOCK_PARAMETER = "/minecraft/server-action";
-const LEGACY_DELETE_CLAIM_PREFIX = "/minecraft/server-action-delete-claim";
 const PROTOCOL_VERSION = "dual-v1";
 const LOCK_LEASE_MS = 90 * 60 * 1000;
-const DELETE_CLAIM_LEASE_MS = 60 * 1000;
 const AMBIGUITY_REPAIR_ATTEMPTS = 3;
-const ACTIONS = new Set(["start", "stop", "resume", "hibernate", "backup", "restore", "allowlist"]);
+// `destroy` is an operator-owned, non-expiring barrier. Lambda never acquires
+// it, but must parse it as active authority so delayed lifecycle deliveries
+// cannot treat the lock record as malformed or absent.
+const ACTIONS = new Set(["start", "stop", "resume", "hibernate", "backup", "restore", "allowlist", "destroy"]);
+const ACQUIRABLE_ACTIONS = new Set(["start", "stop", "resume", "hibernate", "backup", "restore", "allowlist"]);
 
 class LifecycleLockConflictError extends Error {
   constructor(existingLock) {
@@ -30,14 +30,6 @@ function isConditionalFailure(error) {
   return error?.name === "ConditionalCheckFailedException";
 }
 
-function isParameterAlreadyExists(error) {
-  return error?.name === "ParameterAlreadyExists" || error?.message?.includes("ParameterAlreadyExists") === true;
-}
-
-function isParameterNotFound(error) {
-  return error?.name === "ParameterNotFound" || error?.message?.includes("ParameterNotFound") === true;
-}
-
 function parseLockItem(item) {
   if (!item || item.released?.BOOL === true) return null;
   const lockId = item.lockId?.S;
@@ -46,23 +38,33 @@ function parseLockItem(item) {
   const createdAt = item.createdAt?.S;
   const leaseExpiresAt = Number(item.leaseExpiresAt?.N ?? Number.NaN);
   const fencingToken = Number(item.fencingToken?.N ?? Number.NaN);
+  const leaseGeneration = Number(item.leaseGeneration?.N ?? "1");
+  const agentFenceActive = item.agentFenceActive?.BOOL === true;
   if (
     !lockId ||
     !ACTIONS.has(action) ||
     !ownerEmail ||
     !createdAt ||
     !Number.isSafeInteger(fencingToken) ||
-    !Number.isFinite(leaseExpiresAt)
+    fencingToken < 1 ||
+    !Number.isSafeInteger(leaseGeneration) ||
+    leaseGeneration < 1 ||
+    !Number.isFinite(leaseExpiresAt) ||
+    !Number.isFinite(new Date(leaseExpiresAt).getTime())
   ) {
     return null;
   }
   return {
     lockId,
     fencingToken,
+    leaseGeneration,
+    agentFenceActive,
     action,
     ownerEmail,
     createdAt,
     expiresAt: new Date(leaseExpiresAt).toISOString(),
+    operationId: item.operationId?.S,
+    operationOwnerId: item.operationOwnerId?.S,
   };
 }
 
@@ -79,148 +81,30 @@ async function assertBridgeMetadata() {
   }
 }
 
-function parseLegacyLock(raw) {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw);
-    if (
-      !value?.lockId ||
-      !ACTIONS.has(value.action) ||
-      !value.ownerEmail ||
-      !Number.isFinite(Date.parse(value.createdAt)) ||
-      !Number.isFinite(Date.parse(value.expiresAt))
-    )
-      return null;
-    return value;
-  } catch {
-    return null;
-  }
-}
-
-function parseLegacyDeleteClaim(raw) {
-  if (!raw) return null;
-  try {
-    const value = JSON.parse(raw);
-    if (!value?.claimId || !Number.isFinite(Date.parse(value.expiresAt))) return null;
-    return { claimId: value.claimId, expiresAt: value.expiresAt };
-  } catch {
-    return null;
-  }
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Claim lease takeover and ownership-safe cleanup form one SSM transaction boundary.
-async function deleteLegacyBridgeLockIfExpected(lockId, requireExpired) {
-  const claimParameter = `${LEGACY_DELETE_CLAIM_PREFIX}/${lockId}`;
-  const claimId = randomUUID();
-  let claimOwned = false;
-  let claimExpiresAt = 0;
-  for (let attempt = 0; attempt < 3 && !claimOwned; attempt++) {
-    const now = Date.now();
-    try {
-      await putParameter(
-        claimParameter,
-        JSON.stringify({
-          claimId,
-          createdAt: new Date(now).toISOString(),
-          expiresAt: new Date(now + DELETE_CLAIM_LEASE_MS).toISOString(),
-        }),
-        "String",
-        false
-      );
-      claimOwned = true;
-      claimExpiresAt = now + DELETE_CLAIM_LEASE_MS;
-    } catch (error) {
-      if (!isParameterAlreadyExists(error)) throw error;
-      const existingClaim = parseLegacyDeleteClaim(await getParameter(claimParameter));
-      if (existingClaim && Date.parse(existingClaim.expiresAt) > now) return false;
-      try {
-        await deleteParameter(claimParameter);
-      } catch (deleteError) {
-        if (!isParameterNotFound(deleteError)) throw deleteError;
-      }
-    }
-  }
-  if (!claimOwned) return false;
-  try {
-    const current = parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER));
-    if (!current || current.lockId !== lockId || (requireExpired && Date.parse(current.expiresAt) > Date.now())) {
-      return false;
-    }
-    try {
-      await deleteParameter(LEGACY_LOCK_PARAMETER);
-      return true;
-    } catch (error) {
-      if (isParameterNotFound(error)) return false;
-      throw error;
-    }
-  } finally {
-    try {
-      if (Date.now() < claimExpiresAt) {
-        await deleteParameter(claimParameter);
-      } else {
-        const currentClaim = parseLegacyDeleteClaim(await getParameter(claimParameter));
-        if (currentClaim?.claimId === claimId) await deleteParameter(claimParameter);
-      }
-    } catch (error) {
-      if (!isParameterNotFound(error)) console.error("Failed to clean legacy lifecycle delete claim");
-    }
-  }
-}
-
-// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Atomic SSM acquisition, orphan repair, and stale takeover remain one bridge boundary.
 async function acquireLegacyBridgeLock(action, ownerEmail) {
   const now = Date.now();
-  const lock = {
+  // SSM has no conditional mutation. This is only a candidate for the
+  // authoritative DynamoDB conditional write; never bootstrap a legacy mirror
+  // before ownership exists.
+  return {
     lockId: randomUUID(),
     action,
     ownerEmail: ownerEmail.trim().toLowerCase(),
     createdAt: new Date(now).toISOString(),
     expiresAt: new Date(now + LOCK_LEASE_MS).toISOString(),
+    leaseGeneration: 1,
+    agentFenceActive: false,
+    claimToken: randomUUID(),
   };
-  try {
-    await putParameter(LEGACY_LOCK_PARAMETER, JSON.stringify(lock), "String", false);
-    return lock;
-  } catch (error) {
-    if (!isParameterAlreadyExists(error)) throw error;
-  }
-  const existing = parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER));
-  if (existing && Date.parse(existing.expiresAt) > now) {
-    const currentItem = await getCurrentLifecycleLockItem();
-    if (currentItem?.released?.BOOL === true && currentItem.lockId?.S === existing.lockId) {
-      const cleaned = await releaseLegacyBridgeLockWithRetry(existing.lockId);
-      if (!cleaned) throw new Error("Lifecycle lock bridge reconciliation did not converge");
-      try {
-        await putParameter(LEGACY_LOCK_PARAMETER, JSON.stringify(lock), "String", false);
-        return lock;
-      } catch (error) {
-        if (!isParameterAlreadyExists(error)) throw error;
-      }
-    }
-    throw new LifecycleLockConflictError(existing);
-  }
-  if (!existing) throw new LifecycleLockConflictError(existing);
-  await deleteLegacyBridgeLockIfExpected(existing.lockId, true);
-  try {
-    await putParameter(LEGACY_LOCK_PARAMETER, JSON.stringify(lock), "String", false);
-    return lock;
-  } catch (error) {
-    if (!isParameterAlreadyExists(error)) throw error;
-    throw new LifecycleLockConflictError(parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER)));
-  }
 }
 
 async function releaseLegacyBridgeLock(lockId) {
-  return deleteLegacyBridgeLockIfExpected(lockId, false);
+  void lockId;
+  return true;
 }
 
 async function releaseLegacyBridgeLockWithRetry(lockId) {
-  for (let attempt = 0; attempt < AMBIGUITY_REPAIR_ATTEMPTS; attempt++) {
-    if (await releaseLegacyBridgeLock(lockId)) return true;
-    const current = parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER));
-    if (!current) return true;
-    if (current.lockId !== lockId) return false;
-  }
-  return false;
+  return releaseLegacyBridgeLock(lockId);
 }
 
 async function getCurrentLifecycleLock() {
@@ -232,7 +116,7 @@ async function getCurrentLifecycleLock() {
     })
   );
   const lock = parseLockItem(response.Item);
-  return lock && Date.parse(lock.expiresAt) > Date.now() ? lock : null;
+  return lock && (lock.agentFenceActive || Date.parse(lock.expiresAt) > Date.now()) ? lock : null;
 }
 
 async function getCurrentLifecycleLockItem() {
@@ -286,9 +170,10 @@ async function acquireDynamoLifecycleLock(legacyLock) {
       new UpdateItemCommand({
         TableName: tableName(),
         Key: { lockKey: { S: LOCK_KEY } },
-        ConditionExpression: "attribute_not_exists(lockId) OR released = :true OR leaseExpiresAt < :now",
+        ConditionExpression:
+          "attribute_not_exists(lockId) OR released = :true OR (leaseExpiresAt < :now AND (attribute_not_exists(agentFenceActive) OR agentFenceActive = :false))",
         UpdateExpression:
-          "SET lockId = :lockId, #action = :action, ownerEmail = :ownerEmail, createdAt = :createdAt, leaseExpiresAt = :lease, released = :false, protocolVersion = :protocol, fencingToken = if_not_exists(fencingToken, :zero) + :one REMOVE ttlEpochSeconds",
+          "SET lockId = :lockId, #action = :action, ownerEmail = :ownerEmail, createdAt = :createdAt, leaseExpiresAt = :lease, leaseGeneration = :leaseGeneration, agentFenceActive = :false, released = :false, protocolVersion = :protocol, fencingToken = if_not_exists(fencingToken, :zero) + :one REMOVE ttlEpochSeconds",
         ExpressionAttributeNames: { "#action": "action" },
         ExpressionAttributeValues: {
           ":lockId": { S: legacyLock.lockId },
@@ -302,6 +187,7 @@ async function acquireDynamoLifecycleLock(legacyLock) {
           ":false": { BOOL: false },
           ":zero": { N: "0" },
           ":one": { N: "1" },
+          ":leaseGeneration": { N: "1" },
         },
         ReturnValues: "ALL_NEW",
         ReturnValuesOnConditionCheckFailure: "ALL_OLD",
@@ -323,7 +209,7 @@ async function acquireDynamoLifecycleLock(legacyLock) {
 }
 
 async function acquireLifecycleLock(action, ownerEmail) {
-  if (!ACTIONS.has(action)) throw new Error(`Unsupported lifecycle lock action: ${action}`);
+  if (!ACQUIRABLE_ACTIONS.has(action)) throw new Error(`Unsupported lifecycle lock action: ${action}`);
   await assertBridgeMetadata();
   const legacyLock = await acquireLegacyBridgeLock(action, ownerEmail);
   try {
@@ -331,7 +217,7 @@ async function acquireLifecycleLock(action, ownerEmail) {
   } catch (error) {
     if (error?.retainLegacyBridge !== true) {
       await releaseLegacyBridgeLockWithRetry(legacyLock.lockId).catch(() =>
-        console.error("Failed to compensate legacy lifecycle bridge lock")
+        console.error("Failed to reconcile lifecycle acquisition after an ambiguous DynamoDB result")
       );
     }
     throw error;
@@ -340,81 +226,64 @@ async function acquireLifecycleLock(action, ownerEmail) {
 
 async function bridgeLegacyLifecycleLock(lockId, action, ownerEmail) {
   await assertBridgeMetadata();
-  const legacyLock = parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER));
-  if (
-    !legacyLock ||
-    legacyLock.lockId !== lockId ||
-    legacyLock.action !== action ||
-    legacyLock.ownerEmail.trim().toLowerCase() !== ownerEmail.trim().toLowerCase() ||
-    Date.parse(legacyLock.expiresAt) <= Date.now()
-  ) {
-    throw new LifecycleLockConflictError(null);
-  }
   const existing = await getCurrentLifecycleLock();
-  if (existing?.lockId === lockId && existing.action === action && existing.ownerEmail === legacyLock.ownerEmail) {
+  if (
+    existing?.lockId === lockId &&
+    existing.action === action &&
+    existing.ownerEmail === ownerEmail.trim().toLowerCase()
+  ) {
     return existing;
   }
-  return await acquireDynamoLifecycleLock(legacyLock);
+  // Legacy-first bootstrap is intentionally removed. An old payload without
+  // an authoritative DynamoDB owner/version cannot be adopted safely.
+  throw new LifecycleLockConflictError(existing);
 }
 
 async function assertLifecycleLockOwned(lockId, fencingToken, action) {
   await assertBridgeMetadata();
-  const legacy = parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER));
   const current = await getCurrentLifecycleLock();
   if (!current || current.lockId !== lockId || current.fencingToken !== fencingToken || current.action !== action) {
-    throw new LifecycleLockConflictError(current);
-  }
-  if (!legacy) {
-    try {
-      await putParameter(
-        LEGACY_LOCK_PARAMETER,
-        JSON.stringify({
-          lockId: current.lockId,
-          action: current.action,
-          ownerEmail: current.ownerEmail,
-          createdAt: current.createdAt,
-          expiresAt: current.expiresAt,
-        }),
-        "String",
-        false
-      );
-    } catch (error) {
-      if (!isParameterAlreadyExists(error)) throw error;
-    }
-  } else if (legacy.lockId !== lockId || legacy.action !== action) {
     throw new LifecycleLockConflictError(current);
   }
   return current;
 }
 
-async function renewLifecycleLock(lockId, fencingToken) {
+async function renewLifecycleLock(lockId, fencingToken, options = {}) {
   await assertBridgeMetadata();
   const now = Date.now();
   const expiresAt = now + LOCK_LEASE_MS;
-  const legacy = parseLegacyLock(await getParameter(LEGACY_LOCK_PARAMETER));
-  if (!legacy || legacy.lockId !== lockId || Date.parse(legacy.expiresAt) < now) {
+  const current = await getCurrentLifecycleLock();
+  const expectedLeaseGeneration = options.expectedLeaseGeneration ?? current?.leaseGeneration;
+  if (
+    !current ||
+    current.lockId !== lockId ||
+    current.fencingToken !== fencingToken ||
+    !Number.isSafeInteger(expectedLeaseGeneration) ||
+    expectedLeaseGeneration < 1 ||
+    current.leaseGeneration !== expectedLeaseGeneration ||
+    (!current.agentFenceActive && Date.parse(current.expiresAt) < now)
+  ) {
     throw new LifecycleLockConflictError(await getCurrentLifecycleLock());
   }
-  await putParameter(
-    LEGACY_LOCK_PARAMETER,
-    JSON.stringify({ ...legacy, expiresAt: new Date(expiresAt).toISOString() }),
-    "String",
-    true
-  );
   try {
     const response = await dynamodb.send(
       new UpdateItemCommand({
         TableName: tableName(),
         Key: { lockKey: { S: LOCK_KEY } },
         ConditionExpression:
-          "lockId = :lockId AND fencingToken = :token AND released = :false AND leaseExpiresAt >= :now",
-        UpdateExpression: "SET leaseExpiresAt = :lease REMOVE ttlEpochSeconds",
+          "lockId = :lockId AND fencingToken = :token AND released = :false AND leaseGeneration = :generation AND (leaseExpiresAt >= :now OR agentFenceActive = :true)",
+        UpdateExpression: `SET leaseExpiresAt = :lease, leaseGeneration = :nextGeneration${
+          options.retainForAgentEffect === true ? ", agentFenceActive = :true" : ""
+        } REMOVE ttlEpochSeconds`,
         ExpressionAttributeValues: {
           ":lockId": { S: lockId },
           ":token": { N: String(fencingToken) },
           ":false": { BOOL: false },
           ":now": { N: String(now) },
           ":lease": { N: String(expiresAt) },
+          ":generation": { N: String(expectedLeaseGeneration) },
+          ":nextGeneration": { N: String(expectedLeaseGeneration + 1) },
+          ":true": { BOOL: true },
         },
         ReturnValues: "ALL_NEW",
       })
@@ -428,37 +297,62 @@ async function renewLifecycleLock(lockId, fencingToken) {
   }
 }
 
-async function releaseLifecycleLock(lockId, fencingToken, action, ownerEmail) {
+/** Release only the exact current lease; agent fences require durable terminal proof. */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Conditional release identity is one auditable boundary.
+async function releaseLifecycleLock(lockId, fencingToken, action, ownerEmail, options = {}) {
   if (!Number.isSafeInteger(fencingToken)) return false;
   try {
+    const conditions = [
+      "lockId = :lockId",
+      "fencingToken = :token",
+      "#action = :action",
+      "ownerEmail = :ownerEmail",
+      "released = :false",
+    ];
+    const values = {
+      ":lockId": { S: lockId },
+      ":token": { N: String(fencingToken) },
+      ":action": { S: action },
+      ":ownerEmail": { S: ownerEmail.trim().toLowerCase() },
+      ":false": { BOOL: false },
+      ":true": { BOOL: true },
+    };
+    if (options.expectedLeaseGeneration !== undefined) {
+      if (!Number.isSafeInteger(options.expectedLeaseGeneration) || options.expectedLeaseGeneration < 1) return false;
+      conditions.push("leaseGeneration = :generation");
+      values[":generation"] = { N: String(options.expectedLeaseGeneration) };
+    }
+    if (options.requireAgentFenceActive === true) {
+      if (!options.operationId || !options.operationOwnerId) return false;
+      conditions.push(
+        "agentFenceActive = :agentFenceActive",
+        "operationId = :operationId",
+        "operationOwnerId = :operationOwnerId"
+      );
+      values[":agentFenceActive"] = { BOOL: true };
+      values[":operationId"] = { S: options.operationId };
+      values[":operationOwnerId"] = { S: options.operationOwnerId };
+    }
     await dynamodb.send(
       new UpdateItemCommand({
         TableName: tableName(),
         Key: { lockKey: { S: LOCK_KEY } },
-        ConditionExpression:
-          "lockId = :lockId AND fencingToken = :token AND #action = :action AND ownerEmail = :ownerEmail AND released = :false",
+        ConditionExpression: conditions.join(" AND "),
         UpdateExpression: "SET released = :true REMOVE ttlEpochSeconds",
         ExpressionAttributeNames: { "#action": "action" },
-        ExpressionAttributeValues: {
-          ":lockId": { S: lockId },
-          ":token": { N: String(fencingToken) },
-          ":action": { S: action },
-          ":ownerEmail": { S: ownerEmail.trim().toLowerCase() },
-          ":false": { BOOL: false },
-          ":true": { BOOL: true },
-        },
+        ExpressionAttributeValues: values,
         ReturnValuesOnConditionCheckFailure: "ALL_OLD",
       })
     );
     if (!(await releaseLegacyBridgeLockWithRetry(lockId))) {
-      throw new Error("Lifecycle lock release committed but bridge cleanup did not converge");
+      throw new Error("Lifecycle lock release committed but reconciliation did not converge");
     }
     return true;
   } catch (error) {
     const currentItem = error?.Item ?? (await getCurrentLifecycleLockItem().catch(() => undefined));
     if (isMatchingReleasedItem(currentItem, lockId, fencingToken)) {
       if (!(await releaseLegacyBridgeLockWithRetry(lockId))) {
-        throw new Error("Lifecycle lock release reconciliation could not clean the bridge");
+        throw new Error("Lifecycle lock release reconciliation did not converge");
       }
       return true;
     }

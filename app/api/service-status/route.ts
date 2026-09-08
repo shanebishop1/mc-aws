@@ -5,7 +5,7 @@
 
 import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
-import { executeSSMCommand, findInstanceId, getInstanceState } from "@/lib/aws";
+import { getMinecraftServiceStatus } from "@/lib/aws";
 import { getRuntimeStateAdapter } from "@/lib/runtime-state";
 import { snapshotCacheKeys, snapshotCacheTtlSeconds } from "@/lib/runtime-state/snapshot-cache";
 import type { ApiResponse } from "@/lib/types";
@@ -19,37 +19,6 @@ interface ServiceStatusResponse {
 type CachedServiceStatus = {
   payload: ApiResponse<ServiceStatusResponse>;
 };
-
-/**
- * Check if Minecraft service is active via SSM
- */
-async function checkMinecraftService(instanceId: string): Promise<boolean> {
-  try {
-    console.log("[SERVICE-STATUS] Checking Minecraft service status");
-    const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
-    const isActive = output.trim() === "active";
-    console.log("[SERVICE-STATUS] Minecraft service active:", isActive);
-    return isActive;
-  } catch {
-    console.error("[SERVICE-STATUS] Failed to check Minecraft service");
-    return false;
-  }
-}
-
-/**
- * Check if EC2 instance is running
- */
-async function checkInstanceRunning(instanceId: string): Promise<boolean> {
-  try {
-    const state = await getInstanceState(instanceId);
-    const isRunning = state === "running";
-    console.log("[SERVICE-STATUS] Instance state:", state, "- Running:", isRunning);
-    return isRunning;
-  } catch {
-    console.error("[SERVICE-STATUS] Failed to get instance state");
-    return false;
-  }
-}
 
 export async function GET(request: NextRequest): Promise<NextResponse<ApiResponse<ServiceStatusResponse>>> {
   try {
@@ -77,26 +46,14 @@ export async function GET(request: NextRequest): Promise<NextResponse<ApiRespons
 
     console.log("[SERVICE-STATUS] Starting service status check");
 
-    // Get instance ID
-    const instanceId = await findInstanceId();
-    console.log("[SERVICE-STATUS] Using managed instance");
-
-    // Check instance state first
-    const instanceRunning = await checkInstanceRunning(instanceId);
-
-    // Only check service if instance is running
-    let serviceActive = false;
-    if (instanceRunning) {
-      serviceActive = await checkMinecraftService(instanceId);
-    } else {
-      console.log("[SERVICE-STATUS] Instance not running, skipping service check");
-    }
+    console.log("[SERVICE-STATUS] Requesting sanitized managed service status");
+    const status = await getMinecraftServiceStatus();
 
     const payload: ApiResponse<ServiceStatusResponse> = {
       success: true,
       data: {
-        serviceActive,
-        instanceRunning,
+        serviceActive: status.serviceActive,
+        instanceRunning: status.instanceRunning,
       },
       timestamp: new Date().toISOString(),
     };

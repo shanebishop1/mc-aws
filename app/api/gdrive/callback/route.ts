@@ -1,10 +1,11 @@
 /**
  * GET /api/gdrive/callback
- * Handles Google OAuth callback, exchanges code for tokens, and stores them in SSM
+ * Handles Google OAuth callback, exchanges code for tokens, and stores them
+ * through the least-privilege Drive token broker.
  */
 
 import { requireAdmin } from "@/lib/api-auth";
-import { putParameter } from "@/lib/aws";
+import { invokeGdriveTokenBroker } from "@/lib/aws";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { env } from "@/lib/env";
 import { isMockMode } from "@/lib/env";
@@ -108,9 +109,11 @@ async function storeToken(tokens: Record<string, string>): Promise<void> {
     token: rcloneToken,
   };
 
-  console.log("[GDRIVE-CALLBACK] Storing token in SSM");
-  await putParameter("/minecraft/gdrive-token", JSON.stringify(credentialEnvelope), "SecureString");
-  console.log("[GDRIVE-CALLBACK] Token stored successfully");
+  // The Worker never has direct SSM permission. The broker fixes the name and
+  // SecureString type, and returns only a sanitized configured status.
+  console.log("[GDRIVE-CALLBACK] Storing token through token broker");
+  await invokeGdriveTokenBroker({ operation: "put", value: JSON.stringify(credentialEnvelope) });
+  console.log("[GDRIVE-CALLBACK] Token stored successfully through token broker");
 }
 
 /**

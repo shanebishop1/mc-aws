@@ -1,7 +1,13 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { assertBootstrapUserDataMatches, validateBootstrapPins } from "./bootstrap-pins";
+import {
+  assertBootstrapReleaseManifestMatches,
+  assertBootstrapRuntimeRolloutMatches,
+  assertBootstrapUserDataMatches,
+  bootstrapPinsFingerprint,
+  validateBootstrapPins,
+} from "./bootstrap-pins";
 
 const root = process.cwd();
 const config = JSON.parse(readFileSync(path.join(root, "config/bootstrap-pins.json"), "utf8")) as unknown;
@@ -15,7 +21,7 @@ interface MutablePin extends Record<string, unknown> {
 }
 
 interface MutableConfig extends Record<string, unknown> {
-  artifacts: Record<"paper" | "rclone" | "mcstatus" | "asyncioDgram" | "dnspython", MutablePin>;
+  artifacts: Record<"paper" | "rclone" | "nodeArm64" | "mcstatus" | "asyncioDgram" | "dnspython", MutablePin>;
 }
 
 function cloneConfig(): MutableConfig {
@@ -26,10 +32,12 @@ describe("reviewed bootstrap pins contract", () => {
   it("requires every exact version, URL, checksum source, and non-placeholder SHA-256", () => {
     const pins = validateBootstrapPins(config);
     expect(() => assertBootstrapUserDataMatches(userData, pins)).not.toThrow();
-    expect(() => assertBootstrapUserDataMatches(runtimeRollout, pins)).not.toThrow();
-    expect(runtimeRollout).toContain("mcstatus-12.0.2-py3-none-any.whl");
-    expect(runtimeRollout).toContain("asyncio_dgram-2.2.0-py3-none-any.whl");
-    expect(runtimeRollout).toContain("dnspython-2.7.0-py3-none-any.whl");
+    expect(() => assertBootstrapRuntimeRolloutMatches(runtimeRollout, pins)).not.toThrow();
+    expect(runtimeRollout).toContain(`readonly MC_BOOTSTRAP_PINS_SHA256="${bootstrapPinsFingerprint(pins)}"`);
+    expect(userData).toContain('readonly NODE_VERSION="22.19.0"');
+    expect(userData).toContain(
+      'readonly NODE_ARM64_SHA256="0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc"'
+    );
   });
 
   it("rejects absent and placeholder pins", () => {
@@ -60,6 +68,23 @@ describe("reviewed bootstrap pins contract", () => {
     expect(() =>
       assertBootstrapUserDataMatches(userData.replace('readonly PAPER_BUILD="132"', 'readonly PAPER_BUILD="131"'), pins)
     ).toThrow(/does not match reviewed bootstrap pins/);
+  });
+
+  it("rejects a host release pin mismatch and accepts the current canonical pin", () => {
+    const pins = validateBootstrapPins(config);
+    const releaseManifest = {
+      bootstrapPins: { manifest: pins, sha256: bootstrapPinsFingerprint(pins) },
+    };
+    expect(() => assertBootstrapReleaseManifestMatches(releaseManifest, pins)).not.toThrow();
+    const stale = JSON.parse(JSON.stringify(releaseManifest)) as typeof releaseManifest;
+    stale.bootstrapPins.manifest.artifacts.paper.minecraftVersion = "1.21.10";
+    expect(() => assertBootstrapReleaseManifestMatches(stale, pins)).toThrow(/do not match reviewed bootstrap pins/);
+    expect(() =>
+      assertBootstrapRuntimeRolloutMatches(
+        runtimeRollout.replace(`"${bootstrapPinsFingerprint(pins)}"`, `"${"0".repeat(64)}"`),
+        pins
+      )
+    ).toThrow(/digest does not match/);
   });
 
   it("keeps setup validation wired to both reusable deployment env files", () => {

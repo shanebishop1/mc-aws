@@ -7,9 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const {
   requireAllowedMock,
   checkRateLimitMock,
-  findInstanceIdMock,
-  getInstanceStateMock,
-  executeSSMCommandMock,
+  getMinecraftServiceStatusMock,
   getRuntimeStateAdapterMock,
   getSnapshotMock,
   setSnapshotMock,
@@ -20,9 +18,7 @@ const {
   return {
     requireAllowedMock: vi.fn(),
     checkRateLimitMock: vi.fn(),
-    findInstanceIdMock: vi.fn(),
-    getInstanceStateMock: vi.fn(),
-    executeSSMCommandMock: vi.fn(),
+    getMinecraftServiceStatusMock: vi.fn(),
     getRuntimeStateAdapterMock: vi.fn(),
     getSnapshotMock: vi.fn(),
     setSnapshotMock: vi.fn(),
@@ -60,9 +56,7 @@ vi.mock("@/lib/rate-limit", async () => {
 
 vi.mock("@/lib/aws", () => {
   return {
-    findInstanceId: findInstanceIdMock,
-    getInstanceState: getInstanceStateMock,
-    executeSSMCommand: executeSSMCommandMock,
+    getMinecraftServiceStatus: getMinecraftServiceStatusMock,
   };
 });
 
@@ -83,9 +77,11 @@ describe("GET /api/service-status cache contract", () => {
       remaining: 19,
       retryAfterSeconds: 0,
     });
-    findInstanceIdMock.mockResolvedValue("i-1234567890abcdef0");
-    getInstanceStateMock.mockResolvedValue("running");
-    executeSSMCommandMock.mockResolvedValue("active\n");
+    getMinecraftServiceStatusMock.mockResolvedValue({
+      instanceState: "running",
+      instanceRunning: true,
+      serviceActive: true,
+    });
 
     getSnapshotMock.mockImplementation(async () => {
       if (snapshotState.value) {
@@ -152,9 +148,7 @@ describe("GET /api/service-status cache contract", () => {
     expect(hitResponse.headers.get("Cache-Control")).toBe("private, no-store");
     expect(hitResponse.headers.get("X-Service-Status-Cache")).toBe("HIT");
 
-    expect(findInstanceIdMock).toHaveBeenCalledTimes(1);
-    expect(getInstanceStateMock).toHaveBeenCalledTimes(1);
-    expect(executeSSMCommandMock).toHaveBeenCalledTimes(1);
+    expect(getMinecraftServiceStatusMock).toHaveBeenCalledTimes(1);
     expect(setSnapshotMock).toHaveBeenCalledWith(
       expect.objectContaining({
         key: snapshotCacheKeys.serviceStatus,
@@ -176,8 +170,6 @@ describe("GET /api/service-status cache contract", () => {
     expect(response.status).toBe(503);
     expect(body.success).toBe(false);
     expect(body.error).toBe("Runtime state service is unavailable");
-    expect(findInstanceIdMock).not.toHaveBeenCalled();
-    expect(getInstanceStateMock).not.toHaveBeenCalled();
-    expect(executeSSMCommandMock).not.toHaveBeenCalled();
+    expect(getMinecraftServiceStatusMock).not.toHaveBeenCalled();
   });
 });

@@ -4,18 +4,18 @@ import * as iam from "aws-cdk-lib/aws-iam";
  * AWS calls reachable from the deployed control-panel Worker.
  *
  * Keep this contract aligned with the command classes used by lib/aws and the
- * API routes that call them. Lifecycle volume mutations run in the Lambda and
- * intentionally do not belong to the Worker identity.
+ * API routes that call them. Host commands and lifecycle volume mutations run
+ * in the Lambda and intentionally do not belong to the Worker identity.
  */
 export const workerRuntimeAwsCallGraph = {
   instanceStatus: ["ec2:DescribeInstances"],
   stopInstance: ["ec2:StopInstances"],
   invokeLifecycle: ["lambda:InvokeFunction"],
+  invokeGdriveTokenBroker: ["lambda:InvokeFunction"],
   stackStatus: ["cloudformation:DescribeStacks"],
-  runInstanceCommand: ["ssm:SendCommand", "ssm:GetCommandInvocation"],
   readRuntimeParameters: ["ssm:GetParameter", "ssm:GetParametersByPath"],
-  writeRuntimeParameters: ["ssm:PutParameter", "ssm:DeleteParameter"],
-  manageLifecycleState: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+  writeRuntimeParameters: ["ssm:PutParameter"],
+  manageLifecycleState: ["dynamodb:GetItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
   optionalCostData: ["ce:GetCostAndUsage"],
 } as const;
 
@@ -23,8 +23,8 @@ export const workerRuntimeRequiredAwsActions = [
   ...workerRuntimeAwsCallGraph.instanceStatus,
   ...workerRuntimeAwsCallGraph.stopInstance,
   ...workerRuntimeAwsCallGraph.invokeLifecycle,
+  ...workerRuntimeAwsCallGraph.invokeGdriveTokenBroker,
   ...workerRuntimeAwsCallGraph.stackStatus,
-  ...workerRuntimeAwsCallGraph.runInstanceCommand,
   ...workerRuntimeAwsCallGraph.readRuntimeParameters,
   ...workerRuntimeAwsCallGraph.writeRuntimeParameters,
   ...workerRuntimeAwsCallGraph.manageLifecycleState,
@@ -33,11 +33,10 @@ export const workerRuntimeRequiredAwsActions = [
 export interface WorkerRuntimePolicyResources {
   instanceArn: string;
   lifecycleLambdaArn: string;
+  gdriveTokenBrokerLambdaArn: string;
   stackArn: string;
-  runShellScriptDocumentArn: string;
   readableParameterArns: string[];
   writableParameterArns: string[];
-  deletableParameterArns: string[];
   operationParameterPathArns: string[];
   lifecycleStateTableArns: string[];
   includeCostExplorer: boolean;
@@ -62,20 +61,14 @@ export function createWorkerRuntimePolicyStatements(resources: WorkerRuntimePoli
       resources: [resources.lifecycleLambdaArn],
     }),
     new iam.PolicyStatement({
+      sid: "InvokeGDriveTokenBrokerLambda",
+      actions: [...workerRuntimeAwsCallGraph.invokeGdriveTokenBroker],
+      resources: [resources.gdriveTokenBrokerLambdaArn],
+    }),
+    new iam.PolicyStatement({
       sid: "DescribeManagedStack",
       actions: [...workerRuntimeAwsCallGraph.stackStatus],
       resources: [resources.stackArn],
-    }),
-    new iam.PolicyStatement({
-      sid: "SendCommandToManagedInstance",
-      actions: ["ssm:SendCommand"],
-      resources: [resources.runShellScriptDocumentArn, resources.instanceArn],
-    }),
-    new iam.PolicyStatement({
-      sid: "ReadCommandResult",
-      actions: ["ssm:GetCommandInvocation"],
-      // GetCommandInvocation does not support resource-level permissions.
-      resources: ["*"],
     }),
     new iam.PolicyStatement({
       sid: "ReadRuntimeParameters",
@@ -91,11 +84,6 @@ export function createWorkerRuntimePolicyStatements(resources: WorkerRuntimePoli
       sid: "WriteRuntimeParameters",
       actions: ["ssm:PutParameter"],
       resources: resources.writableParameterArns,
-    }),
-    new iam.PolicyStatement({
-      sid: "DeleteRuntimeParameters",
-      actions: ["ssm:DeleteParameter"],
-      resources: resources.deletableParameterArns,
     }),
     new iam.PolicyStatement({
       sid: "ManageLifecycleState",

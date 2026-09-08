@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 
@@ -14,6 +15,13 @@ const baseEnv: NodeJS.ProcessEnv = {
   GOOGLE_CLIENT_ID: "google-client-id",
   GOOGLE_CLIENT_SECRET: "google-client-secret",
   ADMIN_EMAIL: "admin@example.com",
+  AUTH_SECRET: Buffer.from([
+    0xd3, 0x1a, 0xf7, 0x0c, 0x5e, 0x92, 0xb8, 0x4f, 0x01, 0x69, 0xc4, 0xe7, 0xab, 0x2d, 0x53, 0x81, 0xf6, 0xa0, 0xce,
+    0x9d, 0x34, 0x78, 0xb2, 0x15, 0xc7, 0xe3, 0xf9, 0x02, 0x6d, 0x4a, 0xb1, 0xe8, 0xf0, 0xc5, 0xa7, 0xd2, 0xe9, 0xb3,
+    0x14, 0x68, 0x9f, 0x03, 0xdc, 0x76, 0x2a, 0xe1, 0x58, 0xc0,
+  ]).toString("base64url"),
+  MC_AWS_ROTATE_AUTH_SECRET: "",
+  MC_AGENT_RUNTIME_ENABLED: "false",
   CLOUDFLARE_DNS_API_TOKEN: "",
   CLOUDFLARE_ZONE_ID: "",
   CLOUDFLARE_RECORD_ID: "",
@@ -62,6 +70,19 @@ const runSetupFunction = (functionCall: string, env: NodeJS.ProcessEnv): string 
     env,
     encoding: "utf8",
   }).trim();
+
+const authEnvironment = (directory: string, AUTH_SECRET: string): NodeJS.ProcessEnv => ({
+  ...baseEnv,
+  AUTH_SECRET,
+  TEST_PRODUCTION_ENV: path.join(directory, ".env.production"),
+  TEST_LOCAL_ENV: path.join(directory, ".env.local"),
+});
+
+const runAuthSetupFunction = (functionCall: string, env: NodeJS.ProcessEnv): string =>
+  runSetupFunction(
+    `PRODUCTION_ENV_FILE="$TEST_PRODUCTION_ENV"; LOCAL_ENV_FILE="$TEST_LOCAL_ENV"; ${functionCall}`,
+    env
+  );
 
 describe("setup rerun mode detection", () => {
   it.each([
@@ -127,6 +148,70 @@ describe("setup rerun mode detection", () => {
   });
 });
 
+describe("setup AUTH_SECRET rotation", () => {
+  it("accepts an existing production-safe value but rejects a weak non-placeholder value", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-auth-secret-"));
+    try {
+      expect(
+        runAuthSetupFunction(
+          "ensure_auth_secret; printf accepted",
+          authEnvironment(directory, baseEnv.AUTH_SECRET as string)
+        )
+      ).toBe("accepted");
+
+      expect(
+        runAuthSetupFunction(
+          "if ensure_auth_secret; then printf accepted; else printf rotation-required; fi",
+          authEnvironment(directory, "weak-existing-value-that-is-not-a-placeholder")
+        )
+      ).toBe("rotation-required");
+      expect(readdirSync(directory)).toEqual([]);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires an explicit flag to generate a safe rotation and never prints the secret", () => {
+    const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-auth-secret-"));
+    const productionEnv = path.join(directory, ".env.production");
+    const localEnv = path.join(directory, ".env.local");
+    try {
+      const output = runAuthSetupFunction("ensure_auth_secret; printf rotated", {
+        ...authEnvironment(directory, "weak-existing-value-that-is-not-a-placeholder"),
+        MC_AWS_ROTATE_AUTH_SECRET: "1",
+      });
+      const generated = readFileSync(productionEnv, "utf8").trim().replace("AUTH_SECRET=", "");
+      expect(output).toBe("rotated");
+      expect(output).not.toContain(generated);
+      expect(generated).toMatch(/^[A-Za-z0-9_-]{64}$/);
+      expect(readFileSync(localEnv, "utf8")).toContain("AUTH_SECRET=");
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("requires explicit rotation for every formerly accepted noncanonical form", () => {
+    for (const AUTH_SECRET of [
+      "8f2a7c91d4e6b3085a1f9c72e4d6a8037b5c1e94f2a860d3c7e59b14a826f0d9",
+      Buffer.from("machine-looking-but-human-auth-secret-material").toString("base64"),
+      "vQ7!mZ2@pL9#xR4$kT8%wN3^cF6&hJ1*eD5-sA0_gY",
+    ]) {
+      const directory = mkdtempSync(path.join(tmpdir(), "mc-aws-auth-secret-"));
+      try {
+        expect(
+          runAuthSetupFunction(
+            "if ensure_auth_secret; then printf accepted; else printf rotation-required; fi",
+            authEnvironment(directory, AUTH_SECRET)
+          )
+        ).toBe("rotation-required");
+        expect(readdirSync(directory)).toEqual([]);
+      } finally {
+        rmSync(directory, { recursive: true, force: true });
+      }
+    }
+  });
+});
+
 describe("setup completion connection output", () => {
   it.each([
     ["cloudflare", "mc.example.com"],
@@ -146,6 +231,20 @@ describe("setup immutable AMI integration", () => {
     expect(source.indexOf("ensure_al2023_ami_pin")).toBeLessThan(
       source.indexOf("scripts/aws/migrate-existing-deployment.ts")
     );
+  });
+
+  it("defers fresh-stack recovery-capsule adoption until operation-state outputs exist", () => {
+    const source = readFileSync(path.join(rootDir, "setup.sh"), "utf8");
+    const prepare = source.indexOf("prepare_backup_recovery_capsule_adoption");
+    const deferred = source.indexOf("MC_BACKUP_RECOVERY_CAPSULE_ADOPTION_DEFERRED", prepare);
+    const deploy = source.indexOf("pnpm exec cdk deploy");
+    const operationOutput = source.indexOf('write_env_files "MC_OPERATION_STATE_TABLE_NAME"', deploy);
+    const postDeployAdoption = source.indexOf("export MC_AWS_FRESH_STACK=false");
+    expect(prepare).toBeGreaterThan(-1);
+    expect(deferred).toBeGreaterThan(prepare);
+    expect(deploy).toBeGreaterThan(deferred);
+    expect(operationOutput).toBeGreaterThan(deploy);
+    expect(postDeployAdoption).toBeGreaterThan(operationOutput);
   });
 
   it("persists both dual-v1 table outputs before any Worker deployment", () => {

@@ -5,7 +5,7 @@
 
 import { requireAdmin } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
-import { getParameter } from "@/lib/aws";
+import { invokeGdriveTokenBroker } from "@/lib/aws";
 import { getMockStateStore } from "@/lib/aws/mock-state-store";
 import { isMockMode } from "@/lib/env";
 import type { ApiResponse, GDriveStatusResponse } from "@/lib/types";
@@ -47,15 +47,16 @@ export async function GET(_request: NextRequest): Promise<NextResponse<ApiRespon
       );
     }
 
-    // AWS mode: Check real SSM parameter
-    console.log("[GDRIVE-STATUS] Checking Google Drive configuration");
-    const token = await getParameter("/minecraft/gdrive-token");
+    // AWS mode: the Worker can invoke only this exact broker. It never reads
+    // the Drive SecureString or receives its value in the response.
+    console.log("[GDRIVE-STATUS] Checking Google Drive configuration through token broker");
+    const status = await invokeGdriveTokenBroker({ operation: "get" });
 
     return NextResponse.json(
       {
         success: true,
         data: {
-          configured: Boolean(token),
+          configured: status.configured,
         },
         timestamp: new Date().toISOString(),
       },

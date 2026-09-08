@@ -1,0 +1,25 @@
+{
+  "schemaVersion": 1,
+  "controlBaseUrl": "https://replace-with-reviewed-control-origin.invalid",
+  "socketPath": "/run/mc-agent/executor.sock",
+  "downloadSocketPath": "/run/mc-agent-download/download.sock",
+  "backupPath": "/api/agent/runtime/backups",
+  "persistentWorldRoots": ["world", "world_nether", "world_the_end"],
+  "providerCredentialNames": ["provider-openrouter"],
+  "profiles": [
+    {
+      "schemaVersion": 1,
+      "profileId": "reviewed-openrouter",
+      "providerId": "openrouter",
+      "providerKind": "openrouter",
+      "displayName": "Reviewed OpenRouter",
+      "endpoint": "https://openrouter.ai/api/v1",
+      "allowedModels": ["replace-with-reviewed-model"],
+      "supportedFeatures": ["streaming", "tools"],
+      "credentialName": "provider-openrouter",
+      "timeoutMs": 60000,
+      "contextWindow": 128000,
+      "maxTokens": 8192
+    }
+  ]
+}

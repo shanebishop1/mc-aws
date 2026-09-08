@@ -3,7 +3,6 @@
  */
 
 import {
-  DeleteParameterCommand,
   GetCommandInvocationCommand,
   GetParameterCommand,
   GetParametersByPathCommand,
@@ -15,7 +14,7 @@ import { env } from "../env";
 import type { BackupInfo } from "../types";
 import { getAwsClientConfig } from "./aws-client-config";
 import { resolveInstanceId } from "./instance-resolver";
-import type { ParameterStoreEntry } from "./types";
+import type { ParameterStoreEntry, SsmMutationProof } from "./types";
 
 // Lazy initialization of SSM client
 let _ssmClient: SSMClient | null = null;
@@ -243,26 +242,44 @@ export async function putParameter(
   value: string,
   type: "String" | "SecureString" = "String",
   overwrite = true
-): Promise<void> {
+): Promise<number | undefined> {
   const command = new PutParameterCommand({
     Name: name,
     Value: value,
     Type: type,
     Overwrite: overwrite,
   });
-  await ssm.send(command);
+  const response = await ssm.send(command);
+  if (!Number.isSafeInteger(response.Version) || (response.Version as number) < 1) {
+    throw new Error("SSM_PUT_PARAMETER_VERSION_MISSING");
+  }
+  return response.Version;
 }
 
 /**
  * Get a parameter from SSM Parameter Store
  */
 export async function getParameter(name: string): Promise<string | null> {
+  const record = await getParameterRecord(name);
+  return record?.value ?? null;
+}
+
+/** Read the value and the actual SSM resource version as one record. */
+export async function getParameterRecord(name: string): Promise<ParameterStoreEntry | null> {
   try {
     const command = new GetParameterCommand({
       Name: name,
     });
     const response = await ssm.send(command);
-    return response.Parameter?.Value || null;
+    if (typeof response.Parameter?.Value !== "string") return null;
+    if (!Number.isSafeInteger(response.Parameter.Version) || (response.Parameter.Version as number) < 1) return null;
+    return {
+      name,
+      value: response.Parameter.Value,
+      type: response.Parameter.Type,
+      version: response.Parameter.Version,
+      lastModifiedAt: response.Parameter.LastModifiedDate?.toISOString(),
+    };
   } catch (error: unknown) {
     const errorWithName = error as { name?: string };
     if (errorWithName.name === "ParameterNotFound") {
@@ -270,6 +287,34 @@ export async function getParameter(name: string): Promise<string | null> {
     }
     throw error;
   }
+}
+
+/**
+ * SSM has no conditional DeleteParameter API. A read followed by delete is not
+ * a compare-and-swap because another writer can replace the resource between
+ * those calls. Production therefore fails closed; the serialized mock store
+ * provides the equivalent operation for local tests only.
+ */
+export async function deleteParameterIfCurrent(name: string, proof: SsmMutationProof): Promise<boolean> {
+  void name;
+  void proof;
+  return false;
+}
+
+/** SSM has no conditional PutParameter counterpart; do not emulate one with reads. */
+export async function putParameterIfCurrent(
+  name: string,
+  value: string,
+  proof: SsmMutationProof,
+  type: "String" | "SecureString" = "String",
+  overwrite = true
+): Promise<boolean> {
+  void name;
+  void value;
+  void proof;
+  void type;
+  void overwrite;
+  return false;
 }
 
 /**
@@ -305,6 +350,7 @@ export async function listParametersByPath(path: string): Promise<ParameterStore
         name: parameter.Name,
         value: parameter.Value,
         type: parameter.Type,
+        version: parameter.Version,
         lastModifiedAt: parameter.LastModifiedDate?.toISOString(),
       });
     }
@@ -315,13 +361,7 @@ export async function listParametersByPath(path: string): Promise<ParameterStore
   return entries;
 }
 
-/**
- * Delete a parameter from SSM Parameter Store
- */
 export async function deleteParameter(name: string): Promise<void> {
-  await ssm.send(
-    new DeleteParameterCommand({
-      Name: name,
-    })
-  );
+  void name;
+  throw new Error("Unconditional SSM deletion is unavailable; use an authoritative conditional backend");
 }

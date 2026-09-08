@@ -8,6 +8,8 @@ const {
   getSanitizedErrorMessageMock,
   sendNotificationMock,
   getOperationStateMock,
+  claimResumeIntentPointerMock,
+  completeResumeIntentPointerMock,
   claimOperationExecutionMock,
   updateOperationStateMock,
   recordOperationSideEffectCompletedMock,
@@ -15,7 +17,6 @@ const {
   assertLifecycleLockOwnedMock,
   bridgeLegacyLifecycleLockMock,
   releaseLifecycleLockMock,
-  deleteParameterMock,
   executeSSMCommandMock,
   getParameterMock,
   putParameterMock,
@@ -35,6 +36,8 @@ const {
   getSanitizedErrorMessageMock: vi.fn(),
   sendNotificationMock: vi.fn(),
   getOperationStateMock: vi.fn(),
+  claimResumeIntentPointerMock: vi.fn(),
+  completeResumeIntentPointerMock: vi.fn(),
   claimOperationExecutionMock: vi.fn(),
   updateOperationStateMock: vi.fn(),
   recordOperationSideEffectCompletedMock: vi.fn(),
@@ -42,7 +45,6 @@ const {
   assertLifecycleLockOwnedMock: vi.fn(),
   bridgeLegacyLifecycleLockMock: vi.fn(),
   releaseLifecycleLockMock: vi.fn(),
-  deleteParameterMock: vi.fn(),
   executeSSMCommandMock: vi.fn(),
   getParameterMock: vi.fn(),
   putParameterMock: vi.fn(),
@@ -71,6 +73,8 @@ vi.mock("./notifications.js", () => ({
 vi.mock("./operation-state.js", () => ({
   claimOperationExecution: claimOperationExecutionMock,
   getOperationState: getOperationStateMock,
+  claimResumeIntentPointer: claimResumeIntentPointerMock,
+  completeResumeIntentPointer: completeResumeIntentPointerMock,
   updateOperationState: updateOperationStateMock,
   recordOperationSideEffectCompleted: recordOperationSideEffectCompletedMock,
 }));
@@ -84,7 +88,6 @@ vi.mock("./lifecycle-lock.js", () => ({
 }));
 
 vi.mock("./ssm.js", () => ({
-  deleteParameter: deleteParameterMock,
   executeSSMCommand: executeSSMCommandMock,
   getParameter: getParameterMock,
   putParameter: putParameterMock,
@@ -134,7 +137,17 @@ describe("StartMinecraftServer environment contract", () => {
     getSanitizedErrorMessageMock.mockReturnValue("Command execution failed. Check CloudWatch logs for details.");
     resolveResumeRestoreStrategyMock.mockReturnValue({ mode: "fresh" });
     getParameterMock.mockResolvedValue(null);
-    getOperationStateMock.mockResolvedValue(null);
+    getOperationStateMock.mockImplementation(async (operationId: string) =>
+      operationId.includes("resume")
+        ? {
+            id: operationId,
+            type: "resume",
+            status: "running",
+            phase: "executing",
+            executionToken: "resume-execution-token",
+          }
+        : null
+    );
     updateOperationStateMock.mockResolvedValue(undefined);
     recordOperationSideEffectCompletedMock.mockResolvedValue(undefined);
     acquireLifecycleLockMock.mockResolvedValue({
@@ -207,6 +220,26 @@ describe("StartMinecraftServer environment contract", () => {
     expect(updateOperationStateMock).not.toHaveBeenCalled();
   });
 
+  it("returns only sanitized service status for the exact managed instance", async () => {
+    await expect(handler({ invocationType: "serviceStatus", instanceId: "i-abc123" })).resolves.toEqual({
+      statusCode: 200,
+      body: JSON.stringify({ instanceState: "running", instanceRunning: true, serviceActive: true }),
+    });
+    expect(executeSSMCommandMock).toHaveBeenCalledWith(
+      "i-abc123",
+      ["if systemctl is-active --quiet minecraft.service; then echo active; else echo inactive; fi"],
+      { maxAttempts: 15, timeoutSeconds: 30 }
+    );
+  });
+
+  it("rejects service status requests for another instance before SSM", async () => {
+    await expect(handler({ invocationType: "serviceStatus", instanceId: "i-other" })).resolves.toEqual({
+      statusCode: 400,
+      body: "Unsupported service-status payload.",
+    });
+    expect(executeSSMCommandMock).not.toHaveBeenCalled();
+  });
+
   it.each([
     { command: "backup", lockId: "lock-1", fencingToken: 1 },
     { command: "backup", operationId: "op-1", lockId: "lock-1", fencingToken: "not-an-integer" },
@@ -219,8 +252,117 @@ describe("StartMinecraftServer environment contract", () => {
     expect(claimOperationExecutionMock).not.toHaveBeenCalled();
   });
 
-  it("bridges an old Worker payload and seeds its missing DynamoDB operation before execution", async () => {
-    bridgeLegacyLifecycleLockMock.mockResolvedValueOnce({ fencingToken: 11 });
+  it("does not release an agent fence from a malformed API payload", async () => {
+    await expect(
+      handler({
+        invocationType: "api",
+        instanceId: "i-abc123",
+        userEmail: "user@example.com",
+        command: "backup",
+        operationId: "agent-operation",
+        operationRoute: "/api/agent/runtime/backups",
+        lockId: "agent-lock",
+        fencingToken: 9,
+        args: [],
+        requireAlreadyRunning: true,
+        requireServiceActive: true,
+        retainLockForAgentEffect: true,
+        // Missing agentTwoPhase makes this payload malformed while retaining
+        // all the stale lock identity an attacker could replay.
+      })
+    ).resolves.toMatchObject({ statusCode: 400 });
+    expect(releaseLifecycleLockMock).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the narrow agent-runtime operation route for backup lifecycle claims", async () => {
+    await expect(
+      handler({
+        invocationType: "api",
+        operationRoute: "/api/agent/runtime/backups",
+        instanceId: "i-abc123",
+        userEmail: "admin@example.com",
+        command: "backup",
+        operationId: "backup-agent-runtime",
+        lockId: "lock-agent-runtime",
+        fencingToken: 3,
+        args: ["agent-runtime"],
+        requireAlreadyRunning: true,
+        requireServiceActive: true,
+        retainLockForAgentEffect: true,
+        agentTwoPhase: true,
+      })
+    ).resolves.toMatchObject({ statusCode: 202 });
+    expect(claimOperationExecutionMock).toHaveBeenCalledWith(
+      expect.objectContaining({ route: "/api/agent/runtime/backups" })
+    );
+    expect(handleBackupMock).toHaveBeenCalledWith("i-abc123", ["agent-runtime"], "admin@example.com", {
+      requireAlreadyRunning: true,
+      requireServiceActive: true,
+      strictAgentBackup: true,
+      agentTwoPhase: true,
+    });
+    expect(releaseLifecycleLockMock).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    await expect(
+      handler({
+        invocationType: "api",
+        operationRoute: "/api/agent/runtime/backups",
+        instanceId: "i-abc123",
+        userEmail: "admin@example.com",
+        command: "stop",
+        operationId: "stop-agent-runtime",
+        lockId: "lock-agent-runtime",
+        fencingToken: 4,
+      })
+    ).resolves.toMatchObject({ statusCode: 400 });
+    expect(claimOperationExecutionMock).not.toHaveBeenCalled();
+  });
+
+  it("retains a completed strict agent backup lock on duplicate Lambda delivery", async () => {
+    claimOperationExecutionMock.mockResolvedValueOnce({
+      claimed: false,
+      reason: "terminal",
+      state: { status: "completed" },
+    });
+    await expect(
+      handler({
+        invocationType: "api",
+        operationRoute: "/api/agent/runtime/backups",
+        instanceId: "i-abc123",
+        userEmail: "admin@example.com",
+        command: "backup",
+        operationId: "backup-agent-runtime",
+        lockId: "lock-agent-runtime",
+        fencingToken: 3,
+        args: ["agent-runtime"],
+        requireAlreadyRunning: true,
+        requireServiceActive: true,
+        retainLockForAgentEffect: true,
+        agentTwoPhase: true,
+      })
+    ).resolves.toMatchObject({ statusCode: 202 });
+    expect(handleBackupMock).not.toHaveBeenCalled();
+    expect(releaseLifecycleLockMock).not.toHaveBeenCalled();
+  });
+
+  it("does not let ordinary admin backup payloads opt into agent lock retention", async () => {
+    await expect(
+      handler({
+        invocationType: "api",
+        instanceId: "i-abc123",
+        userEmail: "admin@example.com",
+        command: "backup",
+        operationId: "backup-admin",
+        lockId: "lock-admin",
+        fencingToken: 4,
+        retainLockForAgentEffect: true,
+      })
+    ).resolves.toMatchObject({ statusCode: 400 });
+    expect(handleBackupMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an old Worker payload that lacks an authoritative fencing token", async () => {
     getOperationStateMock.mockResolvedValueOnce(null);
 
     await expect(
@@ -232,14 +374,9 @@ describe("StartMinecraftServer environment contract", () => {
         operationId: "legacy-op-1",
         lockId: "legacy-lock-1",
       })
-    ).resolves.toMatchObject({ statusCode: 202 });
-    expect(bridgeLegacyLifecycleLockMock).toHaveBeenCalledWith("legacy-lock-1", "start", "user@example.com");
-    expect(updateOperationStateMock).toHaveBeenCalledWith(
-      expect.objectContaining({ operationId: "legacy-op-1", status: "accepted", fencingToken: 11 })
-    );
-    expect(claimOperationExecutionMock).toHaveBeenCalledWith(
-      expect.objectContaining({ operationId: "legacy-op-1", fencingToken: 11 })
-    );
+    ).rejects.toBeInstanceOf(Error);
+    expect(bridgeLegacyLifecycleLockMock).not.toHaveBeenCalled();
+    expect(claimOperationExecutionMock).not.toHaveBeenCalled();
   });
 
   it("retains the global lock when a remote command cannot be confirmed terminal", async () => {
@@ -374,14 +511,7 @@ describe("StartMinecraftServer environment contract", () => {
     );
   });
 
-  it("persists resume-pending before reconstruction and clears it only after command success", async () => {
-    let resumeMarker: string | null = null;
-    putParameterMock.mockImplementation(async (name: string, value: string) => {
-      if (name === "/minecraft/resume-pending") resumeMarker = value;
-    });
-    getParameterMock.mockImplementation(async (name: string) =>
-      name === "/minecraft/resume-pending" ? resumeMarker : null
-    );
+  it("records resume intent in the authoritative operation state before reconstruction", async () => {
     resolveResumeRestoreStrategyMock.mockReturnValue({
       mode: "named",
       backupArchiveName: "nightly-2026.tar.gz",
@@ -399,50 +529,30 @@ describe("StartMinecraftServer environment contract", () => {
       fencingToken: 1,
     });
 
-    const pendingWrite = putParameterMock.mock.calls.find((call) => call[0] === "/minecraft/resume-pending");
-    expect(pendingWrite).toBeDefined();
-    expect(JSON.parse(pendingWrite?.[1])).toMatchObject({
-      version: 1,
-      operationId: "op-resume",
-      mode: "named",
-      backupArchiveName: "nightly-2026.tar.gz",
-    });
-    expect(pendingWrite?.[3]).toBe(false);
-    expect(putParameterMock.mock.invocationCallOrder[1]).toBeLessThan(handleResumeMock.mock.invocationCallOrder[0]);
+    expect(putParameterMock).not.toHaveBeenCalledWith(
+      "/minecraft/resume-pending",
+      expect.anything(),
+      expect.anything()
+    );
+    expect(updateOperationStateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        operationId: "op-resume",
+        resumeIntent: {
+          mode: "named",
+          backupArchiveName: "nightly-2026.tar.gz",
+        },
+      })
+    );
     expect(executeSSMCommandMock).toHaveBeenCalledWith("i-abc123", [expect.stringContaining("bootstrap-complete")], {
       maxAttempts: 165,
       timeoutSeconds: 300,
       step: "resume-restore",
       finalRemoteStep: false,
     });
-    expect(executeSSMCommandMock.mock.invocationCallOrder[0]).toBeLessThan(
-      deleteParameterMock.mock.invocationCallOrder[0]
-    );
-    expect(deleteParameterMock).toHaveBeenCalledWith("/minecraft/resume-pending");
-    const terminalWrite = updateOperationStateMock.mock.calls.findIndex(
-      ([input]) => input.command === "resume" && input.status === "completed"
-    );
-    const markerDelete = deleteParameterMock.mock.calls.findIndex(([name]) => name === "/minecraft/resume-pending");
-    expect(updateOperationStateMock.mock.invocationCallOrder[terminalWrite]).toBeLessThan(
-      deleteParameterMock.mock.invocationCallOrder[markerDelete]
-    );
   });
 
-  it("adopts its own resume marker after a crash and retries idempotently", async () => {
+  it("retries its own resume operation idempotently after a crash", async () => {
     resolveResumeRestoreStrategyMock.mockReturnValue({ mode: "latest" });
-    const marker = JSON.stringify({
-      version: 1,
-      operationId: "op-resume-retry",
-      mode: "latest",
-      backupArchiveName: null,
-      createdAt: "2026-04-13T12:00:00.000Z",
-    });
-    putParameterMock.mockImplementation(async (name: string) => {
-      if (name === "/minecraft/resume-pending") {
-        throw Object.assign(new Error("already exists"), { name: "ParameterAlreadyExists" });
-      }
-    });
-    getParameterMock.mockImplementation(async (name: string) => (name === "/minecraft/resume-pending" ? marker : null));
 
     await expect(
       handler({
@@ -458,26 +568,50 @@ describe("StartMinecraftServer environment contract", () => {
     ).resolves.toMatchObject({ statusCode: 202 });
 
     expect(handleResumeMock).toHaveBeenCalledWith("i-abc123");
-    expect(deleteParameterMock).toHaveBeenCalledWith("/minecraft/resume-pending");
   });
 
-  it("retains ownership when a resume marker belongs to another unresolved operation", async () => {
-    putParameterMock.mockImplementation(async (name: string) => {
-      if (name === "/minecraft/resume-pending") {
-        throw Object.assign(new Error("already exists"), { name: "ParameterAlreadyExists" });
-      }
-    });
-    getParameterMock.mockResolvedValueOnce(
-      JSON.stringify({
-        version: 1,
-        operationId: "op-other-resume",
-        mode: "latest",
-        backupArchiveName: null,
-        createdAt: "2026-04-13T12:00:00.000Z",
-      })
-    );
-    getOperationStateMock.mockResolvedValueOnce({ status: "running", phase: "executing" });
+  it("terminalizes the exact active resume pointer when resume fails", async () => {
+    handleResumeMock.mockRejectedValueOnce(Object.assign(new Error("restore failed"), { ssmTerminal: true }));
 
+    await expect(
+      handler({
+        invocationType: "api",
+        instanceId: "i-abc123",
+        userEmail: "user@example.com",
+        command: "resume",
+        restoreMode: "latest",
+        operationId: "op-resume-terminal-failure",
+        lockId: "lock-resume-terminal-failure",
+        fencingToken: 1,
+      })
+    ).resolves.toMatchObject({ statusCode: 202 });
+
+    expect(completeResumeIntentPointerMock).toHaveBeenCalledWith({
+      operationId: "op-resume-terminal-failure",
+      ownerToken: expect.any(String),
+      status: "failed",
+    });
+  });
+
+  it("does not let a stale resume failure clear a successor pointer", async () => {
+    handleResumeMock.mockRejectedValueOnce(Object.assign(new Error("restore failed"), { ssmTerminal: true }));
+    completeResumeIntentPointerMock.mockRejectedValueOnce(new Error("Resume intent successor owns the pointer"));
+
+    await expect(
+      handler({
+        invocationType: "api",
+        instanceId: "i-abc123",
+        userEmail: "user@example.com",
+        command: "resume",
+        restoreMode: "latest",
+        operationId: "op-resume-stale-failure",
+        lockId: "lock-resume-stale-failure",
+        fencingToken: 1,
+      })
+    ).resolves.toMatchObject({ statusCode: 202 });
+  });
+
+  it("uses the operation record instead of allowing a stale SSM marker to block a resume", async () => {
     await expect(
       handler({
         invocationType: "api",
@@ -489,14 +623,8 @@ describe("StartMinecraftServer environment contract", () => {
         lockId: "lock-resume-stale",
         fencingToken: 1,
       })
-    ).rejects.toThrow("owned by another unresolved operation");
-
-    expect(handleResumeMock).not.toHaveBeenCalled();
-    expect(executeSSMCommandMock).not.toHaveBeenCalled();
-    expect(deleteParameterMock).not.toHaveBeenCalledWith("/minecraft/resume-pending");
-    expect(getParameterMock).toHaveBeenCalledWith("/minecraft/resume-pending");
-    expect(updateOperationStateMock).not.toHaveBeenCalledWith(expect.objectContaining({ status: "failed" }));
-    expect(releaseLifecycleLockMock).not.toHaveBeenCalled();
+    ).resolves.toMatchObject({ statusCode: 202 });
+    expect(handleResumeMock).toHaveBeenCalledWith("i-abc123");
   });
 
   const sanitizedEmailCommand = {

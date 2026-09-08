@@ -3,14 +3,16 @@
 import { useAuth } from "@/components/auth/auth-provider";
 import { LoginButton } from "@/components/auth/login-button";
 import { motion } from "framer-motion";
+import Link from "next/link";
 
 interface PageHeaderProps {
-  onOpenCosts: () => void;
-  onOpenEmails: () => void;
+  onOpenCosts?: () => void;
+  onOpenEmails?: () => void;
   awsConsoleUrl?: string;
+  showUtilities?: boolean;
 }
 
-export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHeaderProps) => {
+export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl, showUtilities = true }: PageHeaderProps) => {
   const { isAuthenticated, isAdmin } = useAuth();
 
   const iconButtonClassName =
@@ -21,7 +23,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
       window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
       return;
     }
-    onOpenCosts();
+    onOpenCosts?.();
   };
 
   const handleEmailsClick = () => {
@@ -29,7 +31,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
       window.open("/api/auth/login", "google-auth", "width=500,height=600,menubar=no,toolbar=no");
       return;
     }
-    onOpenEmails();
+    onOpenEmails?.();
   };
 
   const handleAwsConsoleClick = () => {
@@ -49,7 +51,19 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
       className="relative shrink-0 pt-2 pb-1 md:pt-8 md:pb-4"
     >
       <div className="grid grid-cols-1 items-center gap-y-2 text-center xl:grid-cols-[1fr_auto_1fr] xl:gap-y-0 xl:h-12">
-        <div className="hidden xl:block" aria-hidden="true" />
+        <nav
+          className="order-2 flex justify-center gap-5 xl:order-none xl:justify-start xl:pl-8"
+          aria-label="Primary navigation"
+        >
+          <Link className="text-[10px] uppercase tracking-[0.2em] text-charcoal/55 hover:text-green" href="/">
+            Controller
+          </Link>
+          {isAdmin && (
+            <Link className="text-[10px] uppercase tracking-[0.2em] text-charcoal/55 hover:text-green" href="/agent">
+              Agent
+            </Link>
+          )}
+        </nav>
 
         <h1 className="font-serif text-3xl italic tracking-wide text-charcoal xl:col-start-2">
           mc-aws <span className="not-italic font-bold">Controller</span>
@@ -77,7 +91,7 @@ export const PageHeader = ({ onOpenCosts, onOpenEmails, awsConsoleUrl }: PageHea
             </svg>
           </motion.a>
 
-          {isAdmin && (
+          {isAdmin && showUtilities && (
             <>
               {/* Costs Button */}
               <motion.button

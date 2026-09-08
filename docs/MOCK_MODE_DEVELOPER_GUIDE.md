@@ -24,6 +24,7 @@ Useful commands:
 | `pnpm mock:scenario` | Print the current and available scenarios |
 | `pnpm mock:scenario <name>` | Reset state, then apply a scenario |
 | `pnpm mock:reset` | Reset persisted mock state and faults to defaults |
+| `pnpm mock:migrate` | Explicitly move legacy root mock state into `.local-artifacts/` |
 | `pnpm test:mock` | Run Vitest with mock backend mode selected |
 | `pnpm test:e2e:mock` | Run the Playwright suite serially against its managed mock server |
 
@@ -111,9 +112,16 @@ curl -sS -b "$cookie_jar" -X DELETE \
 
 ## Persistence and sensitivity
 
-Development and Playwright server runtimes persist mock state automatically to repository-root `.mock-state.json`; unit tests normally use in-memory state, although reset helpers can rewrite the ignored file. The path and startup scenario are not configurable.
+Development and Playwright server runtimes persist mock state to the excluded `.local-artifacts/mock-state.json` path. Set
+`MC_MOCK_STATE_PATH` to an explicit development/test path when a separate fixture is needed; unit tests normally use
+in-memory state. The historical repository-root `.mock-state.json` is never an automatic fallback.
 
-Writes use atomic replacement, but locking is process-local; avoid concurrent mutations from separate runtimes. The file is local state, not a fixture or durable storage model. **It stores `SecureString`-like and other parameter values as plaintext, and unauthenticated `GET /api/mock/state` exposes them.** Timers are not persisted. Never commit, upload, or attach `.mock-state.json`; reset or delete it if it may contain sensitive values.
+Production builds fail closed when the historical root file exists because it may contain plaintext credentials. The
+build does not delete or overwrite it. If it is known to be local mock data, run the explicit development-only
+`pnpm mock:migrate` command; migration refuses to overwrite an existing destination. Never migrate production or
+unknown data, and never put real credentials in mock state.
+
+Writes use atomic replacement, but locking is process-local; avoid concurrent mutations from separate runtimes. The file is local state, not a fixture or durable storage model. **It stores `SecureString`-like and other parameter values as plaintext, and unauthenticated `GET /api/mock/state` exposes them.** Timers are not persisted. Never commit, upload, or attach `mock-state.json`; reset or delete it if it may contain sensitive values.
 
 ## Extending mock mode
 
@@ -124,7 +132,7 @@ Follow the [AWS Provider Extension Contract](provider-implementation.md). Keep n
 - **AWS calls occur:** stop the server and use `pnpm dev:mock`; mode is cached with the selected provider for that process.
 - **Dev login is 403:** use `dev:mock` or set `ENABLE_DEV_LOGIN=true`, ensure `AUTH_SECRET` exists, then restart. A 404 indicates production mode.
 - **Mutation is 401/403:** visit dev login in the same browser, or send the `mc_session` cookie with the API request.
-- **Scenario appears stale:** reset, apply the scenario after the server starts, and reload the page. Inspect `/api/mock/state` and `.mock-state.json` without sharing sensitive contents.
+- **Scenario appears stale:** reset, apply the scenario after the server starts, and reload the page. Inspect `/api/mock/state` and `.local-artifacts/mock-state.json` without sharing sensitive contents.
 - **Transitions leak between tests:** always perform authenticated cleanup; reset clears registered timers.
 - **E2E fails to start:** free port 3000, install Chromium, and let Playwright manage the server rather than reusing one.
 

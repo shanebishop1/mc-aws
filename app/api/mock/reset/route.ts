@@ -4,6 +4,7 @@
  * Only available in mock mode
  */
 
+import { resetMockAgentState } from "@/lib/agent/state";
 import { requireAllowed } from "@/lib/api-auth";
 import { formatApiErrorResponse } from "@/lib/api-error";
 import { resetMockStateStore, resetToDefaultScenario } from "@/lib/aws/mock-scenarios";
@@ -42,6 +43,7 @@ export async function POST(_request: NextRequest): Promise<NextResponse<ApiRespo
     resetMockStateStore();
     // Reset in-memory runtime-state counters/snapshots (rate limits + cache)
     resetInMemoryRuntimeStateAdapterState();
+    await resetMockAgentState();
     // Then reset to default scenario
     await resetToDefaultScenario();
     await invalidateMockControlSnapshots();

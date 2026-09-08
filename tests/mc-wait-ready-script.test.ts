@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -44,7 +44,7 @@ afterEach(() => {
 // Each assertion launches the real readiness shell loop; several sequential process
 // launches can exceed Vitest's unit-test default under normal CI concurrency.
 describe("mc-wait-ready.sh", { timeout: 15_000 }, () => {
-  it("requires Minecraft protocol but reports recursive DNS propagation separately", () => {
+  it("rejects a JVM that is active but not protocol-ready and reports recursive DNS propagation separately", () => {
     expect(run({ protocolReady: false, dnsIp: "203.0.113.10" }).status).not.toBe(0);
     const staleDns = run({ protocolReady: true, dnsIp: "198.51.100.9" });
     expect(staleDns.status).toBe(0);
@@ -54,5 +54,17 @@ describe("mc-wait-ready.sh", { timeout: 15_000 }, () => {
 
   it("allows intentional raw-IP readiness without DNS", () => {
     expect(run({ protocolReady: true, mode: "raw_ip" }).status).toBe(0);
+  });
+
+  it("caps operator-provided readiness budgets and probes only the loopback endpoint", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mc-ready-test-"));
+    cleanup.push(root);
+    const result = spawnSync("bash", [script, "raw_ip", "", ""], {
+      env: { ...process.env, MC_READY_TIMEOUT_SECONDS: "601" },
+      encoding: "utf8",
+    });
+    expect(result.status).toBe(2);
+    expect(result.stderr).toContain("timeout and poll interval");
+    expect(readFileSync(script, "utf8")).toContain('"$MCSTATUS_BIN" 127.0.0.1:25565 status');
   });
 });

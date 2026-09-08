@@ -1,0 +1,81 @@
+[Unit]
+Description=mc-aws confined live-server executor
+After=minecraft.service systemd-tmpfiles-setup.service mc-agent-executor.socket mc-agent-world-roots.service
+Requires=mc-agent-executor.socket mc-agent-world-roots.service
+
+[Service]
+Type=simple
+User=minecraft
+Group=mc-agent
+UMask=0007
+RootDirectory=/opt/mc-agent/executor-root
+WorkingDirectory=/workspace
+ExecStartPre=/usr/bin/python3 /usr/local/bin/mc-agent-world-roots.py verify --generation-dir /config
+ExecStart=/runtime/node-current/bin/node --disallow-code-generation-from-strings /runtime/current/executor-cli.mjs
+Restart=on-failure
+RestartSec=2s
+RuntimeMaxSec=20min
+TimeoutStopSec=30s
+TimeoutStopFailureMode=kill
+KillMode=control-group
+SendSIGKILL=yes
+FinalKillSignal=SIGKILL
+StateDirectory=mc-agent-executor
+StateDirectoryMode=0700
+LoadCredential=executor-journal-hmac:/etc/mc-agent/executor-journal-hmac.key
+LoadCredential=executor-receipt-private:/etc/mc-agent/executor-receipt-private.pem
+LoadCredential=executor-clean-start-epoch:/etc/mc-agent/executor-clean-start-epoch
+Environment=MC_AGENT_EXECUTOR_CONFIG=/config/executor.json
+
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+PrivateMounts=true
+PrivateUsers=true
+PrivateNetwork=true
+DevicePolicy=closed
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+KeyringMode=private
+RestrictNamespaces=true
+SystemCallArchitectures=native
+SystemCallFilter=~@mount @privileged @resources @reboot @swap @obsolete
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=169.254.169.254/32
+IPAddressDeny=fd00:ec2::254/128
+IPAddressDeny=any
+BindPaths=/opt/minecraft/server:/workspace
+BindPaths=/var/lib/mc-agent-executor:/scratch
+BindReadOnlyPaths=/run/mc-agent-download:/run/mc-agent-download
+BindReadOnlyPaths=/run/mc-agent-world-roots:/run/mc-agent-world-roots
+BindPaths=/run/screen/S-minecraft:/run/screen/S-minecraft
+BindReadOnlyPaths=/opt/mc-agent:/runtime
+BindReadOnlyPaths=/etc/mc-agent/world-roots-current:/config
+BindReadOnlyPaths=/usr/bin/python3:/usr/bin/python3
+BindReadOnlyPaths=/usr/lib:/usr/lib
+BindReadOnlyPaths=/etc/mc-agent/gateway-public.pem:/config/gateway-public.pem
+BindReadOnlyPaths=/etc/mc-agent/backup-fence-public.pem:/config/backup-fence-public.pem
+BindReadOnlyPaths=/etc/mc-agent/executor-receipt-key-id:/config/executor-receipt-key-id
+BindReadOnlyPaths=/etc/mc-agent/executor-receipt-key-epoch:/config/executor-receipt-key-epoch
+BindReadOnlyPaths=/usr/bin/screen:/usr/bin/screen
+BindReadOnlyPaths=/usr/lib64:/usr/lib64
+BindReadOnlyPaths=/lib64:/lib64
+ReadWritePaths=/workspace /scratch
+InaccessiblePaths=/root /home /opt/setup /etc/minecraft /var/lib/amazon/ssm /var/lib/amazon/ssm-agent /run/amazon-ssm-agent
+
+[Install]
+WantedBy=multi-user.target

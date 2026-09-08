@@ -15,7 +15,7 @@ log "Starting hibernation with backup: $BACKUP_NAME"
 
 # Run backup first
 log "Running backup..."
-/usr/local/bin/mc-backup.sh "$BACKUP_NAME" || {
+/usr/local/bin/mc-backup.sh --hibernate --require-active "$BACKUP_NAME" || {
   log "ERROR: Backup failed"
   exit 1
 }

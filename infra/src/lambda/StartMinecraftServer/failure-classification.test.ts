@@ -20,4 +20,17 @@ describe("lifecycle failure classification", () => {
       retryable: false,
     });
   });
+
+  it("keeps confirmed host service-restoration failures nonterminal", () => {
+    expect(
+      classifyLifecycleFailure(
+        Object.assign(new Error("service restoration pending"), {
+          ssmTerminal: true,
+          hostRecoveryRequired: true,
+          retainLifecycleLock: true,
+          code: "host_service_restoration_pending",
+        })
+      )
+    ).toEqual({ retryable: true, retainLock: true, code: "host_service_restoration_pending" });
+  });
 });

@@ -16,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   recordRemote: vi.fn(),
   recordRemoteIdentity: vi.fn(),
 }));
+const hostOperationHelper = path.resolve(process.cwd(), "infra/src/ec2/mc-host-operation.py");
+const hostOperationContract = path.resolve(process.cwd(), "infra/src/ec2/host-operation-contract.json");
 
 vi.mock("./operation-state.js", () => ({
   heartbeatOperationExecution: mocks.heartbeat,
@@ -39,8 +41,10 @@ vi.mock("./runtime-budgets.js", () => ({
 
 import { runWithOperationExecutionContext } from "./execution-context.js";
 import {
+  deleteParameterIfCurrent,
   executeSSMCommand,
   putParameter,
+  putParameterIfCurrent,
   reconcileRemoteCommand,
   shouldRetainLifecycleLock,
   wrapIdempotentRemoteCommands,
@@ -92,13 +96,29 @@ describe("lambda SSM command delivery", () => {
   });
 
   it("supports atomic create while preserving overwrite-by-default compatibility", async () => {
-    mocks.send.mockResolvedValue({});
+    mocks.send.mockResolvedValue({ Version: 1 });
 
     await putParameter("/minecraft/default", "one");
     await putParameter("/minecraft/create", "two", "String", false);
 
     expect((mocks.send.mock.calls[0][0] as PutParameterCommand).input.Overwrite).toBe(true);
     expect((mocks.send.mock.calls[1][0] as PutParameterCommand).input.Overwrite).toBe(false);
+  });
+
+  it("fails closed instead of emulating conditional SSM mutation", async () => {
+    await expect(
+      deleteParameterIfCurrent("/minecraft/server-action", {
+        claimToken: "stale-owner",
+        parameterVersion: 1,
+      })
+    ).resolves.toBe(false);
+    await expect(
+      putParameterIfCurrent("/minecraft/server-action", "successor", {
+        claimToken: "stale-owner",
+        parameterVersion: 1,
+      })
+    ).resolves.toBe(false);
+    expect(mocks.send).not.toHaveBeenCalled();
   });
 
   it("durably records the remote command identity before polling", async () => {
@@ -172,11 +192,27 @@ describe("lambda SSM command delivery", () => {
       const uploadLog = path.join(root, "upload.log");
       const key = "c".repeat(64);
       const journal = JSON.stringify({
-        version: 1,
+        version: 3,
         phase: "restart-complete",
         backupName: "contract",
         mode: "ordinary",
         operationKey: key,
+        backupId: "a".repeat(32),
+        createdAt: "2026-09-04T00:00:00Z",
+        generation: 1,
+        maintenanceOwner: "ssm-test",
+        bootId: "boot-test",
+        volumeId: null,
+        volumeDevice: null,
+        quiescenceEpoch: "c".repeat(32),
+        serviceStates: [
+          "minecraft-dns.service",
+          "minecraft.service",
+          "mc-agent-world-roots.service",
+          "mc-agent-executor.socket",
+          "mc-agent-executor.service",
+          "mc-agent-gateway.service",
+        ].map((unit) => ({ unit, active: false, enablement: "disabled" })),
       });
       const quote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
       const [generated] = wrapIdempotentRemoteCommands(
@@ -190,11 +226,15 @@ describe("lambda SSM command delivery", () => {
       const script = generated
         .replaceAll("/var/lib/mc-aws/ssm-operations", stateDirectory)
         .replaceAll("/var/lib/mc-aws/mc-backup-journal.json", backupJournal)
+        .replaceAll("/usr/local/bin/mc-host-operation.py", hostOperationHelper)
         .replace("\nflock 9\n", "\ntrue\n")
         .replace("\n  flock 8\n", "\n  true\n")
         .replace("\n  flock -u 8\n", "\n  true\n");
 
-      const first = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+      const contractPath = path.join(root, "host-operation-contract.json");
+      writeFileSync(contractPath, readFileSync(hostOperationContract));
+      const environment = { ...process.env, MC_HOST_OPERATION_CONTRACT: contractPath };
+      const first = spawnSync("bash", ["-c", script], { env: environment, encoding: "utf8" });
       expect(first.status, first.stderr).toBe(0);
       expect(first.stdout).toBe("completed\n");
       expect(existsSync(path.join(stateDirectory, `${key}.out`))).toBe(true);
@@ -204,7 +244,7 @@ describe("lambda SSM command delivery", () => {
       // Model an ambiguous outer return after the durable .done commit but
       // before acknowledgment. The fast path must retry only acknowledgment.
       writeFileSync(backupJournal, journal, "utf8");
-      const retry = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+      const retry = spawnSync("bash", ["-c", script], { env: environment, encoding: "utf8" });
       expect(retry.status, retry.stderr).toBe(0);
       expect(retry.stdout).toBe("completed\n");
       expect(readFileSync(uploadLog, "utf8")).toBe("upload\n");
@@ -212,7 +252,7 @@ describe("lambda SSM command delivery", () => {
 
       const foreignJournal = journal.replace(key, "d".repeat(64));
       writeFileSync(backupJournal, foreignJournal, "utf8");
-      const foreignRetry = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+      const foreignRetry = spawnSync("bash", ["-c", script], { env: environment, encoding: "utf8" });
       expect(foreignRetry.status, foreignRetry.stderr).toBe(0);
       expect(readFileSync(backupJournal, "utf8")).toBe(foreignJournal);
       expect(readFileSync(uploadLog, "utf8")).toBe("upload\n");
@@ -252,6 +292,24 @@ describe("lambda SSM command delivery", () => {
     const send = mocks.send.mock.calls[0][0] as SendCommandCommand;
     expect(send.input.TimeoutSeconds).toBe(450);
     expect(send.input.Parameters?.executionTimeout).toEqual(["450"]);
+  });
+
+  it("retains lifecycle ownership for host service-restoration exit code 75", async () => {
+    mocks.send.mockResolvedValueOnce({ Command: { CommandId: "command-recovery" } }).mockResolvedValueOnce({
+      Status: "Failed",
+      ResponseCode: 75,
+      StandardErrorContent: "sensitive host recovery detail",
+    });
+
+    const error = await executeSSMCommand("i-abc123", ["backup"], { maxAttempts: 1 }).catch((caught) => caught);
+    expect(error).toMatchObject({
+      name: "SSMCommandTerminalError",
+      code: "host_service_restoration_pending",
+      responseCode: 75,
+      hostRecoveryRequired: true,
+      retainLifecycleLock: true,
+    });
+    expect(JSON.stringify(error)).not.toContain("sensitive host recovery detail");
   });
 
   it("applies the aligned remote timeout by default", async () => {

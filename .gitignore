@@ -37,10 +37,17 @@ yarn-debug.log*
 yarn-error.log*
 
 # local mock state
-.mock-state.json
-.mock-state.json.lock
-.mock-state.json.lock.recovery
-.mock-state.json.*.tmp
+/.local-artifacts/
+/.local-artifacts/mock-state.json
+/.local-artifacts/mock-state.json.lock
+/.local-artifacts/mock-state.json.lock.recovery
+/.local-artifacts/mock-state.json.*.tmp
+# Legacy path is ignored only to avoid indexing existing developer data. Build
+# preparation fails closed if it is present and never removes it implicitly.
+/.mock-state.json
+/.mock-state.json.lock
+/.mock-state.json.lock.recovery
+/.mock-state.json.*.tmp
 
 # non-secret local deployment ownership state
 .mc-aws-deployment.json
@@ -76,10 +83,24 @@ next-env.d.ts
 /.beads/
 /.opencode/
 /.local-docs/
-/.local-artifacts/
 /.mc-aws-cloudflare-deploy.lock
+/.mc-aws-next-build-isolation.json
+/.mc-aws-next-build-isolation.lock
+/.mc-aws-state/
+/.mc-aws-build-env-stage
+/.mc-aws-generated-build.env
+*.mc-aws-backup
+*.mc-aws-generated
+*.mc-aws-auth-rotation.json
 /.agent/
 /.agents/
+!/.agents/
+/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/mc-aws-agent-maintainer/
+!/.agents/skills/mc-aws-agent-maintainer/SKILL.md
 /.crush/
 /.claude/settings.local.json
 AGENTS.md
+!AGENTS.md

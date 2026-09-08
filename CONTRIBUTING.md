@@ -26,7 +26,7 @@ Supported build, test, preview, and CDK package commands remove the previous out
 - Preserve authentication, deployment, migration, backup, and teardown safety.
 - Describe new cloud resources, IAM permissions, recurring costs, migrations, or credential requirements.
 - Test cloud operations only against resources you own or are authorized to use.
-- Never commit credentials, session cookies, `.env` contents, `.mock-state.json`, deployment state, account/resource IDs, private hostnames, or sensitive test output.
+- Never commit credentials, session cookies, `.env` contents, `mock-state.json` (including the legacy root path), deployment state, account/resource IDs, private hostnames, or sensitive test output. Production builds fail if the legacy root mock-state file is present; use the explicit development-only `pnpm mock:migrate` command only for known local mock data.
 
 ## Validate before opening a PR
 

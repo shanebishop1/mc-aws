@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from "node:crypto";
 import {
   getEnvVarNamesByRequirement,
   parseBackendMode,
@@ -6,10 +7,46 @@ import {
   validateRuntimeStateWranglerConfig,
   workerManagedAwsCredentialSecretNames,
   workerSecretAllowlist,
+  workerVariableAllowlist,
 } from "@/lib/runtime-config-schema";
 import { describe, expect, it } from "vitest";
 
+const backupFencePrivateKey = generateKeyPairSync("ed25519")
+  .privateKey.export({ format: "der", type: "pkcs8" })
+  .toString("base64");
+
+const publicProviderCatalog = JSON.stringify({
+  schemaVersion: 1,
+  profiles: [
+    {
+      schemaVersion: 1,
+      profileId: "reviewed-provider",
+      providerId: "reviewed-openai-api",
+      providerKind: "openai-compatible",
+      displayName: "Reviewed provider",
+      endpoint: "https://provider.example.com",
+      allowedModels: ["reviewed-model"],
+      supportedFeatures: ["streaming", "tools"],
+    },
+  ],
+});
+const runtimeProviderProfiles = publicProviderCatalog;
+const validAuthSecret = "jyp8kdTmswhaH5xy5NaoA3tcHpTyqGDTx-WbFKgm8Nk";
+const enabledWorkerRuntime = {
+  MC_AGENT_RUNTIME_ENABLED: "true",
+  MC_AGENT_RUNTIME_ID: "minecraft-gateway",
+  MC_AGENT_RUNTIME_TOKEN_SHA256: "ab".repeat(32),
+  MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8: backupFencePrivateKey,
+  MC_AGENT_PUBLIC_PROVIDER_CATALOG: publicProviderCatalog,
+  MC_AGENT_RUNTIME_PROVIDER_PROFILES: runtimeProviderProfiles,
+};
+
 describe("runtime-config-schema", () => {
+  it("keeps MC_BACKEND_MODE as an allowlisted non-secret Worker variable", () => {
+    expect(workerVariableAllowlist).toEqual(["MC_BACKEND_MODE"]);
+    expect(workerSecretAllowlist).not.toContain("MC_BACKEND_MODE");
+  });
+
   describe("parseBackendMode", () => {
     it("parses allowed backend modes", () => {
       expect(parseBackendMode("aws")).toBe("aws");
@@ -83,8 +120,9 @@ describe("runtime-config-schema", () => {
           AWS_REGION: "us-east-1",
           MC_LIFECYCLE_LOCK_TABLE_NAME: "lifecycle-lock-table",
           MC_OPERATION_STATE_TABLE_NAME: "operation-state-table",
+          MC_AGENT_RUNTIME_ENABLED: "false",
           RUNTIME_STATE_SNAPSHOT_KV_ID: "0123456789abcdef0123456789abcdef",
-          AUTH_SECRET: "very-secret-value",
+          AUTH_SECRET: validAuthSecret,
           ADMIN_EMAIL: "admin@real-domain.dev",
           GOOGLE_CLIENT_ID: "google-client-id",
           GOOGLE_CLIENT_SECRET: "google-client-secret",
@@ -121,6 +159,144 @@ describe("runtime-config-schema", () => {
           expect.objectContaining({ name: "MC_BOOTSTRAP_PINS_SHA256", kind: "invalid" }),
         ])
       );
+    });
+
+    it("enforces the agent runtime verifier and raw-secret ownership boundary", () => {
+      expect(
+        validateEnvForTarget(
+          {
+            ...enabledWorkerRuntime,
+            MC_AGENT_RUNTIME_ID: "minecraft-gateway",
+            MC_AGENT_RUNTIME_TOKEN_SHA256: "ab".repeat(32),
+          },
+          "worker"
+        ).issues
+      ).toEqual(expect.not.arrayContaining([expect.objectContaining({ name: "MC_AGENT_RUNTIME_ID" })]));
+      expect(
+        validateEnvForTarget(
+          {
+            MC_AGENT_RUNTIME_ENABLED: "true",
+            MC_AGENT_RUNTIME_ID: "minecraft-gateway",
+            MC_AGENT_RUNTIME_TOKEN: "raw-gateway-token-with-more-than-thirty-two-characters",
+          },
+          "worker"
+        ).issues
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "MC_AGENT_RUNTIME_TOKEN", kind: "forbidden" }),
+          expect.objectContaining({ name: "MC_AGENT_RUNTIME_TOKEN_SHA256", kind: "missing" }),
+          expect.objectContaining({ name: "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8", kind: "missing" }),
+        ])
+      );
+    });
+
+    it("requires explicit Worker runtime state and complete enabled configuration", () => {
+      expect(validateEnvForTarget({}, "worker").issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "MC_AGENT_RUNTIME_ENABLED", kind: "missing" })])
+      );
+      expect(
+        validateEnvForTarget(
+          {
+            MC_AGENT_RUNTIME_ENABLED: "true",
+            MC_AGENT_RUNTIME_ID: "minecraft-gateway",
+          },
+          "worker"
+        ).issues
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "MC_AGENT_RUNTIME_TOKEN_SHA256", kind: "missing" }),
+          expect.objectContaining({ name: "MC_AGENT_PUBLIC_PROVIDER_CATALOG", kind: "missing" }),
+          expect.objectContaining({ name: "MC_AGENT_RUNTIME_PROVIDER_PROFILES", kind: "missing" }),
+        ])
+      );
+      expect(
+        validateEnvForTarget(
+          {
+            MC_AGENT_RUNTIME_ENABLED: "false",
+            MC_AGENT_RUNTIME_ID: "retained-old-runtime",
+            MC_AGENT_RUNTIME_TOKEN_SHA256: "not-a-valid-retained-hash",
+          },
+          "worker"
+        ).issues.filter(({ name }) => name.startsWith("MC_AGENT_"))
+      ).toEqual([]);
+    });
+
+    it("validates bounded credential-free Agent provider metadata for Worker ownership", () => {
+      const validReport = validateEnvForTarget(
+        {
+          ...enabledWorkerRuntime,
+        },
+        "worker"
+      );
+      expect(
+        validReport.issues.filter(
+          ({ name }) => name === "MC_AGENT_PUBLIC_PROVIDER_CATALOG" || name === "MC_AGENT_RUNTIME_PROVIDER_PROFILES"
+        )
+      ).toEqual([]);
+
+      const sensitiveCatalog = publicProviderCatalog.replace(
+        '"endpoint"',
+        '"credentialRef":"secret-ref:providers/reviewed","endpoint"'
+      );
+      expect(
+        validateEnvForTarget(
+          {
+            ...enabledWorkerRuntime,
+            MC_AGENT_PUBLIC_PROVIDER_CATALOG: sensitiveCatalog,
+            MC_AGENT_RUNTIME_PROVIDER_PROFILES: runtimeProviderProfiles,
+          },
+          "worker"
+        ).issues
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "MC_AGENT_PUBLIC_PROVIDER_CATALOG", kind: "invalid" })])
+      );
+
+      expect(
+        validateEnvForTarget(
+          {
+            ...enabledWorkerRuntime,
+            MC_AGENT_PUBLIC_PROVIDER_CATALOG: `${publicProviderCatalog}${" ".repeat(64_001)}`,
+            MC_AGENT_RUNTIME_PROVIDER_PROFILES: runtimeProviderProfiles,
+          },
+          "worker"
+        ).issues
+      ).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "MC_AGENT_PUBLIC_PROVIDER_CATALOG", kind: "invalid" })])
+      );
+
+      expect(
+        validateEnvForTarget(
+          {
+            ...enabledWorkerRuntime,
+            MC_AGENT_PUBLIC_PROVIDER_CATALOG: publicProviderCatalog,
+            MC_AGENT_RUNTIME_PROVIDER_PROFILES: `${runtimeProviderProfiles}${" ".repeat(64_001)}`,
+          },
+          "worker"
+        ).issues
+      ).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ name: "MC_AGENT_RUNTIME_PROVIDER_PROFILES", kind: "invalid" }),
+        ])
+      );
+    });
+
+    it("forbids Worker-only Agent provider metadata on Lambda and EC2", () => {
+      for (const target of ["lambda", "ec2"] as const) {
+        expect(
+          validateEnvForTarget(
+            {
+              MC_AGENT_PUBLIC_PROVIDER_CATALOG: publicProviderCatalog,
+              MC_AGENT_RUNTIME_PROVIDER_PROFILES: runtimeProviderProfiles,
+            },
+            target
+          ).issues
+        ).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ name: "MC_AGENT_PUBLIC_PROVIDER_CATALOG", kind: "forbidden" }),
+            expect.objectContaining({ name: "MC_AGENT_RUNTIME_PROVIDER_PROFILES", kind: "forbidden" }),
+          ])
+        );
+      }
     });
 
     it("accepts complete DuckDNS config", () => {
@@ -285,8 +461,26 @@ describe("runtime-config-schema", () => {
         "ci"
       );
 
-      expect(report.issues.map((issue) => issue.kind)).toEqual(["invalid", "invalid"]);
-      expect(report.issues.map((issue) => issue.name)).toEqual(["ADMIN_EMAIL", "NEXT_PUBLIC_APP_URL"]);
+      expect(report.issues.map((issue) => issue.kind)).toEqual(["invalid", "invalid", "invalid"]);
+      expect(report.issues.map((issue) => issue.name)).toEqual(["AUTH_SECRET", "ADMIN_EMAIL", "NEXT_PUBLIC_APP_URL"]);
+    });
+
+    it.each([
+      "short",
+      "z".repeat(64),
+      "correct-horse-battery-staple-correct-horse-battery-staple",
+      "0123456789abcdef0123456789abcdef",
+      "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_",
+      "jyp8kdTmswhaH5xy5NaoA3tcHpTyqGDTx-WbFKgm8Nk=",
+    ])("rejects a weak production AUTH_SECRET: %s", (AUTH_SECRET) => {
+      const report = validateEnvForTarget({ AUTH_SECRET }, "worker");
+      expect(report.issues).toEqual(
+        expect.arrayContaining([expect.objectContaining({ name: "AUTH_SECRET", kind: "invalid" })])
+      );
+    });
+
+    it("does not apply production AUTH_SECRET strength policy to local development", () => {
+      expect(validateEnvForTarget({ AUTH_SECRET: "local-only" }, "local-dev").issues).toEqual([]);
     });
 
     it("reports placeholder values for worker target", () => {
@@ -298,7 +492,8 @@ describe("runtime-config-schema", () => {
           CLOUDFLARE_MC_DOMAIN: "mc.yourdomain.com",
           CLOUDFLARE_DNS_API_TOKEN: "your-cloudflare-api-token",
           RUNTIME_STATE_SNAPSHOT_KV_ID: "your-runtime-state-kv-id",
-          AUTH_SECRET: "very-secret-value",
+          MC_AGENT_RUNTIME_ENABLED: "false",
+          AUTH_SECRET: validAuthSecret,
           ADMIN_EMAIL: "admin@real-domain.dev",
           GOOGLE_CLIENT_ID: "google-client-id",
           GOOGLE_CLIENT_SECRET: "google-client-secret",
@@ -344,6 +539,18 @@ describe("runtime-config-schema", () => {
               name: "RUNTIME_STATE_DURABLE_OBJECT",
               class_name: "RuntimeStateDurableObject",
             },
+            {
+              name: "AGENT_SESSION_DURABLE_OBJECT",
+              class_name: "AgentSessionDurableObject",
+            },
+            {
+              name: "AGENT_SESSION_INDEX_DURABLE_OBJECT",
+              class_name: "AgentSessionIndexDurableObject",
+            },
+            {
+              name: "AGENT_SESSION_SHARD_DURABLE_OBJECT",
+              class_name: "AgentSessionShardDurableObject",
+            },
           ],
         },
         kv_namespaces: [
@@ -357,6 +564,14 @@ describe("runtime-config-schema", () => {
           {
             tag: "v1-runtime-state-durable-object",
             new_sqlite_classes: ["RuntimeStateDurableObject"],
+          },
+          {
+            tag: "v2-agent-session-durable-object",
+            new_sqlite_classes: ["AgentSessionDurableObject"],
+          },
+          {
+            tag: "v3-agent-session-shards",
+            new_sqlite_classes: ["AgentSessionIndexDurableObject", "AgentSessionShardDurableObject"],
           },
         ],
       });
@@ -375,7 +590,7 @@ describe("runtime-config-schema", () => {
       });
 
       expect(report.isValid).toBe(false);
-      expect(report.errors).toHaveLength(3);
+      expect(report.errors).toHaveLength(9);
     });
 
     it("fails when runtime-state kv binding uses placeholder ids", () => {
@@ -385,6 +600,18 @@ describe("runtime-config-schema", () => {
             {
               name: "RUNTIME_STATE_DURABLE_OBJECT",
               class_name: "RuntimeStateDurableObject",
+            },
+            {
+              name: "AGENT_SESSION_DURABLE_OBJECT",
+              class_name: "AgentSessionDurableObject",
+            },
+            {
+              name: "AGENT_SESSION_INDEX_DURABLE_OBJECT",
+              class_name: "AgentSessionIndexDurableObject",
+            },
+            {
+              name: "AGENT_SESSION_SHARD_DURABLE_OBJECT",
+              class_name: "AgentSessionShardDurableObject",
             },
           ],
         },
@@ -399,6 +626,14 @@ describe("runtime-config-schema", () => {
           {
             tag: "v1-runtime-state-durable-object",
             new_sqlite_classes: ["RuntimeStateDurableObject"],
+          },
+          {
+            tag: "v2-agent-session-durable-object",
+            new_sqlite_classes: ["AgentSessionDurableObject"],
+          },
+          {
+            tag: "v3-agent-session-shards",
+            new_sqlite_classes: ["AgentSessionIndexDurableObject", "AgentSessionShardDurableObject"],
           },
         ],
       });
@@ -423,6 +658,12 @@ describe("runtime-config-schema", () => {
           "GOOGLE_CLIENT_ID",
           "GOOGLE_CLIENT_SECRET",
           "NEXT_PUBLIC_APP_URL",
+          "MC_AGENT_RUNTIME_ENABLED",
+          "MC_AGENT_RUNTIME_ID",
+          "MC_AGENT_RUNTIME_TOKEN_SHA256",
+          "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8",
+          "MC_AGENT_PUBLIC_PROVIDER_CATALOG",
+          "MC_AGENT_RUNTIME_PROVIDER_PROFILES",
         ])
       );
     });

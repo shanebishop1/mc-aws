@@ -1,9 +1,11 @@
+import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AttachVolumeCommand,
   DeleteVolumeCommand,
   DescribeImagesCommand,
   DescribeInstancesCommand,
+  DescribeSnapshotsCommand,
   DescribeVolumesCommand,
   DetachVolumeCommand,
   StartInstancesCommand,
@@ -12,6 +14,7 @@ import {
 
 const mocks = vi.hoisted(() => ({
   executeSSMCommand: vi.fn(),
+  handleBackup: vi.fn(),
   handleRefreshBackups: vi.fn(),
   send: vi.fn(),
   getOperationExecutionContext: vi.fn(),
@@ -24,6 +27,7 @@ vi.mock("../clients.js", async () => {
   return { ...actual, ec2: { send: mocks.send } };
 });
 vi.mock("../ssm.js", () => ({ executeSSMCommand: mocks.executeSSMCommand }));
+vi.mock("./backup.js", () => ({ handleBackup: mocks.handleBackup }));
 vi.mock("../execution-context.js", () => ({ getOperationExecutionContext: mocks.getOperationExecutionContext }));
 vi.mock("../operation-state.js", () => ({
   getOperationState: mocks.getOperationState,
@@ -58,25 +62,93 @@ const reconstructionImage = {
     },
   ],
 };
+const authenticatedHibernateBackup = {
+  archiveName: "hibernate.tar.gz",
+  archiveSha256: "a".repeat(64),
+  archiveSize: 42,
+  authenticationKeyId: "key-old",
+  backupId: "b".repeat(32),
+  createdAt: "2026-09-04T00:00:00Z",
+  generation: 7,
+  instanceId: "i-managed",
+  operationKey: createHash("sha256").update("hibernate-op\0hibernate-backup").digest("hex"),
+  serverId: "stack-identity",
+  quiescence: {
+    schemaVersion: 2,
+    mode: "terminal-hibernate",
+    maintenanceFence: "held",
+    maintenanceOwner: "hibernate-fixture",
+    services: "stopped-and-masked",
+    minecraft: "inactive",
+    protocol: "closed",
+    bootId: "boot-fixture",
+    rootVolumeId: "vol-root",
+    rootVolumeDevice: "/dev/xvda",
+    quiescenceEpoch: "c".repeat(32),
+  },
+};
+
+const persistedHibernateOperation = (
+  phase: "stopping" | "stopped" | "detaching" | "detached",
+  volumeId = "vol-root",
+  executionToken = "attempt-1"
+) => ({
+  id: "hibernate-op",
+  type: "hibernate",
+  instanceId: "i-managed",
+  executionToken,
+  managedVolumeId: volumeId,
+  managedVolumeDevice: "/dev/xvda",
+  hibernateOriginalInstanceId: "i-managed",
+  hibernateSourceImageId: "ami-source",
+  hibernateReconstructionSnapshotId: "snap-source",
+  hibernatePhase: phase,
+  hibernateBackupArchiveName: authenticatedHibernateBackup.archiveName,
+  hibernateBackupDigest: authenticatedHibernateBackup.archiveSha256,
+  hibernateBackupSize: authenticatedHibernateBackup.archiveSize,
+  hibernateBackupId: authenticatedHibernateBackup.backupId,
+  hibernateBackupCreatedAt: authenticatedHibernateBackup.createdAt,
+  hibernateBackupGeneration: authenticatedHibernateBackup.generation,
+  hibernateBackupInstanceId: authenticatedHibernateBackup.instanceId,
+  hibernateBackupOperationKey: authenticatedHibernateBackup.operationKey,
+  hibernateBackupServerId: authenticatedHibernateBackup.serverId,
+  hibernateBackupAuthenticationKeyId: authenticatedHibernateBackup.authenticationKeyId,
+  hibernateQuiescenceEvidence: { ...authenticatedHibernateBackup.quiescence, rootVolumeId: volumeId },
+});
 
 describe("lambda handlers/hibernate", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv("MC_PROJECT_TAG", "mc-aws");
     vi.stubEnv("MC_STACK_TAG", "MinecraftStack");
-    mocks.executeSSMCommand.mockResolvedValue("backup complete");
-    mocks.handleRefreshBackups.mockResolvedValue("cache refreshed");
-    mocks.getOperationExecutionContext.mockReturnValue(null);
+    vi.stubEnv("MC_BACKUP_SERVER_IDENTITY", authenticatedHibernateBackup.serverId);
+    mocks.executeSSMCommand.mockResolvedValue("MC_BACKUP_TERMINAL_VALID");
+    mocks.handleBackup.mockResolvedValue({ message: "backup complete", manifest: authenticatedHibernateBackup });
+    mocks.handleRefreshBackups.mockResolvedValue({ matchedBackup: authenticatedHibernateBackup });
+    mocks.getOperationExecutionContext.mockReturnValue({
+      operationId: "hibernate-op",
+      command: "hibernate",
+      instanceId: "i-managed",
+      executionToken: "attempt-1",
+    });
     mocks.getOperationState.mockResolvedValue(null);
-    mocks.updateOperationState.mockResolvedValue(undefined);
+    mocks.updateOperationState.mockImplementation(async (input: Record<string, unknown>) => ({
+      id: "hibernate-op",
+      type: "hibernate",
+      executionToken: "attempt-1",
+      ...input,
+    }));
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         return {
           Reservations: [
             {
               Instances: [
                 {
+                  InstanceId: "i-managed",
                   RootDeviceName: "/dev/xvda",
                   ImageId: "ami-source",
                   BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: "vol-root" } }],
@@ -110,6 +182,7 @@ describe("lambda handlers/hibernate", () => {
     mocks.getOperationExecutionContext.mockReturnValue({
       operationId: "hibernate-op",
       command: "hibernate",
+      instanceId: "i-managed",
       executionToken: "attempt-1",
     });
     let instanceDescribeCount = 0;
@@ -119,6 +192,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: The retry fixture models exact-volume reconciliation after deletion.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof StopInstancesCommand) return {};
       if (command instanceof DescribeInstancesCommand) {
         instanceDescribeCount += 1;
@@ -128,6 +203,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     BlockDeviceMappings: [
@@ -172,16 +248,20 @@ describe("lambda handlers/hibernate", () => {
     expect(getCommands(DetachVolumeCommand)[0]?.input).toMatchObject({ VolumeId: "vol-root", InstanceId: "i-managed" });
     expect(getCommands(DeleteVolumeCommand)).toHaveLength(1);
     expect(getCommands(DeleteVolumeCommand)[0]?.input.VolumeId).toBe("vol-root");
-    expect(mocks.executeSSMCommand).toHaveBeenNthCalledWith(
-      1,
+    expect(mocks.handleBackup).toHaveBeenCalledWith(
       "i-managed",
-      [
-        "if grep -Fq -- '--hibernate' /usr/local/bin/mc-backup.sh; then /usr/local/bin/mc-backup.sh --hibernate; else /usr/local/bin/mc-backup.sh; fi",
-      ],
-      { maxAttempts: 195, timeoutSeconds: 360, step: "hibernate-backup", finalRemoteStep: false }
+      [],
+      "",
+      expect.objectContaining({ backupMode: "hibernate", requireFreshBackup: true })
     );
     expect(mocks.updateOperationState).toHaveBeenCalledWith(
       expect.objectContaining({ managedVolumeId: "vol-root", hibernatePhase: "selected" })
+    );
+    expect(mocks.updateOperationState).toHaveBeenCalledWith(
+      expect.objectContaining({
+        hibernatePhase: "backup-complete",
+        hibernateQuiescenceEvidence: authenticatedHibernateBackup.quiescence,
+      })
     );
     expect(mocks.updateOperationState).toHaveBeenCalledWith(expect.objectContaining({ hibernatePhase: "stopped" }));
     expect(mocks.updateOperationState).toHaveBeenCalledWith(expect.objectContaining({ hibernatePhase: "detached" }));
@@ -191,47 +271,39 @@ describe("lambda handlers/hibernate", () => {
         (_, index) => mocks.send.mock.calls[index][0] instanceof DetachVolumeCommand
       )!
     );
-    expect(mocks.handleRefreshBackups).toHaveBeenCalledWith("i-managed");
-    expect(mocks.executeSSMCommand.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.handleRefreshBackups.mock.invocationCallOrder[0]
-    );
     const stopCallIndex = mocks.send.mock.calls.findIndex(([command]) => command instanceof StopInstancesCommand);
-    expect(mocks.handleRefreshBackups.mock.invocationCallOrder[0]).toBeLessThan(
-      mocks.send.mock.invocationCallOrder[stopCallIndex]
-    );
+    const verifyCallIndex = mocks.executeSSMCommand.mock.invocationCallOrder.at(-1)!;
+    expect(mocks.handleRefreshBackups).not.toHaveBeenCalled();
+    expect(verifyCallIndex).toBeLessThan(mocks.send.mock.invocationCallOrder[stopCallIndex]);
   });
 
-  it("does not stop or delete the root volume when cache refresh fails", async () => {
-    mocks.handleRefreshBackups.mockRejectedValueOnce(new Error("cache failed"));
+  it("preserves the root volume when the just-in-time terminal proof is invalid", async () => {
+    mocks.executeSSMCommand.mockRejectedValueOnce(new Error("stale boot evidence")).mockResolvedValueOnce("recovered");
 
-    await expect(handleHibernate("i-managed", [], "")).rejects.toThrow("cache failed");
-
-    expect(getCommands(StopInstancesCommand)).toHaveLength(0);
+    await expect(handleHibernate("i-managed", [], "")).rejects.toThrow(/terminal|stale|stop/i);
     expect(getCommands(DetachVolumeCommand)).toHaveLength(0);
     expect(getCommands(DeleteVolumeCommand)).toHaveLength(0);
-    expect(mocks.executeSSMCommand).toHaveBeenNthCalledWith(
-      2,
-      "i-managed",
-      [
-        "if grep -Fq -- '--recover-hibernate' /usr/local/bin/mc-backup.sh; then /usr/local/bin/mc-backup.sh --recover-hibernate; else systemctl start minecraft.service; fi",
-      ],
-      { maxAttempts: 30, timeoutSeconds: 45, step: "hibernate-recovery", finalRemoteStep: false }
+  });
+
+  it("fails closed on a legacy host without an authenticated manifest result", async () => {
+    mocks.handleBackup.mockRejectedValueOnce(
+      new Error("authenticated backup manifest missing; host upgrade is required")
     );
+
+    await expect(handleHibernate("i-managed", [], "")).rejects.toThrow(/host upgrade/i);
+    expect(getCommands(StopInstancesCommand)).toHaveLength(0);
+    expect(getCommands(DeleteVolumeCommand)).toHaveLength(0);
   });
 
   it("attempts idempotent host recovery after a terminal hibernate-backup failure", async () => {
-    mocks.executeSSMCommand
-      .mockRejectedValueOnce(new Error("backup timed out"))
-      .mockResolvedValueOnce("no guard present");
+    mocks.handleBackup.mockRejectedValueOnce(new Error("backup timed out"));
+    mocks.executeSSMCommand.mockResolvedValueOnce("no guard present");
 
     await expect(handleHibernate("i-managed", [], "")).rejects.toThrow("backup timed out");
 
-    expect(mocks.executeSSMCommand).toHaveBeenNthCalledWith(
-      2,
+    expect(mocks.executeSSMCommand).toHaveBeenLastCalledWith(
       "i-managed",
-      [
-        "if grep -Fq -- '--recover-hibernate' /usr/local/bin/mc-backup.sh; then /usr/local/bin/mc-backup.sh --recover-hibernate; else systemctl start minecraft.service; fi",
-      ],
+      ["/usr/local/bin/mc-backup.sh --recover-hibernate"],
       { maxAttempts: 30, timeoutSeconds: 45, step: "hibernate-recovery", finalRemoteStep: false }
     );
     expect(getCommands(StopInstancesCommand)).toHaveLength(0);
@@ -239,8 +311,11 @@ describe("lambda handlers/hibernate", () => {
 
   it("refuses to detach a root volume without matching ownership tags", async () => {
     let instanceDescribeCount = 0;
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit EC2 command dispatch documents the ownership fixture.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         instanceDescribeCount += 1;
         return instanceDescribeCount === 1
@@ -249,6 +324,7 @@ describe("lambda handlers/hibernate", () => {
                 {
                   Instances: [
                     {
+                      InstanceId: "i-managed",
                       RootDeviceName: "/dev/xvda",
                       ImageId: "ami-source",
                       BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: "vol-unowned" } }],
@@ -278,6 +354,7 @@ describe("lambda handlers/hibernate", () => {
             {
               Instances: [
                 {
+                  InstanceId: "i-managed",
                   RootDeviceName: "/dev/xvda",
                   ImageId: "ami-unusable",
                   BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: "vol-root" } }],
@@ -318,6 +395,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit AWS command sequencing documents the rollback contract.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         describeCount += 1;
         if (describeCount === 1) {
@@ -326,6 +405,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: "vol-root" } }],
@@ -362,9 +442,7 @@ describe("lambda handlers/hibernate", () => {
     expect(getCommands(StartInstancesCommand)).toHaveLength(1);
     expect(mocks.executeSSMCommand).toHaveBeenLastCalledWith(
       "i-managed",
-      [
-        "if grep -Fq -- '--recover-hibernate' /usr/local/bin/mc-backup.sh; then /usr/local/bin/mc-backup.sh --recover-hibernate; else systemctl start minecraft.service; fi",
-      ],
+      ["/usr/local/bin/mc-backup.sh --recover-hibernate"],
       { maxAttempts: 30, timeoutSeconds: 45, step: "hibernate-recovery", finalRemoteStep: false }
     );
   });
@@ -375,6 +453,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit AWS command sequencing documents the rollback contract.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         instanceCount += 1;
         if (instanceCount === 1) {
@@ -383,6 +463,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: "vol-root" } }],
@@ -413,7 +494,19 @@ describe("lambda handlers/hibernate", () => {
           };
         }
         if (volumeCount <= 3) return { Volumes: [{ State: "available", Attachments: [] }] };
-        return { Volumes: [{ State: "in-use", Attachments: [{ InstanceId: "i-managed", State: "attached" }] }] };
+        return {
+          Volumes: [
+            {
+              State: "in-use",
+              Tags: [
+                { Key: "McAwsProject", Value: "mc-aws" },
+                { Key: "McAwsStack", Value: "MinecraftStack" },
+                { Key: "McAwsManagedRoot", Value: "true" },
+              ],
+              Attachments: [{ InstanceId: "i-managed", State: "attached" }],
+            },
+          ],
+        };
       }
       if (command instanceof DeleteVolumeCommand) throw new Error("delete failed");
       return {};
@@ -428,6 +521,7 @@ describe("lambda handlers/hibernate", () => {
     mocks.getOperationExecutionContext.mockReturnValue({
       operationId: "hibernate-op",
       command: "hibernate",
+      instanceId: "i-managed",
       executionToken: "attempt-1",
     });
     let instanceDescribeCount = 0;
@@ -435,6 +529,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit command sequencing models an ambiguous accepted stop and recovery.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         instanceDescribeCount += 1;
         if (instanceDescribeCount === 1) {
@@ -443,6 +539,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     State: { Name: "running" },
@@ -492,7 +589,8 @@ describe("lambda handlers/hibernate", () => {
     expect(instanceDescribeCount).toBe(5);
     expect(getCommands(StartInstancesCommand)).toHaveLength(0);
     expect(getCommands(DeleteVolumeCommand)).toHaveLength(1);
-    expect(mocks.executeSSMCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.executeSSMCommand).toHaveBeenCalledOnce();
+    expect(mocks.executeSSMCommand.mock.calls[0]?.[2]).toMatchObject({ step: "hibernate-quiescence-verify" });
   });
 
   it("retains lifecycle ownership when bounded polling sees only running after ambiguous stop delivery", async () => {
@@ -500,6 +598,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit AWS command sequencing verifies stable-state disambiguation.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         instanceDescribeCount += 1;
         if (instanceDescribeCount === 1) {
@@ -508,6 +608,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     State: { Name: "running" },
@@ -550,7 +651,8 @@ describe("lambda handlers/hibernate", () => {
     expect(instanceDescribeCount).toBe(5);
     expect(getCommands(StartInstancesCommand)).toHaveLength(0);
     expect(getCommands(DeleteVolumeCommand)).toHaveLength(0);
-    expect(mocks.executeSSMCommand).toHaveBeenCalledTimes(1);
+    expect(mocks.executeSSMCommand).toHaveBeenCalledOnce();
+    expect(mocks.executeSSMCommand.mock.calls[0]?.[2]).toMatchObject({ step: "hibernate-quiescence-verify" });
   });
 
   it("performs host recovery after a definite StopInstances rejection", async () => {
@@ -558,6 +660,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit AWS command sequencing verifies definite stop rejection recovery.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         instanceDescribeCount += 1;
         if (instanceDescribeCount === 1) {
@@ -566,6 +670,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     State: { Name: "running" },
@@ -619,6 +724,8 @@ describe("lambda handlers/hibernate", () => {
     // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit command sequencing verifies stale reads after accepted stop delivery.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
         instanceDescribeCount += 1;
         if (instanceDescribeCount === 1) {
@@ -627,6 +734,7 @@ describe("lambda handlers/hibernate", () => {
               {
                 Instances: [
                   {
+                    InstanceId: "i-managed",
                     RootDeviceName: "/dev/xvda",
                     ImageId: "ami-source",
                     State: { Name: "running" },
@@ -675,13 +783,30 @@ describe("lambda handlers/hibernate", () => {
     mocks.getOperationExecutionContext.mockReturnValue({
       operationId: "hibernate-op",
       command: "hibernate",
+      instanceId: "i-managed",
       executionToken: "attempt-2",
     });
-    mocks.getOperationState.mockResolvedValue({ managedVolumeId: "vol-detached" });
+    mocks.getOperationState.mockResolvedValue(persistedHibernateOperation("detached", "vol-detached", "attempt-2"));
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit EC2 command dispatch documents retry reconciliation.
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
       if (command instanceof DescribeInstancesCommand) {
-        return { Reservations: [{ Instances: [{ RootDeviceName: "/dev/xvda", BlockDeviceMappings: [] }] }] };
+        return {
+          Reservations: [
+            {
+              Instances: [
+                {
+                  InstanceId: "i-managed",
+                  RootDeviceName: "/dev/xvda",
+                  ImageId: "ami-source",
+                  BlockDeviceMappings: [],
+                },
+              ],
+            },
+          ],
+        };
       }
       if (command instanceof DescribeVolumesCommand) {
         if (getCommands(DeleteVolumeCommand).length > 0) return { Volumes: [] };
@@ -708,16 +833,203 @@ describe("lambda handlers/hibernate", () => {
     expect(mocks.executeSSMCommand).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      "original instance",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateOriginalInstanceId = "i-other";
+      },
+    ],
+    [
+      "server identity",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateBackupServerId = "other-stack";
+      },
+    ],
+    [
+      "volume lineage",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateSourceImageId = "ami-other";
+      },
+    ],
+    [
+      "reconstruction snapshot",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateReconstructionSnapshotId = "snap-other";
+      },
+    ],
+    [
+      "execution token",
+      (operation: Record<string, unknown>) => {
+        operation.executionToken = "attempt-other";
+      },
+    ],
+    [
+      "operation key",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateBackupOperationKey = "f".repeat(64);
+      },
+    ],
+    [
+      "authentication key",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateBackupAuthenticationKeyId = "";
+      },
+    ],
+    [
+      "quiescence volume",
+      (operation: Record<string, unknown>) => {
+        operation.hibernateQuiescenceEvidence = {
+          ...(operation.hibernateQuiescenceEvidence as Record<string, unknown>),
+          rootVolumeId: "vol-other",
+        };
+      },
+    ],
+  ])("refuses detached deletion when durable %s binding changes", async (_label, mutate) => {
+    mocks.getOperationExecutionContext.mockReturnValue({
+      operationId: "hibernate-op",
+      command: "hibernate",
+      instanceId: "i-managed",
+      executionToken: "attempt-2",
+    });
+    const operation = structuredClone(persistedHibernateOperation("detached", "vol-detached", "attempt-2"));
+    mutate(operation);
+    mocks.getOperationState.mockResolvedValue(operation);
+    mocks.send.mockImplementation(async (command: unknown) => {
+      if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
+      if (command instanceof DescribeInstancesCommand) {
+        return {
+          Reservations: [
+            {
+              Instances: [
+                {
+                  InstanceId: "i-managed",
+                  RootDeviceName: "/dev/xvda",
+                  ImageId: "ami-source",
+                  BlockDeviceMappings: [],
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (command instanceof DescribeVolumesCommand) {
+        return {
+          Volumes: [
+            {
+              State: "available",
+              Attachments: [],
+              Tags: [
+                { Key: "McAwsProject", Value: "mc-aws" },
+                { Key: "McAwsStack", Value: "MinecraftStack" },
+                { Key: "McAwsManagedRoot", Value: "true" },
+              ],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await expect(handleHibernate("i-managed", [], "")).rejects.toThrow(/Refusing|incomplete/);
+    expect(getCommands(DeleteVolumeCommand)).toHaveLength(0);
+  });
+
+  it("continues a durable stopped phase without issuing an impossible SSM command", async () => {
+    mocks.getOperationState.mockResolvedValue(persistedHibernateOperation("stopped"));
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Explicit EC2 command dispatch documents retry reconciliation.
+    mocks.send.mockImplementation(async (command: unknown) => {
+      if (command instanceof DescribeImagesCommand) return reconstructionImage;
+      if (command instanceof DescribeSnapshotsCommand)
+        return { Snapshots: [{ SnapshotId: "snap-source", State: "completed", Progress: "100%" }] };
+      if (command instanceof DescribeInstancesCommand) {
+        return {
+          Reservations: [
+            {
+              Instances: [
+                {
+                  InstanceId: "i-managed",
+                  RootDeviceName: "/dev/xvda",
+                  ImageId: "ami-source",
+                  BlockDeviceMappings: [{ DeviceName: "/dev/xvda", Ebs: { VolumeId: "vol-root" } }],
+                  State: { Name: "stopped" },
+                },
+              ],
+            },
+          ],
+        };
+      }
+      if (command instanceof DescribeVolumesCommand) {
+        if (getCommands(DeleteVolumeCommand).length > 0) return { Volumes: [] };
+        if (getCommands(DetachVolumeCommand).length > 0) return { Volumes: [{ State: "available", Attachments: [] }] };
+        return {
+          Volumes: [
+            {
+              State: "in-use",
+              Tags: [
+                { Key: "McAwsProject", Value: "mc-aws" },
+                { Key: "McAwsStack", Value: "MinecraftStack" },
+                { Key: "McAwsManagedRoot", Value: "true" },
+              ],
+              Attachments: [{ InstanceId: "i-managed", State: "attached" }],
+            },
+          ],
+        };
+      }
+      return {};
+    });
+
+    await expect(handleHibernate("i-managed", [], "")).resolves.toContain("Hibernation completed successfully");
+    expect(mocks.executeSSMCommand).not.toHaveBeenCalled();
+    expect(mocks.handleBackup).not.toHaveBeenCalled();
+    expect(getCommands(StopInstancesCommand)).toHaveLength(0);
+    expect(getCommands(DeleteVolumeCommand)).toHaveLength(1);
+  });
+
+  it("retains ownership when a durable stopping phase is observed running", async () => {
+    mocks.getOperationState.mockResolvedValue(persistedHibernateOperation("stopping"));
+
+    let observed: Error & { retainLifecycleLock?: boolean };
+    try {
+      await handleHibernate("i-managed", [], "");
+      throw new Error("expected hibernate retry to fail");
+    } catch (error) {
+      observed = error as Error & { retainLifecycleLock?: boolean };
+    }
+
+    expect(observed.message).toContain("cannot continue from instance state running");
+    expect(observed.retainLifecycleLock).toBe(true);
+    expect(mocks.executeSSMCommand).not.toHaveBeenCalled();
+    expect(getCommands(StartInstancesCommand)).toHaveLength(0);
+    expect(getCommands(StopInstancesCommand)).toHaveLength(0);
+  });
+
   it("fails closed when detached tagged candidates lack an exact durable identity", async () => {
     mocks.getOperationExecutionContext.mockReturnValue({
       operationId: "hibernate-op",
       command: "hibernate",
+      instanceId: "i-managed",
       executionToken: "attempt-2",
     });
     mocks.send.mockImplementation(async (command: unknown) => {
       if (command instanceof DescribeImagesCommand) return reconstructionImage;
       if (command instanceof DescribeInstancesCommand) {
-        return { Reservations: [{ Instances: [{ RootDeviceName: "/dev/xvda", BlockDeviceMappings: [] }] }] };
+        return {
+          Reservations: [
+            {
+              Instances: [
+                {
+                  InstanceId: "i-managed",
+                  RootDeviceName: "/dev/xvda",
+                  ImageId: "ami-source",
+                  BlockDeviceMappings: [],
+                },
+              ],
+            },
+          ],
+        };
       }
       if (command instanceof DescribeVolumesCommand) return { Volumes: [{ VolumeId: "vol-a" }, { VolumeId: "vol-b" }] };
       return {};

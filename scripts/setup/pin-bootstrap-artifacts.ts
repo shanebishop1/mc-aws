@@ -3,6 +3,7 @@
 import { chmodSync, existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import {
+  assertBootstrapRuntimeRolloutMatches,
   assertBootstrapUserDataMatches,
   bootstrapPinsFingerprint,
   bootstrapUserDataBindings,
@@ -92,6 +93,16 @@ function synchronizeScript(scriptPath: string, pins: ReturnType<typeof validateB
   assertBootstrapUserDataMatches(script, pins);
 }
 
+function synchronizeRuntimeRollout(pins: ReturnType<typeof validateBootstrapPins>): void {
+  let script = readFileSync(runtimeRolloutPath, "utf8");
+  const pattern = /^readonly MC_BOOTSTRAP_PINS_SHA256="[^"]*"$/m;
+  if (!pattern.test(script))
+    throw new Error("mc-runtime-rollout.sh is missing upgrade marker MC_BOOTSTRAP_PINS_SHA256");
+  script = script.replace(pattern, `readonly MC_BOOTSTRAP_PINS_SHA256="${bootstrapPinsFingerprint(pins)}"`);
+  writeFileSync(runtimeRolloutPath, script);
+  assertBootstrapRuntimeRolloutMatches(script, pins);
+}
+
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const pins = validateBootstrapPins(JSON.parse(readFileSync(configPath, "utf8")) as unknown);
@@ -105,10 +116,10 @@ async function main(): Promise<void> {
       throw new Error(`Upgrade refused: review pins and pass --confirm ${fingerprint}`);
     await verifyDownloads(pins);
     synchronizeScript(userDataPath, pins);
-    synchronizeScript(runtimeRolloutPath, pins);
+    synchronizeRuntimeRollout(pins);
   } else {
     assertBootstrapUserDataMatches(readFileSync(userDataPath, "utf8"), pins);
-    assertBootstrapUserDataMatches(readFileSync(runtimeRolloutPath, "utf8"), pins);
+    assertBootstrapRuntimeRolloutMatches(readFileSync(runtimeRolloutPath, "utf8"), pins);
   }
   for (const envFile of options.envFiles) writeEnvPin(envFile, fingerprint);
   process.stdout.write(`${fingerprint}\n`);

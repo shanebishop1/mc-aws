@@ -21,16 +21,19 @@ import {
   waitForInstanceRunning,
   waitForInstanceStopped,
 } from "./ec2-client";
-import { invokeLambda } from "./lambda-client";
+import { getMinecraftServiceStatus, invokeLambda } from "./lambda-client";
 import {
   deleteParameter,
+  deleteParameterIfCurrent,
   executeSSMCommand,
   getEmailAllowlist,
   getParameter,
+  getParameterRecord,
   getPlayerCount,
   listBackups,
   listParametersByPath,
   putParameter,
+  putParameterIfCurrent,
   updateEmailAllowlist,
 } from "./ssm-client";
 import { detachAndDeleteVolumes, handleResume } from "./volume-client";
@@ -57,12 +60,16 @@ export const awsProvider: AwsProvider = {
 
   // SSM - Command Execution
   executeSSMCommand,
+  getMinecraftServiceStatus,
   listBackups,
 
   // SSM - Parameter Store
   getParameter,
+  getParameterRecord,
   putParameter,
+  putParameterIfCurrent,
   deleteParameter,
+  deleteParameterIfCurrent,
   listParametersByPath,
 
   // SSM - Application-Specific Parameters

@@ -75,9 +75,9 @@ function awsJson(region: string, args: string[]): Record<string, unknown> {
 function readPin(envFile: string): string | undefined {
   if (!existsSync(envFile)) return undefined;
   for (const rawLine of readFileSync(envFile, "utf8").split(/\r?\n/)) {
-    const line = rawLine.startsWith("export ") ? rawLine.slice(7) : rawLine;
-    if (!line.startsWith(`${PIN_NAME}=`)) continue;
-    let value = line.slice(PIN_NAME.length + 1).trim();
+    const match = rawLine.match(new RegExp(`^\\s*(?:export\\s+)?${PIN_NAME}\\s*(?:=|:)\\s*(.*)$`));
+    if (!match) continue;
+    let value = match[1].trim();
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
@@ -91,11 +91,12 @@ function writePin(envFile: string, imageId: string): void {
   const original = existsSync(absolutePath) ? readFileSync(absolutePath, "utf8") : "";
   const lines = original.split(/\r?\n/);
   let found = false;
-  const updated = lines.map((line) => {
-    const comparable = line.startsWith("export ") ? line.slice(7) : line;
-    if (!comparable.startsWith(`${PIN_NAME}=`)) return line;
+  const assignment = new RegExp(`^\\s*(?:export\\s+)?${PIN_NAME}\\s*(?:=|:)`);
+  const updated = lines.flatMap((line) => {
+    if (!assignment.test(line)) return [line];
+    if (found) return [];
     found = true;
-    return `${PIN_NAME}=${imageId}`;
+    return [`${PIN_NAME}=${imageId}`];
   });
   if (!found) {
     if (updated.length && updated.at(-1) !== "") updated.push("");

@@ -5,7 +5,7 @@
 
 import { requireAdmin } from "@/lib/api-auth";
 import { formatAuthErrorResponse } from "@/lib/api-error";
-import { executeSSMCommand, findInstanceId, getInstanceState, invokeLambda } from "@/lib/aws";
+import { findInstanceId, getInstanceState, getMinecraftServiceStatus, invokeLambda } from "@/lib/aws";
 import { createMutatingActionFailure, createMutatingActionRequestContext } from "@/lib/mutating-action-contract";
 import { runMutatingActionLifecycle } from "@/lib/mutating-action-lifecycle";
 import {
@@ -64,12 +64,11 @@ async function validateRestoreState(instanceId: string): Promise<void> {
 
 async function validateServiceReady(instanceId: string): Promise<void> {
   try {
-    console.log("[RESTORE] Checking Minecraft service status");
-    const output = await executeSSMCommand(instanceId, ["systemctl is-active minecraft"]);
-    const trimmedOutput = output.trim();
+    console.log("[RESTORE] Requesting sanitized Minecraft service status");
+    const status = await getMinecraftServiceStatus(instanceId);
 
-    if (trimmedOutput !== "active") {
-      console.log("[RESTORE] Minecraft service not ready, status:", trimmedOutput);
+    if (!status.serviceActive) {
+      console.log("[RESTORE] Minecraft service is not ready");
       throw new RestoreServiceNotReadyError();
     }
 

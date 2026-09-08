@@ -8,6 +8,7 @@ import * as lambda from "aws-cdk-lib/aws-lambda";
 export const lambdaAssetRuntimeFiles = {
   AdoptDnsSecureString: ["index.js"],
   FailureEventSanitizer: ["index.js"],
+  GDriveTokenBroker: ["index.js"],
   InboundEmailCommand: ["index.js"],
   MigrateServerActionLock: ["index.js"],
   RetainLambdaLogs: ["index.js"],

@@ -16,6 +16,7 @@ export interface BootstrapPins {
   artifacts: {
     paper: DownloadPin & { minecraftVersion: string; build: number };
     rclone: DownloadPin;
+    nodeArm64: DownloadPin;
     mcstatus: DownloadPin;
     asyncioDgram: DownloadPin;
     dnspython: DownloadPin;
@@ -72,7 +73,7 @@ export function validateBootstrapPins(value: unknown): BootstrapPins {
   }
   const artifacts = asExactRecord(
     root.artifacts,
-    ["paper", "rclone", "mcstatus", "asyncioDgram", "dnspython"],
+    ["paper", "rclone", "nodeArm64", "mcstatus", "asyncioDgram", "dnspython"],
     "bootstrap pins.artifacts"
   );
   const paperRecord = asExactRecord(
@@ -103,11 +104,13 @@ export function validateBootstrapPins(value: unknown): BootstrapPins {
   }
 
   const rclone = parseDownloadPin(artifacts.rclone, "bootstrap pins.artifacts.rclone");
+  const nodeArm64 = parseDownloadPin(artifacts.nodeArm64, "bootstrap pins.artifacts.nodeArm64");
   const mcstatus = parseDownloadPin(artifacts.mcstatus, "bootstrap pins.artifacts.mcstatus");
   const asyncioDgram = parseDownloadPin(artifacts.asyncioDgram, "bootstrap pins.artifacts.asyncioDgram");
   const dnspython = parseDownloadPin(artifacts.dnspython, "bootstrap pins.artifacts.dnspython");
   const expectedUrlFragments = [
     ["rclone", rclone, `/v${rclone.version}/rclone-v${rclone.version}-linux-arm64.zip`],
+    ["nodeArm64", nodeArm64, `/v${nodeArm64.version}/node-v${nodeArm64.version}-linux-arm64.tar.xz`],
     ["mcstatus", mcstatus, `/mcstatus-${mcstatus.version}-py3-none-any.whl`],
     ["asyncioDgram", asyncioDgram, `/asyncio_dgram-${asyncioDgram.version}-py3-none-any.whl`],
     ["dnspython", dnspython, `/dnspython-${dnspython.version}-py3-none-any.whl`],
@@ -122,6 +125,7 @@ export function validateBootstrapPins(value: unknown): BootstrapPins {
     artifacts: {
       paper: { ...paper, minecraftVersion, build: build as number },
       rclone,
+      nodeArm64,
       mcstatus,
       asyncioDgram,
       dnspython,
@@ -134,7 +138,7 @@ export function bootstrapPinsFingerprint(pins: BootstrapPins): string {
 }
 
 export function bootstrapUserDataBindings(pins: BootstrapPins): Record<string, string> {
-  const { paper, rclone, mcstatus, asyncioDgram, dnspython } = pins.artifacts;
+  const { paper, rclone, nodeArm64, mcstatus, asyncioDgram, dnspython } = pins.artifacts;
   return {
     MC_BOOTSTRAP_PINS_SHA256: bootstrapPinsFingerprint(pins),
     MC_VERSION: paper.minecraftVersion,
@@ -144,6 +148,9 @@ export function bootstrapUserDataBindings(pins: BootstrapPins): Record<string, s
     RCLONE_VERSION: rclone.version,
     RCLONE_URL: rclone.url,
     RCLONE_SHA256: rclone.sha256,
+    NODE_VERSION: nodeArm64.version,
+    NODE_ARM64_URL: nodeArm64.url,
+    NODE_ARM64_SHA256: nodeArm64.sha256,
     MCSTATUS_VERSION: mcstatus.version,
     MCSTATUS_URL: mcstatus.url,
     MCSTATUS_SHA256: mcstatus.sha256,
@@ -161,5 +168,37 @@ export function assertBootstrapUserDataMatches(script: string, pins: BootstrapPi
     const match = script.match(new RegExp(`^readonly ${name}="([^"]*)"$`, "m"));
     if (!match) throw new Error(`user_data.sh is missing exact ${name}`);
     if (match[1] !== expected) throw new Error(`user_data.sh ${name} does not match reviewed bootstrap pins`);
+  }
+}
+
+export function assertBootstrapReleaseManifestMatches(value: unknown, pins: BootstrapPins): void {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("host release manifest is missing bootstrap pins");
+  }
+  const bootstrapPins = (value as Record<string, unknown>).bootstrapPins;
+  if (!bootstrapPins || typeof bootstrapPins !== "object" || Array.isArray(bootstrapPins)) {
+    throw new Error("host release manifest is missing bootstrap pins");
+  }
+  const record = bootstrapPins as Record<string, unknown>;
+  if (Object.keys(record).sort().join(",") !== "manifest,sha256") {
+    throw new Error("host release bootstrap pins metadata is invalid");
+  }
+  if (record.sha256 !== bootstrapPinsFingerprint(pins)) {
+    throw new Error("host release bootstrap pins digest does not match reviewed bootstrap pins");
+  }
+  if (JSON.stringify(record.manifest) !== JSON.stringify(pins)) {
+    throw new Error("host release bootstrap pins do not match reviewed bootstrap pins");
+  }
+}
+
+export function assertBootstrapRuntimeRolloutMatches(script: string, pins: BootstrapPins): void {
+  const digest = script.match(/^readonly MC_BOOTSTRAP_PINS_SHA256="([^"]*)"$/m);
+  if (!digest) throw new Error("mc-runtime-rollout.sh is missing the bootstrap pin digest");
+  if (digest[1] !== bootstrapPinsFingerprint(pins)) {
+    throw new Error("mc-runtime-rollout.sh bootstrap pin digest does not match reviewed bootstrap pins");
+  }
+  for (const marker of ["verify_bootstrap_pins", '"bootstrapPins"', '"minecraftVersion"', '"artifacts"']) {
+    if (!script.includes(marker))
+      throw new Error(`mc-runtime-rollout.sh is missing bootstrap pin verification: ${marker}`);
   }
 }

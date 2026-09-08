@@ -33,9 +33,18 @@ TimeoutStopSec=60
 Restart=on-failure
 
 # Security hardening
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
 ProtectSystem=full
 ProtectHome=true
+PrivateMounts=true
+PrivateUsers=true
+ProtectProc=ptraceable
+ProcSubset=pid
+RestrictNamespaces=true
 ReadWritePaths=/opt/minecraft
+InaccessiblePaths=/etc/mc-agent /run/credentials /var/lib/mc-agent-executor /opt/mc-agent/executor-root
 IPAddressDeny=169.254.169.254/32
 IPAddressDeny=fd00:ec2::254/128
 

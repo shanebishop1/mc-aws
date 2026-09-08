@@ -98,4 +98,15 @@ describe("ARM64 AL2023 AMI pinning", () => {
     expect(readFileSync(harness.productionEnv, "utf8")).toContain(`AL2023_ARM64_AMI_ID=${latestImageId}`);
     expect(readFileSync(harness.localEnv, "utf8")).toContain(`AL2023_ARM64_AMI_ID=${latestImageId}`);
   });
+
+  it("canonicalizes colon-form pins without silently selecting the latest AMI", () => {
+    const harness = makeHarness();
+    writeFileSync(harness.productionEnv, `export AL2023_ARM64_AMI_ID: ${oldImageId}\n`, { mode: 0o600 });
+    writeFileSync(harness.localEnv, ` AL2023_ARM64_AMI_ID : '${oldImageId}'\n`, { mode: 0o600 });
+    const result = harness.run("ensure");
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout.trim()).toBe(oldImageId);
+    expect(readFileSync(harness.productionEnv, "utf8")).toBe(`AL2023_ARM64_AMI_ID=${oldImageId}\n`);
+    expect(readFileSync(harness.localEnv, "utf8")).toBe(`AL2023_ARM64_AMI_ID=${oldImageId}\n`);
+  });
 });

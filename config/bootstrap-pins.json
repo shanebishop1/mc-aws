@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "reviewedAt": "2026-08-27",
+  "reviewedAt": "2026-09-02",
   "artifacts": {
     "paper": {
       "version": "1.21.11",
@@ -15,6 +15,12 @@
       "url": "https://downloads.rclone.org/v1.71.2/rclone-v1.71.2-linux-arm64.zip",
       "sha256": "e2e2efc7ed143026352d60216ef0d46d3fa4fe9d647eff1bd929e6fea498e6f1",
       "checksumSource": "https://downloads.rclone.org/v1.71.2/SHA256SUMS"
+    },
+    "nodeArm64": {
+      "version": "22.19.0",
+      "url": "https://nodejs.org/dist/v22.19.0/node-v22.19.0-linux-arm64.tar.xz",
+      "sha256": "0b2d9f564b6594222a62c82e1df2efe119dd4a4aff29644f4dd325bf360b6bcc",
+      "checksumSource": "https://nodejs.org/dist/v22.19.0/SHASUMS256.txt"
     },
     "mcstatus": {
       "version": "12.0.2",

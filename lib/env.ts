@@ -51,10 +51,17 @@ const formatIssueLine = (message: string): string => {
   return `  - ${message}`;
 };
 
-export function validateRuntimeEnvironment(nodeEnv = getNodeEnv()): void {
+export function validateRuntimeEnvironment(
+  nodeEnv = getNodeEnv(),
+  options: { allowRuntimeAuthSecretBinding?: boolean } = {}
+): void {
   const report = validateEnvForTarget(process.env, "worker");
+  const buildIsolationActive = process.env.MC_AWS_BUILD_ISOLATION === "1";
   const blockingIssues = report.issues.filter(
-    (issue) => issue.kind === "missing" || issue.kind === "invalid" || issue.kind === "forbidden"
+    (issue) =>
+      !(options.allowRuntimeAuthSecretBinding && issue.name === "AUTH_SECRET") &&
+      !(buildIsolationActive && issue.kind === "missing" && issue.name === "GOOGLE_CLIENT_SECRET") &&
+      (issue.kind === "missing" || issue.kind === "invalid" || issue.kind === "forbidden")
   );
   const deprecatedIssues = report.issues.filter((issue) => issue.kind === "deprecated");
 
@@ -112,6 +119,7 @@ export const env = {
 
     return resolved.value;
   })(),
+  MC_CONNECTION_MODE: getEnv("MC_CONNECTION_MODE", true),
   DUCKDNS_DOMAIN: getEnv("DUCKDNS_DOMAIN", true),
   DUCKDNS_TOKEN: getEnv("DUCKDNS_TOKEN", true),
 
@@ -120,7 +128,11 @@ export const env = {
   GDRIVE_ROOT: getEnv("GDRIVE_ROOT", true),
 
   // Authentication Configuration
-  AUTH_SECRET: getEnv("AUTH_SECRET"),
+  // The Worker binding is installed after this module can be evaluated. Do
+  // not read or retain the secret while the bundled module graph is evaluated.
+  // Auth operations resolve it lazily from the runtime binding (or local
+  // process environment for non-Worker development).
+  AUTH_SECRET: "",
   ADMIN_EMAIL: getEnv("ADMIN_EMAIL", true),
   ALLOWED_EMAILS: getEnv("ALLOWED_EMAILS", true),
 
@@ -134,7 +146,10 @@ export const env = {
   ENABLE_DEV_LOGIN: getEnv("ENABLE_DEV_LOGIN", true),
 };
 
-validateRuntimeEnvironment();
+// AUTH_SECRET is a Worker secret binding and is not available while the
+// bundled module graph is initialized. The Worker wrapper performs the
+// authoritative binding validation before it forwards a request.
+validateRuntimeEnvironment(getNodeEnv(), { allowRuntimeAuthSecretBinding: true });
 
 /**
  * Check if authentication is properly configured

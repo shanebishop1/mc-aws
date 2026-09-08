@@ -13,18 +13,18 @@ describe("Cloudflare route replacement deployment contract", () => {
     expect(source).toContain("Missing Worker route does not match the validated deployment manifest");
   });
 
-  it("uses an explicit old-ID transition only after exact post-deploy route verification", () => {
-    const patternCheck = source.indexOf(
-      'if [[ "$route_pattern" != "$pattern" ]]',
-      source.indexOf("capture_panel_route_after_deploy")
+  it("removes Wrangler route mutation and performs one pre-journaled explicit create", () => {
+    expect(source).not.toContain('helper_args+=(--hostname "$DOMAIN")');
+    const journal = source.indexOf('journal_creation_intent route "$operation_id"');
+    const post = source.indexOf('cf_api POST "/zones/${CF_ZONE_ID}/workers/routes"');
+    expect(journal).toBeGreaterThan(-1);
+    expect(journal).toBeLessThan(post);
+    expect(source).toContain("route-create-response");
+    expect(source).toContain("Worker route ID changed outside the explicit journaled operation");
+    expect(source).toContain('manifest route --zone "$CF_ZONE_ID" --id "$route_id"');
+    expect(source).not.toContain(
+      'manifest route --zone "$CF_ZONE_ID" --pattern "$pattern" --script "$WORKER_NAME" --ownership created'
     );
-    const targetCheck = source.indexOf('if [[ "$route_script" != "$WORKER_NAME" ]]', patternCheck);
-    const replacement = source.indexOf('--ownership created --replaces-id "$PANEL_ROUTE_ID"', targetCheck);
-
-    expect(patternCheck).toBeGreaterThan(-1);
-    expect(targetCheck).toBeGreaterThan(patternCheck);
-    expect(replacement).toBeGreaterThan(targetCheck);
-    expect(source).toContain("Worker route ID replaced during deployment");
   });
 
   it("records route identity after both Worker deployments", () => {

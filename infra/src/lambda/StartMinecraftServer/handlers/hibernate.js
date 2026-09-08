@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   AttachVolumeCommand,
   DeleteVolumeCommand,
   DescribeImagesCommand,
   DescribeInstancesCommand,
+  DescribeSnapshotsCommand,
   DescribeVolumesCommand,
   DetachVolumeCommand,
   StartInstancesCommand,
@@ -12,9 +14,8 @@ import {
 import { getOperationExecutionContext } from "../execution-context.js";
 import { getSanitizedErrorMessage, sendNotification } from "../notifications.js";
 import { getOperationState, updateOperationState } from "../operation-state.js";
+import { quotePosixShellArgument } from "../posix-shell.js";
 import {
-  HIBERNATE_BACKUP_SSM_MAX_ATTEMPTS,
-  HIBERNATE_BACKUP_SSM_TIMEOUT_SECONDS,
   HIBERNATE_STOP_DELIVERY_MAX_ATTEMPTS,
   INSTANCE_STATE_MAX_ATTEMPTS,
   INSTANCE_STATE_POLL_INTERVAL_MS,
@@ -22,7 +23,7 @@ import {
   VOLUME_DETACH_POLL_INTERVAL_MS,
 } from "../runtime-budgets.js";
 import { executeSSMCommand } from "../ssm.js";
-import { handleRefreshBackups } from "./backups.js";
+import { handleBackup } from "./backup.js";
 
 /**
  * Handle hibernate command - runs backup, stops instance, detaches/deletes volume
@@ -37,48 +38,112 @@ async function handleHibernate(instanceId, _args, adminEmail) {
   let hibernateBackupAttempted = false;
   let stopRequested = false;
   let rootVolume;
+  let backupManifest;
+  let quiescenceEvidence;
+  let resumingPersistedStopIntent = false;
 
   try {
+    const context = getOperationExecutionContext();
+    if (
+      !context?.operationId ||
+      context.command !== "hibernate" ||
+      context.instanceId !== instanceId ||
+      !context.executionToken
+    ) {
+      throw new Error("Refusing hibernation: exact cloud operation identity is unavailable");
+    }
     rootVolume = await resolveManagedRootVolume(instanceId);
     if (!rootVolume) return "Hibernation already complete; no root volume is attached.";
-    const context = getOperationExecutionContext();
     const existingOperation = context ? await getOperationState(context.operationId) : null;
     const existingPhase = existingOperation?.hibernatePhase;
+    const reconstruction = await assertRootReconstructable(rootVolume);
+    rootVolume.reconstructionSnapshotId = reconstruction.snapshotId;
+    if (existingPhase) assertPersistedHibernateVolumeLineage(existingOperation, context, instanceId, rootVolume);
     if (!existingPhase) await recordHibernateVolume(rootVolume, "selected");
-    await assertRootReconstructable(rootVolume);
-    if (!hasReachedHibernatePhase(existingPhase, "backup-complete")) {
-      console.log("Step 1: Running backup before hibernation...");
-      hibernateBackupAttempted = true;
-      await executeSSMCommand(
-        instanceId,
-        [
-          "if grep -Fq -- '--hibernate' /usr/local/bin/mc-backup.sh; then /usr/local/bin/mc-backup.sh --hibernate; else /usr/local/bin/mc-backup.sh; fi",
-        ],
-        {
-          maxAttempts: HIBERNATE_BACKUP_SSM_MAX_ATTEMPTS,
-          timeoutSeconds: HIBERNATE_BACKUP_SSM_TIMEOUT_SECONDS,
-          step: "hibernate-backup",
-          finalRemoteStep: false,
+    if (hasReachedHibernatePhase(existingPhase, "stopping")) {
+      resumingPersistedStopIntent = true;
+      stopRequested = true;
+      backupManifest = getPersistedHibernateBackup(existingOperation, context);
+      quiescenceEvidence = assertHibernateQuiescenceEvidence(existingOperation?.hibernateQuiescenceEvidence);
+      if (
+        quiescenceEvidence.rootVolumeId !== rootVolume.volumeId ||
+        quiescenceEvidence.rootVolumeDevice !== rootVolume.device
+      ) {
+        const error = new Error("Persisted hibernation stop intent belongs to another root volume");
+        error.retainLifecycleLock = true;
+        throw error;
+      }
+      const retryState = await readInstanceState(instanceId);
+      if (retryState === "stopping") {
+        await waitForInstanceState(instanceId, "stopped");
+      } else if (retryState !== "stopped") {
+        const error = new Error(
+          `Persisted hibernation stop intent cannot continue from instance state ${String(retryState)}`
+        );
+        error.retainLifecycleLock = true;
+        throw error;
+      }
+      if (!hasReachedHibernatePhase(existingPhase, "stopped")) await recordHibernateVolume(rootVolume, "stopped");
+    } else {
+      if (!hasReachedHibernatePhase(existingPhase, "backup-complete")) {
+        console.log("Step 1: Running backup before hibernation...");
+        hibernateBackupAttempted = true;
+        const backup = await handleBackup(instanceId, [], adminEmail, {
+          requireAlreadyRunning: true,
+          requireServiceActive: true,
+          strictAgentBackup: true,
+          backupMode: "hibernate",
+          requireFreshBackup: true,
+          rootVolume,
+        });
+        backupManifest = backup.manifest;
+        assertHibernateBackupOperationBinding(backupManifest, context, instanceId);
+        quiescenceEvidence = assertHibernateQuiescenceEvidence(backupManifest.quiescence);
+        await recordHibernateVolume(rootVolume, "backup-complete", backupManifest, quiescenceEvidence);
+      } else {
+        backupManifest = getPersistedHibernateBackup(existingOperation, context);
+        quiescenceEvidence = assertHibernateQuiescenceEvidence(existingOperation?.hibernateQuiescenceEvidence);
+        try {
+          await verifyHibernateQuiescence(instanceId, rootVolume, quiescenceEvidence);
+        } catch {
+          console.log(
+            "Persisted hibernation evidence is stale; recovering exact service state before a fresh backup..."
+          );
+          await recoverFailedHibernate(instanceId, rootVolume, false);
+          hibernateBackupAttempted = true;
+          const backup = await handleBackup(instanceId, [], adminEmail, {
+            requireAlreadyRunning: true,
+            requireServiceActive: true,
+            strictAgentBackup: true,
+            backupMode: "hibernate",
+            requireFreshBackup: true,
+            rootVolume,
+          });
+          backupManifest = backup.manifest;
+          assertHibernateBackupOperationBinding(backupManifest, context, instanceId);
+          quiescenceEvidence = assertHibernateQuiescenceEvidence(backupManifest.quiescence);
+          await recordHibernateVolume(rootVolume, "backup-complete", backupManifest, quiescenceEvidence);
         }
-      );
-      await recordHibernateVolume(rootVolume, "backup-complete");
-    }
+      }
 
-    if (!hasReachedHibernatePhase(existingPhase, "cache-refreshed")) {
-      console.log("Step 2: Refreshing backup cache before removing the root volume...");
-      await handleRefreshBackups(instanceId);
-      await recordHibernateVolume(rootVolume, "cache-refreshed");
-    }
+      // This read-only host proof is repeated immediately before stop. A reboot,
+      // root-volume replacement, boot-hold change, or resumed service invalidates
+      // the evidence and prevents volume deletion.
+      await verifyHibernateQuiescence(instanceId, rootVolume, quiescenceEvidence);
 
-    console.log("Step 3: Stopping instance...");
-    stopRequested = true;
-    await recordHibernateVolume(rootVolume, "stopping");
-    await stopInstanceAndWait(instanceId);
-    await recordHibernateVolume(rootVolume, "stopped");
+      console.log("Step 3: Stopping instance...");
+      assertHibernateQuiescenceEvidence(quiescenceEvidence);
+      stopRequested = true;
+      await recordHibernateVolume(rootVolume, "stopping");
+      await stopInstanceAndWait(instanceId);
+      await recordHibernateVolume(rootVolume, "stopped");
+    }
 
     console.log("Step 4: Detaching and deleting the managed root volume...");
-    await recordHibernateVolume(rootVolume, "detaching");
-    await detachAndDeleteRootVolume(rootVolume);
+    await assertRootReconstructable(rootVolume);
+    assertHibernateBackupOperationBinding(backupManifest, context, instanceId);
+    await recordHibernateVolume(rootVolume, "detaching", backupManifest, quiescenceEvidence);
+    await detachAndDeleteRootVolume(rootVolume, backupManifest, quiescenceEvidence, context);
 
     const message = "Hibernation completed successfully.";
     if (adminEmail) {
@@ -90,6 +155,7 @@ async function handleHibernate(instanceId, _args, adminEmail) {
     return message;
   } catch (error) {
     console.error("ERROR in handleHibernate.");
+    if (resumingPersistedStopIntent) error.retainLifecycleLock = true;
     if ((hibernateBackupAttempted || stopRequested) && error?.retainLifecycleLock !== true) {
       try {
         await recoverFailedHibernate(instanceId, rootVolume, stopRequested, error?.stopDeliveryOutcome);
@@ -194,15 +260,22 @@ async function observeAmbiguousStopDelivery(instanceId) {
 
 async function resolveManagedRootVolume(instanceId) {
   const { Reservations } = await ec2.send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }));
-  const instance = Reservations?.[0]?.Instances?.[0];
-  if (!instance) throw new Error(`Instance ${instanceId} not found`);
+  const matches = (Reservations || [])
+    .flatMap((reservation) => reservation.Instances || [])
+    .filter((candidate) => candidate.InstanceId === instanceId);
+  if (matches.length !== 1) throw new Error(`Instance ${instanceId} identity is missing or ambiguous`);
+  const instance = matches[0];
 
   const rootMapping = (instance.BlockDeviceMappings || []).find(
     (mapping) => mapping.DeviceName === instance.RootDeviceName
   );
   const volumeId = rootMapping?.Ebs?.VolumeId;
   if (!volumeId) {
-    await reconcileDetachedManagedVolume(instanceId);
+    await reconcileDetachedManagedVolume(instanceId, {
+      instanceId,
+      device: instance.RootDeviceName || "/dev/xvda",
+      sourceImageId: instance.ImageId,
+    });
     return null;
   }
 
@@ -230,21 +303,217 @@ async function assertRootReconstructable(rootVolume) {
   if (!snapshotId) {
     throw new Error(`Refusing hibernation: reconstruction snapshot is missing for ${rootVolume.device}`);
   }
+  const snapshots = await ec2.send(new DescribeSnapshotsCommand({ SnapshotIds: [snapshotId] }));
+  const snapshot =
+    snapshots.Snapshots?.find((candidate) => candidate.SnapshotId === snapshotId) ?? snapshots.Snapshots?.[0];
+  if (
+    !snapshot ||
+    snapshot.State !== "completed" ||
+    (snapshot.Progress !== undefined && snapshot.Progress !== "100%")
+  ) {
+    throw new Error(`Refusing hibernation: reconstruction snapshot ${snapshotId} is not restoreable`);
+  }
+  return { imageId: rootVolume.sourceImageId, snapshotId };
 }
 
-async function recordHibernateVolume(rootVolume, hibernatePhase) {
+async function recordHibernateVolume(rootVolume, hibernatePhase, backupManifest, quiescenceEvidence) {
   const context = getOperationExecutionContext();
-  if (!context) return;
-  await updateOperationState({
+  if (!context) throw new Error("Refusing hibernation: durable operation context disappeared");
+  return await updateOperationState({
     operationId: context.operationId,
     command: context.command,
     status: "running",
     phase: "executing",
     expectedExecutionToken: context.executionToken,
+    instanceId: rootVolume.instanceId,
     managedVolumeId: rootVolume.volumeId,
     managedVolumeDevice: rootVolume.device,
+    hibernateOriginalInstanceId: rootVolume.instanceId,
+    hibernateSourceImageId: rootVolume.sourceImageId,
+    hibernateReconstructionSnapshotId: rootVolume.reconstructionSnapshotId,
     hibernatePhase,
+    ...(backupManifest
+      ? {
+          hibernateBackupId: backupManifest.backupId,
+          hibernateBackupDigest: backupManifest.archiveSha256,
+          hibernateBackupSize: backupManifest.archiveSize,
+          hibernateBackupGeneration: backupManifest.generation,
+          hibernateBackupCreatedAt: backupManifest.createdAt,
+          hibernateBackupOperationKey: backupManifest.operationKey,
+          hibernateBackupInstanceId: backupManifest.instanceId,
+          hibernateBackupServerId: backupManifest.serverId,
+          hibernateBackupArchiveName: backupManifest.archiveName,
+          hibernateBackupAuthenticationKeyId: backupManifest.authenticationKeyId,
+          hibernateQuiescenceEvidence: quiescenceEvidence,
+        }
+      : {}),
   });
+}
+
+function assertHibernateQuiescenceEvidence(value) {
+  if (
+    !value ||
+    typeof value !== "object" ||
+    Object.keys(value).sort().join(",") !==
+      [
+        "bootId",
+        "maintenanceFence",
+        "maintenanceOwner",
+        "minecraft",
+        "mode",
+        "protocol",
+        "quiescenceEpoch",
+        "rootVolumeDevice",
+        "rootVolumeId",
+        "schemaVersion",
+        "services",
+      ].join(",") ||
+    value.schemaVersion !== 2 ||
+    value.mode !== "terminal-hibernate" ||
+    value.maintenanceFence !== "held" ||
+    value.services !== "stopped-and-masked" ||
+    value.minecraft !== "inactive" ||
+    value.protocol !== "closed" ||
+    typeof value.bootId !== "string" ||
+    value.bootId.length < 1 ||
+    !/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/.test(value.maintenanceOwner) ||
+    !/^[a-f0-9]{32}$/.test(value.quiescenceEpoch) ||
+    !/^vol-[A-Za-z0-9]{4,17}$/.test(value.rootVolumeId) ||
+    !/^\/dev\/[A-Za-z0-9._/-]{1,127}$/.test(value.rootVolumeDevice)
+  ) {
+    throw new Error("Refusing hibernation: terminal quiescence evidence is missing or invalid");
+  }
+  return value;
+}
+
+async function verifyHibernateQuiescence(instanceId, rootVolume, evidence) {
+  if (evidence.rootVolumeId !== rootVolume.volumeId || evidence.rootVolumeDevice !== rootVolume.device) {
+    throw new Error("Refusing hibernation: terminal evidence belongs to another root volume");
+  }
+  const environment = [
+    ["MC_EXPECTED_BOOT_ID", evidence.bootId],
+    ["MC_EXPECTED_ROOT_VOLUME_ID", rootVolume.volumeId],
+    ["MC_EXPECTED_ROOT_VOLUME_DEVICE", rootVolume.device],
+    ["MC_EXPECTED_QUIESCENCE_EPOCH", evidence.quiescenceEpoch],
+    ["MC_EXPECTED_MAINTENANCE_OWNER", evidence.maintenanceOwner],
+  ]
+    .map(([name, value]) => `${name}=${quotePosixShellArgument(value)}`)
+    .join(" ");
+  const output = await executeSSMCommand(instanceId, [`${environment} /usr/local/bin/mc-backup.sh --verify-terminal`], {
+    maxAttempts: 5,
+    timeoutSeconds: 30,
+    step: "hibernate-quiescence-verify",
+    finalRemoteStep: false,
+  });
+  if (!String(output).split("\n").includes("MC_BACKUP_TERMINAL_VALID")) {
+    throw new Error("Refusing hibernation: terminal quiescence verification failed");
+  }
+}
+
+function assertHibernateBackupOperationBinding(manifest, context, instanceId) {
+  if (!manifest || manifest.operationKey !== operationKeyFor(context?.operationId, "hibernate-backup")) {
+    throw new Error("Refusing hibernation: authenticated backup is not bound to this operation");
+  }
+  if (context?.command !== "hibernate" || context?.instanceId !== instanceId || manifest.instanceId !== instanceId) {
+    throw new Error("Refusing hibernation: authenticated backup belongs to another instance");
+  }
+  const serverIdentity = process.env.MC_BACKUP_SERVER_IDENTITY;
+  if (!serverIdentity || manifest.serverId !== serverIdentity) {
+    throw new Error("Refusing hibernation: authenticated backup belongs to another server identity");
+  }
+}
+
+function getPersistedHibernateBackup(operation, context, instanceId = context?.instanceId) {
+  const manifest = operation && {
+    archiveName: operation.hibernateBackupArchiveName,
+    archiveSha256: operation.hibernateBackupDigest,
+    archiveSize: operation.hibernateBackupSize,
+    backupId: operation.hibernateBackupId,
+    createdAt: operation.hibernateBackupCreatedAt,
+    generation: operation.hibernateBackupGeneration,
+    instanceId: operation.hibernateBackupInstanceId,
+    operationKey: operation.hibernateBackupOperationKey,
+    serverId: operation.hibernateBackupServerId,
+    authenticationKeyId: operation.hibernateBackupAuthenticationKeyId,
+  };
+  assertHibernateBackupOperationBinding(manifest, context, instanceId);
+  if (
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}\.tar\.gz$/.test(manifest.archiveName) ||
+    !/^[a-f0-9]{32}$/.test(manifest.backupId) ||
+    !Number.isSafeInteger(manifest.generation) ||
+    manifest.generation < 1 ||
+    !/^[a-f0-9]{64}$/.test(manifest.archiveSha256) ||
+    !Number.isSafeInteger(manifest.archiveSize) ||
+    manifest.archiveSize < 1 ||
+    typeof manifest.createdAt !== "string" ||
+    Number.isNaN(Date.parse(manifest.createdAt)) ||
+    typeof manifest.instanceId !== "string" ||
+    manifest.instanceId.length < 1 ||
+    typeof manifest.serverId !== "string" ||
+    !/^[A-Za-z0-9][A-Za-z0-9:/._-]{0,255}$/.test(manifest.serverId) ||
+    !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(manifest.authenticationKeyId)
+  ) {
+    throw new Error("Refusing hibernation: durable backup manifest evidence is incomplete");
+  }
+  return manifest;
+}
+
+function assertHibernateDeletionAuthorization(operation, context, instanceId, rootVolume, manifest, evidence) {
+  const persistedManifest = getPersistedHibernateBackup(operation, context, instanceId);
+  const persistedEvidence = assertHibernateQuiescenceEvidence(operation?.hibernateQuiescenceEvidence);
+  const expectedServerIdentity = process.env.MC_BACKUP_SERVER_IDENTITY;
+  if (
+    !operation ||
+    operation.id !== context.operationId ||
+    operation.type !== "hibernate" ||
+    operation.instanceId !== instanceId ||
+    operation.executionToken !== context.executionToken ||
+    operation.managedVolumeId !== rootVolume.volumeId ||
+    operation.managedVolumeDevice !== rootVolume.device ||
+    operation.hibernateOriginalInstanceId !== instanceId ||
+    operation.hibernateSourceImageId !== rootVolume.sourceImageId ||
+    operation.hibernateReconstructionSnapshotId !== rootVolume.reconstructionSnapshotId ||
+    !new Set(["detaching", "detached", "deleted"]).has(operation.hibernatePhase) ||
+    persistedEvidence.rootVolumeId !== rootVolume.volumeId ||
+    persistedEvidence.rootVolumeDevice !== rootVolume.device ||
+    persistedEvidence.maintenanceOwner !== evidence?.maintenanceOwner ||
+    persistedEvidence.quiescenceEpoch !== evidence?.quiescenceEpoch ||
+    persistedEvidence.bootId !== evidence?.bootId ||
+    persistedManifest.archiveName !== manifest?.archiveName ||
+    persistedManifest.archiveSha256 !== manifest?.archiveSha256 ||
+    persistedManifest.archiveSize !== manifest?.archiveSize ||
+    persistedManifest.backupId !== manifest?.backupId ||
+    persistedManifest.generation !== manifest?.generation ||
+    persistedManifest.createdAt !== manifest?.createdAt ||
+    persistedManifest.authenticationKeyId !== manifest?.authenticationKeyId ||
+    persistedManifest.serverId !== expectedServerIdentity
+  ) {
+    throw new Error(
+      `Refusing detached-volume deletion for ${rootVolume.volumeId}: durable instance, volume, operation, or authenticated backup lineage changed`
+    );
+  }
+}
+
+function assertPersistedHibernateVolumeLineage(operation, context, instanceId, rootVolume) {
+  if (
+    !operation ||
+    operation.id !== context.operationId ||
+    operation.type !== "hibernate" ||
+    operation.instanceId !== instanceId ||
+    operation.executionToken !== context.executionToken ||
+    operation.managedVolumeId !== rootVolume.volumeId ||
+    operation.managedVolumeDevice !== rootVolume.device ||
+    operation.hibernateOriginalInstanceId !== instanceId ||
+    operation.hibernateSourceImageId !== rootVolume.sourceImageId ||
+    operation.hibernateReconstructionSnapshotId !== rootVolume.reconstructionSnapshotId
+  ) {
+    throw new Error("Refusing hibernation: durable instance or root-volume lineage changed");
+  }
+}
+
+function operationKeyFor(operationId, step) {
+  if (!operationId) return "";
+  return createHash("sha256").update(`${operationId}\0${step}`).digest("hex");
 }
 
 function isVolumeNotFound(error) {
@@ -277,31 +546,48 @@ function assertDetachedVolumeIdentity(volume, volumeId) {
   }
 }
 
-async function reconcileDetachedManagedVolume(instanceId) {
+async function reconcileDetachedManagedVolume(instanceId, currentInstance) {
   const context = getOperationExecutionContext();
   const operation = context ? await getOperationState(context.operationId) : null;
   if (operation?.managedVolumeId) {
+    const rootVolume = {
+      volumeId: operation.managedVolumeId,
+      device: operation.managedVolumeDevice,
+      instanceId: operation.hibernateOriginalInstanceId,
+      sourceImageId: operation.hibernateSourceImageId,
+      reconstructionSnapshotId: operation.hibernateReconstructionSnapshotId,
+    };
+    if (
+      currentInstance.instanceId !== instanceId ||
+      currentInstance.sourceImageId !== rootVolume.sourceImageId ||
+      currentInstance.device !== rootVolume.device
+    ) {
+      throw new Error(
+        `Refusing detached-volume reconciliation for ${operation.managedVolumeId}: instance lineage changed`
+      );
+    }
+    const reconstruction = await assertRootReconstructable(rootVolume);
+    if (reconstruction.snapshotId !== rootVolume.reconstructionSnapshotId) {
+      throw new Error(
+        `Refusing detached-volume reconciliation for ${operation.managedVolumeId}: reconstruction lineage changed`
+      );
+    }
+    const manifest = getPersistedHibernateBackup(operation, context, instanceId);
+    const evidence = assertHibernateQuiescenceEvidence(operation.hibernateQuiescenceEvidence);
+    assertHibernateDeletionAuthorization(operation, context, instanceId, rootVolume, manifest, evidence);
     const volume = await describeExactVolume(operation.managedVolumeId);
     if (!volume) {
-      await recordHibernateVolume(
-        {
-          volumeId: operation.managedVolumeId,
-          device: operation.managedVolumeDevice || "/dev/xvda",
-        },
-        "deleted"
-      );
+      await recordHibernateVolume(rootVolume, "deleted", manifest, evidence);
       return;
     }
     assertDetachedVolumeIdentity(volume, operation.managedVolumeId);
     if (volume.State !== "available") {
       throw new Error(`Managed detached volume ${operation.managedVolumeId} is in ambiguous state ${volume.State}`);
     }
+    assertHibernateDeletionAuthorization(operation, context, instanceId, rootVolume, manifest, evidence);
     await ec2.send(new DeleteVolumeCommand({ VolumeId: operation.managedVolumeId }));
     await waitForVolumeDeleted(operation.managedVolumeId);
-    await recordHibernateVolume(
-      { volumeId: operation.managedVolumeId, device: operation.managedVolumeDevice || "/dev/xvda" },
-      "deleted"
-    );
+    await recordHibernateVolume(rootVolume, "deleted", manifest, evidence);
     console.log("Reconciled and deleted the exact detached managed root volume");
     return;
   }
@@ -325,9 +611,10 @@ async function reconcileDetachedManagedVolume(instanceId) {
   throw new Error(`Hibernation cannot declare completion without a durable managed root identity for ${instanceId}`);
 }
 
-async function detachAndDeleteRootVolume(rootVolume) {
+async function detachAndDeleteRootVolume(rootVolume, manifest, evidence, context) {
   await detachVolume(rootVolume.volumeId, rootVolume.instanceId);
-  await recordHibernateVolume(rootVolume, "detached");
+  const detached = await recordHibernateVolume(rootVolume, "detached", manifest, evidence);
+  assertHibernateDeletionAuthorization(detached, context, rootVolume.instanceId, rootVolume, manifest, evidence);
   await ec2.send(new DeleteVolumeCommand({ VolumeId: rootVolume.volumeId }));
   await waitForVolumeDeleted(rootVolume.volumeId);
   await recordHibernateVolume(rootVolume, "deleted");
@@ -454,18 +741,12 @@ async function recoverFailedHibernate(instanceId, rootVolume, stopRequested, sto
 }
 
 async function recoverHibernateService(instanceId) {
-  await executeSSMCommand(
-    instanceId,
-    [
-      "if grep -Fq -- '--recover-hibernate' /usr/local/bin/mc-backup.sh; then /usr/local/bin/mc-backup.sh --recover-hibernate; else systemctl start minecraft.service; fi",
-    ],
-    {
-      maxAttempts: 30,
-      timeoutSeconds: 45,
-      step: "hibernate-recovery",
-      finalRemoteStep: false,
-    }
-  );
+  await executeSSMCommand(instanceId, ["/usr/local/bin/mc-backup.sh --recover-hibernate"], {
+    maxAttempts: 30,
+    timeoutSeconds: 45,
+    step: "hibernate-recovery",
+    finalRemoteStep: false,
+  });
 }
 
 async function readInstanceState(instanceId) {

@@ -1,10 +1,15 @@
 import { spawnSync } from "node:child_process";
+import { createHash, generateKeyPairSync } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import * as cdk from "aws-cdk-lib";
 import { Match, Template } from "aws-cdk-lib/assertions";
 import { describe, expect, it } from "vitest";
+import {
+  assertPublishedAgentRuntimeMatchesBuild,
+  validatePublishedAgentRuntime,
+} from "../../scripts/aws/existing-host-upgrade";
 import { MinecraftStack } from "./minecraft-stack";
 import {
   createWorkerRuntimePolicyStatements,
@@ -22,6 +27,15 @@ describe("minecraft-stack SecureString/KMS policy contract", () => {
     expect(source).toContain("resources: [`arn:aws:kms:${this.region}:${this.account}:key/*`]");
     expect(source).toContain("StringEquals");
     expect(source).toContain('"kms:EncryptionContext:PARAMETER_ARN": ec2EncryptedParameters.map(ec2ParameterArn)');
+  });
+
+  it("requires explicit capsule adoption before retaining a replacement server identity", () => {
+    const source = readFileSync(stackSourcePath, "utf8");
+    expect(source).toContain('MC_BACKUP_RECOVERY_CAPSULE_ADOPTED ?? "false"');
+    expect(source).toContain("MC_BACKUP_SERVER_IDENTITY requires explicit recovery-capsule adoption.");
+    expect(source).toContain("Explicit recovery-capsule adoption requires server identity and verifier key IDs.");
+    expect(source).toContain('resourceType: "Custom::BackupRecoveryCapsuleAdoption"');
+    expect(source).toContain("ExpectedKeyringSha256");
   });
 });
 
@@ -52,8 +66,48 @@ const stackEnvironmentNames = [
   "DUCKDNS_TOKEN",
   "AL2023_ARM64_AMI_ID",
   "MC_SERVER_PROFILE_DIR",
+  "MC_SERVER_PROFILE_APPROVED_EXTERNAL_PATH",
   "MC_ALLOW_EMPTY_WHITELIST",
+  "MC_AGENT_RUNTIME_ENABLED",
+  "MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8",
+  "MC_BACKUP_RECOVERY_CAPSULE_ADOPTED",
+  "MC_BACKUP_RECOVERY_CAPSULE_ADOPTION_DEFERRED",
+  "MC_BACKUP_SERVER_IDENTITY",
+  "MC_BACKUP_RECOVERY_CAPSULE_KEY_IDS",
+  "MC_BACKUP_RECOVERY_CAPSULE_CHECKPOINT_GENERATION",
+  "MC_BACKUP_RECOVERY_CAPSULE_FLOOR_GENERATION",
+  "MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_GENERATION",
+  "MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_GENERATION",
+  "MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_SHA256",
+  "MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_METADATA",
+  "MC_BACKUP_RECOVERY_CAPSULE_KEYRING_SHA256",
+  "MC_BACKUP_RECOVERY_CAPSULE_DIGEST",
+  "MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID",
+  "MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID",
+  "MC_AWS_SETUP_CLAIM_TOKEN",
 ] as const;
+
+const backupFencePrivateKey = generateKeyPairSync("ed25519")
+  .privateKey.export({ format: "der", type: "pkcs8" })
+  .toString("base64");
+const recoveryVerifierMetadata = JSON.stringify({
+  algorithm: "HMAC-SHA256",
+  keyIds: ["key-old"],
+  manifestFormat: "mc-aws-drive-backup",
+  manifestSchemaVersion: 3,
+  stateFormat: "mc-aws-backup-state",
+  stateSchemaVersion: 3,
+});
+const recoveryVerifierSha256 = createHash("sha256").update(recoveryVerifierMetadata).digest("hex");
+const recoveryVerifierMetadataRotated = JSON.stringify({
+  algorithm: "HMAC-SHA256",
+  keyIds: ["key-new", "key-old"],
+  manifestFormat: "mc-aws-drive-backup",
+  manifestSchemaVersion: 3,
+  stateFormat: "mc-aws-backup-state",
+  stateSchemaVersion: 3,
+});
+const recoveryVerifierRotatedSha256 = createHash("sha256").update(recoveryVerifierMetadataRotated).digest("hex");
 
 const synthesizedTemplates = new Map<string, Template>();
 // Asset staging makes a cold CDK synthesis materially slower than a unit test. Keep the
@@ -126,11 +180,113 @@ const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironme
   }
 };
 
+describe("minecraft-stack recovery capsule adoption", { timeout: synthesisContractTimeout }, () => {
+  it("synthesizes exact authenticated capsule metadata without key material", () => {
+    const template = synthesizeStack({
+      MC_BACKUP_RECOVERY_CAPSULE_ADOPTED: "true",
+      MC_BACKUP_SERVER_IDENTITY: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/stable-id",
+      MC_BACKUP_RECOVERY_CAPSULE_KEY_IDS: "key-new,key-old",
+      MC_BACKUP_RECOVERY_CAPSULE_CHECKPOINT_GENERATION: "7",
+      MC_BACKUP_RECOVERY_CAPSULE_FLOOR_GENERATION: "5",
+      MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_GENERATION: "9",
+      MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_GENERATION: "8",
+      MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_SHA256: recoveryVerifierRotatedSha256,
+      MC_BACKUP_RECOVERY_CAPSULE_KEYRING_SHA256: "b".repeat(64),
+      MC_BACKUP_RECOVERY_CAPSULE_DIGEST: "c".repeat(64),
+      MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_METADATA: recoveryVerifierMetadataRotated,
+      MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID: "9".repeat(32),
+      MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID: "8".repeat(32),
+    });
+    template.hasResourceProperties("Custom::BackupRecoveryCapsuleAdoption", {
+      ExpectedServerIdentity: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/stable-id",
+      ExpectedKeyIds: ["key-new", "key-old"],
+      ExpectedCheckpointGeneration: "9",
+      ExpectedRestoreFloorGeneration: "8",
+      ExpectedKeyringSha256: "b".repeat(64),
+      ExpectedVerifierSha256: recoveryVerifierRotatedSha256,
+      ExpectedVerifierMetadata: recoveryVerifierMetadataRotated,
+      ExpectedCapsuleDigest: "c".repeat(64),
+      ExpectedCheckpointBackupId: "9".repeat(32),
+      ExpectedRestoreFloorBackupId: "8".repeat(32),
+    });
+    template.hasResourceProperties("AWS::Lambda::Function", {
+      Environment: {
+        Variables: Match.objectLike({
+          MC_BACKUP_SERVER_IDENTITY: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/stable-id",
+        }),
+      },
+    });
+    expect(JSON.stringify(template.toJSON())).not.toContain("secretBase64");
+  });
+
+  it("activates capsule state without a dependency on the replacement lifecycle table", () => {
+    const template = synthesizeStack({
+      MC_BACKUP_RECOVERY_CAPSULE_ADOPTED: "true",
+      MC_BACKUP_SERVER_IDENTITY: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/stable-id",
+      MC_BACKUP_RECOVERY_CAPSULE_KEY_IDS: "key-old",
+      MC_BACKUP_RECOVERY_CAPSULE_CHECKPOINT_GENERATION: "7",
+      MC_BACKUP_RECOVERY_CAPSULE_FLOOR_GENERATION: "5",
+      MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_SHA256: recoveryVerifierSha256,
+      MC_BACKUP_RECOVERY_CAPSULE_KEYRING_SHA256: "b".repeat(64),
+      MC_BACKUP_RECOVERY_CAPSULE_DIGEST: "c".repeat(64),
+      MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_METADATA: recoveryVerifierMetadata,
+      MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID: "7".repeat(32),
+      MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID: "5".repeat(32),
+    });
+    const adoption = Object.values(template.findResources("Custom::BackupRecoveryCapsuleAdoption"))[0];
+    expect(JSON.stringify(adoption.DependsOn || [])).not.toContain("MigrateServerActionLock");
+    expect(JSON.stringify(adoption.DependsOn || [])).not.toContain("LifecycleLockTable");
+    expect(
+      readFileSync(path.resolve(process.cwd(), "infra/src/lambda/AdoptDnsSecureString/index.js"), "utf8")
+    ).not.toContain("LifecycleLockTableName");
+  });
+
+  it("omits capsule mutation resources during fresh-stack synthesis", () => {
+    const template = synthesizeStack({
+      MC_BACKUP_RECOVERY_CAPSULE_ADOPTED: "true",
+      MC_BACKUP_RECOVERY_CAPSULE_ADOPTION_DEFERRED: "true",
+      MC_BACKUP_SERVER_IDENTITY: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/stable-id",
+    });
+    const customResources = JSON.stringify(template.findResources("Custom::AWS"));
+    expect(customResources).not.toContain("/minecraft/backup-auth-keyring");
+    expect(customResources).not.toContain("/minecraft/backup-generation-checkpoint");
+    expect(JSON.stringify(template.toJSON())).not.toContain("Custom::BackupRecoveryCapsuleAdoption");
+  });
+});
+
+describe("minecraft-stack legacy bridge cutover", { timeout: synthesisContractTimeout }, () => {
+  it("adds an explicit server-action mutation deny and orders migration after it", () => {
+    const template = synthesizeStack();
+    const policies = Object.values(template.findResources("AWS::IAM::Policy"));
+    const deny = policies.find((policy) =>
+      JSON.stringify(policy.Properties?.PolicyDocument?.Statement).includes('"Effect":"Deny"')
+    );
+    expect(deny).toBeDefined();
+    expect(JSON.stringify(deny)).toContain("ssm:PutParameter");
+    expect(JSON.stringify(deny)).toContain("ssm:DeleteParameter");
+    expect(JSON.stringify(deny)).toContain("parameter/minecraft/server-action");
+    const source = readFileSync(stackSourcePath, "utf8");
+    expect(source).toContain("migrateLockResource.node.addDependency(migrateLockLegacyBridgeDenyPolicy)");
+  });
+});
+
 describe("minecraft-stack user data shell quoting", { timeout: synthesisContractTimeout }, () => {
+  const userDataText = (instance: {
+    Properties: { UserData: Record<string, unknown> };
+  }): string => {
+    const value = instance.Properties.UserData["Fn::Base64"];
+    if (typeof value === "string") return value;
+    if (value && Array.isArray(value["Fn::Join"])) {
+      const [separator, parts] = value["Fn::Join"] as [string, unknown[]];
+      return parts.map((part) => (typeof part === "string" ? part : "")).join(separator);
+    }
+    throw new Error("synthesized UserData is not a supported CloudFormation string expression");
+  };
+
   it("keeps synthesized UserData ASCII-stable across CloudFormation GetTemplate", () => {
     const template = synthesizeStack();
     const instance = Object.values(template.findResources("AWS::EC2::Instance"))[0];
-    const userData = instance.Properties.UserData["Fn::Base64"] as string;
+    const userData = userDataText(instance);
 
     expect([...userData].every((character) => character.codePointAt(0)! <= 0x7f)).toBe(true);
   }, 60_000);
@@ -145,7 +301,7 @@ describe("minecraft-stack user data shell quoting", { timeout: synthesisContract
       const template = synthesizeStack({ GDRIVE_REMOTE: driveRemote, GDRIVE_ROOT: driveRoot });
       const instances = template.findResources("AWS::EC2::Instance");
       const instance = Object.values(instances)[0];
-      const userData = instance.Properties.UserData["Fn::Base64"] as string;
+      const userData = userDataText(instance);
       const exportLines = userData.split("\n").slice(0, 3).join("\n");
       const result = spawnSync("bash", ["-c", `${exportLines}\nprintf '%s\\n%s\\n' "$GDRIVE_REMOTE" "$GDRIVE_ROOT"`], {
         encoding: "utf8",
@@ -158,10 +314,43 @@ describe("minecraft-stack user data shell quoting", { timeout: synthesisContract
       rmSync(rootDir, { recursive: true, force: true });
     }
   });
+
+  it("derives and provisions only the backup-fence public key into EC2 UserData", () => {
+    const template = synthesizeStack({
+      MC_AGENT_RUNTIME_ENABLED: "true",
+      MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8: backupFencePrivateKey,
+    });
+    const instance = Object.values(template.findResources("AWS::EC2::Instance"))[0];
+    const userData = userDataText(instance);
+
+    expect(userData).toContain("MC_AGENT_BACKUP_FENCE_PUBLIC_KEY_PEM_BASE64=");
+    expect(userData).not.toContain("BEGIN PUBLIC KEY");
+    expect(userData).not.toContain(backupFencePrivateKey);
+  });
 });
 
 describe("minecraft-stack server profile assets", { timeout: synthesisContractTimeout }, () => {
-  it("publishes separate runtime/profile assets with one atomic SSM manifest and exact object reads", () => {
+  it("rejects a previously published agent manifest when the reviewed local bundle changed", () => {
+    const oldDigest = "a".repeat(64);
+    const oldManifestDigest = "b".repeat(64);
+    const published = validatePublishedAgentRuntime({
+      uri: `s3://cdk-assets/agent/${oldDigest}.zip`,
+      sha256: oldDigest,
+      bytes: 100,
+      bundleManifestSha256: oldManifestDigest,
+    });
+    expect(() =>
+      assertPublishedAgentRuntimeMatchesBuild(published, {
+        archive: `/reviewed/${"c".repeat(64)}.zip`,
+        sha256: "c".repeat(64),
+        bytes: 101,
+        manifestSha256: "d".repeat(64),
+        manifestBytes: 10,
+      })
+    ).toThrow(/publish the current content-addressed ZIP and atomic manifest/);
+  });
+
+  it("publishes one versioned host release plus profile with one atomic SSM manifest and exact object reads", () => {
     const template = synthesizeStack();
     const json = template.toJSON();
     const serialized = JSON.stringify(json);
@@ -169,9 +358,16 @@ describe("minecraft-stack server profile assets", { timeout: synthesisContractTi
     const manifest = parameters.find((resource) => resource.Properties.Name === "/minecraft/server-profile-manifest");
 
     expect(manifest).toBeDefined();
-    expect(JSON.stringify(manifest?.Properties.Value)).toContain('\\"version\\":1');
+    expect(JSON.stringify(manifest?.Properties.Value)).toContain('\\"version\\":3');
+    expect(JSON.stringify(manifest?.Properties.Value)).toContain("hostRelease");
+    expect(JSON.stringify(manifest?.Properties.Value)).toContain("releaseManifestSha256");
+    expect(JSON.stringify(manifest?.Properties.Value)).toContain("bytes");
     expect(JSON.stringify(manifest?.Properties.Value)).toMatch(/sha256/);
     expect(JSON.stringify(manifest?.Properties.Value)).toContain("s3://");
+    const profileManifest = JSON.parse(manifest?.Properties.Value as string) as {
+      profile?: { fileCount?: number; totalBytes?: number; plugins?: unknown[] };
+    };
+    expect(profileManifest.profile).toMatchObject({ fileCount: 3, totalBytes: expect.any(Number), plugins: [] });
     expect(serialized).not.toContain("/minecraft/github-");
     expect(json.Parameters ?? {}).not.toHaveProperty("GithubTokenParam");
 
@@ -220,17 +416,34 @@ describe("minecraft-stack server profile assets", { timeout: synthesisContractTi
     expect(resourcesFor(getStatement!)).toEqual(
       expect.arrayContaining([
         expect.stringContaining("server-profile-manifest"),
-        expect.stringContaining("resume-pending"),
         expect.stringContaining("gdrive-token"),
+        expect.stringContaining("backup-auth-keyring"),
+        expect.stringContaining("backup-server-identity"),
+        expect.stringContaining("backup-generation-checkpoint"),
+        expect.stringContaining("restore-generation-floor"),
         expect.stringContaining("cloudflare-api-token"),
         expect.stringContaining("duckdns-token"),
       ])
     );
     expect(actionsFor(getStatement!)).not.toContain("ssm:PutParameter");
     expect(actionsFor(getStatement!)).not.toContain("ssm:DeleteParameter");
-    expect(resourcesFor(putStatement!)).toEqual([expect.stringContaining("player-count")]);
+    expect(resourcesFor(putStatement!)).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("player-count"),
+        expect.stringContaining("backup-generation-checkpoint"),
+      ])
+    );
+    expect(JSON.stringify(putStatement?.Resource)).not.toContain("restore-generation-floor");
     expect(deleteStatement).toBeUndefined();
     expect(JSON.stringify(statements)).not.toContain("parameter/minecraft/*");
+  });
+
+  it("stages and scans only the validated profile tree before creating the CDK asset", () => {
+    const source = readFileSync(stackSourcePath, "utf8");
+    expect(source).toContain("profileStagingDirectory");
+    expect(source).toContain("validateAgentSkillExclusion([profileStagingDirectory])");
+    expect(source).toContain("stagedProfileValidation");
+    expect(source).toContain("plugins: stagedProfileValidation.plugins");
   });
 
   it("keeps the repository root and user data out of file asset sources", () => {
@@ -271,7 +484,8 @@ describe("minecraft-stack server profile assets", { timeout: synthesisContractTi
         .findAll()
         .filter(
           (node) =>
-            node.node.path.includes("MinecraftRuntimeAsset") || node.node.path.includes("MinecraftServerProfileAsset")
+            node.node.path.includes("MinecraftHostReleaseAsset") ||
+            node.node.path.includes("MinecraftServerProfileAsset")
         );
       expect(assets.length).toBeGreaterThanOrEqual(2);
       expect(readFileSync(path.resolve(process.cwd(), "infra/src/ec2/user_data.sh"), "utf8")).not.toContain(
@@ -395,6 +609,22 @@ describe("minecraft-stack optional SES contract", { timeout: synthesisContractTi
 });
 
 describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisContractTimeout }, () => {
+  it("uses an atomic claim custom resource and leaves the fixed dns-mode name setup-owned", () => {
+    const claimToken = "11111111-2222-4333-8444-555555555555";
+    const template = synthesizeStack({ MC_AWS_SETUP_CLAIM_TOKEN: claimToken });
+    const claims = Object.values(template.findResources("Custom::StackOwnershipClaim"));
+    expect(claims).toHaveLength(1);
+    expect(claims[0].Properties).toMatchObject({
+      StackOwnershipClaim: "true",
+      ClaimParameter: "/minecraft/stack-ownership-claim",
+      ClaimToken: claimToken,
+    });
+    const fixedDnsMode = Object.values(template.findResources("AWS::SSM::Parameter")).filter(
+      (resource) => resource.Properties?.Name === "/minecraft/dns-mode"
+    );
+    expect(fixedDnsMode).toHaveLength(0);
+  });
+
   it("keeps the EC2 role at the exact host call graph and removes obsolete SES/SSM access", () => {
     const template = synthesizeStack();
     const instance = Object.values(template.findResources("AWS::EC2::Instance"))[0];
@@ -414,18 +644,24 @@ describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisCo
 
     expect(resourcesFor(reads!).sort()).toEqual(
       [
+        "backup-auth-keyring",
+        "backup-generation-checkpoint",
+        "backup-server-identity",
+        "backup-transfer-authorization",
         "cloudflare-api-token",
         "cloudflare-domain",
         "cloudflare-zone-id",
+        "dns-mode",
         "duckdns-domain",
         "duckdns-token",
         "gdrive-token",
-        "resume-pending",
+        "restore-generation-floor",
         "server-profile-manifest",
       ].map((name) => `arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/${name}`)
     );
-    const roleActions = statements.flatMap(actionsFor);
+    const roleActions = statements.filter((statement) => statement.Effect !== "Deny").flatMap(actionsFor);
     expect(roleActions).not.toContain("ssm:DeleteParameter");
+    expect(JSON.stringify(statements)).not.toContain("backup-recovery-migration-lock");
     expect(roleActions.some((action) => String(action).startsWith("ses:"))).toBe(false);
     expect(JSON.stringify(role.Properties.ManagedPolicyArns)).toContain("AmazonSSMManagedInstanceCore");
 
@@ -489,7 +725,8 @@ describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisCo
     const operationTable = tables.find((table) => table.Properties.KeySchema[0].AttributeName === "operationId");
     expect(lockTable?.DeletionPolicy).toBe("Delete");
     expect(lockTable?.UpdateReplacePolicy).toBe("Retain");
-    expect(operationTable?.DeletionPolicy).toBe("Delete");
+    expect(operationTable?.DeletionPolicy).toBe("Retain");
+    expect(operationTable?.UpdateReplacePolicy).toBe("Retain");
     expect(startLambda?.Properties.Environment.Variables).toMatchObject({
       MC_LIFECYCLE_LOCK_TABLE_NAME: { Ref: expect.stringContaining("LifecycleLockTable") },
       MC_OPERATION_STATE_TABLE_NAME: { Ref: expect.stringContaining("OperationStateTable") },
@@ -501,16 +738,59 @@ describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisCo
     const template = synthesizeStack();
     template.hasResourceProperties("AWS::CloudFormation::CustomResource", {
       Protocol: "dual-v1",
-      MarkerVersion: "2",
+      MarkerVersion: "3",
+      MigrationVersion: "3",
       LockTableName: { Ref: Match.stringLikeRegexp("LifecycleLockTable") },
     });
     const policies = Object.values(template.findResources("AWS::IAM::Policy"));
     const serialized = JSON.stringify(policies);
     expect(serialized).toContain("dynamodb:UpdateItem");
     expect(serialized).toContain("LifecycleLockTable");
-    expect(
-      readFileSync(path.resolve(process.cwd(), "infra/src/lambda/MigrateServerActionLock/index.js"), "utf8")
-    ).not.toContain("/minecraft/server-action");
+    const migrationSource = readFileSync(
+      path.resolve(process.cwd(), "infra/src/lambda/MigrateServerActionLock/index.js"),
+      "utf8"
+    );
+    expect(migrationSource).toContain("GetParameterCommand");
+    expect(migrationSource).toContain("Legacy /minecraft/server-action bridge is still present");
+    expect(migrationSource).not.toContain("DeleteParameterCommand");
+  });
+
+  it("orders bridge migration after every old-writer mutation deny policy", () => {
+    const template = synthesizeStack();
+    const resources = template.toJSON().Resources as Record<
+      string,
+      {
+        Type?: string;
+        Properties?: Record<string, unknown>;
+        DependsOn?: unknown;
+      }
+    >;
+    const migration = Object.values(resources).find(
+      (resource) =>
+        resource.Type === "AWS::CloudFormation::CustomResource" &&
+        resource.Properties?.LegacyParameterName === "/minecraft/server-action"
+    );
+    expect(migration?.Properties).toMatchObject({ MigrationVersion: "3", MarkerVersion: "3" });
+    const denyPolicies = Object.entries(resources)
+      .filter(
+        ([, resource]) =>
+          resource.Type === "AWS::IAM::Policy" &&
+          JSON.stringify(resource.Properties?.PolicyDocument?.Statement).includes("server-action") &&
+          JSON.stringify(resource.Properties?.PolicyDocument?.Statement).includes('"Deny"')
+      )
+      .map(([logicalId]) => logicalId);
+    const writerDenyPolicies = denyPolicies.filter((logicalId) =>
+      /^(MigrateLock|Ec2|StartLambda|WorkerRuntimeLegacyBridgeDenyPolicy)/.test(logicalId)
+    );
+    expect(writerDenyPolicies).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/^MigrateLockLegacyBridgeDenyPolicy/),
+        expect.stringMatching(/^Ec2LegacyBridgeDenyPolicy/),
+        expect.stringMatching(/^StartLambdaLegacyBridgeDenyPolicy/),
+        expect.stringMatching(/^WorkerRuntimeLegacyBridgeDenyPolicy/),
+      ])
+    );
+    expect(migration?.DependsOn).toEqual(expect.arrayContaining(writerDenyPolicies));
   });
 
   it("synthesizes all lifecycle EC2 permissions with mutation scope and ownership conditions", () => {
@@ -529,6 +809,7 @@ describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisCo
     const statementFor = (action: string, resourceFragment?: string) =>
       statements.find(
         (statement) =>
+          statement.Effect !== "Deny" &&
           actionsFor(statement).includes(action) &&
           (!resourceFragment || JSON.stringify(statement.Resource).includes(resourceFragment))
       );
@@ -564,11 +845,11 @@ describe("minecraft-stack lifecycle Lambda IAM contract", { timeout: synthesisCo
       "ec2:CreateAction": "CreateVolume",
       "aws:RequestTag/McAwsProject": "mc-aws",
     });
-    expect(statementFor("ssm:PutParameter", "server-action-delete-claim/*")).toBeDefined();
-    expect(statementFor("ssm:DeleteParameter", "server-action-delete-claim/*")).toBeDefined();
-    expect(statementFor("ssm:PutParameter", "server-action")).toBeDefined();
-    expect(statementFor("ssm:DeleteParameter", "server-action")).toBeDefined();
-    expect(statementFor("ssm:CancelCommand")?.Resource).toBe("*");
+    expect(statementFor("ssm:GetParameter", "server-action")).toBeDefined();
+    expect(statementFor("ssm:PutParameter", "server-action")).toBeUndefined();
+    expect(statementFor("ssm:DeleteParameter", "server-action")).toBeUndefined();
+    expect(statementFor("ssm:PutParameter", "server-action-delete-claim/*")).toBeUndefined();
+    expect(statementFor("ssm:DeleteParameter", "server-action-delete-claim/*")).toBeUndefined();
     const dynamoStatement = statementFor("dynamodb:UpdateItem");
     expect(JSON.stringify(dynamoStatement?.Resource)).toContain("LifecycleLockTable");
     expect(JSON.stringify(dynamoStatement?.Resource)).toContain("OperationStateTable");
@@ -665,7 +946,7 @@ describe("minecraft-stack production observability contract", { timeout: synthes
     )?.[0];
     expect(seedProviderFrameworkLogicalId).toBeDefined();
     const retentionResource = Object.values(template.findResources("AWS::CloudFormation::CustomResource")).find(
-      (resource) => resource.Properties?.MigrationVersion === "3"
+      (resource) => resource.Properties?.MigrationVersion === "3" && resource.Properties?.LogGroupNames
     );
     expect(JSON.stringify(retentionResource?.Properties.LogGroupNames)).toContain(seedProviderFrameworkLogicalId);
     const retentionPolicies = Object.values(template.findResources("AWS::IAM::Policy")).filter((resource) =>
@@ -777,8 +1058,44 @@ describe("minecraft-stack production observability contract", { timeout: synthes
     expect(serialized).not.toContain("DuckDnsTokenParam");
     template.hasResourceProperties("Custom::AWS", {
       ParameterName: "/minecraft/cloudflare-api-token",
-      MigrationVersion: "1",
+      ParameterType: "SecureString",
+      MigrationVersion: "2",
     });
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/backup-auth-keyring",
+      ParameterType: "SecureString",
+      MigrationVersion: "2",
+    });
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/backup-server-identity",
+      ParameterType: "String",
+      ExpectedValue: Match.anyValue(),
+    });
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/backup-verifier-metadata",
+      ParameterType: "String",
+    });
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/backup-generation-checkpoint",
+      ParameterType: "String",
+      InitialValue: "UNINITIALIZED",
+      MigrationVersion: "2",
+    });
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/restore-generation-floor",
+      ParameterType: "String",
+      InitialValue: "UNINITIALIZED",
+      MigrationVersion: "2",
+    });
+    template.hasResourceProperties("Custom::AWS", {
+      ParameterName: "/minecraft/backup-transfer-authorization",
+      ParameterType: "String",
+      InitialValue: "UNINITIALIZED",
+      MigrationVersion: "2",
+    });
+    expect(serialized).not.toContain("secretBase64");
+    const workerPolicies = Object.values(template.findResources("AWS::IAM::ManagedPolicy"));
+    expect(JSON.stringify(workerPolicies)).not.toContain("backup-auth-keyring");
     expect(serialized).toContain("AdoptDnsSecureString");
     expect(readFileSync(path.resolve(process.cwd(), "infra/src/lambda/StartMinecraftServer/ssm.js"), "utf8")).toContain(
       'error.name === "ParameterNotFound"'
@@ -812,8 +1129,10 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
         (tag: { Key?: string; Value?: string }) => tag.Key === "McAwsPurpose" && tag.Value === "CloudflareWorkerRuntime"
       )
     )!;
-    const inlinePolicies = Object.values(template.findResources("AWS::IAM::Policy")).filter((resource) =>
-      resource.Properties.Users?.some((candidate: { Ref?: string }) => candidate.Ref === userLogicalId)
+    const inlinePolicies = Object.values(template.findResources("AWS::IAM::Policy")).filter(
+      (resource) =>
+        resource.Properties.Users?.some((candidate: { Ref?: string }) => candidate.Ref === userLogicalId) &&
+        !JSON.stringify(resource.Properties.PolicyDocument?.Statement).includes('"Deny"')
     );
     const managedPolicies = Object.entries(template.findResources("AWS::IAM::ManagedPolicy")).filter(
       ([policyLogicalId, resource]) =>
@@ -852,6 +1171,40 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
     expect(Object.keys(outputs).some((key) => /accesskey|secret/i.test(key))).toBe(false);
   });
 
+  it("gives the Drive token broker only exact SSM get/put access", () => {
+    const template = synthesizeStack();
+    const functions = template.findResources("AWS::Lambda::Function");
+    const broker = Object.entries(functions).find(([logicalId]) => logicalId.startsWith("GDriveTokenBrokerLambda"));
+    expect(broker).toBeDefined();
+    const brokerRoleReference = broker?.[1].Properties.Role as
+      | { Ref?: string; "Fn::GetAtt"?: [string, string] }
+      | undefined;
+    const brokerRole = brokerRoleReference?.Ref ?? brokerRoleReference?.["Fn::GetAtt"]?.[0];
+    const brokerPolicies = Object.values(template.findResources("AWS::IAM::Policy")).filter((policy) =>
+      policy.Properties.Roles?.some((role: { Ref?: string }) => role.Ref === brokerRole)
+    );
+    const brokerRoleResource = template.findResources("AWS::IAM::Role")[brokerRole];
+    const statements = [
+      ...brokerPolicies.flatMap((policy) => policy.Properties.PolicyDocument.Statement),
+      ...(brokerRoleResource?.Properties.Policies ?? []).flatMap(
+        (policy: { PolicyDocument: { Statement: unknown[] } }) => policy.PolicyDocument.Statement
+      ),
+    ];
+    const ssmStatement = statements.find((statement) =>
+      (Array.isArray(statement.Action) ? statement.Action : [statement.Action]).includes("ssm:GetParameter")
+    );
+
+    expect(ssmStatement?.Effect).toBe("Allow");
+    expect(Array.isArray(ssmStatement?.Action) ? ssmStatement.Action : [ssmStatement?.Action]).toEqual(
+      expect.arrayContaining(["ssm:GetParameter", "ssm:PutParameter"])
+    );
+    expect(JSON.stringify(ssmStatement?.Resource)).toContain("parameter/minecraft/gdrive-token");
+    expect(JSON.stringify(ssmStatement)).not.toContain("parameter/minecraft/*");
+    expect(JSON.stringify(ssmStatement)).not.toContain("cloudflare-api-token");
+    expect(JSON.stringify(ssmStatement)).not.toContain("duckdns-token");
+    expect(JSON.stringify(template.toJSON().Outputs)).toContain("GDriveTokenBrokerFunctionName");
+  });
+
   it("attaches the runtime permissions as one customer-managed policy within its document quota", () => {
     const template = synthesizeStack();
     const { inlinePolicies, managedPolicy, managedPolicyLogicalId, policyDocument } = getRuntimeIdentity(template);
@@ -862,7 +1215,7 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
     expect(managedPolicyLogicalId).toMatch(/^WorkerRuntimeManagedPolicy/);
     expect(managedPolicyLogicalId).not.toBe("WorkerRuntimePolicyD3BC636A");
     expect(template.toJSON().Resources.WorkerRuntimePolicyD3BC636A).toBeUndefined();
-    expect(nonWhitespacePolicySize).toBeGreaterThan(2_048);
+    expect(nonWhitespacePolicySize).toBeGreaterThan(1_500);
     expect(nonWhitespacePolicySize).toBeLessThanOrEqual(6_144);
   });
 
@@ -871,21 +1224,24 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
     const { statements } = getRuntimeIdentity(template);
     const actionsFor = (statement: Record<string, unknown>) =>
       Array.isArray(statement.Action) ? statement.Action : [statement.Action];
-    const statementFor = (action: string) => statements.find((statement) => actionsFor(statement).includes(action));
+    const statementFor = (action: string) =>
+      statements.find((statement) => statement.Effect !== "Deny" && actionsFor(statement).includes(action));
     const serializedResource = (action: string) => JSON.stringify(statementFor(action)?.Resource);
 
     expect(statementFor("ec2:DescribeInstances")?.Resource).toBe("*");
     expect(serializedResource("ec2:StopInstances")).toContain("instance/");
     expect(statementFor("ec2:StopInstances")?.Resource).not.toBe("*");
     expect(serializedResource("lambda:InvokeFunction")).toContain("StartMinecraftLambda");
+    expect(
+      JSON.stringify(statements.find((statement) => statement.Sid === "InvokeGDriveTokenBrokerLambda")?.Resource)
+    ).toContain("GDriveTokenBrokerLambda");
     expect(serializedResource("cloudformation:DescribeStacks")).toContain("stack/MinecraftStack/*");
 
-    const sendCommandResources = serializedResource("ssm:SendCommand");
-    expect(sendCommandResources).toContain("document/AWS-RunShellScript");
-    expect(sendCommandResources).toContain("instance/");
-    expect(statementFor("ssm:GetCommandInvocation")?.Resource).toBe("*");
+    expect(statementFor("ssm:SendCommand")).toBeUndefined();
+    expect(statementFor("ssm:GetCommandInvocation")).toBeUndefined();
+    expect(statementFor("ssm:CancelCommand")).toBeUndefined();
 
-    for (const action of ["ssm:GetParameter", "ssm:GetParametersByPath", "ssm:PutParameter", "ssm:DeleteParameter"]) {
+    for (const action of ["ssm:GetParameter", "ssm:GetParametersByPath", "ssm:PutParameter"]) {
       const resources = serializedResource(action);
       expect(resources).toContain("parameter/minecraft/");
       expect(statementFor(action)?.Resource).not.toBe("*");
@@ -893,13 +1249,16 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
 
     const putResources = serializedResource("ssm:PutParameter");
     expect(putResources).toContain("email-allowlist");
-    expect(putResources).toContain("gdrive-token");
+    expect(putResources).not.toContain("gdrive-token");
+    expect(serializedResource("ssm:GetParameter")).not.toContain("gdrive-token");
     expect(putResources).toContain("operations/*");
-    expect(putResources).toContain("server-action");
-    expect(putResources).toContain("server-action-delete-claim/*");
+    expect(putResources).not.toContain("server-action");
+    expect(putResources).not.toContain("server-action-delete-claim/*");
+    expect(statementFor("ssm:DeleteParameter")).toBeUndefined();
     const lifecycleTables = serializedResource("dynamodb:UpdateItem");
     expect(lifecycleTables).toContain("LifecycleLockTable");
     expect(lifecycleTables).toContain("OperationStateTable");
+    expect(serializedResource("dynamodb:TransactWriteItems")).toBe(lifecycleTables);
     expect(serializedResource("ce:GetCostAndUsage")).toBe('"*"');
   });
 
@@ -908,8 +1267,8 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
       instanceStatus: readFileSync(path.resolve(process.cwd(), "lib/aws/ec2-client.ts"), "utf8"),
       stopInstance: readFileSync(path.resolve(process.cwd(), "lib/aws/ec2-client.ts"), "utf8"),
       invokeLifecycle: readFileSync(path.resolve(process.cwd(), "lib/aws/lambda-client.ts"), "utf8"),
+      invokeGdriveTokenBroker: readFileSync(path.resolve(process.cwd(), "lib/aws/lambda-client.ts"), "utf8"),
       stackStatus: readFileSync(path.resolve(process.cwd(), "lib/aws/cloudformation-client.ts"), "utf8"),
-      runInstanceCommand: readFileSync(path.resolve(process.cwd(), "lib/aws/ssm-client.ts"), "utf8"),
       readRuntimeParameters: readFileSync(path.resolve(process.cwd(), "lib/aws/ssm-client.ts"), "utf8"),
       writeRuntimeParameters: readFileSync(path.resolve(process.cwd(), "lib/aws/ssm-client.ts"), "utf8"),
       optionalCostData: readFileSync(path.resolve(process.cwd(), "lib/aws/cost-client.ts"), "utf8"),
@@ -931,6 +1290,7 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
       "ssm:DeleteParameter": "DeleteParameterCommand",
       "dynamodb:GetItem": "GetItemCommand",
       "dynamodb:UpdateItem": "UpdateItemCommand",
+      "dynamodb:TransactWriteItems": "TransactWriteItemsCommand",
       "ce:GetCostAndUsage": "GetCostAndUsageCommand",
     };
 
@@ -961,11 +1321,10 @@ describe("minecraft-stack Cloudflare Worker runtime IAM contract", { timeout: sy
     const statements = createWorkerRuntimePolicyStatements({
       instanceArn: "arn:aws:ec2:us-west-1:111111111111:instance/i-managed",
       lifecycleLambdaArn: "arn:aws:lambda:us-west-1:111111111111:function:lifecycle",
+      gdriveTokenBrokerLambdaArn: "arn:aws:lambda:us-west-1:111111111111:function:gdrive-token-broker",
       stackArn: "arn:aws:cloudformation:us-west-1:111111111111:stack/MinecraftStack/*",
-      runShellScriptDocumentArn: "arn:aws:ssm:us-west-1::document/AWS-RunShellScript",
       readableParameterArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/player-count"],
-      writableParameterArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/server-action"],
-      deletableParameterArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/server-action"],
+      writableParameterArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/operations/*"],
       operationParameterPathArns: ["arn:aws:ssm:us-west-1:111111111111:parameter/minecraft/operations/*"],
       lifecycleStateTableArns: ["arn:aws:dynamodb:us-west-1:111111111111:table/mc-lifecycle"],
       includeCostExplorer: false,

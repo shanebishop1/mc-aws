@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -23,10 +22,27 @@ import * as cr from "aws-cdk-lib/custom-resources";
 import type { Construct } from "constructs";
 
 import * as ssm from "aws-cdk-lib/aws-ssm";
+import { deriveBackupFencePublicKeyPem } from "../../lib/agent/runtime/backup-fence-key";
 import { resolveServerProfileDirectory, validateServerProfile } from "../../lib/server-profile";
+import { requireSuccessfulIsolatedBuildChild } from "../../scripts/validation/build-child-isolation";
+import { validateAgentSkillExclusion } from "../../scripts/validation/validate-agent-skill-exclusion";
 import { createLambdaDeploymentCode } from "./lambda-assets";
 import { quotePosixShellArgument } from "./posix-shell";
 import { createWorkerRuntimePolicyStatements } from "./worker-runtime-policy";
+
+interface HostReleaseBuild {
+  archive: string;
+  sha256: string;
+  bytes: number;
+  releaseManifestSha256: string;
+  releaseManifestBytes: number;
+  agentRuntimeSha256: string;
+  agentRuntimeBytes: number;
+  agentRuntimeManifestSha256: string;
+  agentRuntimeManifestBytes: number;
+}
+
+let cachedHostReleaseBuild: HostReleaseBuild | undefined;
 
 export class MinecraftStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props?: cdk.StackProps) {
@@ -37,8 +53,14 @@ export class MinecraftStack extends cdk.Stack {
     const cloudflareZoneId = process.env.CLOUDFLARE_ZONE_ID?.trim() ?? "";
     const cloudflareDomain = process.env.CLOUDFLARE_MC_DOMAIN?.trim() ?? "";
     const duckdnsDomain = process.env.DUCKDNS_DOMAIN?.trim() ?? "";
+    const requestedDnsMode = (process.env.MC_CONNECTION_MODE?.trim() ?? "").toLowerCase();
     const lifecycleProjectTag = "mc-aws";
     const lifecycleStackTag = this.stackName;
+    const setupClaimToken = process.env.MC_AWS_SETUP_CLAIM_TOKEN?.trim() ?? "";
+    if (setupClaimToken && !/^[a-f0-9-]{36}$/.test(setupClaimToken)) {
+      throw new Error("MC_AWS_SETUP_CLAIM_TOKEN must be a UUID when supplied.");
+    }
+    if (setupClaimToken) cdk.Tags.of(this).add("McAwsClaimToken", setupClaimToken);
     const readOptionalBoolean = (name: string): boolean => {
       const value = (process.env[name] ?? "false").trim().toLowerCase();
       if (value !== "true" && value !== "false") {
@@ -61,9 +83,83 @@ export class MinecraftStack extends cdk.Stack {
     const backupStaleAfterHours = Number(backupStaleAfterHoursText);
     const operationRetentionDaysText = (process.env.MC_OPERATION_STATE_RETENTION_DAYS ?? "").trim() || "30";
     const operationRetentionDays = Number(operationRetentionDaysText);
+    const agentRuntimeEnabled = readOptionalBoolean("MC_AGENT_RUNTIME_ENABLED");
+    const backupFencePrivateKey = process.env.MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8?.trim() ?? "";
+    const recoveryCapsuleAdopted = (process.env.MC_BACKUP_RECOVERY_CAPSULE_ADOPTED ?? "false").trim().toLowerCase();
+    const recoveryCapsuleAdoptionDeferred = readOptionalBoolean("MC_BACKUP_RECOVERY_CAPSULE_ADOPTION_DEFERRED");
+    const adoptedBackupServerIdentity = process.env.MC_BACKUP_SERVER_IDENTITY?.trim() ?? "";
+    const recoveryCapsuleKeyIds = (process.env.MC_BACKUP_RECOVERY_CAPSULE_KEY_IDS ?? "")
+      .split(",")
+      .map((keyId) => keyId.trim())
+      .filter(Boolean);
+    const recoveryCapsuleCheckpoint = Number(process.env.MC_BACKUP_RECOVERY_CAPSULE_CHECKPOINT_GENERATION ?? "0");
+    const recoveryCapsuleFloor = Number(process.env.MC_BACKUP_RECOVERY_CAPSULE_FLOOR_GENERATION ?? "0");
+    const recoveryCapsuleEffectiveCheckpoint = Number(
+      process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_GENERATION ??
+        process.env.MC_BACKUP_RECOVERY_CAPSULE_CHECKPOINT_GENERATION ??
+        "0"
+    );
+    const recoveryCapsuleEffectiveFloor = Number(
+      process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_GENERATION ??
+        process.env.MC_BACKUP_RECOVERY_CAPSULE_FLOOR_GENERATION ??
+        "0"
+    );
+    const recoveryCapsuleVerifierSha256 = (process.env.MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_SHA256 ?? "").trim();
+    const recoveryCapsuleKeyringSha256 = (process.env.MC_BACKUP_RECOVERY_CAPSULE_KEYRING_SHA256 ?? "").trim();
+    const recoveryCapsuleDigest = (process.env.MC_BACKUP_RECOVERY_CAPSULE_DIGEST ?? "").trim();
+    const recoveryCapsuleVerifierMetadata = (process.env.MC_BACKUP_RECOVERY_CAPSULE_VERIFIER_METADATA ?? "").trim();
+    const recoveryCapsuleCheckpointBackupId =
+      process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID?.trim() ?? "";
+    const recoveryCapsuleFloorBackupId = process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID?.trim() ?? "";
+    if (recoveryCapsuleAdopted !== "true" && recoveryCapsuleAdopted !== "false") {
+      throw new Error("MC_BACKUP_RECOVERY_CAPSULE_ADOPTED must be either true or false.");
+    }
+    if (recoveryCapsuleAdopted === "true" && !recoveryCapsuleAdoptionDeferred) {
+      if (!adoptedBackupServerIdentity || recoveryCapsuleKeyIds.length === 0) {
+        throw new Error("Explicit recovery-capsule adoption requires server identity and verifier key IDs.");
+      }
+      if (
+        !Number.isSafeInteger(recoveryCapsuleCheckpoint) ||
+        !Number.isSafeInteger(recoveryCapsuleFloor) ||
+        recoveryCapsuleFloor > recoveryCapsuleCheckpoint
+      ) {
+        throw new Error("Recovery-capsule adoption requires a non-decreasing checkpoint/floor.");
+      }
+      if (
+        !Number.isSafeInteger(recoveryCapsuleEffectiveCheckpoint) ||
+        !Number.isSafeInteger(recoveryCapsuleEffectiveFloor) ||
+        recoveryCapsuleEffectiveFloor > recoveryCapsuleEffectiveCheckpoint ||
+        !/^[a-f0-9]{64}$/.test(recoveryCapsuleVerifierSha256) ||
+        !/^[a-f0-9]{64}$/.test(recoveryCapsuleKeyringSha256) ||
+        !/^[a-f0-9]{64}$/.test(recoveryCapsuleDigest) ||
+        !recoveryCapsuleVerifierMetadata ||
+        createHash("sha256").update(recoveryCapsuleVerifierMetadata).digest("hex") !== recoveryCapsuleVerifierSha256 ||
+        (recoveryCapsuleEffectiveCheckpoint > 0 && !/^[a-f0-9]{32}$/.test(recoveryCapsuleCheckpointBackupId)) ||
+        (recoveryCapsuleEffectiveFloor > 0 && !/^[a-f0-9]{32}$/.test(recoveryCapsuleFloorBackupId))
+      ) {
+        throw new Error(
+          "Recovery-capsule adoption requires exact authenticated verifier and monotonic state metadata."
+        );
+      }
+    } else if (adoptedBackupServerIdentity && !recoveryCapsuleAdoptionDeferred) {
+      throw new Error("MC_BACKUP_SERVER_IDENTITY requires explicit recovery-capsule adoption.");
+    }
+    if (agentRuntimeEnabled && !backupFencePrivateKey) {
+      throw new Error("MC_AGENT_RUNTIME_ENABLED=true requires MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8.");
+    }
+    const backupFencePublicKeyPemBase64 = backupFencePrivateKey
+      ? Buffer.from(deriveBackupFencePublicKeyPem(backupFencePrivateKey), "ascii").toString("base64")
+      : "";
     const metricNamespace = `McAws/${this.stackName}`;
-    const dnsMode = duckdnsDomain ? "duckdns" : cloudflareDomain ? "cloudflare" : "raw_ip";
-    const dnsHostname = duckdnsDomain ? `${duckdnsDomain}.duckdns.org` : cloudflareDomain;
+    const dnsMode =
+      requestedDnsMode ||
+      (duckdnsDomain && process.env.DUCKDNS_TOKEN?.trim()
+        ? "duckdns"
+        : cloudflareDomain && cloudflareZoneId && process.env.CLOUDFLARE_DNS_API_TOKEN?.trim()
+          ? "cloudflare"
+          : "raw_ip");
+    const dnsHostname =
+      dnsMode === "duckdns" ? `${duckdnsDomain}.duckdns.org` : dnsMode === "cloudflare" ? cloudflareDomain : "";
 
     if (!/^ami-[a-f0-9]{8,17}$/.test(al2023Arm64AmiId)) {
       throw new Error(
@@ -93,13 +189,25 @@ export class MinecraftStack extends cdk.Stack {
     if (!Number.isSafeInteger(operationRetentionDays) || operationRetentionDays < 1 || operationRetentionDays > 3650) {
       throw new Error("MC_OPERATION_STATE_RETENTION_DAYS must be an integer between 1 and 3650");
     }
-    const cloudflareDnsConfigured = Boolean(cloudflareZoneId || cloudflareDomain);
-    const duckDnsConfigured = Boolean(duckdnsDomain);
-    if (cloudflareDnsConfigured && (!cloudflareZoneId || !cloudflareDomain)) {
+    if (!["cloudflare", "duckdns", "raw_ip"].includes(dnsMode)) {
+      throw new Error("MC_CONNECTION_MODE must select cloudflare, duckdns, or raw_ip.");
+    }
+    const cloudflareDnsConfigured = dnsMode === "cloudflare";
+    const duckDnsConfigured = dnsMode === "duckdns";
+    if (
+      cloudflareDnsConfigured &&
+      (!cloudflareZoneId || !cloudflareDomain || !process.env.CLOUDFLARE_DNS_API_TOKEN?.trim())
+    ) {
       throw new Error("Cloudflare DNS requires both CLOUDFLARE_ZONE_ID and CLOUDFLARE_MC_DOMAIN.");
     }
-    if (cloudflareDnsConfigured && duckDnsConfigured) {
-      throw new Error("Configure either Cloudflare DNS or DuckDNS, not both.");
+    if (duckDnsConfigured && !duckdnsDomain) {
+      throw new Error("DuckDNS requires DUCKDNS_DOMAIN.");
+    }
+    if (dnsMode === "cloudflare" && duckdnsDomain) {
+      throw new Error("Cloudflare mode cannot include a DuckDNS domain.");
+    }
+    if (dnsMode === "duckdns" && (cloudflareZoneId || cloudflareDomain)) {
+      throw new Error("DuckDNS mode cannot include Cloudflare Minecraft DNS values.");
     }
 
     const createProjectLogGroup = (id: string) => {
@@ -112,42 +220,135 @@ export class MinecraftStack extends cdk.Stack {
       return logGroup;
     };
 
-    // 0.5 Optional DNS provider SSM parameters for EC2 DNS updates.
-    // DNS credentials are pre-materialized with `pnpm dns:secrets:materialize`
-    // at the fixed SecureString paths before synthesis/deployment.
-    // CloudFormation has no native AWS::SSM::Parameter SecureString resource type, and
-    // resolving a NoEcho/dynamic reference into custom-resource properties would expose
-    // the plaintext value to that provider event. This stack therefore never accepts it.
-    if (cloudflareZoneId) {
+    // DNS credentials and the backup authentication keyring are materialized at
+    // fixed paths before deployment. The authoritative dns-mode value is also
+    // setup-managed; it is intentionally not a CloudFormation-owned fixed-name
+    // parameter, avoiding replacement/ownership races during provider changes.
+    if (cloudflareDnsConfigured) {
       new ssm.StringParameter(this, "CloudflareZoneId", {
         parameterName: "/minecraft/cloudflare-zone-id",
         stringValue: cloudflareZoneId,
         description: "Cloudflare Zone ID for DNS updates",
-      });
+      }).applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     }
 
-    if (cloudflareDomain) {
+    if (cloudflareDnsConfigured) {
       new ssm.StringParameter(this, "CloudflareDomain", {
         parameterName: "/minecraft/cloudflare-domain",
         stringValue: cloudflareDomain,
         description: "Domain name to update (e.g., mc.example.com)",
-      });
+      }).applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     }
 
-    if (duckdnsDomain) {
+    if (duckDnsConfigured) {
       new ssm.StringParameter(this, "DuckDnsDomain", {
         parameterName: "/minecraft/duckdns-domain",
         stringValue: duckdnsDomain,
         description: "DuckDNS subdomain without .duckdns.org",
-      });
+      }).applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     }
 
-    const dnsSecretAdoptionResources: cdk.CustomResource[] = [];
-    const dnsSecureParameterNames = [
+    const lifecycleLockTable = new dynamodb.Table(this, "LifecycleLockTable", {
+      partitionKey: { name: "lockKey", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "ttlEpochSeconds",
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+    const lifecycleLockCfnTable = lifecycleLockTable.node.defaultChild as dynamodb.CfnTable;
+    lifecycleLockCfnTable.cfnOptions.updateReplacePolicy = cdk.CfnDeletionPolicy.RETAIN;
+    cdk.Tags.of(lifecycleLockTable).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(lifecycleLockTable).add("McAwsStack", lifecycleStackTag);
+    cdk.Tags.of(lifecycleLockTable).add("McAwsPurpose", "LifecycleLock");
+
+    const operationStateTable = new dynamodb.Table(this, "OperationStateTable", {
+      partitionKey: { name: "operationId", type: dynamodb.AttributeType.STRING },
+      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
+      encryption: dynamodb.TableEncryption.AWS_MANAGED,
+      timeToLiveAttribute: "ttlEpochSeconds",
+      removalPolicy: cdk.RemovalPolicy.RETAIN,
+    });
+    const operationStateCfnTable = operationStateTable.node.defaultChild as dynamodb.CfnTable;
+    operationStateCfnTable.cfnOptions.updateReplacePolicy = cdk.CfnDeletionPolicy.RETAIN;
+    cdk.Tags.of(operationStateTable).add("McAwsProject", lifecycleProjectTag);
+    cdk.Tags.of(operationStateTable).add("McAwsStack", lifecycleStackTag);
+    cdk.Tags.of(operationStateTable).add("McAwsPurpose", "OperationState");
+
+    const legacyBridgeMutationDenyStatement = () =>
+      new iam.PolicyStatement({
+        effect: iam.Effect.DENY,
+        actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`],
+      });
+
+    const migrateLockLambdaLogGroup = createProjectLogGroup("MigrateServerActionLockLambdaLogGroup");
+    const migrateLockLambda = new lambda.Function(this, "MigrateServerActionLockLambda", {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: "index.handler",
+      code: createLambdaDeploymentCode(
+        "MigrateServerActionLock",
+        path.join(__dirname, "../src/lambda/MigrateServerActionLock")
+      ),
+      timeout: cdk.Duration.minutes(1),
+      logGroup: migrateLockLambdaLogGroup,
+    });
+    migrateLockLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
+        resources: [lifecycleLockTable.tableArn],
+      })
+    );
+    const migrateLockLegacyBridgeDenyPolicy = new iam.Policy(this, "MigrateLockLegacyBridgeDenyPolicy", {
+      roles: migrateLockLambda.role ? [migrateLockLambda.role] : [],
+      statements: [legacyBridgeMutationDenyStatement()],
+    });
+    migrateLockLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/server-action`],
+      })
+    );
+    const migrateLockProviderLogGroup = createProjectLogGroup("MigrateServerActionLockProviderLogGroup");
+    const migrateLockProvider = new cr.Provider(this, "MigrateServerActionLockProvider", {
+      onEventHandler: migrateLockLambda,
+      logGroup: migrateLockProviderLogGroup,
+    });
+    const migrateLockResource = new cdk.CustomResource(this, "MigrateServerActionLock", {
+      serviceToken: migrateLockProvider.serviceToken,
+      properties: {
+        Protocol: "dual-v1",
+        MarkerVersion: "3",
+        MigrationVersion: "3",
+        LockTableName: lifecycleLockTable.tableName,
+        LegacyParameterName: "/minecraft/server-action",
+      },
+    });
+    migrateLockResource.node.addDependency(lifecycleLockTable);
+    migrateLockResource.node.addDependency(operationStateTable);
+    migrateLockResource.node.addDependency(migrateLockLegacyBridgeDenyPolicy);
+
+    const retainedParameterResources: cdk.CustomResource[] = [];
+    const secureParameterNames = [
+      ...(recoveryCapsuleAdoptionDeferred ? [] : ["/minecraft/backup-auth-keyring"]),
       ...(cloudflareDnsConfigured ? ["/minecraft/cloudflare-api-token"] : []),
       ...(duckDnsConfigured ? ["/minecraft/duckdns-token"] : []),
     ];
-    if (dnsSecureParameterNames.length > 0) {
+    const mutableStateParameterNames = recoveryCapsuleAdoptionDeferred
+      ? []
+      : [
+          "/minecraft/backup-generation-checkpoint",
+          "/minecraft/restore-generation-floor",
+          "/minecraft/backup-transfer-authorization",
+        ];
+    const recoveryIdentityParameterNames = recoveryCapsuleAdoptionDeferred
+      ? []
+      : ["/minecraft/backup-server-identity", "/minecraft/backup-verifier-metadata"];
+    let backupServerIdentity: cdk.CustomResource | undefined;
+    if (
+      secureParameterNames.length > 0 ||
+      mutableStateParameterNames.length > 0 ||
+      recoveryIdentityParameterNames.length > 0
+    ) {
       const adoptionLogGroup = createProjectLogGroup("AdoptDnsSecureStringLambdaLogGroup");
       const adoptionLambda = new lambda.Function(this, "AdoptDnsSecureStringLambda", {
         runtime: lambda.Runtime.NODEJS_24_X,
@@ -157,30 +358,135 @@ export class MinecraftStack extends cdk.Stack {
           path.join(__dirname, "../src/lambda/AdoptDnsSecureString")
         ),
         timeout: cdk.Duration.seconds(30),
+        environment: { MC_OPERATION_STATE_TABLE_NAME: operationStateTable.tableName },
         logGroup: adoptionLogGroup,
+      });
+      new iam.Policy(this, "AdoptionLegacyBridgeDenyPolicy", {
+        roles: adoptionLambda.role ? [adoptionLambda.role] : [],
+        statements: [legacyBridgeMutationDenyStatement()],
       });
       adoptionLambda.addToRolePolicy(
         new iam.PolicyStatement({
           actions: ["ssm:GetParameter"],
-          resources: dnsSecureParameterNames.map(
-            (name) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`
-          ),
+          resources: [
+            ...secureParameterNames,
+            ...mutableStateParameterNames,
+            ...recoveryIdentityParameterNames,
+            "/minecraft/backup-recovery-adoption-lock",
+            "/minecraft/stack-ownership-claim",
+          ].map((name) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`),
+        })
+      );
+      adoptionLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["ssm:PutParameter"],
+          resources: [
+            ...mutableStateParameterNames,
+            ...recoveryIdentityParameterNames,
+            "/minecraft/stack-ownership-claim",
+          ].map((name) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`),
+        })
+      );
+      adoptionLambda.addToRolePolicy(
+        new iam.PolicyStatement({
+          actions: ["dynamodb:PutItem", "dynamodb:UpdateItem"],
+          resources: [operationStateTable.tableArn],
         })
       );
       adoptionLambda.addPermission("CloudFormationInvokeDnsSecretAdoption", {
         principal: new iam.ServicePrincipal("cloudformation.amazonaws.com"),
         sourceAccount: this.account,
       });
-      const adoptParameter = (id: string, parameterName: string) => {
+      const adoptParameter = (
+        id: string,
+        parameterName: string,
+        parameterType: "SecureString" | "String",
+        properties: Record<string, string> = {}
+      ) => {
         const resource = new cdk.CustomResource(this, id, {
           resourceType: "Custom::AWS",
           serviceToken: adoptionLambda.functionArn,
-          properties: { ParameterName: parameterName, MigrationVersion: "1" },
+          properties: {
+            ParameterName: parameterName,
+            ParameterType: parameterType,
+            ...(parameterType === "String" ? { InitialValue: "UNINITIALIZED" } : {}),
+            ...properties,
+            MigrationVersion: "2",
+          },
         });
-        dnsSecretAdoptionResources.push(resource);
+        retainedParameterResources.push(resource);
+        return resource;
       };
-      if (cloudflareDnsConfigured) adoptParameter("CloudflareTokenSecureParam", "/minecraft/cloudflare-api-token");
-      if (duckDnsConfigured) adoptParameter("DuckDnsTokenSecureParam", "/minecraft/duckdns-token");
+      const stackOwnershipClaim = setupClaimToken
+        ? new cdk.CustomResource(this, "StackOwnershipClaim", {
+            resourceType: "Custom::StackOwnershipClaim",
+            serviceToken: adoptionLambda.functionArn,
+            properties: {
+              StackOwnershipClaim: "true",
+              ClaimParameter: "/minecraft/stack-ownership-claim",
+              ClaimToken: setupClaimToken,
+            },
+          })
+        : undefined;
+      adoptParameter("BackupAuthKeyringSecureParam", "/minecraft/backup-auth-keyring", "SecureString");
+      if (cloudflareDnsConfigured)
+        adoptParameter("CloudflareTokenSecureParam", "/minecraft/cloudflare-api-token", "SecureString");
+      if (duckDnsConfigured) adoptParameter("DuckDnsTokenSecureParam", "/minecraft/duckdns-token", "SecureString");
+      if (!recoveryCapsuleAdoptionDeferred) {
+        backupServerIdentity = adoptParameter(
+          "BackupServerIdentityParam",
+          "/minecraft/backup-server-identity",
+          "String",
+          {
+            ExpectedValue: adoptedBackupServerIdentity || this.stackId,
+          }
+        );
+      }
+      if (!recoveryCapsuleAdoptionDeferred) {
+        adoptParameter("BackupVerifierMetadataParam", "/minecraft/backup-verifier-metadata", "String");
+        adoptParameter("BackupGenerationCheckpointParam", "/minecraft/backup-generation-checkpoint", "String");
+        adoptParameter("RestoreGenerationFloorParam", "/minecraft/restore-generation-floor", "String");
+        adoptParameter("BackupTransferAuthorizationParam", "/minecraft/backup-transfer-authorization", "String");
+      }
+      if (stackOwnershipClaim) {
+        for (const resource of retainedParameterResources) resource.node.addDependency(stackOwnershipClaim);
+      }
+      // No parameter-adoption or lifecycle runtime may become available until
+      // the provider has observed an empty legacy bridge and committed the
+      // DynamoDB cutover barrier.
+      for (const resource of retainedParameterResources) resource.node.addDependency(migrateLockResource);
+      if (recoveryCapsuleAdopted === "true" && !recoveryCapsuleAdoptionDeferred) {
+        const adoption = new cdk.CustomResource(this, "BackupRecoveryCapsuleAdoption", {
+          resourceType: "Custom::BackupRecoveryCapsuleAdoption",
+          serviceToken: adoptionLambda.functionArn,
+          properties: {
+            ParameterName: "/minecraft/backup-auth-keyring",
+            ParameterType: "SecureString",
+            RecoveryCapsuleAdoption: "true",
+            ExpectedServerIdentity: adoptedBackupServerIdentity,
+            ExpectedKeyIds: recoveryCapsuleKeyIds,
+            ExpectedKeyringSha256: recoveryCapsuleKeyringSha256,
+            ExpectedVerifierSha256: recoveryCapsuleVerifierSha256,
+            ExpectedVerifierMetadata: recoveryCapsuleVerifierMetadata,
+            ExpectedCapsuleDigest: recoveryCapsuleDigest,
+            ExpectedAccountId: this.account,
+            ExpectedRegion: this.region,
+            ExpectedStackName: this.stackName,
+            ExpectedCheckpointGeneration: String(recoveryCapsuleEffectiveCheckpoint),
+            ExpectedRestoreFloorGeneration: String(recoveryCapsuleEffectiveFloor),
+            ...(process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID
+              ? { ExpectedCheckpointBackupId: process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID }
+              : {}),
+            ...(process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID
+              ? { ExpectedRestoreFloorBackupId: process.env.MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID }
+              : {}),
+            RecoveryLockParameter: "/minecraft/backup-recovery-adoption-lock",
+            RecoverySchemaVersion: "3",
+            MigrationVersion: "3",
+          },
+        });
+        for (const resource of retainedParameterResources) adoption.node.addDependency(resource);
+      }
     }
 
     // 1. VPC
@@ -193,80 +499,229 @@ export class MinecraftStack extends cdk.Stack {
       assumedBy: new iam.ServicePrincipal("ec2.amazonaws.com"),
       managedPolicies: [iam.ManagedPolicy.fromAwsManagedPolicyName("AmazonSSMManagedInstanceCore")],
     });
-
+    const ec2LegacyBridgeDenyPolicy = new iam.Policy(this, "Ec2LegacyBridgeDenyPolicy", {
+      roles: [ec2Role],
+      statements: [legacyBridgeMutationDenyStatement()],
+    });
     const repositoryRoot = path.resolve(__dirname, "../..");
     const profileDirectory = resolveServerProfileDirectory(repositoryRoot);
     const allowEmptyWhitelist = (process.env.MC_ALLOW_EMPTY_WHITELIST ?? "false").trim().toLowerCase();
     if (allowEmptyWhitelist !== "true" && allowEmptyWhitelist !== "false") {
       throw new Error("MC_ALLOW_EMPTY_WHITELIST must be exactly true or false when set.");
     }
-    validateServerProfile(profileDirectory, { allowEmptyWhitelist: allowEmptyWhitelist === "true" });
-    const createArchiveAsset = (assetId: string, sourceDirectory: string, excludedBasenames: string[]) => {
-      const archive = execFileSync(
+    const profileValidation = validateServerProfile(profileDirectory, {
+      allowEmptyWhitelist: allowEmptyWhitelist === "true",
+    });
+    const hostReleaseBuild =
+      cachedHostReleaseBuild ??
+      (JSON.parse(
+        requireSuccessfulIsolatedBuildChild(
+          process.execPath,
+          [path.join(repositoryRoot, "scripts/setup/build-host-release.mjs"), "package"],
+          repositoryRoot,
+          {
+            cwd: repositoryRoot,
+            home: path.join(repositoryRoot, ".local-artifacts/cdk-build-isolation/home"),
+            tmpdir: path.join(repositoryRoot, ".local-artifacts/cdk-build-isolation/tmp"),
+            overrides: { NODE_ENV: "production" },
+            networkSandbox: process.env.NODE_ENV === "test" ? "test-only" : "required",
+          }
+        )
+      ) as HostReleaseBuild);
+    if (
+      !path.isAbsolute(hostReleaseBuild.archive) ||
+      path.basename(hostReleaseBuild.archive) !== `${hostReleaseBuild.sha256}.zip`
+    ) {
+      throw new Error("Host release archive path must be an absolute content-addressed file.");
+    }
+    const hostReleaseDescriptor = fs.openSync(
+      hostReleaseBuild.archive,
+      fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0)
+    );
+    let hostReleaseBytes: Buffer;
+    let hostReleaseStatus: fs.Stats;
+    try {
+      hostReleaseStatus = fs.fstatSync(hostReleaseDescriptor);
+      if (!hostReleaseStatus.isFile() || hostReleaseStatus.nlink !== 1) {
+        throw new Error("Host release archive is not one regular file.");
+      }
+      hostReleaseBytes = fs.readFileSync(hostReleaseDescriptor);
+    } finally {
+      fs.closeSync(hostReleaseDescriptor);
+    }
+    if (
+      !/^[a-f0-9]{64}$/.test(hostReleaseBuild.sha256) ||
+      !/^[a-f0-9]{64}$/.test(hostReleaseBuild.releaseManifestSha256) ||
+      !hostReleaseStatus.isFile() ||
+      hostReleaseStatus.size !== hostReleaseBuild.bytes ||
+      path.basename(hostReleaseBuild.archive) !== `${hostReleaseBuild.sha256}.zip` ||
+      !Number.isSafeInteger(hostReleaseBuild.releaseManifestBytes) ||
+      hostReleaseBuild.releaseManifestBytes < 1 ||
+      !/^[a-f0-9]{64}$/.test(hostReleaseBuild.agentRuntimeSha256) ||
+      !Number.isSafeInteger(hostReleaseBuild.agentRuntimeBytes) ||
+      hostReleaseBuild.agentRuntimeBytes < 1 ||
+      !/^[a-f0-9]{64}$/.test(hostReleaseBuild.agentRuntimeManifestSha256) ||
+      !Number.isSafeInteger(hostReleaseBuild.agentRuntimeManifestBytes) ||
+      hostReleaseBuild.agentRuntimeManifestBytes < 1
+    ) {
+      throw new Error("Host release packaging did not return one content-addressed archive.");
+    }
+    if (createHash("sha256").update(hostReleaseBytes).digest("hex") !== hostReleaseBuild.sha256) {
+      throw new Error("Host release archive content does not match its returned SHA-256 descriptor.");
+    }
+    const descriptorCheck = JSON.parse(
+      requireSuccessfulIsolatedBuildChild(
         "python3",
         [
           "-c",
-          `import io,json,os,stat,sys,zipfile
-root=os.path.realpath(sys.argv[1]); excluded=set(json.loads(sys.argv[2])); output=io.BytesIO()
-with zipfile.ZipFile(output,"w",zipfile.ZIP_DEFLATED,compresslevel=9) as archive:
-  for current,dirs,files in os.walk(root,followlinks=False):
-    dirs.sort(); files.sort()
-    for name in dirs+files:
-      source=os.path.join(current,name); mode=os.lstat(source).st_mode
-      if stat.S_ISLNK(mode) or not (stat.S_ISDIR(mode) or stat.S_ISREG(mode)): raise SystemExit("asset contains link or special entry")
-    for name in files:
-      if name in excluded: continue
-      source=os.path.join(current,name); relative=os.path.relpath(source,root).replace(os.sep,"/")
-      info=zipfile.ZipInfo(relative,(2020,1,1,0,0,0)); info.create_system=3; info.external_attr=(os.stat(source).st_mode&0xffff)<<16
-      with open(source,"rb") as item: archive.writestr(info,item.read(),compress_type=zipfile.ZIP_DEFLATED,compresslevel=9)
-sys.stdout.buffer.write(output.getvalue())`,
-          sourceDirectory,
-          JSON.stringify(excludedBasenames),
+          `import hashlib,json,sys,zipfile
+archive,manifest_hash,manifest_bytes,agent_hash,agent_bytes,agent_manifest_hash,agent_manifest_bytes=sys.argv[1:]
+with zipfile.ZipFile(archive) as z:
+  names=z.namelist()
+  if names.count("release-manifest.json") != 1: raise SystemExit("release manifest descriptor is missing or duplicated")
+  raw=z.read("release-manifest.json")
+  if len(raw) != int(manifest_bytes) or hashlib.sha256(raw).hexdigest() != manifest_hash: raise SystemExit("release manifest descriptor/hash mismatch")
+  value=json.loads(raw)
+  agent=value.get("agentRuntime",{})
+  expected={"bytes":int(agent_bytes),"sha256":agent_hash,"bundleManifestBytes":int(agent_manifest_bytes),"bundleManifestSha256":agent_manifest_hash}
+  if any(agent.get(k) != v for k,v in expected.items()): raise SystemExit("agent runtime descriptor mismatch")
+print(json.dumps({"ok":True}))`,
+          hostReleaseBuild.archive,
+          hostReleaseBuild.releaseManifestSha256,
+          String(hostReleaseBuild.releaseManifestBytes),
+          hostReleaseBuild.agentRuntimeSha256,
+          String(hostReleaseBuild.agentRuntimeBytes),
+          hostReleaseBuild.agentRuntimeManifestSha256,
+          String(hostReleaseBuild.agentRuntimeManifestBytes),
         ],
-        { encoding: "buffer", maxBuffer: 160 * 1024 * 1024 }
-      );
-      const digest = createHash("sha256").update(archive).digest("hex");
-      const generatedDirectory = path.resolve(cdk.Stage.of(this)?.outdir ?? "cdk.out", "mc-asset-archives");
-      fs.mkdirSync(generatedDirectory, { recursive: true, mode: 0o700 });
-      const archivePath = path.join(generatedDirectory, `${digest}.zip`);
-      if (!fs.existsSync(archivePath)) fs.writeFileSync(archivePath, archive, { mode: 0o600 });
-      return new s3assets.Asset(this, assetId, { path: archivePath });
+        repositoryRoot,
+        {
+          cwd: repositoryRoot,
+          home: path.join(repositoryRoot, ".local-artifacts/cdk-build-isolation/home"),
+          tmpdir: path.join(repositoryRoot, ".local-artifacts/cdk-build-isolation/tmp"),
+          overrides: { NODE_ENV: "production" },
+          networkSandbox: process.env.NODE_ENV === "test" ? "test-only" : "required",
+        }
+      )
+    );
+    const parsedDescriptor =
+      typeof descriptorCheck === "string"
+        ? (JSON.parse(descriptorCheck) as { ok?: boolean })
+        : (descriptorCheck as { ok?: boolean });
+    if (parsedDescriptor.ok !== true) {
+      throw new Error("Host release descriptor validation failed.");
+    }
+    cachedHostReleaseBuild = hostReleaseBuild;
+    const hostReleaseAsset = new s3assets.Asset(this, "MinecraftHostReleaseAsset", {
+      path: hostReleaseBuild.archive,
+    });
+    const cdkOutputDirectory = path.resolve(cdk.Stage.of(this)?.outdir ?? "cdk.out");
+    const profileStagingDirectory = path.join(cdkOutputDirectory, "profile-staging");
+    fs.rmSync(profileStagingDirectory, { recursive: true, force: true });
+    fs.mkdirSync(profileStagingDirectory, { recursive: true, mode: 0o700 });
+    // Copy only after the source has passed the profile validator, then validate
+    // the actual tree that will be archived. This closes the old gap where CDK
+    // received the selected directory and could package an unreviewed new entry.
+    const copyProfileTree = (source: string, destination: string): void => {
+      for (const entry of fs.readdirSync(source, { withFileTypes: true })) {
+        const sourcePath = path.join(source, entry.name);
+        if (
+          source === profileValidation.directory &&
+          ["bootstrap-pins.json", "mise-pins.json"].includes(entry.name.toLowerCase())
+        ) {
+          continue;
+        }
+        const destinationPath = path.join(destination, entry.name);
+        const sourceStat = fs.lstatSync(sourcePath);
+        if (sourceStat.isSymbolicLink() || (!sourceStat.isDirectory() && !sourceStat.isFile())) {
+          throw new Error(`Profile changed during CDK staging: ${path.relative(profileDirectory, sourcePath)}`);
+        }
+        if (sourceStat.isDirectory()) {
+          fs.mkdirSync(destinationPath, { recursive: false, mode: 0o700 });
+          copyProfileTree(sourcePath, destinationPath);
+          continue;
+        }
+        const descriptor = fs.openSync(sourcePath, fs.constants.O_RDONLY | fs.constants.O_NOFOLLOW);
+        try {
+          const opened = fs.fstatSync(descriptor);
+          if (opened.dev !== sourceStat.dev || opened.ino !== sourceStat.ino || !opened.isFile()) {
+            throw new Error(`Profile changed during CDK staging: ${path.relative(profileDirectory, sourcePath)}`);
+          }
+          fs.writeFileSync(destinationPath, fs.readFileSync(descriptor), { mode: 0o600, flag: "wx" });
+        } finally {
+          fs.closeSync(descriptor);
+        }
+      }
     };
-    // A prebuilt deterministic ZIP lets the manifest digest the exact bytes CDK publishes.
-    const runtimeAsset = createArchiveAsset("MinecraftRuntimeAsset", path.join(__dirname, "../src/ec2"), [
-      "user_data.sh",
-    ]);
-    const profileAsset = createArchiveAsset("MinecraftServerProfileAsset", profileDirectory, []);
+    copyProfileTree(profileValidation.directory, profileStagingDirectory);
+    const stagedProfileValidation = validateServerProfile(profileStagingDirectory, {
+      allowEmptyWhitelist: allowEmptyWhitelist === "true",
+    });
+    if (JSON.stringify(stagedProfileValidation.plugins) !== JSON.stringify(profileValidation.plugins)) {
+      throw new Error("Profile changed while preparing the CDK asset.");
+    }
+    validateAgentSkillExclusion([profileStagingDirectory]);
+    requireSuccessfulIsolatedBuildChild(
+      "python3",
+      [
+        "-c",
+        `import os,stat,sys,zipfile
+root,out=sys.argv[1:]
+with zipfile.ZipFile(out,"w",zipfile.ZIP_STORED) as z:
+  for current,dirs,files in os.walk(root):
+    dirs.sort(); files.sort()
+    for name in files:
+      source=os.path.join(current,name); rel=os.path.relpath(source,root).replace(os.sep,"/")
+      info=zipfile.ZipInfo(rel,(2020,1,1,0,0,0)); info.create_system=3; info.external_attr=((0o100755 if os.stat(source).st_mode&0o111 else 0o100644)&0xffff)<<16
+      with open(source,"rb") as item: z.writestr(info,item.read())`,
+        profileStagingDirectory,
+        path.join(cdkOutputDirectory, "profile.zip"),
+      ],
+      repositoryRoot,
+      {
+        cwd: repositoryRoot,
+        home: path.join(repositoryRoot, ".local-artifacts/cdk-build-isolation/home"),
+        tmpdir: path.join(repositoryRoot, ".local-artifacts/cdk-build-isolation/tmp"),
+        overrides: { NODE_ENV: "production" },
+        networkSandbox: process.env.NODE_ENV === "test" ? "test-only" : "required",
+      }
+    );
+    const profileArchivePath = path.join(cdkOutputDirectory, "profile.zip");
+    const profileAsset = new s3assets.Asset(this, "MinecraftServerProfileAsset", { path: profileArchivePath });
     const archiveSha256 = (asset: s3assets.Asset): string => {
       const assemblyDirectory = cdk.Stage.of(this)?.outdir;
       const archivePath = path.isAbsolute(asset.assetPath)
         ? asset.assetPath
         : path.resolve(assemblyDirectory ?? process.cwd(), asset.assetPath);
-      if (!fs.statSync(archivePath).isFile()) {
-        throw new Error(`Expected CDK file asset ${asset.node.path} to be one staged ZIP archive.`);
-      }
       return createHash("sha256").update(fs.readFileSync(archivePath)).digest("hex");
     };
     const profileManifestParameter = new ssm.StringParameter(this, "ServerProfileManifest", {
       parameterName: "/minecraft/server-profile-manifest",
-      description: "Atomic content-addressed Minecraft runtime and server profile asset manifest",
+      description: "Atomic content-addressed Minecraft host release and server profile asset manifest",
       stringValue: JSON.stringify({
-        version: 1,
-        runtime: {
-          uri: `s3://${runtimeAsset.s3BucketName}/${runtimeAsset.s3ObjectKey}`,
-          sha256: archiveSha256(runtimeAsset),
+        version: 3,
+        hostRelease: {
+          uri: `s3://${hostReleaseAsset.s3BucketName}/${hostReleaseAsset.s3ObjectKey}`,
+          sha256: archiveSha256(hostReleaseAsset),
+          bytes: hostReleaseBuild.bytes,
+          releaseManifestSha256: hostReleaseBuild.releaseManifestSha256,
+          releaseManifestBytes: hostReleaseBuild.releaseManifestBytes,
         },
         profile: {
           uri: `s3://${profileAsset.s3BucketName}/${profileAsset.s3ObjectKey}`,
           sha256: archiveSha256(profileAsset),
+          fileCount: stagedProfileValidation.fileCount,
+          totalBytes: stagedProfileValidation.totalBytes,
+          plugins: stagedProfileValidation.plugins,
         },
       }),
     });
+    profileManifestParameter.applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         actions: ["s3:GetObject"],
         resources: [
-          runtimeAsset.bucket.arnForObjects(runtimeAsset.s3ObjectKey),
+          hostReleaseAsset.bucket.arnForObjects(hostReleaseAsset.s3ObjectKey),
           profileAsset.bucket.arnForObjects(profileAsset.s3ObjectKey),
         ],
       })
@@ -275,16 +730,22 @@ sys.stdout.buffer.write(output.getvalue())`,
     const ec2ParameterArn = (name: string) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`;
     const ec2ReadableParameters = [
       "/minecraft/server-profile-manifest",
-      "/minecraft/resume-pending",
       "/minecraft/gdrive-token",
+      "/minecraft/backup-auth-keyring",
+      "/minecraft/backup-server-identity",
+      "/minecraft/backup-generation-checkpoint",
+      "/minecraft/restore-generation-floor",
+      "/minecraft/backup-transfer-authorization",
       "/minecraft/cloudflare-zone-id",
       "/minecraft/cloudflare-domain",
       "/minecraft/cloudflare-api-token",
       "/minecraft/duckdns-domain",
       "/minecraft/duckdns-token",
+      "/minecraft/dns-mode",
     ];
     const ec2EncryptedParameters = [
       "/minecraft/gdrive-token",
+      "/minecraft/backup-auth-keyring",
       "/minecraft/cloudflare-api-token",
       "/minecraft/duckdns-token",
     ];
@@ -299,7 +760,16 @@ sys.stdout.buffer.write(output.getvalue())`,
     ec2Role.addToPolicy(
       new iam.PolicyStatement({
         actions: ["ssm:PutParameter"],
-        resources: [ec2ParameterArn("/minecraft/player-count")],
+        resources: [
+          ec2ParameterArn("/minecraft/player-count"),
+          ec2ParameterArn("/minecraft/backup-generation-checkpoint"),
+        ],
+      })
+    );
+    ec2Role.addToPolicy(
+      new iam.PolicyStatement({
+        actions: ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:TransactWriteItems"],
+        resources: [operationStateTable.tableArn],
       })
     );
     // Add permission to decrypt only the exact SecureString parameters read by root-owned helpers.
@@ -345,13 +815,13 @@ sys.stdout.buffer.write(output.getvalue())`,
       .replace(
         /^#!.*\n/,
         (line) =>
-          `${line}export GDRIVE_REMOTE=${quotePosixShellArgument(driveRemote)}\nexport GDRIVE_ROOT=${quotePosixShellArgument(driveRoot)}\n`
+          `${line}export GDRIVE_REMOTE=${quotePosixShellArgument(driveRemote)}\nexport GDRIVE_ROOT=${quotePosixShellArgument(driveRoot)}\nexport MC_AGENT_BACKUP_FENCE_PUBLIC_KEY_PEM_BASE64=${quotePosixShellArgument(backupFencePublicKeyPemBase64)}\nexport MC_OPERATION_STATE_TABLE_NAME=${quotePosixShellArgument(operationStateTable.tableName)}\n`
       );
 
     // Fallback if no shebang was found (should not happen, but keeps user-data valid)
     const userDataScript = baseUserData.startsWith("#!/")
       ? baseUserData
-      : `#!/usr/bin/env bash\nexport GDRIVE_REMOTE=${quotePosixShellArgument(driveRemote)}\nexport GDRIVE_ROOT=${quotePosixShellArgument(driveRoot)}\n${baseUserData}`;
+      : `#!/usr/bin/env bash\nexport GDRIVE_REMOTE=${quotePosixShellArgument(driveRemote)}\nexport GDRIVE_ROOT=${quotePosixShellArgument(driveRoot)}\nexport MC_AGENT_BACKUP_FENCE_PUBLIC_KEY_PEM_BASE64=${quotePosixShellArgument(backupFencePublicKeyPemBase64)}\nexport MC_OPERATION_STATE_TABLE_NAME=${quotePosixShellArgument(operationStateTable.tableName)}\n${baseUserData}`;
 
     const instance = new ec2.Instance(this, "MinecraftServer", {
       vpc,
@@ -375,7 +845,8 @@ sys.stdout.buffer.write(output.getvalue())`,
       ],
     });
     instance.node.addDependency(profileManifestParameter);
-    for (const dnsSecretAdoption of dnsSecretAdoptionResources) instance.node.addDependency(dnsSecretAdoption);
+    if (backupServerIdentity) instance.node.addDependency(backupServerIdentity);
+    for (const retainedParameter of retainedParameterResources) instance.node.addDependency(retainedParameter);
 
     // Propagate ownership tags to the initial root volume so lifecycle operations can prove ownership.
     const cfnInstance = instance.node.defaultChild as ec2.CfnInstance;
@@ -384,62 +855,6 @@ sys.stdout.buffer.write(output.getvalue())`,
     cdk.Tags.of(instance).add("McAwsProject", lifecycleProjectTag);
     cdk.Tags.of(instance).add("McAwsStack", lifecycleStackTag);
     cdk.Tags.of(instance).add("McAwsManagedRoot", "true");
-
-    const lifecycleLockTable = new dynamodb.Table(this, "LifecycleLockTable", {
-      partitionKey: { name: "lockKey", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      timeToLiveAttribute: "ttlEpochSeconds",
-      // Deletion and replacement intentionally differ below: teardown must not
-      // orphan PII-bearing lock state, while a replacement must retain the old
-      // table for the mixed-version rollback window.
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-    const lifecycleLockCfnTable = lifecycleLockTable.node.defaultChild as dynamodb.CfnTable;
-    lifecycleLockCfnTable.cfnOptions.updateReplacePolicy = cdk.CfnDeletionPolicy.RETAIN;
-    cdk.Tags.of(lifecycleLockTable).add("McAwsProject", lifecycleProjectTag);
-    cdk.Tags.of(lifecycleLockTable).add("McAwsStack", lifecycleStackTag);
-    cdk.Tags.of(lifecycleLockTable).add("McAwsPurpose", "LifecycleLock");
-
-    const operationStateTable = new dynamodb.Table(this, "OperationStateTable", {
-      partitionKey: { name: "operationId", type: dynamodb.AttributeType.STRING },
-      billingMode: dynamodb.BillingMode.PAY_PER_REQUEST,
-      encryption: dynamodb.TableEncryption.AWS_MANAGED,
-      timeToLiveAttribute: "ttlEpochSeconds",
-      removalPolicy: cdk.RemovalPolicy.DESTROY,
-    });
-    cdk.Tags.of(operationStateTable).add("McAwsProject", lifecycleProjectTag);
-    cdk.Tags.of(operationStateTable).add("McAwsStack", lifecycleStackTag);
-    cdk.Tags.of(operationStateTable).add("McAwsPurpose", "OperationState");
-
-    // Initialize replacement-safe DynamoDB metadata. The mixed-version bridge
-    // continues using the old-format SSM lock until a later reviewed cutover.
-    const migrateLockLambdaLogGroup = createProjectLogGroup("MigrateServerActionLockLambdaLogGroup");
-    const migrateLockLambda = new lambda.Function(this, "MigrateServerActionLockLambda", {
-      runtime: lambda.Runtime.NODEJS_24_X,
-      handler: "index.handler",
-      code: createLambdaDeploymentCode(
-        "MigrateServerActionLock",
-        path.join(__dirname, "../src/lambda/MigrateServerActionLock")
-      ),
-      timeout: cdk.Duration.minutes(1),
-      logGroup: migrateLockLambdaLogGroup,
-    });
-    migrateLockLambda.addToRolePolicy(
-      new iam.PolicyStatement({
-        actions: ["dynamodb:GetItem", "dynamodb:UpdateItem"],
-        resources: [lifecycleLockTable.tableArn],
-      })
-    );
-    const migrateLockProviderLogGroup = createProjectLogGroup("MigrateServerActionLockProviderLogGroup");
-    const migrateLockProvider = new cr.Provider(this, "MigrateServerActionLockProvider", {
-      onEventHandler: migrateLockLambda,
-      logGroup: migrateLockProviderLogGroup,
-    });
-    const migrateLockResource = new cdk.CustomResource(this, "MigrateServerActionLock", {
-      serviceToken: migrateLockProvider.serviceToken,
-      properties: { Protocol: "dual-v1", MarkerVersion: "2", LockTableName: lifecycleLockTable.tableName },
-    });
 
     // 5. Lambda Function to Start Server
     // Story 1.1 runtime budget alignment:
@@ -502,13 +917,13 @@ sys.stdout.buffer.write(output.getvalue())`,
         parameterName: "/minecraft/verified-sender",
         stringValue: verifiedSender,
         description: "Verified SES sender email for notifications",
-      });
+      }).applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
 
       new ssm.StringParameter(this, "NotificationEmail", {
         parameterName: "/minecraft/notification-email",
         stringValue: notificationEmail,
         description: "Email address for server notifications",
-      });
+      }).applyRemovalPolicy(cdk.RemovalPolicy.RETAIN);
     }
 
     const startLambdaLogGroup = createProjectLogGroup("StartMinecraftLambdaLogGroup");
@@ -529,6 +944,9 @@ sys.stdout.buffer.write(output.getvalue())`,
         GDRIVE_ROOT: driveRoot,
         MC_PROJECT_TAG: lifecycleProjectTag,
         MC_STACK_TAG: lifecycleStackTag,
+        MC_BACKUP_SERVER_IDENTITY: recoveryCapsuleAdoptionDeferred
+          ? this.stackId
+          : adoptedBackupServerIdentity || this.stackId,
         MC_LIFECYCLE_LOCK_TABLE_NAME: lifecycleLockTable.tableName,
         MC_OPERATION_STATE_TABLE_NAME: operationStateTable.tableName,
         MC_OPERATION_STATE_RETENTION_DAYS: String(operationRetentionDays),
@@ -545,7 +963,30 @@ sys.stdout.buffer.write(output.getvalue())`,
       reservedConcurrentExecutions: 1,
       logGroup: startLambdaLogGroup,
     });
-    startLambda.node.addDependency(migrateLockResource);
+    const startLambdaLegacyBridgeDenyPolicy = new iam.Policy(this, "StartLambdaLegacyBridgeDenyPolicy", {
+      roles: startLambda.role ? [startLambda.role] : [],
+      statements: [legacyBridgeMutationDenyStatement()],
+    });
+    const parameterArn = (name: string) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`;
+
+    // The Worker must not read credential-bearing SSM parameters. This small
+    // broker is the only runtime principal that can access the Drive token;
+    // its response is deliberately reduced to a configured/not-configured
+    // status and its write target is fixed in code.
+    const gdriveTokenBrokerLogGroup = createProjectLogGroup("GDriveTokenBrokerLambdaLogGroup");
+    const gdriveTokenBrokerLambda = new lambda.Function(this, "GDriveTokenBrokerLambda", {
+      runtime: lambda.Runtime.NODEJS_24_X,
+      handler: "index.handler",
+      code: createLambdaDeploymentCode("GDriveTokenBroker", path.join(__dirname, "../src/lambda/GDriveTokenBroker")),
+      timeout: cdk.Duration.seconds(30),
+      logGroup: gdriveTokenBrokerLogGroup,
+    });
+    gdriveTokenBrokerLambda.addToRolePolicy(
+      new iam.PolicyStatement({
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [parameterArn("/minecraft/gdrive-token")],
+      })
+    );
 
     // Dedicated Cloudflare Worker runtime identity. Access keys are deliberately
     // not CloudFormation resources: setup creates them in memory and uploads
@@ -555,45 +996,43 @@ sys.stdout.buffer.write(output.getvalue())`,
     cdk.Tags.of(workerRuntimeUser).add("McAwsPurpose", "CloudflareWorkerRuntime");
     cdk.Tags.of(workerRuntimeUser).add("McAwsStack", this.stackName);
 
-    const parameterArn = (name: string) => `arn:aws:ssm:${this.region}:${this.account}:parameter${name}`;
     const serverActionArn = parameterArn("/minecraft/server-action");
-    const serverActionClaimArn = parameterArn("/minecraft/server-action-delete-claim/*");
     const operationPathArn = parameterArn("/minecraft/operations");
     const operationChildrenArn = parameterArn("/minecraft/operations/*");
     const readableParameterArns = [
       parameterArn("/minecraft/email-allowlist"),
       parameterArn("/minecraft/player-count"),
       parameterArn("/minecraft/backups-cache"),
-      parameterArn("/minecraft/gdrive-token"),
       serverActionArn,
       operationPathArn,
       operationChildrenArn,
     ];
-    const writableParameterArns = [
-      parameterArn("/minecraft/email-allowlist"),
-      parameterArn("/minecraft/gdrive-token"),
-      serverActionArn,
-      serverActionClaimArn,
-      operationChildrenArn,
-    ];
-    const deletableParameterArns = [serverActionArn, serverActionClaimArn, operationChildrenArn];
+    const writableParameterArns = [parameterArn("/minecraft/email-allowlist"), operationChildrenArn];
     const includeCostExplorer = (process.env.AWS_COST_EXPLORER_ENABLED ?? "true").trim().toLowerCase() !== "false";
 
     const workerRuntimePolicy = new iam.ManagedPolicy(this, "WorkerRuntimeManagedPolicy", {
-      statements: createWorkerRuntimePolicyStatements({
-        instanceArn: `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`,
-        lifecycleLambdaArn: startLambda.functionArn,
-        stackArn: `arn:aws:cloudformation:${this.region}:${this.account}:stack/${this.stackName}/*`,
-        runShellScriptDocumentArn: `arn:aws:ssm:${this.region}::document/AWS-RunShellScript`,
-        readableParameterArns,
-        writableParameterArns,
-        deletableParameterArns,
-        operationParameterPathArns: [operationPathArn, operationChildrenArn],
-        lifecycleStateTableArns: [lifecycleLockTable.tableArn, operationStateTable.tableArn],
-        includeCostExplorer,
-      }),
+      statements: [
+        ...createWorkerRuntimePolicyStatements({
+          instanceArn: `arn:aws:ec2:${this.region}:${this.account}:instance/${instance.instanceId}`,
+          lifecycleLambdaArn: startLambda.functionArn,
+          gdriveTokenBrokerLambdaArn: gdriveTokenBrokerLambda.functionArn,
+          stackArn: `arn:aws:cloudformation:${this.region}:${this.account}:stack/${this.stackName}/*`,
+          readableParameterArns,
+          writableParameterArns,
+          operationParameterPathArns: [operationPathArn, operationChildrenArn],
+          lifecycleStateTableArns: [lifecycleLockTable.tableArn, operationStateTable.tableArn],
+          includeCostExplorer,
+        }),
+      ],
+    });
+    const workerRuntimeLegacyBridgeDenyPolicy = new iam.Policy(this, "WorkerRuntimeLegacyBridgeDenyPolicy", {
+      users: [workerRuntimeUser],
+      statements: [legacyBridgeMutationDenyStatement()],
     });
     workerRuntimePolicy.attachToUser(workerRuntimeUser);
+    migrateLockResource.node.addDependency(ec2LegacyBridgeDenyPolicy);
+    migrateLockResource.node.addDependency(startLambdaLegacyBridgeDenyPolicy);
+    migrateLockResource.node.addDependency(workerRuntimeLegacyBridgeDenyPolicy);
 
     // Ensure email allowlist exists in SSM (seeded from ADMIN_EMAIL + ALLOWED_EMAILS)
     const seedEmailAllowlistLambdaLogGroup = createProjectLogGroup("SeedEmailAllowlistLambdaLogGroup");
@@ -635,8 +1074,8 @@ sys.stdout.buffer.write(output.getvalue())`,
     );
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ssm:PutParameter", "ssm:DeleteParameter"],
-        resources: [serverActionArn, serverActionClaimArn],
+        actions: ["ssm:GetParameter"],
+        resources: [serverActionArn],
       })
     );
     startLambda.addToRolePolicy(
@@ -647,7 +1086,7 @@ sys.stdout.buffer.write(output.getvalue())`,
     );
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ec2:DescribeInstances", "ec2:DescribeImages", "ec2:DescribeVolumes"],
+        actions: ["ec2:DescribeInstances", "ec2:DescribeImages", "ec2:DescribeSnapshots", "ec2:DescribeVolumes"],
         resources: ["*"], // These EC2 describe actions don't support resource-level permissions.
       })
     );
@@ -757,14 +1196,12 @@ sys.stdout.buffer.write(output.getvalue())`,
       })
     );
 
-    // Startup trigger and resume marker remain exact SSM coordination records.
+    // Startup attribution is separate from resume coordination. Resume intent
+    // is discovered and finalized directly in the retained operation table.
     startLambda.addToRolePolicy(
       new iam.PolicyStatement({
-        actions: ["ssm:GetParameter", "ssm:PutParameter", "ssm:DeleteParameter"],
-        resources: [
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/startup-triggered-by`,
-          `arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/resume-pending`,
-        ],
+        actions: ["ssm:GetParameter", "ssm:PutParameter"],
+        resources: [`arn:aws:ssm:${this.region}:${this.account}:parameter/minecraft/startup-triggered-by`],
       })
     );
 
@@ -1085,7 +1522,13 @@ sys.stdout.buffer.write(output.getvalue())`,
       serviceToken: retentionMigrationProvider.serviceToken,
       properties: { LogGroupNames: legacyOwnedLambdaLogGroupNames, RetentionInDays: 30, MigrationVersion: "3" },
     });
-    for (const dependency of [migrateLockLambda, failureSanitizerLambda, startLambda, seedEmailAllowlistLambda]) {
+    for (const dependency of [
+      migrateLockLambda,
+      failureSanitizerLambda,
+      startLambda,
+      gdriveTokenBrokerLambda,
+      seedEmailAllowlistLambda,
+    ]) {
       retentionMigrationResource.node.addDependency(dependency);
     }
     retentionMigrationResource.node.addDependency(seedEmailAllowlistProvider);
@@ -1095,6 +1538,10 @@ sys.stdout.buffer.write(output.getvalue())`,
     new cdk.CfnOutput(this, "InstanceId", { value: instance.instanceId });
     new cdk.CfnOutput(this, "LambdaFunctionName", {
       value: startLambda.functionName,
+    });
+    new cdk.CfnOutput(this, "GDriveTokenBrokerFunctionName", {
+      description: "Exact least-privilege Lambda used by the Worker for Drive token status and storage",
+      value: gdriveTokenBrokerLambda.functionName,
     });
     new cdk.CfnOutput(this, "LifecycleLockTableName", { value: lifecycleLockTable.tableName });
     new cdk.CfnOutput(this, "OperationStateTableName", { value: operationStateTable.tableName });

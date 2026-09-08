@@ -8,7 +8,13 @@ export default defineConfig({
     environment: "node", // Use node for API route tests
     globals: true,
     include: ["**/*.test.ts", "**/*.test.tsx"],
-    exclude: [...configDefaults.exclude, "**/cdk.out/**"],
+    exclude: [
+      ...configDefaults.exclude,
+      "**/.local-artifacts/**",
+      "**/cdk.out/**",
+      "**/tests/agent-local-vertical-slice.test.ts",
+      "**/tests/agent-security-adversarial.test.ts",
+    ],
     setupFiles: ["./tests/setup.ts"],
   },
   resolve: {

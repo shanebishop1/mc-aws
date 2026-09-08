@@ -18,6 +18,9 @@ import os from "node:os";
 import path from "node:path";
 import type { ServerState } from "@/lib/types";
 
+export const MOCK_STATE_PATH_ENV = "MC_MOCK_STATE_PATH";
+export const DEFAULT_MOCK_STATE_PATH = path.join(process.cwd(), ".local-artifacts", "mock-state.json");
+
 // ============================================================================
 // Type Definitions
 // ============================================================================
@@ -52,6 +55,7 @@ export interface MockSSMParameter {
   value: string;
   type: "String" | "SecureString";
   lastModified: string;
+  version: number;
 }
 
 export interface MockLifecycleLock {
@@ -61,6 +65,10 @@ export interface MockLifecycleLock {
   ownerEmail: string;
   createdAt: string;
   expiresAt: string;
+  leaseGeneration?: number;
+  agentFenceActive?: boolean;
+  operationId?: string;
+  operationOwnerId?: string;
 }
 
 /**
@@ -139,6 +147,9 @@ export interface MockState {
     "last-30-days": MockCostData;
   };
   cloudformation: MockCloudFormationStack;
+  /** Serialized agent aggregates shared by independently bundled mock routes. */
+  agentSessions: Record<string, { revision: number; value: string }>;
+  agentWorkQuarantines: Record<string, { revision: number; reason: string }>;
   faults: MockFaultInjection;
   pendingTimeouts: NodeJS.Timeout[];
 }
@@ -207,16 +218,19 @@ function createDefaultSSMParameters(): Record<string, MockSSMParameter> {
       value: "[]",
       type: "String",
       lastModified: now,
+      version: 1,
     },
     "/minecraft/player-count": {
       value: "0",
       type: "String",
       lastModified: now,
+      version: 1,
     },
     "/minecraft/gdrive-token": {
       value: "",
       type: "SecureString",
       lastModified: now,
+      version: 1,
     },
   };
 }
@@ -323,6 +337,8 @@ function createDefaultMockState(): MockState {
       "last-30-days": createDefaultCostData("last-30-days"),
     },
     cloudformation: createDefaultCloudFormationStack(),
+    agentSessions: {},
+    agentWorkQuarantines: {},
     faults: createDefaultFaultInjection(),
     pendingTimeouts: [],
   };
@@ -345,10 +361,14 @@ export class MockStateStore {
   constructor(options: MockStateStoreOptions = {}) {
     this.options = {
       enablePersistence: options.enablePersistence ?? false,
-      persistencePath: options.persistencePath ?? path.join(process.cwd(), ".mock-state.json"),
+      persistencePath: options.persistencePath ?? DEFAULT_MOCK_STATE_PATH,
       persistenceLockTimeoutMs: options.persistenceLockTimeoutMs ?? 5_000,
       persistenceLockStaleMs: options.persistenceLockStaleMs ?? 30_000,
     };
+
+    if (this.options.enablePersistence) {
+      fs.mkdirSync(path.dirname(this.options.persistencePath), { recursive: true, mode: 0o700 });
+    }
 
     // Persistence is loaded under the cross-runtime lock on first access.
     this.state = createDefaultMockState();
@@ -439,7 +459,17 @@ export class MockStateStore {
 
       // Initialize pendingTimeouts (not persisted)
       parsed.pendingTimeouts = [];
+      // Backward-compatible migration for mock state created before agent
+      // sessions were integrated into the shared persistence transaction.
+      parsed.agentSessions ??= {};
+      parsed.agentWorkQuarantines ??= {};
 
+      for (const parameter of Object.values((parsed.ssm?.parameters ?? {}) as Record<string, { version?: unknown }>)) {
+        parameter.version =
+          Number.isSafeInteger(parameter.version) && (parameter.version as number) >= 1
+            ? (parameter.version as number)
+            : 1;
+      }
       return parsed as MockState;
     } catch (error) {
       throw new Error("[MOCK-STATE-STORE] Failed to load persisted state", { cause: error });
@@ -453,6 +483,7 @@ export class MockStateStore {
     let temporaryPath: string | undefined;
     let temporaryFile: number | undefined;
     try {
+      fs.mkdirSync(path.dirname(this.options.persistencePath), { recursive: true, mode: 0o700 });
       // Convert Map to object for JSON serialization
       // Exclude pendingTimeouts as it contains non-serializable NodeJS.Timeout objects
       const { pendingTimeouts, ...stateWithoutTimeouts } = this.state;
@@ -915,10 +946,12 @@ export class MockStateStore {
    */
   async setParameter(name: string, value: string, type: "String" | "SecureString" = "String"): Promise<void> {
     await this.withLockAndPersist((state) => {
+      const previousVersion = state.ssm.parameters[name]?.version ?? 0;
       state.ssm.parameters[name] = {
         value,
         type,
         lastModified: new Date().toISOString(),
+        version: previousVersion + 1,
       };
     });
   }
@@ -929,15 +962,126 @@ export class MockStateStore {
     value: string,
     type: "String" | "SecureString" = "String",
     overwrite = true
-  ): Promise<boolean> {
+  ): Promise<number | false> {
     return this.withLockAndPersist((state) => {
       if (!overwrite && state.ssm.parameters[name]) return false;
-      state.ssm.parameters[name] = { value, type, lastModified: new Date().toISOString() };
+      const version = (state.ssm.parameters[name]?.version ?? 0) + 1;
+      state.ssm.parameters[name] = { value, type, lastModified: new Date().toISOString(), version };
+      return version;
+    });
+  }
+
+  /** Delete only when the claim and actual resource version still match. */
+  async deleteParameterIfCurrent(
+    name: string,
+    proof: { claimToken: string; parameterVersion: number; claimParameterName?: string; claimVersion?: number }
+  ): Promise<boolean> {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Proof parsing and version checks form one serialized mutation boundary.
+    return this.withLockAndPersist((state) => {
+      const parameter = state.ssm.parameters[name];
+      if (
+        !parameter ||
+        !Number.isSafeInteger(proof.parameterVersion) ||
+        proof.parameterVersion < 1 ||
+        parameter.version !== proof.parameterVersion
+      )
+        return false;
+      let claim: { claimToken?: unknown; resourceVersion?: unknown; expiresAt?: unknown } | null = null;
+      try {
+        claim = JSON.parse(
+          proof.claimParameterName ? (state.ssm.parameters[proof.claimParameterName]?.value ?? "") : parameter.value
+        ) as { claimToken?: unknown; resourceVersion?: unknown; expiresAt?: unknown };
+      } catch {
+        return false;
+      }
+      if (
+        claim?.claimToken !== proof.claimToken ||
+        !Number.isSafeInteger(claim.resourceVersion) ||
+        (claim.resourceVersion as number) < 1 ||
+        typeof claim.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(claim.expiresAt)) ||
+        Date.parse(claim.expiresAt) <= Date.now()
+      )
+        return false;
+      if (proof.claimParameterName) {
+        const claimParameter = state.ssm.parameters[proof.claimParameterName];
+        const claimVersion = proof.claimVersion;
+        if (
+          !claimParameter ||
+          typeof claimVersion !== "number" ||
+          !Number.isSafeInteger(claimVersion) ||
+          claimVersion < 1 ||
+          claimParameter.version !== claimVersion ||
+          claim.resourceVersion !== proof.parameterVersion
+        )
+          return false;
+      }
+      // A target resource may only be deleted with an independently persisted
+      // claim proof. A claim record may clean itself up with its own exact
+      // token/version; legacy target values may not.
+      if (!proof.claimParameterName && !name.startsWith("/minecraft/server-action-delete-claim/")) return false;
+      delete state.ssm.parameters[name];
       return true;
     });
   }
 
-  /** Delete only when the current serialized value still belongs to the caller. */
+  /** Version-fenced PutParameter counterpart used by the lifecycle bridge. */
+  async putParameterIfCurrent(
+    name: string,
+    value: string,
+    proof: { claimToken: string; parameterVersion: number; claimParameterName?: string; claimVersion?: number },
+    type: "String" | "SecureString" = "String",
+    overwrite = true
+  ): Promise<boolean> {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Proof parsing and version checks form one serialized mutation boundary.
+    return this.withLockAndPersist((state) => {
+      const current = state.ssm.parameters[name];
+      if (
+        !Number.isSafeInteger(proof.parameterVersion) ||
+        proof.parameterVersion < 1 ||
+        (current?.version ?? 0) !== proof.parameterVersion
+      )
+        return false;
+      const claimVersion = proof.claimVersion;
+      if (
+        !proof.claimParameterName ||
+        typeof claimVersion !== "number" ||
+        !Number.isSafeInteger(claimVersion) ||
+        claimVersion < 1
+      )
+        return false;
+      const claimParameter = state.ssm.parameters[proof.claimParameterName];
+      if (!claimParameter || claimParameter.version !== claimVersion) return false;
+      let claim: { claimToken?: unknown; resourceVersion?: unknown; expiresAt?: unknown };
+      try {
+        claim = JSON.parse(claimParameter.value) as {
+          claimToken?: unknown;
+          resourceVersion?: unknown;
+          expiresAt?: unknown;
+        };
+      } catch {
+        return false;
+      }
+      if (
+        claim.claimToken !== proof.claimToken ||
+        claim.resourceVersion !== proof.parameterVersion ||
+        typeof claim.expiresAt !== "string" ||
+        !Number.isFinite(Date.parse(claim.expiresAt)) ||
+        Date.parse(claim.expiresAt) <= Date.now()
+      )
+        return false;
+      if (current && !overwrite) return false;
+      state.ssm.parameters[name] = {
+        value,
+        type,
+        lastModified: new Date().toISOString(),
+        version: (current?.version ?? 0) + 1,
+      };
+      return true;
+    });
+  }
+
+  /** Backward-compatible value CAS retained for callers outside the bridge protocol. */
   async deleteParameterIfValue(name: string, expectedValue: string): Promise<boolean> {
     return this.withLockAndPersist((state) => {
       if (state.ssm.parameters[name]?.value !== expectedValue) return false;
@@ -965,7 +1109,7 @@ export class MockStateStore {
         if (!Number.isFinite(expiresAt) || !Number.isSafeInteger(existing.fencingToken)) {
           return { acquired: false, lock: null };
         }
-        if (expiresAt > nowMs) return { acquired: false, lock: existing };
+        if (existing.agentFenceActive === true || expiresAt > nowMs) return { acquired: false, lock: existing };
       }
       const tokenParameter = state.ssm.parameters["/minecraft/server-action-fencing-token"];
       const previousToken = Number(tokenParameter?.value ?? "0");
@@ -979,11 +1123,13 @@ export class MockStateStore {
         value: String(fencingToken),
         type: "String",
         lastModified: modifiedAt,
+        version: (state.ssm.parameters["/minecraft/server-action-fencing-token"]?.version ?? 0) + 1,
       };
       state.ssm.parameters["/minecraft/server-action"] = {
         value: JSON.stringify(lock),
         type: "String",
         lastModified: modifiedAt,
+        version: (lockParameter?.version ?? 0) + 1,
       };
       return { acquired: true, lock };
     });
@@ -994,7 +1140,9 @@ export class MockStateStore {
     fencingToken: number;
     action?: string;
     ownerEmail?: string;
+    leaseGeneration?: number;
   }): Promise<boolean> {
+    // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Mock release mirrors the complete production fenced identity in one transaction callback.
     return this.withLockAndPersist((state) => {
       const parameter = state.ssm.parameters["/minecraft/server-action"];
       if (!parameter) return false;
@@ -1007,12 +1155,20 @@ export class MockStateStore {
       if (lock.lockId !== input.lockId || lock.fencingToken !== input.fencingToken) return false;
       if (input.action && lock.action !== input.action) return false;
       if (input.ownerEmail && lock.ownerEmail !== input.ownerEmail.trim().toLowerCase()) return false;
+      if (input.leaseGeneration && (lock.leaseGeneration ?? 1) !== input.leaseGeneration) return false;
       Reflect.deleteProperty(state.ssm.parameters, "/minecraft/server-action");
       return true;
     });
   }
 
-  async renewLifecycleLock(lockId: string, fencingToken: number, expiresAt: string, nowMs: number) {
+  async renewLifecycleLock(
+    lockId: string,
+    fencingToken: number,
+    expiresAt: string,
+    nowMs: number,
+    expectedLeaseGeneration?: number,
+    retainForAgentEffect = false
+  ) {
     return this.withLockAndPersist((state) => {
       const parameter = state.ssm.parameters["/minecraft/server-action"];
       if (!parameter) return null;
@@ -1025,16 +1181,23 @@ export class MockStateStore {
       if (
         lock.lockId !== lockId ||
         lock.fencingToken !== fencingToken ||
+        (lock.leaseGeneration ?? 1) !== (expectedLeaseGeneration ?? lock.leaseGeneration ?? 1) ||
         !Number.isFinite(Date.parse(lock.expiresAt)) ||
-        Date.parse(lock.expiresAt) <= nowMs
+        (!lock.agentFenceActive && Date.parse(lock.expiresAt) <= nowMs)
       ) {
         return null;
       }
-      const renewed = { ...lock, expiresAt };
+      const renewed = {
+        ...lock,
+        expiresAt,
+        leaseGeneration: (lock.leaseGeneration ?? 1) + 1,
+        agentFenceActive: lock.agentFenceActive || retainForAgentEffect,
+      };
       state.ssm.parameters["/minecraft/server-action"] = {
         ...parameter,
         value: JSON.stringify(renewed),
         lastModified: new Date(nowMs).toISOString(),
+        version: parameter.version + 1,
       };
       return renewed;
     });
@@ -1046,6 +1209,27 @@ export class MockStateStore {
   async deleteParameter(name: string): Promise<void> {
     await this.withLockAndPersist((state) => {
       delete state.ssm.parameters[name];
+    });
+  }
+
+  async getParameterRecord(name: string): Promise<{
+    name: string;
+    value: string;
+    type: "String" | "SecureString";
+    version: number;
+    lastModifiedAt: string;
+  } | null> {
+    return this.withLock((state) => {
+      const parameter = state.ssm.parameters[name];
+      return parameter
+        ? {
+            name,
+            value: parameter.value,
+            type: parameter.type,
+            version: parameter.version,
+            lastModifiedAt: parameter.lastModified,
+          }
+        : null;
     });
   }
 
@@ -1268,6 +1452,8 @@ export class MockStateStore {
         "last-30-days": { ...state.costs["last-30-days"] },
       },
       cloudformation: { ...state.cloudformation },
+      agentSessions: { ...state.agentSessions },
+      agentWorkQuarantines: { ...state.agentWorkQuarantines },
       faults: {
         globalLatencyMs: state.faults.globalLatencyMs,
         operationFailures: new Map(state.faults.operationFailures),
@@ -1294,6 +1480,8 @@ export class MockStateStore {
       state.backups = [...defaultState.backups];
       state.costs = { ...defaultState.costs };
       state.cloudformation = { ...defaultState.cloudformation };
+      state.agentSessions = {};
+      state.agentWorkQuarantines = {};
       state.faults = {
         globalLatencyMs: defaultState.faults.globalLatencyMs,
         operationFailures: new Map(defaultState.faults.operationFailures),
@@ -1402,6 +1590,58 @@ export class MockStateStore {
     return this.withLockAndPersist(fn);
   }
 
+  async readAgentSessionRecord(sessionId: string): Promise<{ revision: number; value: string } | null> {
+    return this.withLock((state) => {
+      const record = state.agentSessions[sessionId];
+      return record ? { ...record } : null;
+    });
+  }
+
+  async listAgentSessionRecords(): Promise<Array<{ revision: number; value: string }>> {
+    return this.withLock((state) => Object.values(state.agentSessions).map((record) => ({ ...record })));
+  }
+
+  async createAgentSessionRecord(sessionId: string, record: { revision: number; value: string }): Promise<boolean> {
+    return this.withLockAndPersist((state) => {
+      if (Object.hasOwn(state.agentSessions, sessionId)) return false;
+      state.agentSessions[sessionId] = { ...record };
+      delete state.agentWorkQuarantines[sessionId];
+      return true;
+    });
+  }
+
+  async compareAndSwapAgentSessionRecord(
+    sessionId: string,
+    expectedRevision: number,
+    record: { revision: number; value: string }
+  ): Promise<boolean> {
+    return this.withLockAndPersist((state) => {
+      if (state.agentSessions[sessionId]?.revision !== expectedRevision) return false;
+      state.agentSessions[sessionId] = { ...record };
+      delete state.agentWorkQuarantines[sessionId];
+      return true;
+    });
+  }
+
+  async clearAgentSessionRecords(): Promise<void> {
+    await this.withLockAndPersist((state) => {
+      state.agentSessions = {};
+      state.agentWorkQuarantines = {};
+    });
+  }
+
+  async quarantineAgentWorkCandidate(sessionId: string, revision: number, reason: string): Promise<void> {
+    await this.withLockAndPersist((state) => {
+      if (state.agentSessions[sessionId]?.revision === revision) {
+        state.agentWorkQuarantines[sessionId] = { revision, reason };
+      }
+    });
+  }
+
+  async isAgentWorkCandidateQuarantined(sessionId: string, revision: number): Promise<boolean> {
+    return this.withLock((state) => state.agentWorkQuarantines[sessionId]?.revision === revision);
+  }
+
   /**
    * Force immediate persistence
    */
@@ -1444,8 +1684,8 @@ export function getMockStateStore(options?: MockStateStoreOptions): MockStateSto
   // Enable file persistence by default to survive module reloads in dev mode
   const storeOptions: MockStateStoreOptions = {
     ...options,
-    enablePersistence: !isTestMode,
-    persistencePath: path.join(process.cwd(), ".mock-state.json"),
+    enablePersistence: options?.enablePersistence ?? !isTestMode,
+    persistencePath: options?.persistencePath ?? process.env[MOCK_STATE_PATH_ENV] ?? DEFAULT_MOCK_STATE_PATH,
   };
   const newStore = new MockStateStore(storeOptions);
   (globalThis as Record<string, unknown>)[GLOBAL_KEY] = newStore;

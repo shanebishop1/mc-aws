@@ -74,6 +74,24 @@ describe("PUT /api/emails/allowlist", () => {
     expect(mocks.acquireServerActionLock).not.toHaveBeenCalled();
   });
 
+  it("rejects an invalid session at the admin route before side effects", async () => {
+    mocks.requireAdmin.mockRejectedValueOnce(
+      Response.json({ success: false, error: "Authentication required" }, { status: 401 })
+    );
+    const response = await PUT(
+      createMockNextRequest("http://localhost/api/emails/allowlist", {
+        method: "PUT",
+        headers: { cookie: "mc_session=forged-or-invalid-token" },
+        body: JSON.stringify({ emails: ["attacker@example.com"] }),
+      })
+    );
+
+    expect(response.status).toBe(401);
+    expect(mocks.checkRateLimit).not.toHaveBeenCalled();
+    expect(mocks.acquireServerActionLock).not.toHaveBeenCalled();
+    expect(mocks.updateEmailAllowlist).not.toHaveBeenCalled();
+  });
+
   it("normalizes valid email updates", async () => {
     const response = await PUT(
       createMockNextRequest("http://localhost/api/emails/allowlist", {

@@ -8,7 +8,15 @@ import { getProvider } from "./provider-selector";
 
 // Re-export types for backward compatibility
 export type { CostBreakdown } from "./cost-client";
-export type { AwsProvider, InstanceDetails, PlayerCount, BackupInfo, ParameterStoreEntry } from "./types";
+export type {
+  AwsProvider,
+  InstanceDetails,
+  PlayerCount,
+  BackupInfo,
+  ParameterStoreEntry,
+  SsmMutationProof,
+} from "./types";
+export type { MinecraftServiceStatus } from "./types";
 
 // Re-export constants for backward compatibility
 export { MAX_POLL_ATTEMPTS, POLL_INTERVAL_MS } from "./ec2-client";
@@ -18,6 +26,7 @@ export { MAX_POLL_ATTEMPTS, POLL_INTERVAL_MS } from "./ec2-client";
 export { ec2 } from "./ec2-client";
 export { ssm } from "./ssm-client";
 export { cloudformation } from "./cloudformation-client";
+export { invokeGdriveTokenBroker } from "./lambda-client";
 
 // Instance resolution (shared utility)
 export async function findInstanceId(): Promise<string> {
@@ -62,6 +71,10 @@ export async function executeSSMCommand(instanceId: string, commands: string[]):
   return getProvider().executeSSMCommand(instanceId, commands);
 }
 
+export async function getMinecraftServiceStatus(instanceId?: string) {
+  return getProvider().getMinecraftServiceStatus(instanceId);
+}
+
 export async function listBackups(instanceId?: string) {
   return getProvider().listBackups(instanceId);
 }
@@ -82,17 +95,38 @@ export async function getParameter(name: string): Promise<string | null> {
   return getProvider().getParameter(name);
 }
 
+export async function getParameterRecord(name: string) {
+  return getProvider().getParameterRecord(name);
+}
+
 export async function putParameter(
   name: string,
   value: string,
   type?: "String" | "SecureString",
   overwrite?: boolean
-): Promise<void> {
+): Promise<number | undefined> {
   return getProvider().putParameter(name, value, type, overwrite);
+}
+
+export async function putParameterIfCurrent(
+  name: string,
+  value: string,
+  proof: import("./types").SsmMutationProof,
+  type?: "String" | "SecureString",
+  overwrite?: boolean
+): Promise<boolean> {
+  return getProvider().putParameterIfCurrent(name, value, proof, type, overwrite);
 }
 
 export async function deleteParameter(name: string): Promise<void> {
   return getProvider().deleteParameter(name);
+}
+
+export async function deleteParameterIfCurrent(
+  name: string,
+  proof: import("./types").SsmMutationProof
+): Promise<boolean> {
+  return getProvider().deleteParameterIfCurrent(name, proof);
 }
 
 export async function listParametersByPath(path: string) {

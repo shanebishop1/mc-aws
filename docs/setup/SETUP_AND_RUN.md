@@ -95,7 +95,15 @@ The wizard asks for:
 
 An EC2 key pair is optional, but port 22 is blocked by default. Leave it blank and use AWS Systems Manager Session Manager.
 
-The wizard writes `.env.local` and `.env.production`. These gitignored files contain credentials and secrets, including the Google client secret and DNS tokens. Protect them; do not commit or share them.
+The wizard writes `.env.local` and `.env.production`. These gitignored files contain credentials and secrets, including the Google client secret and DNS tokens. Protect them; do not commit or share them. It writes `MC_AGENT_RUNTIME_ENABLED=false` by default. Every Worker deploy requires and uploads an explicit `true` or `false`; omission is rejected rather than inheriting authorization from retained Worker secrets. To enable Agent providers, set it to `true` and add `MC_AGENT_RUNTIME_ID`, `MC_AGENT_RUNTIME_TOKEN_SHA256`, a canonical base64 PKCS#8 Ed25519 `MC_AGENT_BACKUP_FENCE_PRIVATE_KEY_PKCS8`, the setup-managed public `MC_AGENT_EXECUTOR_RECEIPT_VERIFIERS`, the credential-free `MC_AGENT_PUBLIC_PROVIDER_CATALOG`, and matching full `MC_AGENT_RUNTIME_PROVIDER_PROFILES` inventory to `.env.production` using the bounded, exact single-line shapes in the [API reference](../API.md). All six values are required and an ID-only inventory is rejected. The Worker receives the backup-fence private signing key as a secret; CDK and the reviewed existing-host rollout derive and provision only its public half to the executor. The separate executor terminal-receipt private key is generated root-only on EC2 and never enters the Worker or gateway; setup pins only its public verifier material. Quiesce agent work and update the host public key before deploying a rotated backup-fence private key. Follow the Operations Guide hard-stop sequence for executor receipt-key rotation. To decommission, deploy explicit `false`; old bearers then fail before retained identity/hash values are read. The deploy tooling intentionally does not infer secret deletion, so removal of retained identity/catalog/signing secrets is a separate reviewed operator cleanup. Provider secrets stay in root-owned systemd credentials named by the gateway's exact `provider-*` allowlist; runtime bearer and signing-key names are forbidden as provider credentials and are never sent to a model.
+
+The wizard generates `AUTH_SECRET` from 48 cryptographically secure random bytes, encodes it as canonical unpadded base64url, and never prints it. Production schema loading, session signing/verification, deploy preflight, and Worker startup accept only that machine-generated encoding class when it decodes to at least 32 bytes. They do not estimate entropy from arbitrary human text: passwords, ordered or repeated strings, printable text wrapped in base64url, padded base64, hex, and every other legacy/noncanonical form are rejected. Local development explicitly keeps its convenient example secret because this policy applies only to production use. If an older `.env.production` contains any noncanonical value, deployment stops before provider mutation; do not re-encode it. Review the session impact, then explicitly generate fresh CSPRNG material with `MC_AWS_ROTATE_AUTH_SECRET=1 ./setup.sh` (full setup) or `MC_AWS_ROTATE_AUTH_SECRET=1 pnpm deploy:cf` (Worker-only deployment). Rotation invalidates all existing panel sessions; neither command prints the replacement.
+
+Session tokens use only HS256 and carry a JWT type plus expiration, issued-at, fixed issuer, fixed panel audience, nonempty email, and session-purpose claims. Verification rejects missing claims, future or stale issuance, expiration, lifetimes over 30 days, wrong issuer/audience/purpose/type, signature forgery, and algorithm confusion. Development login uses the same token contract; only production secret-format enforcement is relaxed outside production.
+
+During a Worker deployment, the shared `scripts/validation/next-build-isolation.ts` primitive stages every repository dotenv candidate out of the Next/OpenNext working directory and replaces them with an isolated generated build env. Its private `0600` journal and `0700` temporary directory prevent concurrent builds, recover stale interrupted staging, and restore the original files exactly on success, failure, interruption, or rerun. `AUTH_SECRET`, `ADMIN_EMAIL`, runtime tokens, and other credential values are also removed from the build process environment. After both builds, deployable `.next` and `.open-next` output is scanned for exact secret/canary values; any match fails closed before Wrangler upload. Worker secret names are passed as arguments, while each selected value is streamed directly from the protected dotenv source to Wrangler over stdin—values and base64 encodings are never placed in child arguments or inherited environments.
+
+Rotation takes precedence even when the current `AUTH_SECRET` is valid. A local `0600` rotation journal is written before the dotenv replacement, allowing an interrupted/rerun deployment to persist and deploy the same candidate exactly once; the journal is removed only after deployed binding verification.
 
 ### Cloudflare choices
 
@@ -129,7 +137,11 @@ Use the web panel for production mutations by default. The `server:*` CLI comman
 
 The instance stops after about 15 minutes of consecutive successful probes showing zero players. Probe failures suppress the automatic stop. Stopping ends EC2 compute charges, but the attached EBS volume remains billed.
 
-Hibernate backs up, stops the instance, and deletes the project-managed root volume. Do not hibernate until Google Drive is configured and a backup and restore have been tested. When resuming, explicitly choose the latest backup, a named backup, or a fresh server; a request without a restore choice starts fresh.
+Hibernate creates a terminal, authenticated backup while Minecraft and gateway activation paths remain stopped and
+masked, then stops the instance and deletes only the project-managed root volume after EC2 is confirmed stopped. A
+quiescence, stop, or verification failure leaves the volume in place. Do not hibernate until Google Drive is configured
+and a backup and restore have been tested. When resuming, explicitly choose the latest backup, a named backup, or a
+fresh server; a request without a restore choice starts fresh.
 
 Any cost examples are estimates, not quotes. Actual charges depend on region, instance and storage pricing, snapshots, data transfer, request volume, optional SES/Cloudflare services, taxes, free-tier eligibility, and pricing changes.
 
@@ -155,6 +167,11 @@ AWS_PROFILE=<profile> mise exec -- pnpm cdk:deploy
 These ordinary commands intentionally refuse an existing-host AMI/UserData replacement. For AMI, bootstrap-pin, helper, or OS security maintenance, use [Reviewed Bootstrap and OS Upgrades](../BOOTSTRAP_UPGRADES.md). UserData is launch-only and is never described as an existing-host update mechanism.
 
 `pnpm cdk:deploy` loads the same preferred deployment file as the CDK app (`.env.production`, falling back to `.env.local`) while preserving explicit non-empty `CDK_DEFAULT_ACCOUNT` and `CDK_DEFAULT_REGION` shell overrides. It verifies that the active AWS caller, region, stack, and synthesized CDK environment agree before any DNS credential write. Only after that guard succeeds does it write the selected Cloudflare or DuckDNS token directly to SSM as a `SecureString`; token values are never added to CDK or AWS CLI arguments. `setup.sh` also waits for the explicit `DEPLOY` confirmation before this write.
+
+Setup creates a UUID stack claim before a new CloudFormation deployment. The claim is an atomic SSM no-overwrite record and
+the same token is applied as the `McAwsClaimToken` stack tag; retries reconcile the exact token, while an existing stack
+with a different or missing tag is refused. Setup and DNS materialization share the account-scoped migration lock, and
+pre-existing DNS credentials are never overwritten without exact manifest ownership evidence.
 
 Preview teardown:
 

@@ -10,8 +10,8 @@
  * To test different roles, change the "role" value below
  */
 
+import { createSession, createSessionCookie } from "@/lib/auth";
 import { checkRateLimit, getClientIp } from "@/lib/rate-limit";
-import { SignJWT } from "jose";
 import { type NextRequest, NextResponse } from "next/server";
 
 const DEV_LOGIN_RATE_LIMIT_WINDOW_MS = 60_000;
@@ -47,27 +47,16 @@ export async function GET(request: NextRequest) {
     return response;
   }
 
-  // Create a real JWT token (same as production login would)
-  const secret = new TextEncoder().encode(process.env.AUTH_SECRET);
-  const token = await new SignJWT({
-    email: "dev@localhost",
-    role: "admin", // Change to "allowed" to test non-admin users
-  })
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuedAt()
-    .setExpirationTime("30d")
-    .sign(secret);
+  // Use the same strict session contract as production. Only the route and
+  // AUTH_SECRET strength exception are development-only conveniences.
+  const token = await createSession("dev@localhost");
 
   // Redirect to home page with the cookie set (use request origin to support different ports)
   const origin = request.nextUrl.origin;
   const response = NextResponse.redirect(new URL("/", origin));
 
-  response.cookies.set("mc_session", token, {
-    httpOnly: true,
-    secure: false, // Strictly for localhost
-    sameSite: "lax",
-    path: "/",
-  });
+  const cookie = createSessionCookie(token);
+  response.cookies.set(cookie.name, cookie.value, cookie);
 
   return response;
 }

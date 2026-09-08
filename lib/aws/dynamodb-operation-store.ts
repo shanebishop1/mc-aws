@@ -34,14 +34,23 @@ export async function writeVersionedOperationRecord(input: {
   ttlEpochSeconds: number;
 }): Promise<number> {
   const nextVersion = input.expectedVersion + 1;
+  let hasLifecycleBinding = true;
+  try {
+    const payload = JSON.parse(input.payload) as { lockId?: unknown; fencingToken?: unknown };
+    hasLifecycleBinding = typeof payload.lockId === "string" && Number.isSafeInteger(payload.fencingToken);
+  } catch {
+    // Malformed payloads fail safe: retention cleanup must review them manually.
+  }
+  const ttlEligible = (input.status === "completed" || input.status === "failed") && !hasLifecycleBinding;
   await getDynamoDbClient().send(
     new UpdateItemCommand({
       TableName: tableName(),
       Key: { operationId: { S: input.operationId } },
       ConditionExpression:
         input.expectedVersion === 0 ? "attribute_not_exists(operationId)" : "#version = :expectedVersion",
-      UpdateExpression:
-        "SET payload = :payload, #version = :nextVersion, #status = :status, phase = :phase, updatedAt = :updatedAt, ttlEpochSeconds = :ttl",
+      UpdateExpression: ttlEligible
+        ? "SET payload = :payload, #version = :nextVersion, #status = :status, phase = :phase, updatedAt = :updatedAt, ttlEpochSeconds = :ttl"
+        : "SET payload = :payload, #version = :nextVersion, #status = :status, phase = :phase, updatedAt = :updatedAt REMOVE ttlEpochSeconds",
       ExpressionAttributeNames: { "#version": "version", "#status": "status" },
       ExpressionAttributeValues: {
         ...(input.expectedVersion === 0 ? {} : { ":expectedVersion": { N: String(input.expectedVersion) } }),
@@ -50,7 +59,7 @@ export async function writeVersionedOperationRecord(input: {
         ":status": { S: input.status },
         ":phase": { S: input.phase },
         ":updatedAt": { S: input.updatedAt },
-        ":ttl": { N: String(input.ttlEpochSeconds) },
+        ...(ttlEligible ? { ":ttl": { N: String(input.ttlEpochSeconds) } } : {}),
       },
     })
   );
