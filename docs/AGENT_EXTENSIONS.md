@@ -37,6 +37,16 @@ reviewed rollout path is implemented and qualified.
 
 ## Bundle rules
 
+The G2 maintenance slice is separate from ordinary extension bundles. The
+`maintenance.apply` capability is currently a typed, exact `server.properties` MOTD
+operation backed by the root host broker and the existing world-root transaction;
+it is not a shell/systemd escape. The broker also owns the credentialless narrow
+namespaced list/kick bridge and returns command-specific loopback query evidence. A committed
+edit whose fresh protocol observation is unresolved remains indeterminate and
+fenced rather than being retried. Executable plugin installation remains limited
+to the reviewed profile rollout path; new or changed lock entries require exact
+byte identity while validated unchanged legacy entries remain compatible.
+
 - Declare schema version, stable extension/tool/skill/hook IDs, SemVer, contract/platform compatibility, and SHA-256
   provenance. The loader rejects incompatible versions, altered provenance, duplicate IDs, unknown fields, untrusted
   third-party provenance by default, and missing tool references. Ordering is extension ID, definition ID, and hook
@@ -111,9 +121,10 @@ reviewed rollout path is implemented and qualified.
   requests work; active, pending, cancellation-pending, indeterminate, publication-pending, missing, rolled-back, or
   corrupt state blocks all new leases. The executor independently serializes all effects globally and rejects a
    distinct invocation while a reserved, entered, indeterminate, or unacknowledged terminal entry owns its journal. Every durable executor terminal uses the
-   privileged terminal-only recovery mutation, including while the original work lease is still current. In one
-   transaction it persists the centrally redacted result, records both the original executor digest and the persisted-result
-   digest, clears the exact lease/runtime invocation, and establishes immutable task/session publication statuses. It is
+    privileged terminal-only publication mutation. For a live, non-indeterminate invocation completion, one transaction
+    persists the centrally redacted result, records both the original executor digest and the persisted-result digest,
+    clears only the exact active invocation, and retains the same running task lease for the next tool. Restart recovery,
+    cancellation, and unknown outcomes use the same contract with a task-terminal disposition; they do not recreate execution authority. It is
    bound to the durable runtime owner/handoff, prior lease generation, invocation digest, journal sequence, result digest,
    and terminal receipt, and grants no execution authority. Only after successful idempotent publication does the control
    plane return a signed acknowledgement bound to those immutable publication facts. The gateway then releases any exact

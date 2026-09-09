@@ -311,6 +311,13 @@ class LeaseSession {
     }
     return snapshot;
   }
+
+  adoptRevision(revision: number): void {
+    if (!Number.isSafeInteger(revision) || revision < this.revision) {
+      throw new Error("Runtime terminal publication returned an invalid revision.");
+    }
+    this.revision = revision;
+  }
 }
 
 class RuntimeDraftPublisher {
@@ -422,6 +429,26 @@ class RuntimeDraftPublisher {
     await publication;
   }
 
+  async publishTerminal(operation: () => Promise<RuntimeRecoveryPublicationResult>): Promise<void> {
+    const publication = this.queue.then(async () => {
+      if (this.failure) throw this.failure;
+      if (this.cancellationFenced) throw new Error("Runtime event publication is fenced after cancellation.");
+      try {
+        const result = await operation();
+        if (result.event.kind !== "tool-result") {
+          throw new Error("Runtime terminal publication omitted its tool result event.");
+        }
+        this.lease.adoptRevision(result.revision);
+        this.ordinal++;
+      } catch (error) {
+        this.failure = error;
+        throw error;
+      }
+    });
+    this.queue = publication;
+    await publication;
+  }
+
   async waitForProposal(invocationId: string): Promise<void> {
     await this.proposal(invocationId).promise;
   }
@@ -454,6 +481,7 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
     {
       request: import("@/lib/agent/executor").ExecuteInvocationRequest;
       result: ToolResult;
+      displayResult: ToolResult;
       terminalReceipt: BackupTerminalReceipt;
       authorization?: Extract<GatewayBackupAuthorization, { status: "succeeded" }>;
     }
@@ -550,7 +578,7 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
           );
         }
         const displayResult = applyTrustedAfterInvocationHooks(this.extensionHooks, invocation, result);
-        await this.rememberTerminal(executionRequest, result, finalAuthorization);
+        await this.rememberTerminal(executionRequest, result, displayResult, finalAuthorization);
         return displayResult;
       }
       const output = asRecord(result.output);
@@ -766,7 +794,7 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
         continue;
       }
       const displayResult = applyTrustedAfterInvocationHooks(this.extensionHooks, invocation, result);
-      await this.rememberTerminal(executionRequest, result);
+      await this.rememberTerminal(executionRequest, result, displayResult);
       return displayResult;
     }
     return failed(invocation, this.now, "Runtime retry bound was reached.", "runtime-retry-bound");
@@ -877,6 +905,7 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
   private async rememberTerminal(
     request: import("@/lib/agent/executor").ExecuteInvocationRequest,
     result: ToolResult,
+    displayResult: ToolResult,
     authorization?: Extract<GatewayBackupAuthorization, { status: "succeeded" }>
   ): Promise<void> {
     if (isWaitingResult(result)) return;
@@ -892,6 +921,7 @@ class OrchestratedToolExecutor implements AgentToolExecutorAdapter {
     this.terminalStates.set(result.invocationId, {
       request: { ...request, signal: undefined, onProgress: undefined },
       result: structuredClone(result),
+      displayResult: structuredClone(displayResult),
       terminalReceipt: structuredClone(terminalReceipt),
       ...(authorization ? { authorization: structuredClone(authorization) } : {}),
     });
@@ -1307,6 +1337,27 @@ export class AgentRuntimeGateway {
           terminal = "failed";
           break;
         }
+        if (event.kind === "tool-result") {
+          const publishedResult = agentSchemas.toolResult.safeParse(event.payload.data);
+          if (publishedResult.success && toolExecutor.terminalState(publishedResult.data.invocationId)) {
+            const liveToolExecutor = toolExecutor;
+            await publisher.publishTerminal(
+              async () =>
+                await this.completeLiveTerminal(
+                  liveToolExecutor,
+                  publishedResult.data.invocationId,
+                  publishedResult.data.status === "indeterminate" ? "terminate" : "continue"
+                )
+            );
+            if (publishedResult.data.status === "indeterminate") {
+              effectIndeterminate = true;
+              terminal = "failed";
+              controller.abort();
+              break;
+            }
+            continue;
+          }
+        }
         await publisher.publishHarness(event);
         if (event.kind === "tool-result") {
           const publishedResult = agentSchemas.toolResult.safeParse(event.payload.data);
@@ -1404,12 +1455,16 @@ export class AgentRuntimeGateway {
     });
   }
 
-  private async completeLiveTerminal(toolExecutor: OrchestratedToolExecutor, invocationId: string): Promise<void> {
+  private async completeLiveTerminal(
+    toolExecutor: OrchestratedToolExecutor,
+    invocationId: string,
+    taskDisposition: "continue" | "terminate" = "terminate"
+  ): Promise<RuntimeRecoveryPublicationResult> {
     const terminalState = toolExecutor.terminalState(invocationId);
     if (!terminalState) throw new Error("Published executor terminal evidence was not retained.");
     const runtimeContext = terminalState.request.runtimeContext;
     if (!runtimeContext) throw new Error("Published executor terminal evidence lost runtime context.");
-    const acknowledgementAuthorization = await this.publishLateRecovery(
+    const published = await this.publishLateRecovery(
       {
         key: `${runtimeContext.runtimeId}:${runtimeContext.taskId}:${runtimeContext.leaseId}:${runtimeContext.leaseGeneration}:${invocationId}`,
         runtimeId: runtimeContext.runtimeId,
@@ -1417,8 +1472,11 @@ export class AgentRuntimeGateway {
       },
       runtimeContext,
       terminalState.result,
-      terminalState.terminalReceipt
+      terminalState.terminalReceipt,
+      taskDisposition,
+      terminalState.displayResult
     );
+    const acknowledgementAuthorization = published.acknowledgementAuthorization;
     const outcome = terminalState.result.status === "succeeded" ? "committed" : terminalState.result.status;
     const fenceReleased = terminalState.authorization
       ? await this.finalizeRecoveredFence(terminalState.authorization, outcome, terminalState.terminalReceipt)
@@ -1437,6 +1495,7 @@ export class AgentRuntimeGateway {
       await executor.completeReconciliation?.(invocationId, runtimeContext, acknowledgementAuthorization);
       toolExecutor.markTerminalComplete(invocationId);
     }
+    return published;
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Restart recovery deliberately validates authority, durable handoff phase, exact executor state, renewal, dispatch, publication, and finalization in one fail-closed loop.
@@ -1785,14 +1844,11 @@ export class AgentRuntimeGateway {
     if (!runtimeContext) throw new Error("Recovered publication lost runtime context.");
     // Every durable executor terminal uses the one terminal-only control-plane
     // mutation, even while the original lease is still live. That mutation
-    // publishes exact evidence, records reconciliation, clears the lease, and
-    // terminalizes task/session truth before minting acknowledgement authority.
-    const acknowledgementAuthorization = await this.publishLateRecovery(
-      pending,
-      runtimeContext,
-      result,
-      terminalReceipt
-    );
+    // publishes exact evidence and records reconciliation before minting
+    // acknowledgement authority. A response-loss replay may return the prior
+    // live continuation projection instead of changing its disposition.
+    const published = await this.publishLateRecovery(pending, runtimeContext, result, terminalReceipt, "terminate");
+    const acknowledgementAuthorization = published.acknowledgementAuthorization;
     const fenceReleased = authorization
       ? await this.finalizeRecoveredFence(authorization, outcome, terminalReceipt)
       : true;
@@ -1805,6 +1861,9 @@ export class AgentRuntimeGateway {
         runtimeContext,
         acknowledgementAuthorization
       );
+      if (acknowledgementAuthorization.taskDisposition === "continue") {
+        await this.failInterruptedContinuation(pending, published.revision);
+      }
     }
   }
 
@@ -1812,8 +1871,10 @@ export class AgentRuntimeGateway {
     pending: { key: string; runtimeId: string; request: import("@/lib/agent/executor").ExecuteInvocationRequest },
     runtimeContext: RuntimeExecutionContext,
     result: ToolResult,
-    terminalReceipt?: BackupTerminalReceipt
-  ): Promise<TerminalPublicationAuthorization | undefined> {
+    terminalReceipt?: BackupTerminalReceipt,
+    taskDisposition: "continue" | "terminate" = "terminate",
+    displayResult?: ToolResult
+  ): Promise<RuntimeRecoveryPublicationResult> {
     if (!terminalReceipt) throw new Error("Late executor recovery requires an authenticated terminal receipt.");
     if (!this.options.control.publishRecovery) {
       throw new Error("Late executor recovery publication protocol is unavailable.");
@@ -1844,10 +1905,51 @@ export class AgentRuntimeGateway {
       journalSequence: terminalReceipt.journalSequence,
       resultDigest: terminalReceipt.resultDigest,
       result,
+      ...(displayResult ? { displayResult } : {}),
       terminalReceipt,
+      taskDisposition,
       idempotencyKey: `recover-terminal:${createHash("sha256").update(pending.key).digest("hex")}`,
     });
-    return published.acknowledgementAuthorization;
+    return published;
+  }
+
+  private async failInterruptedContinuation(
+    pending: { key: string; request: import("@/lib/agent/executor").ExecuteInvocationRequest },
+    expectedRevision: number
+  ): Promise<void> {
+    const runtimeContext = pending.request.runtimeContext;
+    if (!runtimeContext) throw new Error("Interrupted continuation lost runtime context.");
+    const idempotencyKey = `interrupt-terminal:${createHash("sha256").update(pending.key).digest("hex")}`;
+    try {
+      await this.options.control.publishStatus(runtimeContext.leaseId, {
+        schemaVersion: 1,
+        sessionId: pending.request.invocation.sessionId,
+        taskId: runtimeContext.taskId,
+        expectedRevision,
+        idempotencyKey,
+        status: "failed",
+        reason: "Runtime restarted after publishing an invocation result; the interrupted model turn was not resumed.",
+      });
+    } catch (error) {
+      if (!(error instanceof RuntimeTransportError) || error.status !== 409) throw error;
+      const snapshot = await this.options.control.waitForDecision(runtimeContext.leaseId, {
+        schemaVersion: 1,
+        sessionId: pending.request.invocation.sessionId,
+        taskId: runtimeContext.taskId,
+        afterRevision: 1,
+        waitMs: 0,
+      });
+      if (["completed", "failed", "cancelled"].includes(snapshot.taskStatus)) return;
+      await this.options.control.publishStatus(runtimeContext.leaseId, {
+        schemaVersion: 1,
+        sessionId: pending.request.invocation.sessionId,
+        taskId: runtimeContext.taskId,
+        expectedRevision: snapshot.revision,
+        idempotencyKey,
+        status: "failed",
+        reason: "Runtime restarted after publishing an invocation result; the interrupted model turn was not resumed.",
+      });
+    }
   }
 
   private async finalizeRecoveredFence(

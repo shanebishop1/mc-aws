@@ -235,4 +235,70 @@ describe("runtime recovery publication", () => {
       expect.objectContaining({ taskStatus: "completed", sessionStatus: "idle", publicationRevision: 9 })
     );
   });
+
+  it("signs the immutable running projection for a live invocation completion", async () => {
+    const liveInput: RuntimeRecoveryPublicationRequest = {
+      ...recoveryInput,
+      taskDisposition: "continue",
+      idempotencyKey: "live-recovery-service-test",
+    };
+    const recoveredState = state({
+      session: { status: "running" },
+      tasks: [
+        {
+          ...state().tasks[0],
+          status: "running",
+          runtimeRecoveries: [
+            {
+              schemaVersion: 1,
+              runtimeId: input.runtimeId,
+              sessionId: input.sessionId,
+              taskId: input.taskId,
+              leaseId: input.leaseId,
+              leaseGeneration: input.leaseGeneration,
+              invocationId: input.invocationId,
+              invocationDigest: input.invocationDigest,
+              journalSequence: 7,
+              resultDigest,
+              persistedResultDigest: resultDigest,
+              outcome: "committed",
+              result,
+              terminalReceipt,
+              taskDisposition: "continue",
+              taskStatus: "running",
+              sessionStatus: "running",
+              publishedAt: NOW,
+              publicationRevision: 11,
+            },
+          ],
+        },
+      ],
+    });
+    const issueTerminalAcknowledgement = vi.fn(async (authorization) => ({
+      ...authorization,
+      signature: "A".repeat(86),
+    }));
+    const runtimeService = new AgentRuntimeService(
+      {
+        publishRuntimeRecovery: vi.fn(async () => ({
+          state: recoveredState,
+          idempotent: false,
+          event: { eventId: "event-live-recovery" },
+        })),
+      } as unknown as AgentSessionStateStore,
+      {
+        verifyRecoveryReceipt: async () => true,
+        issueTerminalAcknowledgement,
+      }
+    );
+
+    await expect(runtimeService.publishRecovery(input.runtimeId, input.leaseId, liveInput)).resolves.toMatchObject({
+      acknowledgementAuthorization: {
+        taskDisposition: "continue",
+        taskStatus: "running",
+        sessionStatus: "running",
+        publicationRevision: 11,
+      },
+    });
+  });
 });

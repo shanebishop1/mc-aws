@@ -52,6 +52,7 @@ export function parseTerminalPublicationAuthorization(value: unknown): TerminalP
     "resultDigest",
     "terminalReceiptDigest",
     "outcome",
+    "taskDisposition",
     "taskStatus",
     "sessionStatus",
     "publicationRevision",
@@ -59,8 +60,8 @@ export function parseTerminalPublicationAuthorization(value: unknown): TerminalP
     "signature",
   ];
   if (
-    Object.keys(item).length !== keys.length ||
-    keys.some((key) => !(key in item)) ||
+    Object.keys(item).some((key) => !keys.includes(key)) ||
+    keys.filter((key) => key !== "taskDisposition").some((key) => !(key in item)) ||
     item.schemaVersion !== 1 ||
     item.source !== "control-plane-terminal-publication" ||
     ![item.runtimeId, item.sessionId, item.taskId, item.leaseId, item.invocationId].every(
@@ -76,12 +77,24 @@ export function parseTerminalPublicationAuthorization(value: unknown): TerminalP
       (candidate) => typeof candidate === "string" && SHA256.test(candidate)
     ) ||
     !["committed", "failed", "cancelled"].includes(String(item.outcome)) ||
-    !["completed", "failed", "cancelled"].includes(String(item.taskStatus)) ||
-    !["idle", "completed", "failed", "cancelled"].includes(String(item.sessionStatus)) ||
+    (item.taskDisposition !== undefined && !["continue", "terminate"].includes(String(item.taskDisposition))) ||
+    !["running", "waiting-approval", "completed", "failed", "cancelled"].includes(String(item.taskStatus)) ||
+    !["running", "waiting-approval", "idle", "completed", "failed", "cancelled"].includes(String(item.sessionStatus)) ||
     typeof item.publishedAt !== "string" ||
     !Number.isFinite(Date.parse(item.publishedAt)) ||
     typeof item.signature !== "string" ||
     !SIGNATURE.test(item.signature)
+  ) {
+    throw new Error("Terminal publication authorization is invalid.");
+  }
+  const disposition = item.taskDisposition ?? "terminate";
+  if (
+    (disposition === "continue" &&
+      (!["running", "waiting-approval"].includes(String(item.taskStatus)) ||
+        !["running", "waiting-approval"].includes(String(item.sessionStatus)))) ||
+    (disposition === "terminate" &&
+      (!["completed", "failed", "cancelled"].includes(String(item.taskStatus)) ||
+        !["idle", "completed", "failed", "cancelled"].includes(String(item.sessionStatus))))
   ) {
     throw new Error("Terminal publication authorization is invalid.");
   }

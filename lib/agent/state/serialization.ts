@@ -167,7 +167,9 @@ function parseTask(value: unknown, sessionId: string, path: string): AgentTaskRe
       ? undefined
       : parseRuntimeRecoveries(value.runtimeRecoveries, `${path}.runtimeRecoveries`, sessionId, value.taskId as string);
   assert(
-    runtimeRecoveries?.every((recovery) => recovery.taskStatus === value.status) ?? true,
+    runtimeRecoveries?.every(
+      (recovery) => recovery.taskDisposition === "continue" || recovery.taskStatus === value.status
+    ) ?? true,
     `${path}.runtimeRecoveries: task status mismatch`
   );
   return {
@@ -197,6 +199,7 @@ function parseRuntimeRecoveries(
   return recoveries;
 }
 
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Durable recovery parsing keeps legacy disposition compatibility and every signed binding in one fail-closed validator.
 function parseRuntimeRecovery(
   value: unknown,
   path: string,
@@ -221,6 +224,7 @@ function parseRuntimeRecovery(
       "outcome",
       "result",
       "terminalReceipt",
+      "taskDisposition",
       "taskStatus",
       "sessionStatus",
       "publishedAt",
@@ -256,15 +260,39 @@ function parseRuntimeRecovery(
   const expectedOutcome = result.status === "succeeded" ? "committed" : result.status;
   assert(value.outcome === expectedOutcome, `${path}.outcome: result mismatch`);
   assert(
-    value.taskStatus === "completed" || value.taskStatus === "failed" || value.taskStatus === "cancelled",
+    value.taskDisposition === undefined ||
+      value.taskDisposition === "continue" ||
+      value.taskDisposition === "terminate",
+    `${path}.taskDisposition: invalid disposition`
+  );
+  const taskDisposition = value.taskDisposition ?? "terminate";
+  assert(
+    value.taskStatus === "running" ||
+      value.taskStatus === "waiting-approval" ||
+      value.taskStatus === "completed" ||
+      value.taskStatus === "failed" ||
+      value.taskStatus === "cancelled",
     `${path}.taskStatus: invalid status`
   );
   assert(
-    value.sessionStatus === "idle" ||
+    value.sessionStatus === "running" ||
+      value.sessionStatus === "waiting-approval" ||
+      value.sessionStatus === "idle" ||
       value.sessionStatus === "completed" ||
       value.sessionStatus === "failed" ||
       value.sessionStatus === "cancelled",
     `${path}.sessionStatus: invalid status`
+  );
+  assert(
+    taskDisposition === "continue"
+      ? (value.taskStatus === "running" || value.taskStatus === "waiting-approval") &&
+          (value.sessionStatus === "running" || value.sessionStatus === "waiting-approval")
+      : (value.taskStatus === "completed" || value.taskStatus === "failed" || value.taskStatus === "cancelled") &&
+          (value.sessionStatus === "idle" ||
+            value.sessionStatus === "completed" ||
+            value.sessionStatus === "failed" ||
+            value.sessionStatus === "cancelled"),
+    `${path}: disposition/status mismatch`
   );
   assertTimestamp(value.publishedAt, `${path}.publishedAt`);
   assert(

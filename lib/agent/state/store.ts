@@ -1055,12 +1055,23 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
       throw new AgentStateConflictError("Runtime recovery publication binding is invalid");
     }
     const result = agentSchemas.toolResult.parse(input.result);
+    const displayResult = agentSchemas.toolResult.parse(input.displayResult ?? result);
+    const authoritativeDisplayShape = { ...displayResult, evidence: result.evidence };
+    if (
+      canonicalJson(authoritativeDisplayShape as unknown as JsonValue) !== canonicalJson(result as unknown as JsonValue)
+    ) {
+      throw new AgentStateConflictError("Runtime recovery display result changed authoritative executor evidence");
+    }
     const actualResultDigest = await fingerprint(result as unknown as JsonValue);
     const persistedResult = agentSchemas.toolResult.parse(
       redactPersistedJson(result as unknown as import("@/lib/agent/contracts").JsonObject)
     );
+    const persistedDisplayResult = agentSchemas.toolResult.parse(
+      redactPersistedJson(displayResult as unknown as import("@/lib/agent/contracts").JsonObject)
+    );
     const persistedResultDigest = await fingerprint(persistedResult as unknown as JsonValue);
     const outcome = result.status === "succeeded" ? "committed" : result.status;
+    const taskDisposition = input.taskDisposition ?? "terminate";
     const receipt = input.terminalReceipt;
     if (
       result.invocationId !== input.invocationId ||
@@ -1080,11 +1091,14 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
     ) {
       throw new AgentStateConflictError("Runtime recovery publication evidence is not exact");
     }
+    if (taskDisposition === "continue" && outcome === "indeterminate") {
+      throw new AgentStateConflictError("Indeterminate runtime recovery cannot continue a task");
+    }
     const observed = await this.required(input.sessionId);
     const task = this.task(observed, input.taskId);
     const existingRecoveries = task.runtimeRecoveries ?? [];
     const existingRecovery = existingRecoveries.find((candidate) => candidate.invocationId === input.invocationId);
-    const sameRecovery = (candidate: AgentRuntimeRecovery) =>
+    const sameRecoveryEvidence = (candidate: AgentRuntimeRecovery) =>
       candidate.runtimeId === input.runtimeId &&
       candidate.sessionId === input.sessionId &&
       candidate.taskId === input.taskId &&
@@ -1116,7 +1130,11 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
       !Array.isArray(result.output) &&
       result.output.code === "reconciliation-clean-start" &&
       result.output.noActiveEffect === true;
-    if (existingRecovery && !sameRecovery(existingRecovery) && !replacesIndeterminateRecovery(existingRecovery)) {
+    if (
+      existingRecovery &&
+      !sameRecoveryEvidence(existingRecovery) &&
+      !replacesIndeterminateRecovery(existingRecovery)
+    ) {
       throw new AgentStateConflictError("Runtime recovery publication conflicts with prior terminal evidence");
     }
     const existingEvent = observed.events.find(
@@ -1129,9 +1147,8 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
       // an idempotency proof. Only the exact terminal result and receipt make
       // an already recovered publication idempotent.
       if (
-        existingResult.status !== "indeterminate" &&
+        existingResult.status === persistedDisplayResult.status &&
         existingRecovery.resultDigest === input.resultDigest &&
-        (await fingerprint(existingResult as unknown as JsonValue)) === existingRecovery.persistedResultDigest &&
         canonicalJson(existingRecovery.terminalReceipt as unknown as JsonValue) ===
           canonicalJson(receipt as unknown as JsonValue)
       ) {
@@ -1161,6 +1178,15 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
         task.lease.generation !== input.leaseGeneration)
     ) {
       throw new AgentStateConflictError("Runtime recovery publication would cross a replacement lease");
+    }
+    if (
+      taskDisposition === "continue" &&
+      (!task.lease ||
+        !proposal ||
+        (task.status !== "running" && task.status !== "waiting-approval") ||
+        (observed.session.status !== "running" && observed.session.status !== "waiting-approval"))
+    ) {
+      throw new AgentStateConflictError("Runtime invocation completion requires its exact live task authority");
     }
     const proposalExists = observed.events.some(
       (event) =>
@@ -1192,6 +1218,7 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
     const operationFingerprint = await fingerprint({
       ...recoveryBinding,
       result,
+      displayResult,
       terminalReceipt: receipt,
     } as unknown as JsonValue);
     let publishedEventId = eventId;
@@ -1204,7 +1231,7 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
         const currentTask = this.task(state, input.taskId);
         const currentRecoveries = currentTask.runtimeRecoveries ?? [];
         const currentRecovery = currentRecoveries.find((candidate) => candidate.invocationId === input.invocationId);
-        if (currentRecovery && sameRecovery(currentRecovery)) return;
+        if (currentRecovery && sameRecoveryEvidence(currentRecovery)) return;
         if (
           (currentRecovery && !replacesIndeterminateRecovery(currentRecovery)) ||
           currentRecoveries.some((candidate) => candidate.journalSequence === input.journalSequence)
@@ -1219,6 +1246,20 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
         ) {
           throw new AgentStateConflictError("Runtime recovery publication crossed a replacement invocation");
         }
+        if (
+          taskDisposition === "continue" &&
+          (!currentTask.lease ||
+            currentTask.lease.runtimeId !== input.runtimeId ||
+            currentTask.lease.leaseId !== input.leaseId ||
+            currentTask.lease.generation !== input.leaseGeneration ||
+            !currentTask.activeRuntimeInvocation ||
+            currentTask.activeRuntimeInvocation.invocationId !== input.invocationId ||
+            currentTask.activeRuntimeInvocation.invocationDigest !== input.invocationDigest ||
+            (currentTask.status !== "running" && currentTask.status !== "waiting-approval") ||
+            (state.session.status !== "running" && state.session.status !== "waiting-approval"))
+        ) {
+          throw new AgentStateConflictError("Runtime invocation completion lost its exact live task authority");
+        }
         const currentExisting = state.events.find(
           (event) => event.kind === "tool-result" && event.payload.data.invocationId === input.invocationId
         );
@@ -1227,8 +1268,8 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
           const currentResult = agentSchemas.toolResult.parse(currentExisting.payload.data);
           if (
             currentResult.status !== "indeterminate" &&
-            canonicalJson(currentResult as unknown as JsonValue) !==
-              canonicalJson(persistedResult as unknown as JsonValue)
+            (currentResult.status !== persistedDisplayResult.status ||
+              currentResult.completedAt !== persistedDisplayResult.completedAt)
           ) {
             throw new AgentStateConflictError("Runtime recovery publication conflicts with prior terminal result");
           }
@@ -1240,7 +1281,7 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
             currentExisting.payload = {
               schemaVersion: AGENT_SCHEMA_VERSION,
               redacted: true,
-              data: persistedResult as unknown as JsonObject,
+              data: persistedDisplayResult as unknown as JsonObject,
             };
           }
         } else {
@@ -1255,14 +1296,14 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
               payload: {
                 schemaVersion: AGENT_SCHEMA_VERSION,
                 redacted: true,
-                data: persistedResult as unknown as JsonObject,
+                data: persistedDisplayResult as unknown as JsonObject,
               },
               replayCursor: `${input.sessionId}:${state.nextEventSequence - 1}`,
             })
           );
         }
         const cancellationWon = state.session.status === "cancelled" || currentTask.status === "cancelled";
-        if (!cancellationWon && currentTask.status !== "completed") {
+        if (taskDisposition === "terminate" && !cancellationWon && currentTask.status !== "completed") {
           if (outcome === "committed") {
             currentTask.status = "completed";
           } else {
@@ -1275,7 +1316,7 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
           }
         }
         currentTask.activeRuntimeInvocation = undefined;
-        currentTask.lease = undefined;
+        if (taskDisposition === "terminate") currentTask.lease = undefined;
         currentTask.invocationAuthorizations = currentTask.invocationAuthorizations?.filter(
           (candidate) => candidate.invocationId !== input.invocationId
         );
@@ -1286,7 +1327,7 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
         currentTask.runtimeEventOrdinal = Math.max(currentTask.runtimeEventOrdinal ?? 0, ordinal);
         currentTask.updatedAt = input.at;
         this.compactEvents(state);
-        if (!cancellationWon && state.session.status !== "completed") {
+        if (taskDisposition === "terminate" && !cancellationWon && state.session.status !== "completed") {
           if (outcome === "committed" || currentTask.status === "completed") {
             if (state.tasks.every((candidate) => TERMINAL_TASK_STATUSES.has(candidate.status))) {
               this.transitionRecoveredSessionState(
@@ -1303,10 +1344,14 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
         } else {
           state.session.updatedAt = input.at;
         }
-        if (
-          !TERMINAL_TASK_STATUSES.has(currentTask.status) ||
-          !["idle", "completed", "failed", "cancelled"].includes(state.session.status)
-        ) {
+        const coherentProjection =
+          taskDisposition === "continue"
+            ? (currentTask.status === "running" || currentTask.status === "waiting-approval") &&
+              (state.session.status === "running" || state.session.status === "waiting-approval") &&
+              currentTask.lease !== undefined
+            : TERMINAL_TASK_STATUSES.has(currentTask.status) &&
+              ["idle", "completed", "failed", "cancelled"].includes(state.session.status);
+        if (!coherentProjection) {
           throw new AgentStateConflictError("Runtime recovery publication did not reach a terminal projection");
         }
         // The executor's runtime-wide fence cannot admit this distinct
@@ -1329,8 +1374,9 @@ export class RepositoryAgentSessionStore implements AgentSessionStateStore {
             outcome,
             result: clone(persistedResult),
             terminalReceipt: clone(receipt),
-            taskStatus: currentTask.status as "completed" | "failed" | "cancelled",
-            sessionStatus: state.session.status as "idle" | "completed" | "failed" | "cancelled",
+            taskDisposition,
+            taskStatus: currentTask.status as AgentRuntimeRecovery["taskStatus"],
+            sessionStatus: state.session.status as AgentRuntimeRecovery["sessionStatus"],
             publishedAt: input.at,
             publicationRevision: state.revision + 1,
           },

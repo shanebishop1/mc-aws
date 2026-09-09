@@ -174,6 +174,7 @@ export class AgentRuntimeService {
             resultDigest: recovery.resultDigest,
             terminalReceiptDigest,
             outcome: recovery.outcome,
+            taskDisposition: recovery.taskDisposition ?? "terminate",
             taskStatus: recovery.taskStatus,
             sessionStatus: recovery.sessionStatus,
             publicationRevision: recovery.publicationRevision,

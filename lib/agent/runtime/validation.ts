@@ -169,7 +169,7 @@ export function parseEvents(value: unknown): RuntimeEventPublicationRequest {
 
 export function parseRecoveryPublication(value: unknown): RuntimeRecoveryPublicationRequest {
   const input = record(value);
-  exact(input, [
+  const required = [
     "schemaVersion",
     "sessionId",
     "taskId",
@@ -183,7 +183,12 @@ export function parseRecoveryPublication(value: unknown): RuntimeRecoveryPublica
     "result",
     "terminalReceipt",
     "idempotencyKey",
-  ]);
+  ];
+  if (
+    Object.keys(input).some((key) => ![...required, "displayResult", "taskDisposition"].includes(key)) ||
+    required.some((key) => !(key in input))
+  )
+    fail();
   if (
     input.schemaVersion !== 1 ||
     typeof input.invocationDigest !== "string" ||
@@ -193,9 +198,11 @@ export function parseRecoveryPublication(value: unknown): RuntimeRecoveryPublica
   )
     fail();
   let result: RuntimeRecoveryPublicationRequest["result"];
+  let displayResult: RuntimeRecoveryPublicationRequest["displayResult"];
   let terminalReceipt: RuntimeRecoveryPublicationRequest["terminalReceipt"];
   try {
     result = agentSchemas.toolResult.parse(input.result);
+    if (input.displayResult !== undefined) displayResult = agentSchemas.toolResult.parse(input.displayResult);
     terminalReceipt = parseBackupTerminalReceipt(input.terminalReceipt);
   } catch {
     fail();
@@ -212,7 +219,14 @@ export function parseRecoveryPublication(value: unknown): RuntimeRecoveryPublica
     journalSequence: integer(input.journalSequence, 1, Number.MAX_SAFE_INTEGER),
     resultDigest: input.resultDigest,
     result,
+    ...(displayResult ? { displayResult } : {}),
     terminalReceipt,
+    taskDisposition:
+      input.taskDisposition === undefined
+        ? "terminate"
+        : input.taskDisposition === "continue" || input.taskDisposition === "terminate"
+          ? input.taskDisposition
+          : fail(),
     idempotencyKey:
       typeof input.idempotencyKey === "string" && IDEMPOTENCY_KEY.test(input.idempotencyKey)
         ? input.idempotencyKey

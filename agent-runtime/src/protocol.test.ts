@@ -185,7 +185,8 @@ function successfulResult(invocationId: string): ToolResult {
 async function terminalPublicationAuthorization(
   client: ExecutorProtocolClient,
   input: ExecuteInvocationRequest,
-  result: ToolResult
+  result: ToolResult,
+  taskDisposition: "continue" | "terminate" = "terminate"
 ): Promise<TerminalPublicationAuthorization> {
   const receipt = await client.terminalReceiptFor(input, result);
   if (!receipt) throw new Error("test terminal receipt is missing");
@@ -205,8 +206,19 @@ async function terminalPublicationAuthorization(
       .update(canonicalJson(receipt as never))
       .digest("hex"),
     outcome: receipt.outcome as "committed" | "failed" | "cancelled",
-    taskStatus: receipt.outcome === "committed" ? ("completed" as const) : ("failed" as const),
-    sessionStatus: receipt.outcome === "committed" ? ("idle" as const) : ("failed" as const),
+    taskDisposition,
+    taskStatus:
+      taskDisposition === "continue"
+        ? ("running" as const)
+        : receipt.outcome === "committed"
+          ? ("completed" as const)
+          : ("failed" as const),
+    sessionStatus:
+      taskDisposition === "continue"
+        ? ("running" as const)
+        : receipt.outcome === "committed"
+          ? ("idle" as const)
+          : ("failed" as const),
     publicationRevision: 1,
     publishedAt: receipt.completedAt,
   };
@@ -810,6 +822,42 @@ describe("authenticated executor Unix protocol", () => {
         continuation.runtimeContext,
         await terminalPublicationAuthorization(client, continuation, continuationResult)
       );
+      expect(effects).toBe(2);
+    } finally {
+      await server.close();
+    }
+  });
+
+  it("accepts an authenticated invocation-complete publication before the next invocation on the same task lease", async () => {
+    const socket = await socketPath();
+    const keys = generateKeyPairSync("ed25519");
+    let effects = 0;
+    const server = new ExecutorProtocolServer({
+      socketPath: socket,
+      statePath: journalPath(socket),
+      gatewayPublicKey: keys.publicKey,
+      executor: {
+        async execute(input) {
+          effects++;
+          return successfulResult(input.invocation.invocationId);
+        },
+      },
+    });
+    await server.listen();
+    try {
+      const client = new ExecutorProtocolClient({ socketPath: socket, gatewayPrivateKey: keys.privateKey });
+      const first = request();
+      const firstResult = await client.execute(first);
+      await client.completeReconciliation(
+        first.invocation.invocationId,
+        first.runtimeContext,
+        await terminalPublicationAuthorization(client, first, firstResult, "continue")
+      );
+
+      const second = structuredClone(first);
+      second.invocation.invocationId = "invocation-protocol-second";
+      const secondResult = await client.execute(second);
+      expect(secondResult).toMatchObject({ status: "succeeded" });
       expect(effects).toBe(2);
     } finally {
       await server.close();

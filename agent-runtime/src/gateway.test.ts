@@ -82,8 +82,19 @@ function recoveryPublication(input: RuntimeRecoveryPublicationRequest): RuntimeR
               .update(canonicalJson(input.terminalReceipt as never))
               .digest("hex"),
             outcome,
-            taskStatus: outcome === "committed" ? ("completed" as const) : ("failed" as const),
-            sessionStatus: outcome === "committed" ? ("idle" as const) : ("failed" as const),
+            taskDisposition: input.taskDisposition ?? "terminate",
+            taskStatus:
+              input.taskDisposition === "continue"
+                ? ("running" as const)
+                : outcome === "committed"
+                  ? ("completed" as const)
+                  : ("failed" as const),
+            sessionStatus:
+              input.taskDisposition === "continue"
+                ? ("running" as const)
+                : outcome === "committed"
+                  ? ("idle" as const)
+                  : ("failed" as const),
             publicationRevision: 100,
             publishedAt: input.result.completedAt,
             signature: "B".repeat(86),
@@ -334,7 +345,20 @@ class FakeControl implements RuntimeControlTransport {
     return existing ? this.revision : ++this.revision;
   }
   async publishRecovery(_leaseId: string, input: RuntimeRecoveryPublicationRequest) {
-    return recoveryPublication(input);
+    const recovered = recoveryPublication(input);
+    const existing = this.events.find((draft) => draft.draftId === recovered.event.eventId);
+    if (!existing) {
+      this.events.push({
+        schemaVersion: 1,
+        draftId: recovered.event.eventId,
+        ordinal: (this.events.at(-1)?.ordinal ?? 0) + 1,
+        timestamp: recovered.event.timestamp,
+        kind: "tool-result",
+        payload: recovered.event.payload.data,
+      });
+      this.revision++;
+    }
+    return { ...recovered, revision: this.revision };
   }
   async publishApproval(_leaseId: string, input: RuntimeApprovalPublicationRequest): Promise<number> {
     let approval = structuredClone(input.approval);
@@ -447,6 +471,9 @@ class StoreControl implements RuntimeControlTransport {
       if (error instanceof AgentStateConflictError) throw new RuntimeTransportError(409, false);
       throw error;
     }
+  }
+  publishRecovery(leaseId: string, input: RuntimeRecoveryPublicationRequest) {
+    return this.service.publishRecovery(this.runtimeId, leaseId, input);
   }
   async publishApproval(leaseId: string, input: RuntimeApprovalPublicationRequest) {
     return (await this.service.publishApproval(this.runtimeId, leaseId, input)).state.revision;

@@ -69,10 +69,12 @@ export interface AgentRuntimeRecovery {
   outcome: "committed" | "failed" | "cancelled" | "indeterminate";
   result: import("@/lib/agent/contracts").ToolResult;
   terminalReceipt: BackupTerminalReceipt;
+  /** Omitted legacy records terminalized their task. */
+  taskDisposition?: "continue" | "terminate";
   /** Immutable task projection at the publication revision. */
-  taskStatus: "completed" | "failed" | "cancelled";
+  taskStatus: "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
   /** Immutable session projection at the publication revision. */
-  sessionStatus: "idle" | "completed" | "failed" | "cancelled";
+  sessionStatus: "running" | "waiting-approval" | "idle" | "completed" | "failed" | "cancelled";
   publishedAt: string;
   publicationRevision: number;
 }
@@ -430,7 +432,11 @@ export interface RuntimeRecoveryPublicationInput {
   journalSequence: number;
   resultDigest: string;
   result: import("@/lib/agent/contracts").ToolResult;
+  /** Trusted gateway display projection; only evidence may differ from result. */
+  displayResult?: import("@/lib/agent/contracts").ToolResult;
   terminalReceipt: BackupTerminalReceipt;
+  /** Omitted legacy requests terminalize the interrupted task. */
+  taskDisposition?: "continue" | "terminate";
   idempotencyKey: string;
   at: string;
 }

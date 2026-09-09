@@ -333,7 +333,9 @@ export interface BackupTerminalReceipt {
 
 /**
  * Control-plane proof that executor terminal evidence is durably published and
- * the owning task/session projection has reached a coherent terminal boundary.
+ * the owning invocation has reached a coherent publication boundary. A live
+ * gateway may retain the exact task lease for the next invocation; recovery
+ * terminalizes the interrupted task instead.
  * The gateway may transport this proof but cannot mint or alter it.
  */
 export interface TerminalPublicationAuthorization {
@@ -350,8 +352,10 @@ export interface TerminalPublicationAuthorization {
   resultDigest: string;
   terminalReceiptDigest: string;
   outcome: "committed" | "failed" | "cancelled";
-  taskStatus: "completed" | "failed" | "cancelled";
-  sessionStatus: "idle" | "completed" | "failed" | "cancelled";
+  /** Omitted legacy authorizations are task-terminal publications. */
+  taskDisposition?: "continue" | "terminate";
+  taskStatus: "running" | "waiting-approval" | "completed" | "failed" | "cancelled";
+  sessionStatus: "running" | "waiting-approval" | "idle" | "completed" | "failed" | "cancelled";
   publicationRevision: number;
   publishedAt: string;
   /** Ed25519 signature over the canonical authorization with this field omitted. */

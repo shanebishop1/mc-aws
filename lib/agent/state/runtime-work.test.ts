@@ -491,6 +491,173 @@ describe("runtime work state", () => {
     });
   });
 
+  it("publishes one authenticated invocation completion while retaining the exact task lease", async () => {
+    const { store } = await setup();
+    const work = await store.leaseNextRuntimeWork({
+      runtimeId: "runtime-a",
+      claimId: "claim-live-publication",
+      leaseId: "lease-live-publication",
+      now: at(1_000),
+      leaseDurationMs: 20_000,
+    });
+    const acknowledged = await store.acknowledgeRuntimeWork({
+      sessionId: "session-runtime",
+      taskId: "task-runtime",
+      leaseId: "lease-live-publication",
+      runtimeId: "runtime-a",
+      expectedRevision: work!.revision,
+      idempotencyKey: "ack-live-publication",
+      at: at(2_000),
+    });
+    const proposal = await store.publishRuntimeEvents({
+      sessionId: "session-runtime",
+      taskId: "task-runtime",
+      leaseId: "lease-live-publication",
+      runtimeId: "runtime-a",
+      expectedRevision: acknowledged.state.revision,
+      idempotencyKey: "proposal-live-publication",
+      at: at(3_000),
+      drafts: [
+        {
+          schemaVersion: 1,
+          draftId: "proposal-live-publication",
+          ordinal: 1,
+          timestamp: at(3_000),
+          kind: "tool-proposal",
+          payload: {
+            invocationId: "invocation-live-publication",
+            invocationDigest: CANCELLATION_INVOCATION_DIGEST,
+            capability: "workspace.read",
+            targetScope: { schemaVersion: 1, kind: "workspace", normalizedTarget: "status.txt" },
+          },
+        },
+      ],
+    });
+    const result: ToolResult = {
+      schemaVersion: 1,
+      invocationId: "invocation-live-publication",
+      status: "succeeded",
+      completedAt: at(4_500),
+      summary: "Read status.txt.",
+      output: { content: "status=before\n" },
+      evidence: [],
+    };
+    const displayResult: ToolResult = {
+      ...result,
+      evidence: [
+        {
+          schemaVersion: 1,
+          evidenceId: "trusted-live-display",
+          kind: "file",
+          uri: "agent-evidence://session-runtime/trusted-live-display",
+          description: "Trusted display evidence.",
+        },
+      ],
+    };
+    const digest = resultDigest(result);
+    const terminalReceipt = recoveryReceipt({
+      runtimeId: "runtime-a",
+      leaseId: "lease-live-publication",
+      leaseGeneration: 1,
+      sessionId: "session-runtime",
+      taskId: "task-runtime",
+      invocationId: result.invocationId,
+      invocationDigest: CANCELLATION_INVOCATION_DIGEST,
+      journalSequence: 21,
+      resultDigest: digest,
+      outcome: "committed",
+    });
+    const input = {
+      sessionId: "session-runtime",
+      taskId: "task-runtime",
+      runtimeId: "runtime-a",
+      leaseId: "lease-live-publication",
+      leaseGeneration: 1,
+      invocationId: result.invocationId,
+      invocationDigest: CANCELLATION_INVOCATION_DIGEST,
+      journalSequence: 21,
+      resultDigest: digest,
+      result,
+      displayResult,
+      terminalReceipt,
+      taskDisposition: "continue" as const,
+      idempotencyKey: "live-terminal-publication",
+      at: at(5_000),
+    };
+
+    await expect(
+      store.publishRuntimeRecovery({
+        ...input,
+        displayResult: { ...displayResult, output: { content: "tampered" } },
+        idempotencyKey: "tampered-live-terminal-display",
+      })
+    ).rejects.toBeInstanceOf(AgentStateConflictError);
+    const published = await store.publishRuntimeRecovery(input);
+    expect(published.state).toMatchObject({
+      session: { status: "running" },
+      tasks: [
+        {
+          status: "running",
+          lease: { leaseId: "lease-live-publication", generation: 1 },
+          runtimeEventOrdinal: 2,
+          runtimeRecoveries: [
+            {
+              invocationId: result.invocationId,
+              taskDisposition: "continue",
+              taskStatus: "running",
+              sessionStatus: "running",
+            },
+          ],
+        },
+      ],
+    });
+    expect(published.state.tasks[0].activeRuntimeInvocation).toBeUndefined();
+    expect(published.event.payload.data).toMatchObject({ evidence: displayResult.evidence });
+
+    const lostResponseReplay = await store.publishRuntimeRecovery({
+      ...input,
+      displayResult: result,
+      taskDisposition: "terminate",
+      idempotencyKey: "live-terminal-response-loss",
+      at: at(5_100),
+    });
+    expect(lostResponseReplay.idempotent).toBe(true);
+    expect(lostResponseReplay.state.revision).toBe(published.state.revision);
+    expect(lostResponseReplay.state.tasks[0].runtimeRecoveries?.[0]).toMatchObject({
+      taskDisposition: "continue",
+      publicationRevision: published.state.revision,
+    });
+
+    const nextProposal = await store.publishRuntimeEvents({
+      sessionId: "session-runtime",
+      taskId: "task-runtime",
+      leaseId: "lease-live-publication",
+      runtimeId: "runtime-a",
+      expectedRevision: lostResponseReplay.state.revision,
+      idempotencyKey: "proposal-after-live-publication",
+      at: at(6_000),
+      drafts: [
+        {
+          schemaVersion: 1,
+          draftId: "proposal-after-live-publication",
+          ordinal: 3,
+          timestamp: at(6_000),
+          kind: "tool-proposal",
+          payload: {
+            invocationId: "invocation-after-live-publication",
+            invocationDigest: "b".repeat(64),
+            capability: "workspace.write",
+            targetScope: { schemaVersion: 1, kind: "workspace", normalizedTarget: "status.txt" },
+          },
+        },
+      ],
+    });
+    expect(nextProposal.state.tasks[0].activeRuntimeInvocation).toMatchObject({
+      invocationId: "invocation-after-live-publication",
+    });
+    expect(proposal.state.tasks[0].activeRuntimeInvocation).toMatchObject({ invocationId: result.invocationId });
+  });
+
   it("replaces a synthetic indeterminate event with exact terminal evidence before acknowledgement", async () => {
     const { store } = await setup();
     const work = await store.leaseNextRuntimeWork({
