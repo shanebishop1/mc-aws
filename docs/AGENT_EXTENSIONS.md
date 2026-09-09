@@ -236,10 +236,11 @@ profile or a claimed token count.
 `mc-agent-gateway.service` adds `MemoryHigh=192M`, `MemoryMax=256M`, and `TasksMax=64`. The default `t4g.medium` has 4
 GiB of RAM while `minecraft.service` reserves a 3,276 MiB Java heap. Capping the gateway at 256 MiB leaves about 564 MiB
 after the Java heap for the JVM's native memory, the OS, and short-lived executor work; the gateway is throttled or
-terminated inside its own cgroup instead of consuming Minecraft's heap allowance. Treat `t4g.medium` as the minimum for
-this exact 3,276 MiB heap. Before increasing the gateway cap, first move to a larger instance or deliberately reduce the
-Minecraft heap, and preserve at least the same non-heap headroom. Provider/model limits are not a reason to raise the
-service cap.
+terminated inside its own cgroup instead of consuming Minecraft's heap allowance. This arithmetic is not a supported
+instance minimum, adequate combined-workload headroom, or gameplay-impact measurement. Measure with Minecraft running
+before selecting an instance or changing the cap. Before increasing the gateway cap, first move to a larger instance or
+deliberately reduce the Minecraft heap, and preserve at least the same non-heap headroom. Provider/model limits are not
+a reason to raise the service cap.
 
 ## Durable agent state and lease budgets
 
