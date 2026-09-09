@@ -2,6 +2,7 @@
 
 import { ArtDecoBorder } from "@/components/ArtDecoBorder";
 import { PageHeader } from "@/components/PageHeader";
+import { ApprovalOperationalDetails, MaintenanceObservationStatus } from "@/components/agent/approval-presentation";
 import { useAuth } from "@/components/auth/auth-provider";
 import { LuxuryButton } from "@/components/ui/Button";
 import {
@@ -36,6 +37,8 @@ import { PERMISSION_PRESETS } from "@/lib/agent/presets";
 import { ClientApiError } from "@/lib/client-api";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+
+export { maintenanceObservationStatus } from "@/components/agent/approval-presentation";
 
 const TERMINAL = new Set(["cancelled", "failed", "completed"]);
 const DETAIL_REFRESH_EVENTS = new Set<AgentEvent["kind"]>([
@@ -327,6 +330,24 @@ export function PolicyEditor({
           </label>
         </div>
       )}
+      <aside
+        aria-label="Executable plugin availability"
+        className="mt-3 border border-amber-900/25 bg-[#f5efe1] p-3 text-xs leading-5 text-charcoal/70"
+      >
+        <p className="text-[9px] font-bold uppercase tracking-[0.16em] text-amber-900">Capability boundary</p>
+        <h3 className="mt-1 font-serif text-base italic text-charcoal">
+          Executable plugin installation unavailable through agent tools
+        </h3>
+        <p className="mt-1">
+          The agent can use reviewed data-only extensions, but it cannot install or enable executable plugins. A
+          complete profile rollout is a separate operator-reviewed path; this panel intentionally offers no action for
+          it.
+        </p>
+        <p className="mt-2 border-t border-amber-900/15 pt-2 text-[10px] uppercase tracking-[0.08em] text-charcoal/55">
+          A reviewed runner and toolchain must be available for execution. If they are unavailable, the runtime fails
+          closed; this UI does not claim that the OS or plugin is enabled.
+        </p>
+      </aside>
     </fieldset>
   );
 }
@@ -414,6 +435,7 @@ export function ApprovalCard({
         <dd>
           <time dateTime={approval.expiresAt}>{formatDate(approval.expiresAt)}</time>
         </dd>
+        <ApprovalOperationalDetails approval={approval} />
         <DownloadApprovalDetails approval={approval} />
       </dl>
       <div className="mt-4 border-y border-charcoal/15 py-3">
@@ -431,7 +453,10 @@ export function ApprovalCard({
         )}
         {approval.backupFailureStatus && (
           <p role="alert" className="mt-3 border border-red-800/30 bg-red-50 p-3 text-xs font-semibold text-red-800">
-            Required backup {approval.backupFailureStatus}. Approval proceeds without that backup.
+            Required backup {approval.backupFailureStatus}.{" "}
+            {approval.scope.capability === "maintenance.apply"
+              ? "Maintenance remains blocked; proceeding without backup is not supported."
+              : "An explicit proceed-or-cancel decision is required before mutation."}
           </p>
         )}
       </div>
@@ -532,6 +557,7 @@ export function EventTimeline({ events }: { events: AgentEvent[] }) {
               </time>
             </div>
             <p className="mt-1 break-words text-xs leading-5 text-charcoal/70">{eventSummary(event)}</p>
+            <MaintenanceObservationStatus event={event} />
           </div>
         </li>
       ))}

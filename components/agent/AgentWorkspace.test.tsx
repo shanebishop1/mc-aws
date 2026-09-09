@@ -76,14 +76,156 @@ describe("agent workspace controls", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: "Custom" }));
     const writeRule = screen.getByRole("combobox", { name: "workspace / write permission" });
+    const maintenanceRule = screen.getByRole("combobox", { name: "maintenance / apply permission" });
     fireEvent.change(writeRule, { target: { value: "deny" } });
     fireEvent.change(screen.getByRole("combobox", { name: "Backup default" }), {
       target: { value: "never" },
     });
 
-    expect(screen.getAllByRole("combobox")).toHaveLength(9);
+    expect(screen.getAllByRole("combobox")).toHaveLength(10);
     expect((writeRule as HTMLSelectElement).value).toBe("deny");
+    expect((maintenanceRule as HTMLSelectElement).value).toBe("ask-always");
+    expect(screen.getAllByText(/maintenance \/ apply — ask always/)).toHaveLength(3);
+    expect(screen.getByText("Executable plugin installation unavailable through agent tools")).toBeTruthy();
+    expect(screen.getByText(/complete profile rollout is a separate operator-reviewed path/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: /plugin/i })).toBeNull();
     expect((screen.getByRole("combobox", { name: "Backup default" }) as HTMLSelectElement).value).toBe("never");
+  });
+
+  it("shows shell details for a capability alias and its effective scopes", () => {
+    const command = "printf '%s\\n' 'reviewed command'";
+    const approval: PublicAgentApprovalDto = {
+      schemaVersion: 1,
+      approvalId: "shell-approval",
+      invocationId: "shell-invocation",
+      invocationDigest: "a".repeat(64),
+      invocationSummaryDigest: "b".repeat(64),
+      toolId: "reviewed-shell-alias",
+      sanitizedArguments: {
+        mode: "staged-write",
+        command,
+        timeoutMs: 15_000,
+        change: { operation: "delete", path: "notes/reviewed.txt" },
+      },
+      decision: "pending",
+      scope: {
+        schemaVersion: 1,
+        kind: "single-invocation",
+        capability: "shell.execute",
+        targetScope: { schemaVersion: 1, kind: "workspace", normalizedTarget: "notes/reviewed.txt" },
+        risk: "risky",
+      },
+      expiresAt: "2026-09-02T13:00:00.000Z",
+      grantLifetime: "single-invocation",
+    };
+
+    render(<ApprovalCard approval={approval} busy={false} onDecision={() => undefined} onRevoke={() => undefined} />);
+
+    expect(screen.getByTestId("reviewed-shell-command").textContent).toBe(command);
+    expect(screen.getByText(/Mounted workspace root \(\.\)/)).toBeTruthy();
+    expect(screen.getByText("delete notes/reviewed.txt")).toBeTruthy();
+    expect(screen.getByText(/No automatic rollback/)).toBeTruthy();
+  });
+
+  it("shows the narrow MOTD maintenance contract and its recovery limits", () => {
+    const approval: PublicAgentApprovalDto = {
+      schemaVersion: 1,
+      approvalId: "maintenance-approval",
+      invocationId: "maintenance-invocation",
+      invocationDigest: "c".repeat(64),
+      invocationSummaryDigest: "d".repeat(64),
+      toolId: "maintenance.apply",
+      sanitizedArguments: {
+        path: "server.properties",
+        key: "motd",
+        value: "Reviewed MOTD",
+        expectedSha256: "e".repeat(64),
+        expectedBytes: 100,
+        resultSha256: "f".repeat(64),
+        resultBytes: 104,
+        serviceIntent: "restore-prior",
+        expectedProtocol: { schemaVersion: 1, host: "127.0.0.1", port: 25565, motd: "Reviewed MOTD" },
+      },
+      decision: "pending",
+      scope: {
+        schemaVersion: 1,
+        kind: "single-invocation",
+        capability: "maintenance.apply",
+        targetScope: { schemaVersion: 1, kind: "workspace", normalizedTarget: "server.properties" },
+        risk: "risky",
+      },
+      expiresAt: "2026-09-02T13:00:00.000Z",
+      grantLifetime: "single-invocation",
+    };
+
+    render(<ApprovalCard approval={approval} busy={false} onDecision={() => undefined} onRevoke={() => undefined} />);
+
+    expect(screen.getByText("server.properties -> motd only")).toBeTruthy();
+    expect(screen.getByText(/SHA-256 e{64}; 100 bytes/)).toBeTruthy();
+    expect(screen.getByText(/SHA-256 f{64}; 104 bytes/)).toBeTruthy();
+    expect(screen.getByText(/Required before the service stop and MOTD edit/)).toBeTruthy();
+    expect(screen.getByText(/Independent Minecraft protocol observation/)).toBeTruthy();
+    expect(screen.getByText(/restore-prior restores service intent, not the prior file value/)).toBeTruthy();
+  });
+
+  it("distinguishes successful MOTD observation from unknown maintenance evidence", () => {
+    render(
+      <EventTimeline
+        events={[
+          agentEvent(1, "tool-result", {
+            invocationId: "maintenance-success",
+            status: "succeeded",
+            completedAt: "2026-09-02T12:00:01.000Z",
+            summary: "Approved MOTD committed and independently observed.",
+            output: {
+              committed: true,
+              configSha256: "a".repeat(64),
+              configBytes: 104,
+              verification: "observed",
+              protocol: {
+                protocol: "minecraft-status",
+                host: "127.0.0.1",
+                port: 25565,
+                motd: "Reviewed MOTD",
+                independentlyObserved: true,
+              },
+            },
+            evidence: [],
+            mutationCommit: { committed: true, point: "maintenance-edit" },
+          }),
+          agentEvent(2, "tool-result", {
+            invocationId: "maintenance-unknown",
+            status: "indeterminate",
+            completedAt: "2026-09-02T12:00:02.000Z",
+            summary: "Protocol verification is unresolved.",
+            output: { code: "indeterminate-effect", commitPoint: "maintenance-edit", reconciliation: "required" },
+            evidence: [],
+            mutationCommit: { committed: true, point: "maintenance-edit" },
+          }),
+          agentEvent(3, "tool-result", {
+            invocationId: "unrelated-protocol",
+            status: "succeeded",
+            completedAt: "2026-09-02T12:00:03.000Z",
+            summary: "Unrelated status query completed.",
+            output: {
+              verification: "observed",
+              protocol: {
+                protocol: "minecraft-status",
+                host: "127.0.0.1",
+                port: 25565,
+                motd: "Other MOTD",
+                independentlyObserved: true,
+              },
+            },
+            evidence: [],
+          }),
+        ]}
+      />
+    );
+
+    expect(screen.getByText(/MOTD observation status: success - independently observed/)).toBeTruthy();
+    expect(screen.getByText(/MOTD observation status: unknown - reconciliation required/)).toBeTruthy();
+    expect(screen.getAllByTestId("motd-observation-status")).toHaveLength(2);
   });
 
   it("renders ordered event evidence as text without interpreting markup", () => {
