@@ -213,7 +213,7 @@ reconcile_agent_principal_groups() {
   fi
   usermod --gid mc-agent-gateway --groups mc-agent-gateway-client,mc-agent-world-root-client mc-agent-gateway
   usermod --gid mc-agent-executor --groups mc-agent-executor-client,mc-agent-gateway-client,mc-agent-world-root-client,mc-agent-workspace mc-agent-executor
-  usermod --gid mc-agent-tool --groups '' mc-agent-tool
+  usermod --gid mc-agent-tool --groups mc-agent-workspace mc-agent-tool
 }
 
 migrate_legacy_executor_state() {

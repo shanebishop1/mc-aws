@@ -256,6 +256,7 @@ describe("agent runtime host services", () => {
     for (const unit of [toolRead, toolWrite]) {
       expect(unit).toContain("User=mc-agent-tool");
       expect(unit).toContain("Group=mc-agent-tool");
+      expect(unit).toContain("SupplementaryGroups=mc-agent-workspace\n");
       expect(unit).toContain("PrivateNetwork=true");
       expect(unit).toContain("RestrictAddressFamilies=AF_UNIX");
       expect(unit).toContain("IPAddressDeny=any");
@@ -265,6 +266,7 @@ describe("agent runtime host services", () => {
       expect(unit).not.toContain("LoadCredential=");
     }
     expect(toolRead).toContain("shell-runner-cli.mjs --read-only");
+    expect(installer).toContain("usermod --gid mc-agent-tool --groups mc-agent-workspace mc-agent-tool");
     expect(toolWrite).toContain("shell-runner-cli.mjs --staged-write");
     expect(toolWrite).toContain("TemporaryFileSystem=/changes:rw");
     expect(toolReadSocket).toContain("SocketGroup=mc-agent-executor-client");

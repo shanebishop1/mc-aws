@@ -7,6 +7,7 @@ Requires=mc-agent-tool-write.socket
 Type=simple
 User=mc-agent-tool
 Group=mc-agent-tool
+SupplementaryGroups=mc-agent-workspace
 UMask=0077
 RootDirectory=/opt/mc-agent/tool-write-root
 WorkingDirectory=/workspace
