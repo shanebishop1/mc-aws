@@ -69,6 +69,8 @@ export interface PluginLockEntry {
   destination: string;
   url: string;
   sha256: string;
+  /** Required for new/changed artifacts; omitted only for installed digest-matched legacy entries. */
+  bytes?: number;
 }
 
 export interface PluginLock {
@@ -117,7 +119,10 @@ const exactObject = (value: unknown, keys: string[], context: string): Record<st
   return record;
 };
 
-export function validatePluginLock(value: unknown): PluginLock {
+export function validatePluginLock(
+  value: unknown,
+  options: { allowInstalledLegacyDigestOnly?: boolean } = {}
+): PluginLock {
   const root = exactObject(value, ["version", "plugins"], PROFILE_MANIFEST_NAME);
   if (root.version !== 1 || !Array.isArray(root.plugins)) {
     throw new Error(`${PROFILE_MANIFEST_NAME} must use version 1 and a plugins array.`);
@@ -126,7 +131,16 @@ export function validatePluginLock(value: unknown): PluginLock {
   const destinations = new Set<string>();
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: strict fail-closed schema checks remain together.
   const plugins = root.plugins.map((value, index): PluginLockEntry => {
-    const entry = exactObject(value, ["name", "destination", "url", "sha256"], `plugins[${index}]`);
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error(`plugins[${index}] must be an object.`);
+    }
+    const rawKeys = Object.keys(value as Record<string, unknown>)
+      .sort()
+      .join(",");
+    if (rawKeys !== "bytes,destination,name,sha256,url" && rawKeys !== "destination,name,sha256,url") {
+      throw new Error(`plugins[${index}] has unknown or missing fields.`);
+    }
+    const entry = value as Record<string, unknown>;
     if (typeof entry.name !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(entry.name)) {
       throw new Error(`plugins[${index}].name is not safe.`);
     }
@@ -137,6 +151,20 @@ export function validatePluginLock(value: unknown): PluginLock {
       throw new Error(`plugins[${index}].sha256 must be an exact lowercase SHA-256.`);
     }
     if (typeof entry.url !== "string") throw new Error(`plugins[${index}].url must be a string.`);
+    if (
+      entry.bytes !== undefined &&
+      (typeof entry.bytes !== "number" ||
+        !Number.isSafeInteger(entry.bytes) ||
+        entry.bytes < 1 ||
+        entry.bytes > PROFILE_LIMITS.fileBytes)
+    ) {
+      throw new Error(`plugins[${index}].bytes must be an exact positive artifact size.`);
+    }
+    if (entry.bytes === undefined && !options.allowInstalledLegacyDigestOnly) {
+      throw new Error(
+        `plugins[${index}].bytes is required for a new or changed artifact; digest-only identity is legacy-installed compatibility only.`
+      );
+    }
     let url: URL;
     try {
       url = new URL(entry.url);
@@ -164,7 +192,13 @@ export function validatePluginLock(value: unknown): PluginLock {
     if (destinations.has(normalizedDestination)) throw new Error(`Duplicate plugin destination: ${entry.destination}.`);
     names.add(normalizedName);
     destinations.add(normalizedDestination);
-    return { name: entry.name, destination: entry.destination, url: entry.url, sha256: entry.sha256 };
+    return {
+      name: entry.name,
+      destination: entry.destination,
+      url: entry.url,
+      sha256: entry.sha256,
+      ...(entry.bytes === undefined ? {} : { bytes: entry.bytes }),
+    } as PluginLockEntry;
   });
   return { version: 1, plugins };
 }

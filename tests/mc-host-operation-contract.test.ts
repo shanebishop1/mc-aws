@@ -277,7 +277,7 @@ describe("shared host-operation contract", () => {
       checkpoint: noEffect.checkpoint,
       floor: noEffect.floor,
     });
-    expect(accepted.status, accepted.stderr).toBe(0);
+    expect({ status: accepted.status, stderr: accepted.stderr, stdout: accepted.stdout }).toMatchObject({ status: 0 });
 
     const committedRoot = mkdtempSync(path.join(os.tmpdir(), "mc-host-operation-unpublished-"));
     roots.push(committedRoot);
@@ -620,6 +620,137 @@ describe("shared host-operation contract", () => {
     expect(result.stderr).toMatch(/checkpoint|idle|active|indeterminate/i);
   });
 
+  it("authorizes only the exact active entry, gateway dispatch, and backup snapshot", () => {
+    const root = mkdtempSync(path.join(os.tmpdir(), "mc-host-operation-active-"));
+    roots.push(root);
+    const key = Buffer.alloc(32, 31);
+    const invocation = {
+      schemaVersion: 1,
+      invocationId: "invocation-active",
+      sessionId: "session-active",
+      toolId: "maintenance.apply",
+      capability: "maintenance.apply",
+      targetScope: { schemaVersion: 1, kind: "workspace", normalizedTarget: "server.properties" },
+      arguments: {},
+      requestedAt: "2026-09-04T00:00:00.000Z",
+    };
+    const invocationDigest = createHash("sha256").update(canonical(invocation)).digest("hex");
+    const backupFingerprint = "9".repeat(64);
+    const entry: Record<string, unknown> = {
+      schemaVersion: 3,
+      recordSequence: 1,
+      invocationId: invocation.invocationId,
+      invocationDigest,
+      effectFingerprint: "8".repeat(64),
+      taskId: "task-active",
+      leaseGeneration: 4,
+      behaviorFingerprint: "7".repeat(64),
+      approvalsFingerprint: "6".repeat(64),
+      approvalsWithoutAuthorizationFingerprint: "5".repeat(64),
+      backupAuthorizationFingerprint: backupFingerprint,
+      executorEpoch: "epoch-active",
+      status: "in-progress",
+      updatedAt: "2026-09-04T00:00:00.000Z",
+      mac: "",
+    };
+    entry.mac = mac(key, "entry", entry);
+    const checkpoint: Record<string, unknown> = {
+      schemaVersion: 3,
+      format: "manifest-checkpoint-transaction-v1",
+      generation: 1,
+      entries: [entry],
+      cancellationTombstones: [],
+      evidence: [],
+      mac: "",
+    };
+    checkpoint.mac = mac(key, "checkpoint", checkpoint);
+    const journal: Record<string, unknown> = {
+      schemaVersion: 3,
+      format: "manifest-checkpoint-transaction-v1",
+      generation: 1,
+      checkpointGeneration: 1,
+      appendGeneration: 1,
+      generationFloor: 1,
+      checkpointSlot: 0,
+      appendSlot: 0,
+      mac: "",
+    };
+    journal.mac = mac(key, "manifest", journal);
+    const floor: Record<string, unknown> = { schemaVersion: 3, generationFloor: 1, mac: "" };
+    floor.mac = mac(key, "floor", floor);
+    const gateway = {
+      schemaVersion: 1,
+      entries: [
+        {
+          schemaVersion: 1,
+          key: `runtime-active:task-active:lease-active:4:${invocation.invocationId}`,
+          runtimeId: "runtime-active",
+          sessionId: invocation.sessionId,
+          taskId: "task-active",
+          leaseId: "lease-active",
+          leaseGeneration: 4,
+          invocationId: invocation.invocationId,
+          invocationDigest,
+          state: "dispatching",
+          payload: {
+            invocation,
+            runtimeContext: {
+              runtimeId: "runtime-active",
+              taskId: "task-active",
+              leaseId: "lease-active",
+              leaseGeneration: 4,
+            },
+          },
+          updatedAt: "2026-09-04T00:00:00.000Z",
+          expectedJournalSequence: 1,
+        },
+      ],
+    };
+    run(root, journal, key, { checkpoint, floor, gateway, handoffState: "durable" });
+    const command = (fingerprint: string) =>
+      spawnSync(
+        "python3",
+        [
+          helper,
+          "--contract",
+          contract,
+          "executor-active-effect",
+          "--journal",
+          path.join(root, "executor-effect-journal.json"),
+          "--credential",
+          path.join(root, "executor-journal-hmac.key"),
+          "--gateway-journal",
+          path.join(root, "executor-reconciliations.json"),
+          "--runtime-id",
+          "runtime-active",
+          "--session-id",
+          invocation.sessionId,
+          "--task-id",
+          "task-active",
+          "--lease-id",
+          "lease-active",
+          "--lease-generation",
+          "4",
+          "--invocation-id",
+          invocation.invocationId,
+          "--invocation-digest",
+          invocationDigest,
+          "--backup-authorization-fingerprint",
+          fingerprint,
+        ],
+        { encoding: "utf8" }
+      );
+    const accepted = command(backupFingerprint);
+    expect({ status: accepted.status, stderr: accepted.stderr, stdout: accepted.stdout }).toMatchObject({ status: 0 });
+    expect(JSON.parse(accepted.stdout)).toMatchObject({
+      generation: 1,
+      recordSequence: 1,
+      effectFingerprint: "8".repeat(64),
+      backupAuthorizationFingerprint: backupFingerprint,
+    });
+    expect(command("4".repeat(64)).status).not.toBe(0);
+  });
+
   it("captures and restores the exact service active and enablement inventory", () => {
     const root = mkdtempSync(path.join(os.tmpdir(), "mc-service-state-"));
     roots.push(root);
@@ -659,9 +790,15 @@ esac
       { unit: "minecraft-dns.service", active: true, enablement: "static" },
       { unit: "minecraft.service", active: true, enablement: "enabled" },
       { unit: "mc-agent-world-roots.service", active: true, enablement: "enabled" },
+      { unit: "mc-agent-tool-read.socket", active: false, enablement: "disabled" },
+      { unit: "mc-agent-tool-read.service", active: false, enablement: "disabled" },
+      { unit: "mc-agent-tool-write.socket", active: false, enablement: "disabled" },
+      { unit: "mc-agent-tool-write.service", active: false, enablement: "disabled" },
       { unit: "mc-agent-executor.socket", active: true, enablement: "enabled" },
       { unit: "mc-agent-executor.service", active: false, enablement: "disabled" },
       { unit: "mc-agent-gateway.service", active: false, enablement: "disabled" },
+      { unit: "mc-agent-host-broker.socket", active: false, enablement: "disabled" },
+      { unit: "mc-agent-host-broker.service", active: false, enablement: "disabled" },
     ]);
     const restored = spawnSync(
       "python3",

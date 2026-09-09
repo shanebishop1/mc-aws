@@ -83,5 +83,17 @@
     "persistentAcrossRestart": true,
     "executorAuthenticatedStatus": true,
     "generationFencedClaims": true
+  },
+  "shellRunner": {
+    "schemaVersion": 1,
+    "modes": ["read-only", "staged-write"],
+    "protocol": "credentialless-untrusted-json-over-root-owned-unix-socket",
+    "toolchainManifestPath": "/config/shell-toolchain.json",
+    "toolchainSourceRequired": true,
+    "unavailableWithoutReviewedToolchain": true,
+    "maxCommandBytes": 16384,
+    "maxTimeoutMs": 120000,
+    "maxOutputBytes": 1048576,
+    "maxStagedResultBytes": 1048576
   }
 }

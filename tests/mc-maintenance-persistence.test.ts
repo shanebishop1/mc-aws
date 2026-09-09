@@ -11,9 +11,15 @@ const recoveryUnit = readFileSync(path.join(root, "infra/src/ec2/mc-maintenance-
 const units = [
   "minecraft.service",
   "minecraft-dns.service",
+  "mc-agent-tool-read.socket",
+  "mc-agent-tool-read.service",
+  "mc-agent-tool-write.socket",
+  "mc-agent-tool-write.service",
   "mc-agent-executor.socket",
   "mc-agent-executor.service",
   "mc-agent-gateway.service",
+  "mc-agent-host-broker.socket",
+  "mc-agent-host-broker.service",
 ];
 const cleanup: string[] = [];
 
@@ -108,6 +114,19 @@ describe("reboot-persistent maintenance inhibition", () => {
       "terminal-quiesced",
       "restoring-services",
     ],
+    "agent-maintenance": [
+      "prepared",
+      "quiescing",
+      "quiesced",
+      "editing",
+      "restarting",
+      "effect-unknown",
+      "verification-unresolved",
+      "restoration-unresolved",
+      "restoring-services",
+      "verified",
+      "recovery",
+    ],
   } as const;
 
   it.each(
@@ -135,7 +154,8 @@ describe("reboot-persistent maintenance inhibition", () => {
     const restoring =
       phase === "restoring-services" ||
       (operation === "restore" && phase === "rollback-restoring-services") ||
-      (operation === "host-replacement" && phase === "recovery");
+      (operation === "host-replacement" && phase === "recovery") ||
+      (operation === "agent-maintenance" && phase === "restoring-services");
     for (const unit of units) expect(existsSync(path.join(generated.early, unit))).toBe(!restoring);
     writeFileSync(bootId, "boot-two\n");
     const rebooted = runGenerator(path.join(fixture, "rebooted"), marker, bootId);

@@ -10,6 +10,7 @@ import type {
   ProcessRequest,
 } from "@/lib/agent/executor";
 import { contained } from "@/lib/agent/executor";
+import type { MaintenanceInvocationIdentity } from "@/lib/agent/maintenance";
 
 function aborted(signal: AbortSignal): void {
   if (signal.aborted) throw new DOMException("Test host operation cancelled", "AbortError");
@@ -37,7 +38,7 @@ export class LocalAgentTestHost implements DirectLiveHostEffects {
   } as const;
   readonly effects: Array<{ kind: string; detail: string }> = [];
   readonly consoleCommands: string[] = [];
-  readonly processRequests: Array<Pick<ProcessRequest, "executable" | "args" | "cwd" | "timeoutMs">> = [];
+  readonly processRequests: Array<Pick<ProcessRequest, "mode" | "command" | "cwd" | "timeoutMs">> = [];
   networkAttempts = 0;
   private operation = Promise.resolve();
   private evidenceSequence = 0;
@@ -123,29 +124,54 @@ export class LocalAgentTestHost implements DirectLiveHostEffects {
       throw new Error("Fake process exceeded its test bound.");
     }
     this.processRequests.push({
-      executable: request.executable,
-      args: [...request.args],
+      mode: request.mode,
+      command: request.command,
       cwd: request.cwd,
       timeoutMs: request.timeoutMs,
     });
-    this.effects.push({ kind: "process", detail: path.basename(request.executable) });
+    this.effects.push({ kind: "process", detail: request.mode });
     return this.result("Executed bounded fake process action.", { exitCode: 0 }, "command-output", "process");
   }
 
-  async executeConsole(command: string, timeoutMs: number, signal: AbortSignal): Promise<HostEffectResult> {
+  async executeConsole(
+    command: string,
+    timeoutMs: number,
+    signal: AbortSignal,
+    assertCommitAllowed?: () => Promise<void>,
+    invocation?: MaintenanceInvocationIdentity
+  ): Promise<HostEffectResult> {
     aborted(signal);
-    if (timeoutMs > 1_000 || /[\r\n\0]/.test(command)) throw new Error("Fake console request exceeded its bound.");
+    if (
+      !invocation ||
+      invocation.schemaVersion !== 1 ||
+      invocation.leaseGeneration < 1 ||
+      !/^[a-f0-9]{64}$/.test(invocation.invocationDigest) ||
+      timeoutMs > 1_000 ||
+      !["minecraft:list", /^minecraft:kick\s+\S+(?:\s+.+)?$/].some((allowed) =>
+        typeof allowed === "string" ? command === allowed : allowed.test(command)
+      ) ||
+      /[\r\n\0]/.test(command)
+    ) {
+      throw new Error("Fake console request requires a bounded namespaced command and active runtime context.");
+    }
+    const mutates = command.startsWith("minecraft:kick ");
+    if (mutates) {
+      if (!assertCommitAllowed) throw new Error("Fake console mutation requires an active commit fence.");
+      await assertCommitAllowed();
+    }
     this.consoleCommands.push(command);
     this.effects.push({ kind: "console", detail: command });
-    return {
-      ...this.result(
-        "Executed bounded fake console action.",
-        { response: "There are 0 players online.", committed: true, commitPoint: "console-dispatch" },
-        "console-output",
-        "console"
-      ),
-      mutationCommit: { committed: true, point: "console-dispatch" },
-    };
+    const response = this.result(
+      "Executed bounded namespaced fake console action.",
+      {
+        response: mutates ? "Player command accepted." : "There are 0 players online.",
+        committed: mutates,
+        ...(mutates ? { commitPoint: "console-dispatch" } : {}),
+      },
+      "console-output",
+      "console"
+    );
+    return mutates ? { ...response, mutationCommit: { committed: true, point: "console-dispatch" } } : response;
   }
 
   async download(_request: DownloadRequest): Promise<HostEffectResult> {

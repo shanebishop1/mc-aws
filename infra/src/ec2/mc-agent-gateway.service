@@ -7,7 +7,8 @@ Requires=mc-agent-executor.socket
 [Service]
 Type=simple
 User=mc-agent-gateway
-Group=mc-agent
+Group=mc-agent-gateway
+SupplementaryGroups=mc-agent-gateway-client mc-agent-world-root-client
 UMask=0077
 WorkingDirectory=/var/lib/mc-agent-gateway/work
 ExecStartPre=/usr/bin/python3 /usr/local/bin/mc-agent-world-roots.py verify

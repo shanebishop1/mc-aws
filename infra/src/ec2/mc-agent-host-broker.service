@@ -1,0 +1,46 @@
+[Unit]
+Description=mc-aws narrow host maintenance and console broker
+Requires=mc-agent-host-broker.socket
+After=local-fs.target minecraft.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+UMask=0007
+ExecStart=/usr/local/bin/mc-agent-host-broker.py
+Restart=on-failure
+RestartSec=2s
+TimeoutStopSec=30s
+NoNewPrivileges=true
+CapabilityBoundingSet=CAP_DAC_OVERRIDE CAP_FOWNER CAP_CHOWN CAP_SETUID CAP_SETGID
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+PrivateIPC=true
+ProtectProc=invisible
+ProcSubset=pid
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+LockPersonality=true
+KeyringMode=private
+RestrictNamespaces=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressAllow=127.0.0.0/8
+IPAddressAllow=::1/128
+IPAddressDeny=any
+ReadWritePaths=/opt/minecraft/server /run/mc-agent /var/lib/mc-aws /var/lib/mc-agent-world-roots
+ReadOnlyPaths=/etc/mc-agent/executor-journal-hmac.key /etc/mc-agent/backup-fence-public.pem /etc/mc-agent/host-operation-contract.json /usr/local/bin/mc-agent-world-roots.py /usr/local/bin/mc-host-operation.py /usr/local/bin/mc-maintenance-boot.py /usr/local/bin/mcstatus /opt/setup/runtime /run/mc-agent-world-roots /var/lib/mc-agent-executor /var/lib/mc-agent-gateway
+InaccessiblePaths=/root /home /opt/mc-agent/executor-root /var/lib/amazon/ssm /run/amazon-ssm-agent
+
+[Install]
+WantedBy=multi-user.target

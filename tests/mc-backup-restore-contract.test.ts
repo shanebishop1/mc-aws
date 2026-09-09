@@ -137,6 +137,7 @@ exec python3 "${backupAuthScript}" "$@"
 exec python3 "${hostOperationScript}" --contract "${hostOperationContract}" "$@"
 `
   );
+  makeExecutable(path.join(binDir, "mc-agent-workspace-dac"), "#!/usr/bin/env bash\nexit 0\n");
   makeExecutable(
     path.join(binDir, "mc-agent-world-roots"),
     `#!/usr/bin/env bash
@@ -321,6 +322,7 @@ exit 0
     MC_STATUS_BIN: path.join(binDir, "mcstatus"),
     MC_WORLD_ROOTS_HELPER: path.join(binDir, "mc-agent-world-roots"),
     MC_HOST_OPERATION_HELPER: path.join(binDir, "mc-host-operation"),
+    MC_WORKSPACE_DAC_HELPER: path.join(binDir, "mc-agent-workspace-dac"),
     MC_HOST_OPERATION_CONTRACT: hostOperationContract,
     MC_BACKUP_INSTANCE_ID_FILE: instanceIdFile,
     MC_BACKUP_GENERATION_STATE: generationState,
@@ -490,10 +492,10 @@ describe("backup and restore archive contract", { timeout: 20_000 }, () => {
     const calls = readFileSync(harness.systemctlLog, "utf8");
     expect(calls).toContain("kill --kill-whom=main --signal=SIGUSR1 mc-agent-gateway.service");
     expect(calls).toContain(
-      "mask --runtime minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service"
+      "mask --runtime minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service"
     );
     expect(calls).toContain(
-      "stop mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service"
+      "stop mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service"
     );
     expect(calls).not.toContain("stop mc-agent-gateway.service");
     expect(existsSync(harness.maintenanceLock)).toBe(false);
@@ -526,11 +528,11 @@ describe("backup and restore archive contract", { timeout: 20_000 }, () => {
 
     expect(result.status, result.stderr).toBe(0);
     expect(readFileSync(harness.systemctlLog, "utf8")).toContain(
-      "stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service\n"
+      "stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service\n"
     );
     expect(readFileSync(harness.systemctlLog, "utf8")).not.toContain("start minecraft\n");
     expect(readFileSync(harness.systemctlLog, "utf8")).toContain(
-      "mask --runtime minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service\n"
+      "mask --runtime minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service\n"
     );
     expect(existsSync(harness.hibernateGuard)).toBe(true);
     expect(existsSync(harness.maintenanceLock)).toBe(true);
@@ -812,7 +814,7 @@ describe("backup and restore archive contract", { timeout: 20_000 }, () => {
     expect(journal).toMatchObject({ mode: "destroy", phase: "publishing-manifest" });
     expect(existsSync(harness.maintenanceBootHold)).toBe(true);
     const calls = readFileSync(harness.systemctlLog, "utf8").trim().split("\n");
-    const finalQuiescenceRead = calls.findLastIndex((line) => line === "is-enabled mc-agent-gateway.service");
+    const finalQuiescenceRead = calls.findLastIndex((line) => line.startsWith("is-enabled "));
     expect(finalQuiescenceRead).toBe(calls.length - 1);
     expect(calls.slice(finalQuiescenceRead + 1)).toEqual([]);
   });

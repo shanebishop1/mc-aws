@@ -291,7 +291,7 @@ function parseToolResult(value: unknown): ToolResult {
       required(commit, ["point"], `${path}.mutationCommit`);
       oneOf(
         commit.point,
-        ["atomic-rename", "console-dispatch", "server-properties-root-generation"] as const,
+        ["atomic-rename", "console-dispatch", "server-properties-root-generation", "maintenance-edit"] as const,
         `${path}.mutationCommit.point`
       );
     } else if (commit.point !== undefined) {

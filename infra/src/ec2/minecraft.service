@@ -10,11 +10,13 @@ User=minecraft
 
 WorkingDirectory=/opt/minecraft/server
 
-# Ensure correct ownership
+# Ensure correct ownership before granting the confined executor its narrow DAC access.
 ExecStartPre=+/bin/chown -R minecraft:minecraft /opt/minecraft/server/
+ExecStartPre=+/bin/sh -c 'if [ ! -x /usr/local/bin/mc-agent-workspace-dac.py ]; then exit 0; fi; exec /usr/local/bin/mc-agent-workspace-dac.py reconcile'
 
 # Start inside a detached screen session
 ExecStart=/usr/bin/screen -DmS mc-server /usr/bin/java -Xms3276M -Xmx3276M -jar paper.jar nogui
+UMask=0007
 
 # Gracefully ask Minecraft to stop
 ExecStop=/usr/local/bin/mc-stop.sh

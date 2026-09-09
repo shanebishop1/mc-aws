@@ -1,4 +1,4 @@
 # Recreated by systemd-tmpfiles before socket and service activation on every boot.
 d /run/mc-agent 0755 root root -
-d /run/mc-agent-download 0750 mc-agent-gateway mc-agent -
+d /run/mc-agent-download 2750 mc-agent-gateway mc-agent-gateway-client -
 d /run/screen/S-minecraft 0700 minecraft minecraft -

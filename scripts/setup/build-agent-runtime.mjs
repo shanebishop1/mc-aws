@@ -103,6 +103,7 @@ async function buildStage(stage) {
     entryPoints: {
       "gateway-cli": "agent-runtime/src/gateway-cli.ts",
       "executor-cli": "agent-runtime/src/executor-cli.ts",
+      "shell-runner-cli": "agent-runtime/src/shell-runner-cli.ts",
     },
     outdir: stage,
     outExtension: { ".js": ".mjs" },
@@ -125,7 +126,8 @@ async function buildStage(stage) {
     loader: { ".wasm": "file", ".png": "file" },
     metafile: true,
   });
-  for (const name of ["gateway-cli.mjs", "executor-cli.mjs"]) await chmod(path.join(stage, name), 0o755);
+  for (const name of ["gateway-cli.mjs", "executor-cli.mjs", "shell-runner-cli.mjs"])
+    await chmod(path.join(stage, name), 0o755);
   await cp(path.join(root, "examples/agent-extensions/status-report"), path.join(stage, "extensions/status-report"), {
     recursive: true,
   });

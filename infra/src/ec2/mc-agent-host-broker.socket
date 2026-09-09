@@ -1,0 +1,13 @@
+[Unit]
+Description=mc-aws narrow host maintenance and console broker
+PartOf=mc-agent-host-broker.service
+
+[Socket]
+ListenStream=/run/mc-agent/host-broker.sock
+SocketUser=root
+SocketGroup=mc-agent-executor-client
+SocketMode=0660
+RemoveOnStop=true
+
+[Install]
+WantedBy=sockets.target

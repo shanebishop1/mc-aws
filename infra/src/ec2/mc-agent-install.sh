@@ -18,7 +18,7 @@ MAINTENANCE_PARENT_OPERATION="${MC_MAINTENANCE_PARENT_OPERATION:-}"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 [[ "$(id -u)" == 0 ]] || fail "mc-agent install must run as root"
-for command in cmp find flock install openssl python3 readlink sha256sum sleep stat systemctl; do command -v "$command" >/dev/null || fail "missing $command"; done
+for command in cmp cut find flock gpasswd install openssl python3 readlink sha256sum sleep stat systemctl; do command -v "$command" >/dev/null || fail "missing $command"; done
 exec 9>/run/lock/mc-agent-install.lock
 flock -n 9 || fail "another agent install is active"
 
@@ -80,15 +80,35 @@ ensure_host_layout() {
   assert_maintenance_fence
   local backup_fence_source="${1:-${MC_AGENT_BACKUP_FENCE_PUBLIC_KEY_SOURCE:-}}"
   getent group mc-agent >/dev/null || groupadd --system mc-agent
-  id mc-agent-gateway >/dev/null 2>&1 || useradd --system --gid mc-agent --home-dir /var/lib/mc-agent-gateway --shell /sbin/nologin mc-agent-gateway
-  usermod -a -G mc-agent minecraft
+  getent group mc-agent-gateway >/dev/null || groupadd --system mc-agent-gateway
+  getent group mc-agent-executor >/dev/null || groupadd --system mc-agent-executor
+  getent group mc-agent-tool >/dev/null || groupadd --system mc-agent-tool
+  getent group mc-agent-executor-client >/dev/null || groupadd --system mc-agent-executor-client
+  getent group mc-agent-gateway-client >/dev/null || groupadd --system mc-agent-gateway-client
+  getent group mc-agent-world-root-client >/dev/null || groupadd --system mc-agent-world-root-client
+  getent group mc-agent-workspace >/dev/null || groupadd --system mc-agent-workspace
+  workspace_gid="$(getent group mc-agent-workspace | cut -d: -f3)"
+  id mc-agent-gateway >/dev/null 2>&1 || useradd --system --gid mc-agent-gateway --home-dir /var/lib/mc-agent-gateway --shell /sbin/nologin mc-agent-gateway
+  id mc-agent-executor >/dev/null 2>&1 || useradd --system --gid mc-agent-executor --home-dir /var/lib/mc-agent-executor --shell /sbin/nologin mc-agent-executor
+  id mc-agent-tool >/dev/null 2>&1 || useradd --system --gid mc-agent-tool --home-dir /var/lib/mc-agent-tool --shell /sbin/nologin mc-agent-tool
+  migrate_legacy_executor_state
+  remove_legacy_minecraft_group_membership
+  reconcile_agent_principal_groups
+  usermod -a -G mc-agent-workspace minecraft 2>/dev/null || true
   install -d -o root -g root -m 0755 "$ROOT" "$RELEASES" "$NODE_RELEASES"
-  install -d -o root -g root -m 0755 "$ROOT/executor-root"/{workspace,scratch,runtime,config,usr/bin,usr/local/bin,usr/lib,usr/lib64,lib64,run/mc-agent-download,run/screen}
-  install -d -o minecraft -g mc-agent -m 0700 /var/lib/mc-agent-executor
-  install -d -o mc-agent-gateway -g mc-agent -m 0700 /var/lib/mc-agent-gateway /var/lib/mc-agent-gateway/{work,pi}
+  install -d -o root -g root -m 0755 "$ROOT/executor-root"/{workspace,scratch,runtime,config,usr/bin,usr/local/bin,usr/lib,usr/lib64,lib64,run/mc-agent,run/mc-agent-download}
+  install -d -o root -g root -m 0755 "$ROOT"/{tool-read-root,tool-write-root,toolchain}
+  install -d -o root -g root -m 0755 "$ROOT/tool-read-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64}
+  install -d -o root -g root -m 0755 "$ROOT/tool-write-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64}
+  install -d -o mc-agent-executor -g mc-agent-executor -m 0700 /var/lib/mc-agent-executor
+  install -d -o mc-agent-gateway -g mc-agent-gateway -m 0700 /var/lib/mc-agent-gateway /var/lib/mc-agent-gateway/{work,pi}
   install -d -o root -g root -m 0755 /run/mc-agent
-  install -d -o mc-agent-gateway -g mc-agent -m 0750 /run/mc-agent-download
+  install -d -o mc-agent-gateway -g mc-agent-gateway-client -m 2750 /run/mc-agent-download
   install -d -o root -g root -m 0755 /etc/mc-agent
+  printf '%s\n' "$workspace_gid" > /etc/mc-agent/.workspace-gid
+  install -o root -g root -m 0444 /etc/mc-agent/.workspace-gid /etc/mc-agent/workspace-gid
+  rm -f -- /etc/mc-agent/.workspace-gid
+  install -o root -g root -m 0444 /etc/mc-agent/workspace-gid "$ROOT/executor-root/config/workspace-gid"
   if [[ ! -e /etc/mc-agent/executor-journal-hmac.key && ! -L /etc/mc-agent/executor-journal-hmac.key ]]; then
     [[ ! -e /var/lib/mc-agent-executor/executor-effect-journal.json && ! -L /var/lib/mc-agent-executor/executor-effect-journal.json &&
        ! -e /var/lib/mc-agent-executor/executor-effect-journal.json.checkpoint.0 && ! -L /var/lib/mc-agent-executor/executor-effect-journal.json.checkpoint.0 &&
@@ -167,6 +187,66 @@ PY
     [[ "$(stat -c '%U:%G' -- "$credential")" == "root:root" ]] || fail "agent credential owner is unsafe"
     chmod 0400 "$credential"
   done
+}
+
+assert_legacy_transition_quiesced() {
+  local unit active enabled
+  for unit in minecraft.service mc-agent-gateway.service mc-agent-world-roots.service mc-agent-host-broker.socket mc-agent-host-broker.service mc-agent-executor.socket mc-agent-executor.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service; do
+    active="$(systemctl is-active "$unit" 2>/dev/null || true)"
+    [[ "$active" == "inactive" || "$active" == "unknown" ]] || fail "legacy executor ownership transition requires $unit to be stopped"
+    enabled="$(systemctl is-enabled "$unit" 2>/dev/null || true)"
+    case "$enabled" in
+      masked|masked-runtime|not-found) ;;
+      *) fail "legacy executor ownership transition requires $unit to be masked" ;;
+    esac
+  done
+}
+
+reconcile_agent_principal_groups() {
+  local user groups legacy=0
+  for user in mc-agent-gateway mc-agent-executor mc-agent-tool; do
+    groups="$(id -nG "$user" 2>/dev/null || true)"
+    [[ " $groups " != *" mc-agent "* ]] || legacy=1
+  done
+  if (( legacy == 1 )); then
+    assert_legacy_transition_quiesced
+  fi
+  usermod --gid mc-agent-gateway --groups mc-agent-gateway-client,mc-agent-world-root-client mc-agent-gateway
+  usermod --gid mc-agent-executor --groups mc-agent-executor-client,mc-agent-gateway-client,mc-agent-world-root-client,mc-agent-workspace mc-agent-executor
+  usermod --gid mc-agent-tool --groups '' mc-agent-tool
+}
+
+migrate_legacy_executor_state() {
+  [[ -d /var/lib/mc-agent-executor && ! -L /var/lib/mc-agent-executor ]] || return 0
+  local executor_uid executor_gid minecraft_uid
+  executor_uid="$(id -u mc-agent-executor)"
+  executor_gid="$(getent group mc-agent-executor | cut -d: -f3)"
+  minecraft_uid="$(id -u minecraft 2>/dev/null || true)"
+  [[ -n "$minecraft_uid" ]] || return 0
+  if [[ "$(stat -c '%u' /var/lib/mc-agent-executor)" == "$minecraft_uid" ]]; then
+    assert_legacy_transition_quiesced
+    python3 - "$executor_uid" "$executor_gid" <<'PY'
+import os, stat, sys
+root = "/var/lib/mc-agent-executor"
+uid, gid = map(int, sys.argv[1:])
+for current, directories, files, descriptor in os.fwalk(root, topdown=True, follow_symlinks=False):
+    for name in [*directories, *files]:
+        metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+        if stat.S_ISLNK(metadata.st_mode):
+            raise SystemExit("legacy executor state contains a symlink")
+        os.chown(name, uid, gid, dir_fd=descriptor, follow_symlinks=False)
+    os.fchown(descriptor, uid, gid)
+PY
+  fi
+}
+
+remove_legacy_minecraft_group_membership() {
+  local groups
+  groups="$(id -nG minecraft 2>/dev/null || true)"
+  [[ " $groups " != *" mc-agent "* ]] || {
+    assert_legacy_transition_quiesced
+    gpasswd -d minecraft mc-agent >/dev/null || fail "could not remove Minecraft from the executor socket group"
+  }
 }
 
 validate_file() {
@@ -274,7 +354,7 @@ PY
   chown -R root:root "$temporary"
   find "$temporary" -type d -exec chmod 0755 {} +
   find "$temporary" -type f -exec chmod 0644 {} +
-  chmod 0755 "$temporary/gateway-cli.mjs" "$temporary/executor-cli.mjs"
+  chmod 0755 "$temporary/gateway-cli.mjs" "$temporary/executor-cli.mjs" "$temporary/shell-runner-cli.mjs"
   mv -- "$temporary" "$release"
   trap - RETURN
 }
@@ -314,7 +394,7 @@ activate() {
 }
 
 assert_agent_hard_stopped() {
-  for unit in mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service; do
+  for unit in mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service; do
     [[ "$(systemctl is-active "$unit" 2>/dev/null || true)" == "inactive" ]] || \
       fail "$unit must be hard-stopped before clean-start epoch rotation"
     case "$(systemctl is-enabled "$unit" 2>/dev/null || true)" in

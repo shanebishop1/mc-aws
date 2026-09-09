@@ -76,7 +76,8 @@ export function classifyRisk(capability: AgentCapability, facts: RiskFacts): Ris
     facts.bulkOperation ||
     capability === "shell.execute" ||
     capability === "network.outbound" ||
-    capability === "extension.load"
+    capability === "extension.load" ||
+    capability === "maintenance.apply"
   ) {
     return "risky";
   }

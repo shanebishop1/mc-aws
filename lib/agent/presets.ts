@@ -20,6 +20,7 @@ const COPILOT_RULES: RuleMap = {
   "network.outbound": "deny",
   "backup.create": "allow",
   "extension.load": "deny",
+  "maintenance.apply": "ask-always",
 };
 
 const MAINTAINER_RULES: RuleMap = {
@@ -31,6 +32,7 @@ const MAINTAINER_RULES: RuleMap = {
   "network.outbound": "ask-always",
   "backup.create": "allow",
   "extension.load": "ask-always",
+  "maintenance.apply": "ask-always",
 };
 
 const AUTOPILOT_RULES: RuleMap = {
@@ -42,6 +44,7 @@ const AUTOPILOT_RULES: RuleMap = {
   "network.outbound": "ask-once",
   "backup.create": "allow",
   "extension.load": "ask-once",
+  "maintenance.apply": "ask-always",
 };
 
 function expandRules(ruleMap: RuleMap): CapabilityRule[] {

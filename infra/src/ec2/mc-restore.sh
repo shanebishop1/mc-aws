@@ -83,7 +83,13 @@ RESTORE_DOWNLOAD_TIMEOUT="${MC_RESTORE_DOWNLOAD_TIMEOUT:-900}"
 # is never configurable through the legacy command line override.
 LEGACY_ARCHIVE_MAX_BYTES=67108864
 WORLD_ROOTS_HELPER="${MC_WORLD_ROOTS_HELPER:-/usr/local/bin/mc-agent-world-roots.py}"
-QUIESCE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service)
+WORKSPACE_DAC_HELPER="${MC_WORKSPACE_DAC_HELPER:-/usr/local/bin/mc-agent-workspace-dac.py}"
+QUIESCE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service)
+
+reconcile_workspace_dac() {
+  [[ -x "$WORKSPACE_DAC_HELPER" ]] || { log "ERROR: Workspace DAC helper is unavailable"; return 1; }
+  "$WORKSPACE_DAC_HELPER" reconcile
+}
 
 acquire_or_adopt_boot_hold() {
   local existing owner operation
@@ -724,7 +730,7 @@ drain_and_quiesce_runtime() {
     log "ERROR: Failed to mask every runtime activation path"
     return 1
   fi
-  if ! systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service; then
+  if ! systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service; then
     log "ERROR: Failed to stop all gateway, socket, executor, and Minecraft services"
     return 1
   fi
@@ -775,7 +781,7 @@ start_committed_services() {
 secure_committed_failure() {
   SERVICES_MASKED=1
   systemctl mask --runtime "${QUIESCE_UNITS[@]}" || true
-  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service || true
+  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service || true
 }
 
 cleanup_recovered_staging() {
@@ -1648,7 +1654,7 @@ recover_previous_state() {
   fi
   write_restore_journal "rollback-started" "$RETAINED_BACKUP"
   update_boot_hold rollback-started || return 1
-  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service || \
+          systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service || \
     log "Warning: Failed to stop every service during rollback"
 
   if [[ "$HAD_PREVIOUS" == "1" ]]; then
@@ -1864,6 +1870,7 @@ if ! mv -- "$STAGED_SERVER" "$SERVER_DIR"; then
   log "ERROR: Failed to install staged server directory"
   exit 1
 fi
+reconcile_workspace_dac || exit 1
 fsync_restore_directories
 write_restore_journal "installed"
 update_boot_hold installed || exit 1

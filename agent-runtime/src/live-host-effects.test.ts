@@ -1,9 +1,11 @@
 import { chmod, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { IndeterminateHostEffectError } from "../../lib/agent/executor/types";
 import {
+  HostBrokerClient,
   canonicalizeDescriptorConfinedPath,
   classifyDescriptorDeletionPath,
   commitAtomicRename,
@@ -236,5 +238,103 @@ describe("Minecraft console dispatch commit point", () => {
       name: "IndeterminateHostEffectError",
       point: "console-dispatch",
     } satisfies Partial<IndeterminateHostEffectError>);
+  });
+});
+
+describe("authenticated host broker effect truth", () => {
+  async function brokerResponse(response?: Record<string, unknown>, holdOpen = false) {
+    const root = await scratchRoot();
+    const socketPath = path.join(root, "broker.sock");
+    const server = createServer((socket) => {
+      socket.once("data", () => {
+        if (response) socket.end(`${JSON.stringify(response)}\n`);
+        else if (!holdOpen) socket.destroy();
+      });
+    });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(socketPath, resolve);
+    });
+    return {
+      client: new HostBrokerClient(Buffer.alloc(32, 3), socketPath, 50),
+      close: async () => await new Promise<void>((resolve) => server.close(() => resolve())),
+    };
+  }
+
+  const request = {
+    schemaVersion: 1 as const,
+    operation: "console.execute" as const,
+    invocation: {
+      schemaVersion: 1 as const,
+      runtimeId: "runtime-1",
+      leaseId: "lease-1",
+      leaseGeneration: 1,
+      taskId: "task-1",
+      sessionId: "session-1",
+      invocationId: "invocation-1",
+      invocationDigest: "a".repeat(64),
+    },
+    command: "minecraft:list",
+    timeoutMs: 1_000,
+  };
+
+  it("preserves an authenticated pre-entry rejection as proven no-effect", async () => {
+    const fixture = await brokerResponse({
+      schemaVersion: 1,
+      ok: false,
+      effectState: "not-entered",
+      verification: "not-required",
+      error: "authority rejected",
+      output: {},
+    });
+    await expect(fixture.client.execute(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "Error",
+      message: "Host broker rejected the request before effect entry.",
+    });
+    await fixture.close();
+  });
+
+  it.each([
+    [
+      "committed response with unresolved verification",
+      {
+        schemaVersion: 1,
+        ok: false,
+        effectState: "committed",
+        verification: "unresolved",
+        output: {},
+      },
+    ],
+    [
+      "explicit unknown response",
+      {
+        schemaVersion: 1,
+        ok: false,
+        effectState: "unknown",
+        verification: "unresolved",
+        output: {},
+      },
+    ],
+  ])("maps %s to indeterminate instead of false failure", async (_name, response) => {
+    const fixture = await brokerResponse(response);
+    await expect(fixture.client.execute(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "IndeterminateHostEffectError",
+      point: "console-dispatch",
+    });
+    await fixture.close();
+  });
+
+  it("treats response loss or timeout after request delivery as indeterminate", async () => {
+    const lost = await brokerResponse();
+    await expect(lost.client.execute(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "IndeterminateHostEffectError",
+    });
+    await lost.close();
+
+    const timedOut = await brokerResponse(undefined, true);
+    await expect(timedOut.client.execute(request, new AbortController().signal)).rejects.toMatchObject({
+      name: "IndeterminateHostEffectError",
+    });
+    await timedOut.close();
   });
 });

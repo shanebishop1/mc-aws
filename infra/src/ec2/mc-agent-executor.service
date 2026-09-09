@@ -1,12 +1,13 @@
 [Unit]
 Description=mc-aws confined live-server executor
-After=minecraft.service systemd-tmpfiles-setup.service mc-agent-executor.socket mc-agent-world-roots.service
-Requires=mc-agent-executor.socket mc-agent-world-roots.service
+After=minecraft.service systemd-tmpfiles-setup.service mc-agent-executor.socket mc-agent-tool-read.socket mc-agent-tool-write.socket mc-agent-world-roots.service
+Requires=mc-agent-executor.socket mc-agent-tool-read.socket mc-agent-tool-write.socket mc-agent-world-roots.service
 
 [Service]
 Type=simple
-User=minecraft
-Group=mc-agent
+User=mc-agent-executor
+Group=mc-agent-executor
+SupplementaryGroups=mc-agent-executor-client mc-agent-gateway-client mc-agent-world-root-client mc-agent-workspace
 UMask=0007
 RootDirectory=/opt/mc-agent/executor-root
 WorkingDirectory=/workspace
@@ -26,6 +27,8 @@ LoadCredential=executor-journal-hmac:/etc/mc-agent/executor-journal-hmac.key
 LoadCredential=executor-receipt-private:/etc/mc-agent/executor-receipt-private.pem
 LoadCredential=executor-clean-start-epoch:/etc/mc-agent/executor-clean-start-epoch
 Environment=MC_AGENT_EXECUTOR_CONFIG=/config/executor.json
+Environment=MC_AGENT_WORKSPACE=/workspace
+Environment=MC_AGENT_WORKSPACE_GID_FILE=/workspace-gid
 
 NoNewPrivileges=true
 CapabilityBoundingSet=
@@ -62,16 +65,20 @@ BindPaths=/opt/minecraft/server:/workspace
 BindPaths=/var/lib/mc-agent-executor:/scratch
 BindReadOnlyPaths=/run/mc-agent-download:/run/mc-agent-download
 BindReadOnlyPaths=/run/mc-agent-world-roots:/run/mc-agent-world-roots
-BindPaths=/run/screen/S-minecraft:/run/screen/S-minecraft
+BindReadOnlyPaths=/run/mc-agent/executor.sock:/run/mc-agent/executor.sock
+BindReadOnlyPaths=/run/mc-agent/shell-read.sock:/run/mc-agent/shell-read.sock
+BindReadOnlyPaths=/run/mc-agent/shell-write.sock:/run/mc-agent/shell-write.sock
+BindReadOnlyPaths=/run/mc-agent/host-broker.sock:/run/mc-agent/host-broker.sock
 BindReadOnlyPaths=/opt/mc-agent:/runtime
 BindReadOnlyPaths=/etc/mc-agent/world-roots-current:/config
 BindReadOnlyPaths=/usr/bin/python3:/usr/bin/python3
+BindReadOnlyPaths=/usr/local/bin/mc-agent-workspace-dac.py:/usr/local/bin/mc-agent-workspace-dac.py
 BindReadOnlyPaths=/usr/lib:/usr/lib
 BindReadOnlyPaths=/etc/mc-agent/gateway-public.pem:/config/gateway-public.pem
 BindReadOnlyPaths=/etc/mc-agent/backup-fence-public.pem:/config/backup-fence-public.pem
+BindReadOnlyPaths=/etc/mc-agent/workspace-gid:/workspace-gid
 BindReadOnlyPaths=/etc/mc-agent/executor-receipt-key-id:/config/executor-receipt-key-id
 BindReadOnlyPaths=/etc/mc-agent/executor-receipt-key-epoch:/config/executor-receipt-key-epoch
-BindReadOnlyPaths=/usr/bin/screen:/usr/bin/screen
 BindReadOnlyPaths=/usr/lib64:/usr/lib64
 BindReadOnlyPaths=/lib64:/lib64
 ReadWritePaths=/workspace /scratch

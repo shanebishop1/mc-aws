@@ -18,6 +18,20 @@ const mocks = vi.hoisted(() => ({
 }));
 const hostOperationHelper = path.resolve(process.cwd(), "infra/src/ec2/mc-host-operation.py");
 const hostOperationContract = path.resolve(process.cwd(), "infra/src/ec2/host-operation-contract.json");
+const canonicalServiceUnits = [
+  "minecraft-dns.service",
+  "minecraft.service",
+  "mc-agent-world-roots.service",
+  "mc-agent-tool-read.socket",
+  "mc-agent-tool-read.service",
+  "mc-agent-tool-write.socket",
+  "mc-agent-tool-write.service",
+  "mc-agent-executor.socket",
+  "mc-agent-executor.service",
+  "mc-agent-gateway.service",
+  "mc-agent-host-broker.socket",
+  "mc-agent-host-broker.service",
+] as const;
 
 vi.mock("./operation-state.js", () => ({
   heartbeatOperationExecution: mocks.heartbeat,
@@ -205,14 +219,7 @@ describe("lambda SSM command delivery", () => {
         volumeId: null,
         volumeDevice: null,
         quiescenceEpoch: "c".repeat(32),
-        serviceStates: [
-          "minecraft-dns.service",
-          "minecraft.service",
-          "mc-agent-world-roots.service",
-          "mc-agent-executor.socket",
-          "mc-agent-executor.service",
-          "mc-agent-gateway.service",
-        ].map((unit) => ({ unit, active: false, enablement: "disabled" })),
+        serviceStates: canonicalServiceUnits.map((unit) => ({ unit, active: false, enablement: "disabled" })),
       });
       const quote = (value: string): string => `'${value.replaceAll("'", `'"'"'`)}'`;
       const [generated] = wrapIdempotentRemoteCommands(

@@ -44,6 +44,18 @@ function piToolName(toolId: string): string {
 }
 
 function targetScopeForCapability(capability: AgentCapability, args: JsonObject): TargetScope {
+  if (capability === "shell.execute") {
+    if (
+      args.mode === "staged-write" &&
+      typeof args.change === "object" &&
+      args.change !== null &&
+      !Array.isArray(args.change)
+    ) {
+      const pathValue = (args.change as JsonObject).path;
+      if (typeof pathValue === "string") return scope("workspace", pathValue);
+    }
+    return scope("workspace", ".");
+  }
   if (
     capability === "workspace.read" ||
     capability === "workspace.write" ||

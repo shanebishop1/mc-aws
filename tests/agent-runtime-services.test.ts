@@ -8,6 +8,10 @@ const ec2 = path.resolve(process.cwd(), "infra/src/ec2");
 const gateway = readFileSync(path.join(ec2, "mc-agent-gateway.service"), "utf8");
 const executor = readFileSync(path.join(ec2, "mc-agent-executor.service"), "utf8");
 const executorSocket = readFileSync(path.join(ec2, "mc-agent-executor.socket"), "utf8");
+const toolRead = readFileSync(path.join(ec2, "mc-agent-tool-read.service"), "utf8");
+const toolReadSocket = readFileSync(path.join(ec2, "mc-agent-tool-read.socket"), "utf8");
+const toolWrite = readFileSync(path.join(ec2, "mc-agent-tool-write.service"), "utf8");
+const toolWriteSocket = readFileSync(path.join(ec2, "mc-agent-tool-write.socket"), "utf8");
 const tmpfiles = readFileSync(path.join(ec2, "mc-agent-runtime.tmpfiles"), "utf8");
 const gatewayConfig = readFileSync(path.join(ec2, "mc-agent-gateway.json"), "utf8");
 const parsedGatewayConfig = JSON.parse(gatewayConfig) as {
@@ -152,9 +156,12 @@ describe("agent runtime host services", () => {
     expect(effectiveIpv4Policy(gateway, "169.254.169.252")).toBe("deny");
   });
 
-  it("keeps the executor in the Minecraft domain while denying network and gateway credentials", () => {
-    expect(executor).toContain("User=minecraft");
-    expect(executor).toContain("Group=mc-agent");
+  it("keeps the trusted executor separate from Minecraft while denying network and gateway credentials", () => {
+    expect(executor).toContain("User=mc-agent-executor");
+    expect(executor).toContain("Group=mc-agent-executor");
+    expect(executor).toContain(
+      "SupplementaryGroups=mc-agent-executor-client mc-agent-gateway-client mc-agent-world-root-client mc-agent-workspace"
+    );
     expect(executor).toContain("RootDirectory=/opt/mc-agent/executor-root");
     expect(executor).toContain("BindPaths=/opt/minecraft/server:/workspace");
     expect(executor).toContain("BindReadOnlyPaths=/run/mc-agent-download:/run/mc-agent-download");
@@ -166,7 +173,7 @@ describe("agent runtime host services", () => {
     expect(executor).toContain(
       "ExecStartPre=/usr/bin/python3 /usr/local/bin/mc-agent-world-roots.py verify --generation-dir /config"
     );
-    expect(executor).not.toContain("ExecStartPre=+");
+    expect(executor).not.toContain("mc-agent-workspace-dac.py reconcile");
     expect(executor).toContain("BindReadOnlyPaths=/usr/bin/python3:/usr/bin/python3");
     expect(installer).toContain('"$ROOT/executor-root"/{workspace,scratch,runtime,config,usr/bin,usr/local/bin');
     expect(profileInstaller).toContain("/opt/mc-agent/executor-root/usr/local/bin/mc-agent-world-roots.py");
@@ -197,10 +204,13 @@ describe("agent runtime host services", () => {
     expect(minecraft).not.toMatch(/executor-receipt-private|executor-clean-start-epoch/);
     expect(executor).not.toContain("/usr/bin/find");
     expect(executorConfig).not.toContain('"find"');
-    expect(executorConfig).toContain('"workspace": "/runtime/commands/workspace"');
+    expect(executorConfig).toContain('"shellReadSocketPath": "/run/mc-agent/shell-read.sock"');
+    expect(executorConfig).toContain('"shellWriteSocketPath": "/run/mc-agent/shell-write.sock"');
     expect(executor).not.toMatch(/BindReadOnlyPaths=\/usr\/bin\/(?:cmp|find|grep|ls|stat)/);
-    expect(installer).toContain("usermod -a -G mc-agent minecraft");
-    expect(installer).not.toMatch(/useradd[^\n]*mc-agent-executor/);
+    expect(installer).toMatch(/useradd[^\n]*mc-agent-executor/);
+    expect(installer).toMatch(/useradd[^\n]*mc-agent-tool/);
+    expect(executor).not.toContain("/run/screen");
+    expect(executor).not.toContain("/usr/bin/screen");
     expect(executorCli).toContain("readExecutorProtectedCredentials");
     expect(executorCli).toContain("journalCredentialPath: credentials.journal.path");
     expect(executorCli.indexOf("readExecutorProtectedCredentials")).toBeLessThan(
@@ -209,7 +219,7 @@ describe("agent runtime host services", () => {
     expect(executorCli).not.toMatch(/console\.(log|error).*journal/i);
   });
 
-  it("isolates the same-UID Minecraft service from executor credentials, environment, and journal mounts", () => {
+  it("isolates Minecraft from executor credentials, environment, and journal mounts", () => {
     expect(executor).toContain("PrivateUsers=true");
     expect(executor).toContain("PrivateMounts=true");
     expect(executor).toContain("PrivateIPC=true");
@@ -242,11 +252,33 @@ describe("agent runtime host services", () => {
     expect(minecraft).toContain("InaccessiblePaths=/etc/mc-agent /run/credentials");
   });
 
+  it("provides two credentialless socket-activated runner boundaries", () => {
+    for (const unit of [toolRead, toolWrite]) {
+      expect(unit).toContain("User=mc-agent-tool");
+      expect(unit).toContain("Group=mc-agent-tool");
+      expect(unit).toContain("PrivateNetwork=true");
+      expect(unit).toContain("RestrictAddressFamilies=AF_UNIX");
+      expect(unit).toContain("IPAddressDeny=any");
+      expect(unit).toContain("BindReadOnlyPaths=/opt/minecraft/server:/workspace");
+      expect(unit).toContain("BindReadOnlyPaths=/opt/mc-agent/toolchain:/toolchain");
+      expect(unit).toContain("KillMode=control-group");
+      expect(unit).not.toContain("LoadCredential=");
+    }
+    expect(toolRead).toContain("shell-runner-cli.mjs --read-only");
+    expect(toolWrite).toContain("shell-runner-cli.mjs --staged-write");
+    expect(toolWrite).toContain("TemporaryFileSystem=/changes:rw");
+    expect(toolReadSocket).toContain("SocketGroup=mc-agent-executor-client");
+    expect(toolWriteSocket).toContain("SocketGroup=mc-agent-executor-client");
+    expect(toolReadSocket).toContain("ListenStream=/run/mc-agent/shell-read.sock");
+    expect(toolWriteSocket).toContain("ListenStream=/run/mc-agent/shell-write.sock");
+    expect(minecraft).not.toMatch(/^LoadCredential=/m);
+  });
+
   it("keeps the executor identity socket root-owned and non-replaceable by the Minecraft UID", () => {
     expect(executorSocket).toContain("ListenStream=/run/mc-agent/executor.sock");
     expect(executorSocket).toContain("FileDescriptorName=executor");
     expect(executorSocket).toContain("SocketUser=root");
-    expect(executorSocket).toContain("SocketGroup=mc-agent");
+    expect(executorSocket).toContain("SocketGroup=mc-agent-gateway-client");
     expect(executorSocket).toContain("SocketMode=0660");
     expect(executorSocket).toContain("DirectoryMode=0755");
     expect(executorCli).toContain('listenFd: systemdSocketActivationFd("executor")');
@@ -259,8 +291,10 @@ describe("agent runtime host services", () => {
 
   it("recreates exact runtime parents before either socket can bind", () => {
     expect(tmpfiles).toContain("d /run/mc-agent 0755 root root -");
-    expect(tmpfiles).toContain("d /run/mc-agent-download 0750 mc-agent-gateway mc-agent -");
-    expect(tmpfiles).toContain("d /run/screen/S-minecraft 0700 minecraft minecraft -");
+    // Socket creation must inherit the client group, not the gateway's private primary group.
+    expect(tmpfiles).toContain("d /run/mc-agent-download 2750 mc-agent-gateway mc-agent-gateway-client -");
+    expect(installer).toContain("-g mc-agent-gateway-client -m 2750 /run/mc-agent-download");
+    expect(tmpfiles).toContain("d /run/mc-agent 0755 root root -");
     expect(tmpfiles).not.toMatch(/\/run\/mc-agent-download\s+0?7[0-7]{2}\s+minecraft/);
     expect(gateway).toContain("After=network-online.target systemd-tmpfiles-setup.service mc-agent-executor.socket");
     expect(executorSocket).toContain("After=systemd-tmpfiles-setup.service");
@@ -419,11 +453,11 @@ describe("agent runtime host services", () => {
     expect(relay).toContain('"accept-encoding": "identity"');
     expect(relay).toContain("GatewayDownloadRelayAuthorizer");
     const effects = readFileSync(path.resolve(process.cwd(), "agent-runtime/src/live-host-effects.ts"), "utf8");
-    expect(effects).toContain("assertWorkspaceProcessRequest");
-    expect(effects).toContain("Raw executables are unavailable to shell tools.");
-    expect(effects).toContain("without spawning a raw executable");
-    expect(effects).toContain('request.env.HOME !== "/workspace"');
-    expect(effects).not.toContain("HOME: scratch.path");
+    expect(effects).toContain("UnixShellRunnerClient");
+    expect(effects).toContain("Reviewed shell runner returned untrusted command data.");
+    expect(effects).toContain("Minecraft console bridge is unavailable under the separated executor identity.");
+    expect(effects).toContain('request.cwd !== "/workspace"');
+    expect(effects).toContain("request.mode");
   });
 
   it("routes every production HTTP path through the injectable pinned transport", () => {

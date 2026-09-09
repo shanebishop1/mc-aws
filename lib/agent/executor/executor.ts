@@ -15,9 +15,10 @@ import {
   ExecutorGuardError,
   assertScope,
   contained,
-  inspectCommand,
   inspectMinecraftCommand,
   isGenericImmutableAssetMutation,
+  isShellImmutableTarget,
+  parseShellCommand,
   resolveConfinedPath,
   riskFacts,
   scopeForDownload,
@@ -34,7 +35,13 @@ import type {
   HostEffectResult,
 } from "@/lib/agent/executor/types";
 import { EXECUTOR_EFFECT_MAX_BOUND_MS, IndeterminateHostEffectError } from "@/lib/agent/executor/types";
-import { canonicalPersistentWorldRoots } from "@/lib/agent/minecraft-security";
+import { isImmutableAgentAssetPath } from "@/lib/agent/immutable-assets";
+import { parseMaintenanceApplyArguments } from "@/lib/agent/maintenance";
+import {
+  canonicalPersistentWorldRoots,
+  isPersistentWorldPath,
+  isRootServerPropertiesMutation,
+} from "@/lib/agent/minecraft-security";
 import {
   NO_IMMUTABLE_BOUNDARY_VIOLATIONS,
   classifyRisk,
@@ -43,6 +50,7 @@ import {
   evaluateBackup,
   evaluatePermission,
   findImmutableBoundaryViolation,
+  permissionDecisionForRisk,
 } from "@/lib/agent/policy";
 import { boundToolResult } from "@/lib/agent/response-limits";
 import {
@@ -60,6 +68,7 @@ const TOOL_CAPABILITIES = {
   "network.download": "network.outbound",
   "backup.request": "backup.create",
   "extension.load": "extension.load",
+  "maintenance.apply": "maintenance.apply",
 } as const;
 
 type ToolId = keyof typeof TOOL_CAPABILITIES;
@@ -67,17 +76,35 @@ const TOOL_ARGUMENTS: Record<ToolId, readonly string[]> = {
   "workspace.read": ["path", "maxBytes"],
   "workspace.write": ["path", "content"],
   "workspace.delete": ["path", "recursive"],
-  "shell.execute": ["executable", "args", "timeoutMs"],
+  "shell.execute": ["mode", "command", "timeoutMs", "change"],
   "console.execute": ["command", "timeoutMs"],
   "network.download": ["url", "destination", "timeoutMs", "maxBytes", "expectedSha256", "expectedBytes"],
   "backup.request": ["label"],
   "extension.load": ["path"],
+  "maintenance.apply": [
+    "path",
+    "key",
+    "value",
+    "expectedSha256",
+    "expectedBytes",
+    "resultSha256",
+    "resultBytes",
+    "serviceIntent",
+    "expectedProtocol",
+  ],
 };
 
 function assertKnownArguments(toolId: ToolId, args: JsonObject): void {
   const unknown = Object.keys(args).find((key) => !TOOL_ARGUMENTS[toolId].includes(key));
   if (unknown) throw new Error(`Unknown ${toolId} argument: ${unknown}`);
   if ("recursive" in args && typeof args.recursive !== "boolean") throw new Error("recursive must be a boolean");
+}
+
+function shellOutput(hostResult: HostEffectResult): JsonObject {
+  if (hostResult.output === null || typeof hostResult.output !== "object" || Array.isArray(hostResult.output)) {
+    throw new ExecutorGuardError("Shell runner returned a non-object result.", "targetOutsideAllowedRoots");
+  }
+  return hostResult.output as JsonObject;
 }
 
 function stringArg(args: JsonObject, name: string, max: number): string {
@@ -94,15 +121,9 @@ function integerArg(args: JsonObject, name: string, fallback: number, max: numbe
   return value;
 }
 
-function stringArrayArg(args: JsonObject, name: string): string[] {
-  const value = args[name] ?? [];
-  if (
-    !Array.isArray(value) ||
-    value.length > 128 ||
-    value.some((item) => typeof item !== "string" || item.length > 4096)
-  )
-    throw new Error(`${name} must be a bounded string array`);
-  return value as string[];
+async function digestBytes(bytes: Uint8Array): Promise<string> {
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", new Uint8Array(bytes).buffer);
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
 function cancelled(signal: AbortSignal): void {
@@ -132,14 +153,13 @@ function result(
 function failure(invocationId: string, error: unknown): ToolResult {
   if (error instanceof DOMException && error.name === "AbortError")
     return result(invocationId, "cancelled", "Invocation cancelled.", { code: "cancelled" }, [], { committed: false });
-  return result(
-    invocationId,
-    "failed",
-    "Executor failed closed.",
-    { code: error instanceof ExecutorGuardError ? "immutable-boundary" : "executor-failed" },
-    [],
-    { committed: false }
-  );
+  const code =
+    error instanceof ExecutorGuardError
+      ? "immutable-boundary"
+      : error instanceof Error && error.message.startsWith("Unknown shell.execute argument")
+        ? "denied"
+        : "executor-failed";
+  return result(invocationId, "failed", "Executor failed closed.", { code }, [], { committed: false });
 }
 
 function assertHostSecurityCapabilities(effects: DirectLiveHostEffects, toolId: ToolId): void {
@@ -237,8 +257,8 @@ export function createDirectLiveExecutor(
         const toolId = declaredToolId in TOOL_CAPABILITIES ? declaredToolId : extensionToolIds.get(invocation.toolId);
         if (!toolId || TOOL_CAPABILITIES[toolId] !== invocation.capability)
           throw new Error("Tool and capability do not match");
-        assertKnownArguments(toolId, invocation.arguments);
         assertHostSecurityCapabilities(effects, toolId);
+        assertKnownArguments(toolId, invocation.arguments);
         cancelled(signal);
 
         const workspace = await effects.canonicalize(limits.workspaceRoot);
@@ -259,7 +279,8 @@ export function createDirectLiveExecutor(
         let effectTimeoutMs = limits.maxFilesystemEffectMs;
         let mutation = false;
         let consoleMutation = false;
-        let immutable = { ...NO_IMMUTABLE_BOUNDARY_VIOLATIONS };
+        const immutable = { ...NO_IMMUTABLE_BOUNDARY_VIOLATIONS };
+        let shellMode: "read-only" | "staged-write" | undefined;
         if (isGenericImmutableAssetMutation(invocation)) immutable.targetImmutableAsset = true;
         let permissionScope = invocation.targetScope;
         const args = invocation.arguments;
@@ -304,25 +325,110 @@ export function createDirectLiveExecutor(
           }
           if (toolId === "extension.load") effect = (effectSignal) => effects.loadExtension(target.path, effectSignal);
         } else if (toolId === "shell.execute") {
-          if (invocation.targetScope.kind !== "workspace" || invocation.targetScope.normalizedTarget !== ".")
-            throw new ExecutorGuardError("Shell scope must be the workspace root.", "targetOutsideAllowedRoots");
-          const executable = stringArg(args, "executable", 4096);
-          const processArgs = stringArrayArg(args, "args");
-          immutable = inspectCommand(executable, processArgs, config);
-          mutation = true;
-          const timeoutMs = integerArg(args, "timeoutMs", limits.maxTimeoutMs, limits.maxTimeoutMs);
-          effectTimeoutMs = timeoutMs;
-          effect = (effectSignal) =>
-            effects.executeProcess({
-              executable,
-              args: processArgs,
-              cwd: workspace.path,
-              timeoutMs,
-              maxOutputBytes: limits.maxOutputBytes,
-              signal: effectSignal,
-              env: Object.freeze({ PATH: "/usr/bin:/bin", HOME: workspace.path, TMPDIR: workspace.path }),
-              onProgress: (bytes) => void progress(`Command produced ${Math.min(bytes, limits.maxOutputBytes)} bytes.`),
-            });
+          if (invocation.targetScope.kind !== "workspace")
+            throw new ExecutorGuardError(
+              "Shell scope must be the workspace root or exact staged target.",
+              "targetOutsideAllowedRoots"
+            );
+          const shell = parseShellCommand(args);
+          if (shell.mode === "read-only" && invocation.targetScope.normalizedTarget !== ".")
+            throw new ExecutorGuardError(
+              "Read-only shell scope must be the workspace root.",
+              "targetOutsideAllowedRoots"
+            );
+          shellMode = shell.mode;
+          effectTimeoutMs = shell.timeoutMs;
+          mutation = shell.mode === "staged-write";
+          if (shell.mode === "read-only") {
+            effect = (effectSignal) =>
+              effects.executeProcess({
+                ...shell,
+                cwd: workspace.path,
+                maxOutputBytes: limits.maxOutputBytes,
+                signal: effectSignal,
+                onProgress: (bytes) =>
+                  void progress(`Command produced ${Math.min(bytes, limits.maxOutputBytes)} bytes.`),
+              });
+          } else {
+            const change = shell.change;
+            if (!change)
+              throw new ExecutorGuardError("Staged-write shell requires a change.", "targetOutsideAllowedRoots");
+            const target = await resolveConfinedPath(
+              effects,
+              workspace.path,
+              change.path,
+              change.operation === "replace" ? ["file", "missing"] : ["file"]
+            );
+            assertScope(invocation.targetScope, scopeForPath("workspace", workspace.path, target.path));
+            if (isImmutableAgentAssetPath(change.path) || isShellImmutableTarget(change.path))
+              immutable.targetImmutableAsset = true;
+            const targetInvocation: ToolInvocation = {
+              ...invocation,
+              targetScope: scopeForPath("workspace", workspace.path, target.path),
+              arguments: {
+                path: change.path,
+                ...(change.operation === "replace" ? { content: "[runner result]" } : { recursive: false }),
+              },
+            };
+            if (
+              isRootServerPropertiesMutation(targetInvocation) ||
+              isPersistentWorldPath(change.path, persistentWorldRoots)
+            ) {
+              return result(
+                invocationId,
+                "failed",
+                "This shell change requires the stopped-host maintenance boundary.",
+                {
+                  code: "maintenance-required",
+                  change: { operation: change.operation, path: change.path },
+                }
+              );
+            }
+            // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Staged shell execution must validate and commit the untrusted runner result in one fail-closed boundary.
+            effect = async (effectSignal) => {
+              const runnerResult = await effects.executeProcess({
+                ...shell,
+                cwd: workspace.path,
+                maxOutputBytes: limits.maxOutputBytes,
+                signal: effectSignal,
+                onProgress: (bytes) =>
+                  void progress(`Command produced ${Math.min(bytes, limits.maxOutputBytes)} bytes.`),
+              });
+              const runnerOutput = shellOutput(runnerResult);
+              if (runnerOutput.exitCode !== 0) return runnerResult;
+              let committed: HostEffectResult;
+              if (change.operation === "replace") {
+                const staged = runnerResult.stagedResult;
+                if (
+                  !staged ||
+                  staged.regularFile !== true ||
+                  staged.noLink !== true ||
+                  staged.bytes.byteLength > limits.maxWriteBytes ||
+                  !/^[a-f0-9]{64}$/.test(staged.sha256) ||
+                  (await digestBytes(staged.bytes)) !== staged.sha256
+                ) {
+                  throw new ExecutorGuardError(
+                    "Shell runner staged output failed regular-file validation.",
+                    "targetOutsideAllowedRoots"
+                  );
+                }
+                committed = await effects.writeFile(
+                  target.path,
+                  staged.bytes,
+                  effectSignal,
+                  request.assertCommitAllowed
+                );
+              } else {
+                committed = await effects.deletePath(target.path, false, effectSignal, request.assertCommitAllowed);
+              }
+              return {
+                summary: `Staged shell ${change.operation} committed after runner validation.`,
+                output: { runner: runnerResult.output, change: committed.output },
+                evidence: [...runnerResult.evidence, ...committed.evidence].slice(0, 32),
+                mutationCommit: committed.mutationCommit,
+              };
+            };
+          }
         } else if (toolId === "console.execute") {
           if (invocation.targetScope.kind !== "console")
             throw new ExecutorGuardError("Console tool requires console scope.", "targetOutsideAllowedRoots");
@@ -338,8 +444,64 @@ export function createDirectLiveExecutor(
           consoleMutation = !console.readOnly;
           mutation = consoleMutation;
           effectTimeoutMs = integerArg(args, "timeoutMs", limits.maxTimeoutMs, limits.maxTimeoutMs);
-          effect = (effectSignal) =>
-            effects.executeConsole(command, effectTimeoutMs, effectSignal, request.assertCommitAllowed);
+          effect = async (effectSignal) =>
+            effects.executeConsole(
+              command,
+              effectTimeoutMs,
+              effectSignal,
+              request.assertCommitAllowed,
+              request.runtimeContext
+                ? {
+                    schemaVersion: 1,
+                    runtimeId: request.runtimeContext.runtimeId,
+                    leaseId: request.runtimeContext.leaseId,
+                    leaseGeneration: request.runtimeContext.leaseGeneration,
+                    taskId: request.runtimeContext.taskId,
+                    sessionId: invocation.sessionId,
+                    invocationId: invocation.invocationId,
+                    invocationDigest: await createInvocationDigest(invocation),
+                  }
+                : undefined
+            );
+        } else if (toolId === "maintenance.apply") {
+          if (
+            invocation.targetScope.kind !== "workspace" ||
+            invocation.targetScope.normalizedTarget !== "server.properties"
+          )
+            throw new ExecutorGuardError(
+              "Maintenance scope must be the exact server.properties file.",
+              "targetOutsideAllowedRoots"
+            );
+          const maintenance = parseMaintenanceApplyArguments(args);
+          mutation = true;
+          effectTimeoutMs = EXECUTOR_EFFECT_MAX_BOUND_MS;
+          effect = async (effectSignal) => {
+            const backup = request.backupAuthorization;
+            if (backup?.status !== "succeeded") throw new Error("Maintenance requires a completed backup fence.");
+            const runtimeContext = request.runtimeContext;
+            if (!runtimeContext) throw new Error("Maintenance requires an authenticated runtime context.");
+            if (!effects.applyMaintenance) throw new Error("Narrow maintenance host broker is unavailable.");
+            return await effects.applyMaintenance(
+              {
+                schemaVersion: 1,
+                operation: "maintenance.apply",
+                invocation: {
+                  schemaVersion: 1,
+                  runtimeId: runtimeContext.runtimeId,
+                  leaseId: runtimeContext.leaseId,
+                  leaseGeneration: runtimeContext.leaseGeneration,
+                  taskId: runtimeContext.taskId,
+                  sessionId: invocation.sessionId,
+                  invocationId: invocation.invocationId,
+                  invocationDigest: await createInvocationDigest(invocation),
+                },
+                backup,
+                ...maintenance,
+              },
+              effectSignal,
+              request.assertCommitAllowed
+            );
+          };
         } else if (toolId === "network.download") {
           if (!root)
             throw new ExecutorGuardError(
@@ -392,6 +554,22 @@ export function createDirectLiveExecutor(
         const risk = classifyRisk(invocation.capability, riskFacts(invocation, consoleMutation, persistentWorldRoots));
         const digest = await createInvocationDigest(invocation);
         const suppliedBackupAuthorization = request.backupAuthorization;
+        if (toolId === "shell.execute" && shellMode === "staged-write") {
+          const deniedCapability = (["workspace.write", "workspace.delete"] as const).find(
+            (capability) => permissionDecisionForRisk(policy, capability, "destructive") === "deny"
+          );
+          if (deniedCapability) {
+            return result(
+              invocationId,
+              "failed",
+              `${deniedCapability} is denied by policy; staged shell cannot bypass it.`,
+              {
+                code: "denied",
+                capability: deniedCapability,
+              }
+            );
+          }
+        }
         if (
           suppliedBackupAuthorization?.status === "succeeded" &&
           (!request.runtimeContext ||
@@ -635,6 +813,15 @@ export function createDirectLiveExecutor(
           }
         }
         cancelled(signal);
+
+        if (toolId === "maintenance.apply" && suppliedBackupAuthorization?.status !== "succeeded") {
+          return result(
+            invocationId,
+            "failed",
+            "Maintenance requires a completed backup; automatic proceed without backup is not supported.",
+            { code: "maintenance-backup-required" }
+          );
+        }
 
         await progress("Executing guarded host effect.", 60);
         if (

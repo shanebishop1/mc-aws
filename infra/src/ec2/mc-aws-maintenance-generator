@@ -14,9 +14,15 @@ UNITS = (
     "minecraft-dns.service",
     "minecraft.service",
     "mc-agent-world-roots.service",
+    "mc-agent-tool-read.socket",
+    "mc-agent-tool-read.service",
+    "mc-agent-tool-write.socket",
+    "mc-agent-tool-write.service",
     "mc-agent-executor.socket",
     "mc-agent-executor.service",
     "mc-agent-gateway.service",
+    "mc-agent-host-broker.socket",
+    "mc-agent-host-broker.service",
 )
 MARKER = Path(os.environ.get("MC_MAINTENANCE_BOOT_HOLD", "/var/lib/mc-aws/maintenance-boot-hold.json"))
 BOOT_ID = Path(os.environ.get("MC_BOOT_ID_FILE", "/proc/sys/kernel/random/boot_id"))
@@ -31,10 +37,13 @@ def valid_current_boot_restoration() -> bool:
         value = json.loads(MARKER.read_text(encoding="ascii"))
         return (
             isinstance(value, dict)
-            and set(value) == {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId"}
+            and set(value) in (
+                {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId"},
+                {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId", "details"},
+            )
             and value.get("schemaVersion") == 1
             and value.get("operation")
-            in ("runtime-rollout", "restore", "backup", "hibernate", "destroy", "replacement", "host-replacement")
+            in ("runtime-rollout", "restore", "backup", "hibernate", "destroy", "replacement", "host-replacement", "agent-maintenance")
             and isinstance(value.get("owner"), str)
             and bool(value["owner"])
             and value.get("phase") in {
@@ -45,6 +54,7 @@ def valid_current_boot_restoration() -> bool:
                 "destroy": {"restoring-services"},
                 "replacement": {"restoring-services"},
                 "host-replacement": {"recovery"},
+                "agent-maintenance": {"restoring-services"},
             }.get(value.get("operation"), set())
             and value.get("bootId") == BOOT_ID.read_text(encoding="ascii").strip()
         )

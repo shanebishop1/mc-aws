@@ -263,7 +263,12 @@ def load_contract(path: Path) -> dict[str, Any]:
         or backup["phases"] != ["prepared", "quiescing", "quiesced", "uploading", "archive-uploaded", "publishing-manifest", "uploaded", "restoring-services", "restart-complete"]
         or backup["modes"] != ["ordinary", "hibernate", "destroy", "replacement"]
         or backup["maxGeneration"] != MAX_GENERATION
-        or service_state["units"] != ["minecraft-dns.service", "minecraft.service", "mc-agent-world-roots.service", "mc-agent-executor.socket", "mc-agent-executor.service", "mc-agent-gateway.service"]
+            or service_state["units"] != [
+                "minecraft-dns.service", "minecraft.service", "mc-agent-world-roots.service",
+                "mc-agent-tool-read.socket", "mc-agent-tool-read.service", "mc-agent-tool-write.socket",
+                "mc-agent-tool-write.service", "mc-agent-executor.socket", "mc-agent-executor.service",
+                "mc-agent-gateway.service", "mc-agent-host-broker.socket", "mc-agent-host-broker.service",
+            ]
         or service_state["enablementStates"] != ["enabled", "enabled-runtime", "disabled", "static", "indirect", "masked", "masked-runtime", "not-found"]
     ):
         fail("host-operation contract contents are invalid")
@@ -344,7 +349,9 @@ def validate_tool_result(value: Any, invocation_id: str) -> dict[str, Any]:
         if not isinstance(mutation["committed"], bool):
             fail("executor journal mutation commit is invalid")
         if mutation["committed"]:
-            if mutation.get("point") not in ("atomic-rename", "console-dispatch") or value["status"] == "indeterminate":
+            if mutation.get("point") not in (
+                "atomic-rename", "console-dispatch", "server-properties-root-generation", "maintenance-edit",
+            ) or value["status"] == "indeterminate":
                 fail("executor journal mutation commit is invalid")
         elif "point" in mutation or value["status"] == "succeeded":
             fail("executor journal mutation commit is invalid")
@@ -497,8 +504,9 @@ def validate_gateway_journal(path: Path, contract: dict[str, Any]) -> list[dict[
 
 
 def validate_executor_journal(path: Path, key_path: Path, contract_path: Path, gateway_path: Path,
-                              handoff_state: str, checkpoint_sequence: int,
-                              receipt_reference: tuple[str, int] | None = None) -> int:
+                               handoff_state: str, checkpoint_sequence: int,
+                               receipt_reference: tuple[str, int] | None = None,
+                               active_identity: dict[str, Any] | None = None) -> int:
     contract = load_contract(contract_path)
     executor_contract = contract["executorJournal"]
     if handoff_state not in ("auto", "never-used", "durable"):
@@ -515,7 +523,7 @@ def validate_executor_journal(path: Path, key_path: Path, contract_path: Path, g
     if handoff_state == "never-used" and (gateway or checkpoint_sequence != 0):
         fail("never-used executor handoff has durable dispatch context")
     dispatches = [entry["expectedJournalSequence"] for entry in (gateway or []) if entry["state"] == "dispatching"]
-    if dispatches and checkpoint_sequence < max(dispatches):
+    if active_identity is None and dispatches and checkpoint_sequence < max(dispatches):
         fail("executor journal checkpoint is behind the durable gateway dispatch")
     key_prefix = executor_contract["macPrefix"]
     if executor_contract["schemaVersion"] == 3:
@@ -853,6 +861,37 @@ def validate_executor_journal(path: Path, key_path: Path, contract_path: Path, g
         if receipt_reference:
             print_receipt_reference_scan(entries, gateway, *receipt_reference)
             return 0
+        if active_identity is not None:
+            expected_gateway = [
+                entry for entry in (gateway or [])
+                if entry["state"] == "dispatching"
+                and all(entry.get(field) == active_identity[field] for field in (
+                    "runtimeId", "sessionId", "taskId", "leaseId", "leaseGeneration",
+                    "invocationId", "invocationDigest",
+                ))
+            ]
+            expected_entries = [
+                entry for entry in entries
+                if entry.get("taskId") == active_identity["taskId"]
+                and entry.get("leaseGeneration") == active_identity["leaseGeneration"]
+                and entry.get("invocationId") == active_identity["invocationId"]
+                and entry.get("invocationDigest") == active_identity["invocationDigest"]
+                and entry.get("status") == "in-progress"
+                and ("backupAuthorizationFingerprint" not in active_identity
+                     or entry.get("backupAuthorizationFingerprint") == active_identity["backupAuthorizationFingerprint"])
+            ]
+            if (len(expected_gateway) != 1 or len(expected_entries) != 1
+                    or selected_generation < expected_gateway[0]["expectedJournalSequence"]):
+                fail("exact active executor maintenance authority is unavailable")
+            print(canonical_text({
+                "schemaVersion": 1,
+                "generation": selected_generation,
+                "recordSequence": expected_entries[0]["recordSequence"],
+                "effectFingerprint": expected_entries[0]["effectFingerprint"],
+                **({"backupAuthorizationFingerprint": expected_entries[0]["backupAuthorizationFingerprint"]}
+                   if "backupAuthorizationFingerprint" in expected_entries[0] else {}),
+            }))
+            return 0
         if gateway:
             fail("gateway reconciliation journal still owns an unpublished handoff")
         if any(
@@ -1042,6 +1081,18 @@ def parser() -> argparse.ArgumentParser:
     executor.add_argument("--gateway-journal", default=DEFAULT_GATEWAY_JOURNAL)
     executor.add_argument("--handoff-state", choices=("auto", "never-used", "durable"), required=True)
     executor.add_argument("--checkpoint-sequence", required=True, type=int)
+    active = subparsers.add_parser("executor-active-effect")
+    active.add_argument("--journal", default=DEFAULT_EXECUTOR_JOURNAL)
+    active.add_argument("--credential", default=DEFAULT_EXECUTOR_KEY)
+    active.add_argument("--gateway-journal", default=DEFAULT_GATEWAY_JOURNAL)
+    active.add_argument("--runtime-id", required=True)
+    active.add_argument("--session-id", required=True)
+    active.add_argument("--task-id", required=True)
+    active.add_argument("--lease-id", required=True)
+    active.add_argument("--lease-generation", required=True, type=int)
+    active.add_argument("--invocation-id", required=True)
+    active.add_argument("--invocation-digest", required=True)
+    active.add_argument("--backup-authorization-fingerprint")
     references = subparsers.add_parser("executor-receipt-references")
     references.add_argument("--journal", default=DEFAULT_EXECUTOR_JOURNAL)
     references.add_argument("--credential", default=DEFAULT_EXECUTOR_KEY)
@@ -1094,6 +1145,38 @@ def main() -> int:
                 Path(arguments.gateway_journal),
                 arguments.handoff_state,
                 arguments.checkpoint_sequence,
+            )
+        if arguments.command == "executor-active-effect":
+            identity = {
+                "runtimeId": arguments.runtime_id,
+                "sessionId": arguments.session_id,
+                "taskId": arguments.task_id,
+                "leaseId": arguments.lease_id,
+                "leaseGeneration": arguments.lease_generation,
+                "invocationId": arguments.invocation_id,
+                "invocationDigest": arguments.invocation_digest,
+                **({"backupAuthorizationFingerprint": arguments.backup_authorization_fingerprint}
+                   if arguments.backup_authorization_fingerprint is not None else {}),
+            }
+            if (
+                any(not isinstance(identity[field], str) or not ID.fullmatch(identity[field]) for field in (
+                    "runtimeId", "sessionId", "taskId", "leaseId", "invocationId",
+                ))
+                or not isinstance(identity["leaseGeneration"], int)
+                or identity["leaseGeneration"] < 1
+                or not DIGEST.fullmatch(identity["invocationDigest"])
+                or ("backupAuthorizationFingerprint" in identity
+                    and not DIGEST.fullmatch(identity["backupAuthorizationFingerprint"]))
+            ):
+                fail("active maintenance identity is invalid")
+            return validate_executor_journal(
+                Path(arguments.journal),
+                Path(arguments.credential),
+                Path(arguments.contract),
+                Path(arguments.gateway_journal),
+                "durable",
+                0,
+                active_identity=identity,
             )
         if arguments.command == "executor-receipt-references":
             if not ID.fullmatch(arguments.key_id) or arguments.key_epoch < 1:

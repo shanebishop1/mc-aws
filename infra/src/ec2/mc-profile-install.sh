@@ -123,7 +123,7 @@ PY
 fi
 if (( ACTIVATE_QUIESCED == 1 )); then
   [[ -n "$MAINTENANCE_OWNER" && -n "$MAINTENANCE_LOCK" ]] || fail "quiesced activation requires an exact maintenance owner"
-  for unit in minecraft.service minecraft-dns.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-world-roots.service; do
+  for unit in minecraft.service minecraft-dns.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-world-roots.service mc-agent-host-broker.socket mc-agent-host-broker.service; do
     [[ "$(systemctl is-active "$unit" 2>/dev/null || true)" == inactive ]] || fail "quiesced activation requires $unit to be inactive"
     [[ "$(systemctl is-enabled "$unit" 2>/dev/null || true)" =~ ^masked(-runtime)?$ ]] || fail "quiesced activation requires $unit to be masked"
   done
@@ -670,8 +670,8 @@ if (( BOOTSTRAP == 0 && RESTORE_STAGING == 0 )) && systemctl is-active --quiet m
 if (( RESTORE_STAGING == 0 && DEFER_SERVICES == 0 && BOOTSTRAP == 0 )); then
   # Quiesce every activation path before replacing any cooperating script,
   # unit, socket, config, or authentication helper.
-  systemctl mask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service
-  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service
+  systemctl mask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service
+  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service
 fi
 
 MC_AGENT_ENABLE="$ENABLE_AGENT" python3 - "$config_stage/gateway.json" "$runtime_release/host/mc-agent-gateway.service" "$config_stage/executor.json" "$runtime_release/host/mc-agent-executor.service" <<'PY'
@@ -710,7 +710,7 @@ with open(executor_config_path, encoding="utf-8") as source:
     executor_config = json.load(source)
 with open(executor_service_path, encoding="utf-8") as source:
     executor_unit = source.read()
-if executor_config.get("journalCredentialName") != "executor-journal-hmac" or executor_config.get("receiptCredentialName") != "executor-receipt-private" or executor_config.get("cleanStartEpochCredentialName") != "executor-clean-start-epoch" or executor_config.get("backupFencePublicKeyPath") != "/config/backup-fence-public.pem":
+if executor_config.get("journalCredentialName") != "executor-journal-hmac" or executor_config.get("receiptCredentialName") != "executor-receipt-private" or executor_config.get("cleanStartEpochCredentialName") != "executor-clean-start-epoch" or executor_config.get("backupFencePublicKeyPath") != "/config/backup-fence-public.pem" or executor_config.get("shellReadSocketPath") != "/run/mc-agent/shell-read.sock" or executor_config.get("shellWriteSocketPath") != "/run/mc-agent/shell-write.sock" or executor_config.get("hostBrokerSocketPath") != "/run/mc-agent/host-broker.sock":
     raise SystemExit("executor credential requirements are invalid")
 executor_loaded = set(re.findall(r"^LoadCredential=([^:]+):", executor_unit, re.MULTILINE))
 if executor_loaded != {"executor-journal-hmac", "executor-receipt-private", "executor-clean-start-epoch"}:
@@ -725,12 +725,14 @@ mv -Tf -- "$SETUP_ROOT/.runtime-current" "$SETUP_ROOT/runtime"
 ln -sfn "$(basename -- "$profile_release")" "$SETUP_ROOT/.profile-current"
 mv -Tf -- "$SETUP_ROOT/.profile-current" "$SETUP_ROOT/profile"
 
-for script in check-mc-idle.sh mc-rclone-config.sh mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh mc-wait-ready.sh mc-runtime-rollout.sh update-dns.sh mc-profile-install.sh mc-stop.sh mc-agent-install.sh mc-agent-world-roots.py mc-release-journal.py; do
+for script in check-mc-idle.sh mc-rclone-config.sh mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh mc-wait-ready.sh mc-runtime-rollout.sh update-dns.sh mc-profile-install.sh mc-stop.sh mc-agent-install.sh mc-agent-world-roots.py mc-release-journal.py mc-agent-host-broker.py mc-agent-workspace-dac.py; do
   replace_release_file "$SETUP_ROOT/runtime/$script" "/usr/local/bin/$script" 0755
 done
 install -d -o root -g root -m 0755 /opt/mc-agent/executor-root/usr/local/bin
 install -o root -g root -m 0755 "$SETUP_ROOT/runtime/mc-agent-world-roots.py" \
   /opt/mc-agent/executor-root/usr/local/bin/mc-agent-world-roots.py
+install -o root -g root -m 0755 "$SETUP_ROOT/runtime/mc-agent-workspace-dac.py" \
+  /opt/mc-agent/executor-root/usr/local/bin/mc-agent-workspace-dac.py
 cmp -s "$SETUP_ROOT/runtime/mc-agent-world-roots.py" \
   /opt/mc-agent/executor-root/usr/local/bin/mc-agent-world-roots.py || fail "executor world-root verifier staging failed"
 install_persistent_guard_file "$SETUP_ROOT/runtime/mc-maintenance-boot.py" /usr/local/bin/mc-maintenance-boot.py 755
@@ -741,7 +743,15 @@ replace_release_file "$SETUP_ROOT/runtime/minecraft-dns.service" /etc/systemd/sy
 replace_release_file "$SETUP_ROOT/runtime/mc-agent-gateway.service" /etc/systemd/system/mc-agent-gateway.service 0644
 replace_release_file "$SETUP_ROOT/runtime/mc-agent-executor.service" /etc/systemd/system/mc-agent-executor.service 0644
 replace_release_file "$SETUP_ROOT/runtime/mc-agent-executor.socket" /etc/systemd/system/mc-agent-executor.socket 0644
-replace_release_file "$SETUP_ROOT/runtime/mc-agent-world-roots.service" /etc/systemd/system/mc-agent-world-roots.service 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-tool-read.service" /etc/systemd/system/mc-agent-tool-read.service 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-tool-read.socket" /etc/systemd/system/mc-agent-tool-read.socket 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-tool-write.service" /etc/systemd/system/mc-agent-tool-write.service 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-tool-write.socket" /etc/systemd/system/mc-agent-tool-write.socket 0644
+  replace_release_file "$SETUP_ROOT/runtime/mc-agent-world-roots.service" /etc/systemd/system/mc-agent-world-roots.service 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-host-broker.service" /etc/systemd/system/mc-agent-host-broker.service 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-host-broker.socket" /etc/systemd/system/mc-agent-host-broker.socket 0644
+replace_release_file "$SETUP_ROOT/runtime/mc-agent-workspace-dac.py" /usr/local/bin/mc-agent-workspace-dac.py 0755
+/usr/local/bin/mc-agent-workspace-dac.py reconcile
 install_persistent_guard_file "$SETUP_ROOT/runtime/mc-maintenance-recovery.service" /etc/systemd/system/mc-maintenance-recovery.service 644
 install -d -o root -g root -m 0755 /usr/lib/systemd/system-generators
 install_persistent_guard_file "$SETUP_ROOT/runtime/mc-aws-maintenance-generator" /usr/lib/systemd/system-generators/mc-aws-maintenance-generator 755
@@ -894,14 +904,15 @@ lock="$profile_source/plugins.lock.json"
 plugin_list="$work/plugins.tsv"
 : > "$plugin_list"
 if [[ -f "$lock" ]]; then
-  python3 - "$lock" > "$plugin_list" <<'PY'
-import json, re, sys, urllib.parse
+    python3 - "$lock" "$SERVER_ROOT" > "$plugin_list" <<'PY'
+import hashlib, json, pathlib, re, stat, sys, urllib.parse
 value = json.load(open(sys.argv[1], encoding="utf-8"))
+live_root = pathlib.Path(sys.argv[2])
 if set(value) != {"version", "plugins"} or value["version"] != 1 or not isinstance(value["plugins"], list):
     raise SystemExit("invalid plugin lock schema")
 names, destinations = set(), set()
 for plugin in value["plugins"]:
-    if not isinstance(plugin, dict) or set(plugin) != {"name", "destination", "url", "sha256"}:
+    if not isinstance(plugin, dict) or set(plugin) not in ({"name", "destination", "url", "sha256"}, {"name", "destination", "url", "sha256", "bytes"}):
         raise SystemExit("invalid plugin entry")
     name, destination, url, digest = (plugin[key] for key in ("name", "destination", "url", "sha256"))
     parsed = urllib.parse.urlsplit(url)
@@ -911,10 +922,26 @@ for plugin in value["plugins"]:
         raise SystemExit("unsafe plugin URL")
     if not re.fullmatch(r"[a-f0-9]{64}", digest) or name.lower() in names or destination.lower() in destinations:
         raise SystemExit("invalid or duplicate plugin checksum entry")
+    expected_bytes = plugin.get("bytes")
+    if expected_bytes is not None and (not isinstance(expected_bytes, int) or isinstance(expected_bytes, bool) or not 1 <= expected_bytes <= 32 * 1024 * 1024):
+        raise SystemExit("invalid plugin byte identity")
+    existing = live_root / "plugins" / destination
+    if expected_bytes is None:
+        try:
+            existing_metadata = existing.lstat()
+        except FileNotFoundError:
+            existing_metadata = None
+        if (
+            existing_metadata is None
+            or not stat.S_ISREG(existing_metadata.st_mode)
+            or stat.S_ISLNK(existing_metadata.st_mode)
+            or hashlib.sha256(existing.read_bytes()).hexdigest() != digest
+        ):
+            raise SystemExit("new or changed plugin entries require an exact bytes field")
     names.add(name.lower()); destinations.add(destination.lower())
-    print("\t".join((name, destination, url, digest)))
+    print("\t".join((name, destination, url, digest, "" if expected_bytes is None else str(expected_bytes))))
 PY
-  while IFS=$'\t' read -r name destination url digest; do
+  while IFS=$'\t' read -r name destination url digest expected_bytes; do
     [[ -n "$name" ]] || continue
     temporary="$work/plugin-${digest}.download"
     rm -f -- "$temporary"
@@ -931,6 +958,10 @@ PY
     [[ "$plugin_bytes" =~ ^[0-9]+$ ]] && (( plugin_bytes > 0 && plugin_bytes <= MAX_PLUGIN_BYTES )) || {
       rm -f -- "$temporary"
       fail "plugin download has an invalid size: $name"
+    }
+    [[ -z "$expected_bytes" || "$plugin_bytes" == "$expected_bytes" ]] || {
+      rm -f -- "$temporary"
+      fail "plugin byte identity mismatch: $name"
     }
     printf '%s  %s\n' "$digest" "$temporary" | sha256sum --check --status || fail "plugin checksum mismatch: $name"
     python3 - "$temporary" "$SERVER_ROOT" "$destination" <<'PY'
@@ -972,22 +1003,38 @@ fi
 # tree.  Non-JAR regular files and directories are an explicit compatibility
 # allowance for Paper/plugin-generated data; links and special files are not.
 python3 - "$SERVER_ROOT" "$plugin_list" <<'PY'
-import os, stat, sys
+import hashlib, os, stat, sys
 from pathlib import Path
 
 server_root, lock_path = map(Path, sys.argv[1:])
 plugins_root = server_root / "plugins"
-if not plugins_root.exists():
-    raise SystemExit(0)
-metadata = plugins_root.lstat()
-if plugins_root.is_symlink() or not stat.S_ISDIR(metadata.st_mode):
-    raise SystemExit("live plugins path is unsafe")
 expected = {}
 for line in lock_path.read_text(encoding="utf-8").splitlines():
     fields = line.split("\t")
-    if len(fields) != 4:
+    if len(fields) != 5:
         raise SystemExit("plugin manifest evidence is malformed")
-    expected[fields[1].lower()] = fields[1]
+    name, destination, url, digest, bytes_value = fields
+    if not name or not destination or not digest or not url:
+        raise SystemExit("plugin manifest evidence is malformed")
+    if bytes_value:
+        try:
+            expected_bytes = int(bytes_value)
+        except ValueError:
+            raise SystemExit("plugin manifest evidence has an invalid byte identity")
+        if expected_bytes < 1:
+            raise SystemExit("plugin manifest evidence has an invalid byte identity")
+    else:
+        expected_bytes = None
+    expected[destination.lower()] = (destination, digest, expected_bytes)
+
+try:
+    metadata = plugins_root.lstat()
+except FileNotFoundError:
+    if expected:
+        raise SystemExit("live plugins path is missing")
+    raise SystemExit(0)
+if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISDIR(metadata.st_mode):
+    raise SystemExit("live plugins path is unsafe")
 
 def reconcile(directory: Path) -> None:
     changed = False
@@ -1002,7 +1049,7 @@ def reconcile(directory: Path) -> None:
         if not entry.name.lower().endswith(".jar"):
             continue
         relative = path.relative_to(plugins_root).as_posix()
-        if relative.lower() != entry.name.lower() or entry.name.lower() not in expected or entry.name != expected[entry.name.lower()]:
+        if relative.lower() != entry.name.lower() or entry.name.lower() not in expected or entry.name != expected[entry.name.lower()][0]:
             path.unlink()
             changed = True
     if changed:
@@ -1013,6 +1060,19 @@ def reconcile(directory: Path) -> None:
             os.close(descriptor)
 
 reconcile(plugins_root)
+for destination, digest, expected_bytes in expected.values():
+    path = plugins_root / destination
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        raise SystemExit(f"reviewed plugin is missing after reconciliation: {destination}")
+    if stat.S_ISLNK(metadata.st_mode) or not stat.S_ISREG(metadata.st_mode):
+        raise SystemExit(f"reviewed plugin is not a regular file: {destination}")
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != digest:
+        raise SystemExit(f"reviewed plugin digest mismatch after reconciliation: {destination}")
+    if expected_bytes is not None and len(data) != expected_bytes:
+        raise SystemExit(f"reviewed plugin byte identity mismatch after reconciliation: {destination}")
 PY
 
 if (( RESTORE_STAGING == 0 )); then
@@ -1045,15 +1105,15 @@ if (( BOOTSTRAP == 0 && RESTORE_STAGING == 0 && ACTIVATE_QUIESCED == 0 )); then
   fi
   systemctl enable minecraft.service minecraft-dns.service
   if (( ENABLE_AGENT == 1 )); then
-    systemctl enable mc-agent-executor.socket mc-agent-gateway.service mc-agent-executor.service mc-agent-world-roots.service
+     systemctl enable mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-gateway.service mc-agent-executor.service mc-agent-world-roots.service mc-agent-host-broker.socket mc-agent-host-broker.service
   fi
   if [[ -e "$MAINTENANCE_BOOT_HOLD" || -L "$MAINTENANCE_BOOT_HOLD" ]]; then
     log "Durable boot inhibition is active; service activation remains deferred"
   else
-     systemctl unmask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service
+      systemctl unmask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service
     if (( ENABLE_AGENT == 1 )); then
       systemctl start mc-agent-world-roots.service
-      systemctl start mc-agent-executor.socket
+      systemctl start mc-agent-tool-read.socket mc-agent-tool-write.socket mc-agent-executor.socket mc-agent-host-broker.socket
       systemctl start mc-agent-executor.service
       systemctl start mc-agent-gateway.service
     fi

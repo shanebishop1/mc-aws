@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import type { AgentHarnessAdapter, AgentToolExecutorAdapter } from "@/lib/agent/adapters";
+import { canonicalJson } from "@/lib/agent/canonical-json";
 import type { AgentEvent, JsonObject, PermissionPolicy, ToolInvocation, ToolResult } from "@/lib/agent/contracts";
 import { AgentControlPlaneService, deriveOpaqueActorId } from "@/lib/agent/control-plane";
 import { createDirectLiveExecutor } from "@/lib/agent/executor";
@@ -16,6 +18,7 @@ import {
   type RuntimeEventPublicationRequest,
   type RuntimeInvocationAuthorizationRequest,
   type RuntimeLeaseMutationRequest,
+  type RuntimeRecoveryPublicationRequest,
   type RuntimeRenewRequest,
   type RuntimeStatusPublicationRequest,
   type RuntimeWorkLeaseRequest,
@@ -27,6 +30,10 @@ import { agentE2eNetworkAttempts } from "./agent-e2e-network.setup";
 import { LocalAgentTestHost } from "./support/local-agent-test-host";
 
 const NOW = "2099-09-02T12:00:00.000Z";
+
+function resultDigest(result: ToolResult): string {
+  return createHash("sha256").update(canonicalJson(result)).digest("hex");
+}
 
 class LocalRuntimeControl implements RuntimeControlTransport {
   private approvalPersistedResolve: (() => void) | undefined;
@@ -70,6 +77,9 @@ class LocalRuntimeControl implements RuntimeControlTransport {
       if (error instanceof AgentStateConflictError) throw new RuntimeTransportError(409, false);
       throw error;
     }
+  }
+  publishRecovery(leaseId: string, input: RuntimeRecoveryPublicationRequest) {
+    return this.service.publishRecovery(this.runtimeId, leaseId, input);
   }
   async publishApproval(leaseId: string, input: RuntimeApprovalPublicationRequest) {
     const result = await this.service.publishApproval(this.runtimeId, leaseId, input);
@@ -195,7 +205,7 @@ class VerticalSliceHarness implements AgentHarnessAdapter {
       toolId: "console.execute",
       capability: "console.execute",
       targetScope: { schemaVersion: 1, kind: "console", normalizedTarget: "server" },
-      arguments: { command: "list", timeoutMs: 1_000 },
+      arguments: { command: "minecraft:list", timeoutMs: 1_000 },
     });
     yield event(
       input.session.sessionId,
@@ -292,6 +302,9 @@ describe("cloud-free local agent vertical slice", () => {
         now: () => new Date(NOW),
         createId: () => "vertical-slice",
         sleep: async () => undefined,
+        verifyRecoveryReceipt: async (receipt) =>
+          receipt.executorKeyId === "executor-receipt-deterministic" && receipt.signature === "A".repeat(86),
+        issueTerminalAcknowledgement: async (input) => ({ ...input, signature: "A".repeat(86) }),
       });
       const host = new LocalAgentTestHost([workspace, scratch]);
       const directExecutor = createDirectLiveExecutor(host, {
@@ -342,7 +355,7 @@ describe("cloud-free local agent vertical slice", () => {
             lifecycleLockId: authorization.lifecycleLockId,
             lifecycleFencingToken: authorization.lifecycleFencingToken,
             lifecycleLeaseGeneration: authorization.lifecycleLeaseGeneration,
-            resultDigest: "0".repeat(64),
+            resultDigest: resultDigest(result),
             journalSequence: 1,
             completedAt: result.completedAt,
             signature: "A".repeat(86),
@@ -452,7 +465,7 @@ describe("cloud-free local agent vertical slice", () => {
       );
       expect(await readFile(outside, "utf8")).toBe("outside-must-not-change");
       expect(host.effects.map((effect) => effect.kind)).toEqual(["read", "write", "console"]);
-      expect(host.consoleCommands).toEqual(["list"]);
+      expect(host.consoleCommands).toEqual(["minecraft:list"]);
       expect(backupCalls).toHaveBeenCalledTimes(1);
       expect(
         completed?.events.filter((item) => item.kind === "backup").map((item) => item.payload.data.status)
@@ -465,14 +478,13 @@ describe("cloud-free local agent vertical slice", () => {
           .filter((item) => item.kind === "tool-result")
           .map((item) => item.payload.data.mutationCommit)
           .filter(Boolean)
-      ).toEqual([
-        { committed: true, point: "atomic-rename" },
-        { committed: true, point: "console-dispatch" },
-      ]);
+      ).toEqual([{ committed: true, point: "atomic-rename" }]);
       const backupCompletedAt = completed?.events.findIndex(
         (item) => item.kind === "backup" && item.payload.data.status === "succeeded"
       );
-      const editEvidenceAt = completed?.events.findIndex((item) => item.eventId === "vs-edit-result");
+      const editEvidenceAt = completed?.events.findIndex(
+        (item) => item.kind === "tool-result" && item.payload.data.invocationId === "vs-edit"
+      );
       expect(backupCompletedAt).toBeGreaterThanOrEqual(0);
       expect(editEvidenceAt).toBeGreaterThan(backupCompletedAt ?? Number.MAX_SAFE_INTEGER);
       expect(

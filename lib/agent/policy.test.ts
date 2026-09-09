@@ -33,9 +33,19 @@ const NOW = "2026-09-02T12:00:00.000Z";
 const DIGEST = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 const expectedPresetRules: Record<string, PermissionDecision[]> = {
-  copilot: ["allow", "ask-always", "deny", "ask-always", "ask-always", "deny", "allow", "deny"],
-  maintainer: ["allow", "ask-once", "ask-always", "ask-once", "ask-once", "ask-always", "allow", "ask-always"],
-  autopilot: ["allow", "allow", "ask-once", "allow", "allow", "ask-once", "allow", "ask-once"],
+  copilot: ["allow", "ask-always", "deny", "ask-always", "ask-always", "deny", "allow", "deny", "ask-always"],
+  maintainer: [
+    "allow",
+    "ask-once",
+    "ask-always",
+    "ask-once",
+    "ask-once",
+    "ask-always",
+    "allow",
+    "ask-always",
+    "ask-always",
+  ],
+  autopilot: ["allow", "allow", "ask-once", "allow", "allow", "ask-once", "allow", "ask-once", "ask-always"],
 };
 
 function evaluationInput(overrides: Partial<PermissionEvaluationInput> = {}): PermissionEvaluationInput {
@@ -80,6 +90,7 @@ describe("permission presets", () => {
       "network.outbound",
       "backup.create",
       "extension.load",
+      "maintenance.apply",
     ]);
     expect(PERMISSION_PRESET_NAMES).toEqual(["copilot", "maintainer", "autopilot", "custom"]);
   });
@@ -106,6 +117,17 @@ describe("permission presets", () => {
     expect(PERMISSION_PRESETS.copilot.backupMode).toBe("before-any-mutation");
     expect(PERMISSION_PRESETS.maintainer).toMatchObject({ isDefault: true, backupMode: "before-risky" });
     expect(PERMISSION_PRESETS.autopilot.backupMode).toBe("before-destructive");
+  });
+
+  it("keeps MOTD maintenance on exact destructive approval and backup gates", () => {
+    for (const name of ["copilot", "maintainer", "autopilot"] as const) {
+      const policy = createPolicyFromPreset(name, `${name}-maintenance-policy`);
+      expect(permissionDecisionForRisk(policy, "maintenance.apply", "destructive")).toBe("ask-always");
+      expect(evaluateBackup(policy.backupMode, "destructive", true)).toMatchObject({
+        required: true,
+        outcome: "create-backup",
+      });
+    }
   });
 
   it.each(["allow", "ask-once"] as const)(

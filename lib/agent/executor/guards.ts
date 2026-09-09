@@ -1,6 +1,12 @@
 import { isIP } from "node:net";
 import path from "node:path";
-import type { ImmutableBoundaryFacts, RiskFacts, TargetScope, ToolInvocation } from "@/lib/agent/contracts";
+import type {
+  ImmutableBoundaryFacts,
+  RiskFacts,
+  ShellCommand,
+  TargetScope,
+  ToolInvocation,
+} from "@/lib/agent/contracts";
 import type { CanonicalPath, DirectLiveExecutorConfig, DirectLiveHostEffects } from "@/lib/agent/executor/types";
 import { isImmutableAgentAssetDirectory, isImmutableAgentAssetPath } from "@/lib/agent/immutable-assets";
 import {
@@ -100,6 +106,8 @@ const MINECRAFT_ACCESS_CONTROL_FILES = new Set([
   "whitelist.json",
 ]);
 const PERMISSION_PLUGIN_DIRECTORIES = new Set(["GroupManager", "LuckPerms", "PermissionsEx"]);
+export const MAX_SHELL_COMMAND_BYTES = 16 * 1024;
+export const MAX_SHELL_TIMEOUT_MS = 120_000;
 
 export class ExecutorGuardError extends Error {
   constructor(
@@ -109,6 +117,64 @@ export class ExecutorGuardError extends Error {
     super(message);
     this.name = "ExecutorGuardError";
   }
+}
+
+function canonicalRegularFileTarget(value: unknown): string {
+  if (
+    typeof value !== "string" ||
+    value.length === 0 ||
+    value.includes("\0") ||
+    value.includes("\\") ||
+    path.posix.isAbsolute(value) ||
+    path.posix.normalize(value) !== value ||
+    value.split("/").some((part) => part === "" || part === "." || part === "..")
+  ) {
+    throw new ExecutorGuardError(
+      "Shell change path must be canonical and workspace-relative.",
+      "targetOutsideAllowedRoots"
+    );
+  }
+  return value;
+}
+
+/** Strict parser for the public shell capability. It intentionally does not inspect command names. */
+// biome-ignore lint/complexity/noExcessiveCognitiveComplexity: This parser is the strict shell contract boundary and intentionally validates every field fail-closed.
+export function parseShellCommand(value: unknown): ShellCommand {
+  if (value === null || typeof value !== "object" || Array.isArray(value))
+    throw new ExecutorGuardError("Shell arguments must be an object.", "targetOutsideAllowedRoots");
+  const item = value as Record<string, unknown>;
+  const keys = Object.keys(item);
+  if (keys.some((key) => !["mode", "command", "timeoutMs", "change"].includes(key)))
+    throw new ExecutorGuardError("Shell arguments contain an unknown field.", "targetOutsideAllowedRoots");
+  if (item.mode !== "read-only" && item.mode !== "staged-write")
+    throw new ExecutorGuardError("Shell mode is invalid.", "targetOutsideAllowedRoots");
+  if (
+    typeof item.command !== "string" ||
+    item.command.length === 0 ||
+    Buffer.byteLength(item.command, "utf8") > MAX_SHELL_COMMAND_BYTES ||
+    item.command.includes("\0")
+  )
+    throw new ExecutorGuardError("Shell command is empty, oversized, or contains NUL.", "targetOutsideAllowedRoots");
+  if (
+    !Number.isSafeInteger(item.timeoutMs) ||
+    (item.timeoutMs as number) < 1 ||
+    (item.timeoutMs as number) > MAX_SHELL_TIMEOUT_MS
+  )
+    throw new ExecutorGuardError("Shell timeout is outside its bound.", "targetOutsideAllowedRoots");
+  if (item.mode === "read-only" && item.change !== undefined)
+    throw new ExecutorGuardError("Read-only shell cannot declare a change.", "targetOutsideAllowedRoots");
+  if (item.mode === "staged-write") {
+    const change = item.change;
+    if (change === null || typeof change !== "object" || Array.isArray(change))
+      throw new ExecutorGuardError("Staged-write shell requires one change.", "targetOutsideAllowedRoots");
+    const changeObject = change as Record<string, unknown>;
+    if (Object.keys(changeObject).some((key) => !["operation", "path"].includes(key)))
+      throw new ExecutorGuardError("Shell change contains an unknown field.", "targetOutsideAllowedRoots");
+    if (changeObject.operation !== "replace" && changeObject.operation !== "delete")
+      throw new ExecutorGuardError("Shell change operation is invalid.", "targetOutsideAllowedRoots");
+    canonicalRegularFileTarget(changeObject.path);
+  }
+  return structuredClone(item) as unknown as ShellCommand;
 }
 
 export function contained(root: string, candidate: string): boolean {
@@ -306,7 +372,7 @@ export function inspectCommand(
     facts.requestsLinuxCapabilities = true;
   const boundary = textBoundary(commandText);
   if (boundary) facts[boundary] = true;
-  if (!(name in config.allowedExecutables) || config.allowedExecutables[name] !== executable)
+  if (!(name in (config.allowedExecutables ?? {})) || config.allowedExecutables?.[name] !== executable)
     facts.targetOutsideAllowedRoots = true;
   return facts;
 }
@@ -385,15 +451,42 @@ export function isMinecraftAccessControlPath(target: string): boolean {
  * contract.
  */
 export function isGenericImmutableAssetMutation(invocation: ToolInvocation): boolean {
+  if (invocation.capability === "shell.execute" && invocation.arguments.mode === "staged-write") {
+    const change = invocation.arguments.change;
+    const target =
+      change !== null && typeof change === "object" && !Array.isArray(change) && typeof change.path === "string"
+        ? change.path
+        : "";
+    return isShellImmutableTarget(target);
+  }
   if (
     invocation.targetScope.kind !== "workspace" ||
     !["workspace.write", "workspace.delete", "network.outbound"].includes(invocation.capability)
   )
     return false;
+  if (isShellImmutableTarget(invocation.targetScope.normalizedTarget)) return true;
   if (isImmutableAgentAssetPath(invocation.targetScope.normalizedTarget)) return true;
   return invocation.capability === "workspace.delete" && invocation.arguments.recursive === true
     ? isImmutableAgentAssetDirectory(invocation.targetScope.normalizedTarget)
     : false;
+}
+
+/** Shell output may never replace executable, datapack, function, or plugin runtime code. */
+export function isShellImmutableTarget(target: string): boolean {
+  if (
+    !target ||
+    target.includes("\0") ||
+    target.includes("\\") ||
+    path.posix.isAbsolute(target) ||
+    path.posix.normalize(target) !== target ||
+    target.split("/").some((part) => part === "" || part === "." || part === "..")
+  )
+    return false;
+  const parts = target.split("/");
+  if (parts.some((part) => part === "datapacks" || part === "functions")) return true;
+  if (parts[0] === "scripts") return true;
+  if (parts[0] === "plugins" && parts.length > 1) return true;
+  return isImmutableAgentAssetPath(target);
 }
 
 export function riskFacts(
@@ -407,9 +500,20 @@ export function riskFacts(
     invocation.capability === "workspace.delete" ||
     invocation.capability === "network.outbound";
   facts.consoleMutation = consoleMutation;
+  const shellChange =
+    invocation.capability === "shell.execute" &&
+    invocation.arguments.mode === "staged-write" &&
+    invocation.arguments.change !== null &&
+    typeof invocation.arguments.change === "object" &&
+    !Array.isArray(invocation.arguments.change) &&
+    typeof invocation.arguments.change.path === "string"
+      ? invocation.arguments.change.path
+      : undefined;
   facts.executableOrConfigurationChange =
     invocation.capability === "extension.load" ||
-    /(?:\.sh|\.jar|\.json|\.ya?ml|\.toml|\.properties)$/i.test(String(invocation.targetScope.normalizedTarget));
+    /(?:\.sh|\.jar|\.json|\.ya?ml|\.toml|\.properties)$/i.test(
+      shellChange ?? String(invocation.targetScope.normalizedTarget)
+    );
   facts.bulkOperation = invocation.capability === "workspace.delete" && invocation.arguments.recursive === true;
   facts.worldChange = isPersistentWorldMutation(invocation, persistentWorldRoots);
   if (invocation.capability === "console.execute") {
@@ -427,6 +531,7 @@ export function riskFacts(
       [invocation.arguments.executable, ...(Array.isArray(invocation.arguments.args) ? invocation.arguments.args : [])]
         .join(" ")
         .match(/(?:^|\s)(?:chmod|chown)(?:\s|$)/) !== null);
-  facts.broadMutation = facts.bulkOperation;
+  facts.broadMutation =
+    facts.bulkOperation || (invocation.capability === "shell.execute" && invocation.arguments.mode === "staged-write");
   return facts;
 }

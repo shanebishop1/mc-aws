@@ -13,7 +13,7 @@
   "workspaceRoot": "/workspace",
   "scratchRoot": "/scratch",
   "persistentWorldRoots": ["world", "world_nether", "world_the_end"],
-  "allowedExecutables": {
-    "workspace": "/runtime/commands/workspace"
-  }
+  "shellReadSocketPath": "/run/mc-agent/shell-read.sock",
+  "shellWriteSocketPath": "/run/mc-agent/shell-write.sock",
+  "hostBrokerSocketPath": "/run/mc-agent/host-broker.sock"
 }

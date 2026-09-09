@@ -6,7 +6,7 @@ Before=mc-agent-executor.service
 [Service]
 Type=simple
 User=root
-Group=mc-agent
+Group=mc-agent-world-root-client
 UMask=0007
 ExecStart=/usr/local/bin/mc-agent-world-roots.py serve
 Restart=on-failure

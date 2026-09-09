@@ -6,11 +6,14 @@ import type {
   JsonValue,
   MutationCommit,
   PermissionPolicy,
+  ShellCommand,
+  ShellMode,
   ToolDefinition,
   ToolInvocation,
   ToolProgress,
   ToolResult,
 } from "@/lib/agent/contracts";
+import type { MaintenanceApplyRequest, MaintenanceInvocationIdentity } from "@/lib/agent/maintenance";
 export type ExecutorEntryKind = "file" | "directory" | "symlink" | "special" | "missing";
 
 /** Hard ceiling shared by executor tools; the lifecycle safety horizon must remain strictly longer. */
@@ -55,17 +58,27 @@ export interface HostEffectResult {
   evidence: EvidenceReference[];
   /** Present only after a mutation has crossed its defined irreversible commit point. */
   mutationCommit?: MutationCommit;
+  /** Runner data is deliberately not part of the signed JSON result until validated by the executor. */
+  stagedResult?: UntrustedStagedResult;
+}
+
+export interface UntrustedStagedResult {
+  regularFile: boolean;
+  noLink: boolean;
+  bytes: Uint8Array;
+  sha256: string;
 }
 
 export interface ProcessRequest {
-  executable: string;
-  args: string[];
+  mode: ShellMode;
+  command: string;
   cwd: string;
   timeoutMs: number;
   maxOutputBytes: number;
   signal: AbortSignal;
-  env: Readonly<Record<string, string>>;
   onProgress(bytesProduced: number): void;
+  /** Strictly bounded staged output returned by the credentialless runner. */
+  change?: ShellCommand["change"];
 }
 
 export interface DownloadRequest {
@@ -121,6 +134,12 @@ export interface DirectLiveHostEffects {
     command: string,
     timeoutMs: number,
     signal: AbortSignal,
+    assertCommitAllowed?: () => Promise<void>,
+    invocation?: MaintenanceInvocationIdentity
+  ): Promise<HostEffectResult>;
+  applyMaintenance?(
+    request: MaintenanceApplyRequest,
+    signal: AbortSignal,
     assertCommitAllowed?: () => Promise<void>
   ): Promise<HostEffectResult>;
   download(request: DownloadRequest): Promise<HostEffectResult>;
@@ -138,7 +157,8 @@ export interface DirectLiveExecutorConfig {
   scratchRoot: string;
   /** Exact canonical workspace-relative roots containing persistent Minecraft world data. */
   persistentWorldRoots?: readonly string[];
-  allowedExecutables: Readonly<Record<string, string>>;
+  /** Legacy dispatcher configuration is ignored by the shell boundary. */
+  allowedExecutables?: Readonly<Record<string, string>>;
   maxReadBytes?: number;
   maxWriteBytes?: number;
   maxDownloadBytes?: number;

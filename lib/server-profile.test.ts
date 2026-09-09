@@ -248,10 +248,25 @@ describe("plugins.lock.json validation", () => {
     destination: "example.jar",
     url: "https://plugins.example.org/releases/example.jar",
     sha256: "a".repeat(64),
+    bytes: 123_456,
   };
 
   it("accepts exact checksum-pinned HTTPS plugins", () => {
     expect(validatePluginLock({ version: 1, plugins: [plugin] }).plugins).toEqual([plugin]);
+  });
+
+  it("retains digest-only legacy identities while validating exact byte identities when present", () => {
+    const { bytes: _bytes, ...legacy } = plugin;
+    expect(() => validatePluginLock({ version: 1, plugins: [legacy] })).toThrow("legacy-installed compatibility only");
+    expect(
+      validatePluginLock({ version: 1, plugins: [legacy] }, { allowInstalledLegacyDigestOnly: true }).plugins
+    ).toEqual([legacy]);
+    expect(() => validatePluginLock({ version: 1, plugins: [{ ...plugin, bytes: 0 }] })).toThrow(
+      "exact positive artifact size"
+    );
+    expect(() => validatePluginLock({ version: 1, plugins: [{ ...plugin, bytes: 32 * 1024 * 1024 + 1 }] })).toThrow(
+      "exact positive artifact size"
+    );
   });
 
   it.each([

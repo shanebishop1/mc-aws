@@ -16,10 +16,15 @@ readonly EXECUTOR_JOURNAL_CREDENTIAL="${MC_EXECUTOR_JOURNAL_CREDENTIAL:-/etc/mc-
 readonly GATEWAY_RECONCILIATION_JOURNAL="${MC_GATEWAY_RECONCILIATION_JOURNAL:-/var/lib/mc-agent-gateway/executor-reconciliations.json}"
 readonly EXECUTOR_JOURNAL_CHECKPOINT="${MC_EXECUTOR_JOURNAL_CHECKPOINT:-0}"
 readonly MC_HOST_OPERATION_HELPER="${MC_HOST_OPERATION_HELPER:-/usr/local/bin/mc-host-operation.py}"
-readonly SERVICE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service)
+readonly WORKSPACE_DAC_HELPER="${MC_WORKSPACE_DAC_HELPER:-/usr/local/bin/mc-agent-workspace-dac.py}"
+readonly SERVICE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service)
 readonly AGENT_TARGET_WANTS=(
   /etc/systemd/system/multi-user.target.wants/mc-agent-world-roots.service
   /etc/systemd/system/sockets.target.wants/mc-agent-executor.socket
+  /etc/systemd/system/sockets.target.wants/mc-agent-tool-read.socket
+  /etc/systemd/system/sockets.target.wants/mc-agent-tool-write.socket
+  /etc/systemd/system/multi-user.target.wants/mc-agent-tool-read.service
+  /etc/systemd/system/multi-user.target.wants/mc-agent-tool-write.service
   /etc/systemd/system/multi-user.target.wants/mc-agent-executor.service
   /etc/systemd/system/multi-user.target.wants/mc-agent-gateway.service
 )
@@ -32,6 +37,10 @@ RELEASE_ROOT=""
 MANIFEST_FILE=""
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
+reconcile_workspace_dac() {
+  [[ -x "$WORKSPACE_DAC_HELPER" ]] || fail "workspace DAC helper is unavailable"
+  "$WORKSPACE_DAC_HELPER" reconcile
+}
 verify_bootstrap_pins() {
   local manifest="$1"
   python3 - "$manifest" "$PINS_SHA256" <<'PY'
@@ -322,7 +331,7 @@ drain_and_quiesce_runtime() {
   # Mask before stopping: a queued socket activation must not recreate the
   # executor while the release journal is being made authoritative.
   systemctl mask --runtime "${SERVICE_UNITS[@]}" || fail "could not mask runtime activation paths"
-  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service ||
+  systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-host-broker.socket mc-agent-host-broker.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service ||
     fail "could not stop runtime activation paths"
   for unit in "${SERVICE_UNITS[@]}"; do
     [[ "$(systemctl is-active "$unit" 2>/dev/null || true)" == inactive ]] || fail "$unit remained active after quiescence"
@@ -372,9 +381,15 @@ capture_minecraft_log_baseline() {
 agent_target_wants_path() {
   case "$1" in
     mc-agent-executor.socket) printf '%s' /etc/systemd/system/sockets.target.wants/mc-agent-executor.socket ;;
+    mc-agent-tool-read.socket) printf '%s' /etc/systemd/system/sockets.target.wants/mc-agent-tool-read.socket ;;
+    mc-agent-tool-write.socket) printf '%s' /etc/systemd/system/sockets.target.wants/mc-agent-tool-write.socket ;;
+    mc-agent-tool-read.service) printf '%s' /etc/systemd/system/multi-user.target.wants/mc-agent-tool-read.service ;;
+    mc-agent-tool-write.service) printf '%s' /etc/systemd/system/multi-user.target.wants/mc-agent-tool-write.service ;;
     mc-agent-executor.service) printf '%s' /etc/systemd/system/multi-user.target.wants/mc-agent-executor.service ;;
     mc-agent-gateway.service) printf '%s' /etc/systemd/system/multi-user.target.wants/mc-agent-gateway.service ;;
     mc-agent-world-roots.service) printf '%s' /etc/systemd/system/multi-user.target.wants/mc-agent-world-roots.service ;;
+    mc-agent-host-broker.socket) printf '%s' /etc/systemd/system/sockets.target.wants/mc-agent-host-broker.socket ;;
+    mc-agent-host-broker.service) printf '%s' /etc/systemd/system/multi-user.target.wants/mc-agent-host-broker.service ;;
     *) return 1 ;;
   esac
 }
@@ -643,7 +658,7 @@ for current, directories, files in os.walk(profile_root, followlinks=False):
 
 expected_destinations = set()
 for plugin in lock["plugins"]:
-    if not isinstance(plugin, dict) or set(plugin) != {"name", "destination", "url", "sha256"}:
+    if not isinstance(plugin, dict) or set(plugin) not in ({"name", "destination", "url", "sha256"}, {"name", "destination", "url", "sha256", "bytes"}):
         raise SystemExit("staged plugin lock entry is invalid")
     destination = plugin["destination"]
     if not isinstance(destination, str) or "/" in destination or destination in {"", ".", ".."}:
@@ -652,6 +667,8 @@ for plugin in lock["plugins"]:
     plugin_bytes = regular(live_root / "plugins" / destination, f"live plugin {destination}")
     if hashlib.sha256(plugin_bytes).hexdigest() != plugin["sha256"]:
         raise SystemExit(f"live plugin digest mismatch: {destination}")
+    if "bytes" in plugin and (not isinstance(plugin["bytes"], int) or plugin["bytes"] != len(plugin_bytes)):
+        raise SystemExit(f"live plugin byte identity mismatch: {destination}")
 
 plugins_root = live_root / "plugins"
 if plugins_root.exists():
@@ -713,6 +730,18 @@ with open(path, "rb") as source:
     text = source.read(4 * 1024 * 1024).decode("utf-8", "replace")
 if re.search(r"(?:Error occurred while enabling|Could not load|Failed to (?:load|enable) plugin)", text, re.I):
     raise SystemExit("plugin initialization failed")
+PY
+      python3 - "$candidate_server/logs/latest.log" "$profile_release/plugins.lock.json" <<'PY'
+import json, pathlib, re, sys
+log = pathlib.Path(sys.argv[1]).read_bytes().decode("utf-8", "replace")
+lock_path = pathlib.Path(sys.argv[2])
+plugins = json.loads(lock_path.read_text(encoding="utf-8")).get("plugins", []) if lock_path.is_file() else []
+if not re.search(r"Done \(", log):
+    raise SystemExit("fresh startup did not publish Minecraft readiness")
+for plugin in plugins:
+    name = plugin.get("name")
+    if not isinstance(name, str) or not re.search(re.escape(name), log, re.I):
+        raise SystemExit(f"fresh startup did not publish readiness for installed plugin: {name}")
 PY
     fi
   fi
@@ -794,9 +823,10 @@ for item in (value["phase"],value["attempt"],descriptor["hostReleaseSha256"],des
     capture_minecraft_log_baseline || return 1
     restore_services "$service_state" || return 1
     if (( ENABLE_AGENT == 1 )); then
-      systemctl unmask mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service || return 1
-      systemctl enable mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service || return 1
-      systemctl start mc-agent-executor.socket || return 1
+      systemctl unmask mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service || return 1
+      systemctl enable mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service || return 1
+      systemctl start mc-agent-tool-read.socket mc-agent-tool-write.socket || return 1
+      systemctl start mc-agent-executor.socket mc-agent-host-broker.socket || return 1
       systemctl start mc-agent-gateway.service || return 1
     fi
     # The generation is already committed, but reuse the same isolated
@@ -907,8 +937,8 @@ rollback_attempt() {
     fi
   fi
   if (( rollback_failed != 0 )); then
-    systemctl mask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service || true
-    systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service || true
+    systemctl mask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service || true
+    systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service || true
     printf '%s\n' 'Host release rollback failed; the attempt journal is retained and lifecycle remains explicitly quiesced.' >&2
   else
     printf '%s\n' 'Host release activation failed; the exact prior filesystem and service state was restored.' >&2
@@ -1032,9 +1062,10 @@ if [[ -e "$JOURNAL_ROOT/active" || -L "$JOURNAL_ROOT/active" ]]; then
 fi
 
 acquire_or_adopt_maintenance
+reconcile_workspace_dac
 if [[ -n "$adopted_maintenance_operation" ]]; then
   update_boot_hold recovery
-   systemctl unmask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service
+   systemctl unmask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service
   systemctl daemon-reload
 fi
 
@@ -1121,13 +1152,13 @@ restore_services "$service_state" precommit
 # Live Minecraft must remain stopped until the release journal crosses its
 # irreversible commit.  It is validated below only through the disposable copy.
 if (( ENABLE_AGENT == 1 )); then
-  systemctl unmask mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service
-  systemctl enable mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service
+  systemctl unmask mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service
+  systemctl enable mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service
   # --enable-agent is an affirmative enable request, not permission to
   # preserve a previously inactive agent. Start every unit explicitly and
   # let readiness probes validate the real endpoints before commit.
   systemctl restart mc-agent-world-roots.service
-  systemctl start mc-agent-executor.socket
+  systemctl start mc-agent-tool-read.socket mc-agent-tool-write.socket mc-agent-executor.socket mc-agent-host-broker.socket
   systemctl start mc-agent-gateway.service
 fi
 python3 "$journal_helper" --root "$JOURNAL_ROOT" phase services-restored
@@ -1145,7 +1176,7 @@ committed=1
 fault_after committed
 restore_services "$service_state"
 if (( ENABLE_AGENT == 1 )); then
-  systemctl start mc-agent-world-roots.service mc-agent-executor.socket mc-agent-gateway.service
+  systemctl start mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-write.socket mc-agent-executor.socket mc-agent-host-broker.socket mc-agent-gateway.service
 fi
 if (( ENABLE_AGENT == 1 )); then verify_service_state "$service_state" installed-agent
 else verify_service_state "$service_state" installed

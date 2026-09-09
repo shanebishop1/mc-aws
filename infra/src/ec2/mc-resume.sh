@@ -210,8 +210,8 @@ resume_boot_phase="restoring-services"
 python3 "$MAINTENANCE_BOOT_HELPER" --marker "$MAINTENANCE_BOOT_HOLD" --boot-id-file "$BOOT_ID_FILE" \
   phase --owner "$RESUME_OPERATION_ID" --phase "$resume_boot_phase" --attempt "$RESUME_OPERATION_ID"
 systemctl daemon-reload
-systemctl unmask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service \
-  minecraft.service minecraft-dns.service
+systemctl unmask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service \
+  mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service
 if ! systemctl start minecraft-dns.service; then
   log "ERROR: Failed to start minecraft DNS service"
   exit 1
@@ -278,9 +278,12 @@ maintenance_release_allowed=1
 release_maintenance_fence
 maintenance_release_allowed=0
 if systemctl is-enabled --quiet mc-agent-world-roots.service; then systemctl start mc-agent-world-roots.service; fi
+if systemctl is-enabled --quiet mc-agent-tool-read.socket; then systemctl start mc-agent-tool-read.socket; fi
+if systemctl is-enabled --quiet mc-agent-tool-write.socket; then systemctl start mc-agent-tool-write.socket; fi
 if systemctl is-enabled --quiet mc-agent-executor.socket; then systemctl start mc-agent-executor.socket; fi
 if systemctl is-enabled --quiet mc-agent-executor.service; then systemctl start mc-agent-executor.service; fi
 if systemctl is-enabled --quiet mc-agent-gateway.service; then systemctl start mc-agent-gateway.service; fi
+if systemctl is-enabled --quiet mc-agent-host-broker.socket; then systemctl start mc-agent-host-broker.socket; fi
 clear_resume_boot_hold
 maintenance_release_allowed=1
 log "SUCCESS: Resume completed (${RESTORE_MODE})"

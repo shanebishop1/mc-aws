@@ -31,9 +31,15 @@ function begin(root: string) {
       "minecraft-dns.service\tinactive\tdisabled",
       "minecraft.service\tinactive\tdisabled",
       "mc-agent-world-roots.service\tinactive\tdisabled",
+      "mc-agent-tool-read.socket\tinactive\tdisabled",
+      "mc-agent-tool-read.service\tinactive\tdisabled",
+      "mc-agent-tool-write.socket\tinactive\tdisabled",
+      "mc-agent-tool-write.service\tinactive\tdisabled",
       "mc-agent-executor.socket\tinactive\tdisabled",
       "mc-agent-executor.service\tinactive\tdisabled",
       "mc-agent-gateway.service\tinactive\tdisabled",
+      "mc-agent-host-broker.socket\tinactive\tdisabled",
+      "mc-agent-host-broker.service\tinactive\tdisabled",
       "",
     ].join("\n")
   );

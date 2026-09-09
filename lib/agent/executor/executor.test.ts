@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type {
   AgentApproval,
   AgentCapability,
@@ -237,6 +238,12 @@ describe("direct-live executor immutable boundary", () => {
         destination: "scripts/start.sh",
       },
     ],
+    [
+      "workspace.write",
+      "workspace.write",
+      "world/datapacks/example/data/example/functions/load.mcfunction",
+      { path: "world/datapacks/example/data/example/functions/load.mcfunction", content: "function" },
+    ],
   ] as const)("marks generic protected asset mutation %s as immutable", (toolId, capability, target, args) => {
     const item = invocation(toolId, capability, scope("workspace", target), args as JsonObject);
     expect(isGenericImmutableAssetMutation(item)).toBe(true);
@@ -282,7 +289,7 @@ describe("direct-live executor immutable boundary", () => {
       "shell.execute",
       "shell.execute",
       scope("workspace", "."),
-      { executable: "/usr/bin/grep", args: ["motd", "server.properties"] },
+      { mode: "read-only", command: "grep motd server.properties", timeoutMs: 1_000 },
       { descriptorRelativeWorkspaceConfinement: true },
     ],
     [
@@ -382,6 +389,90 @@ describe("direct-live executor immutable boundary", () => {
 });
 
 describe("direct-live executor policy, backup, and cancellation", () => {
+  it("requires exact destructive approval before a staged shell replacement and validates its result", async () => {
+    const stagedBytes = new TextEncoder().encode("updated");
+    const effects = fakeEffects({
+      async executeProcess() {
+        effects.calls.push("shell");
+        return {
+          summary: "runner",
+          output: { exitCode: 0 },
+          evidence: [],
+          stagedResult: {
+            regularFile: true,
+            noLink: true,
+            bytes: stagedBytes,
+            sha256: createHash("sha256").update(stagedBytes).digest("hex"),
+          },
+        };
+      },
+    });
+    const item = invocation("shell.execute", "shell.execute", scope("workspace", "status.txt"), {
+      mode: "staged-write",
+      command: 'printf updated > "$TMPDIR/result"',
+      timeoutMs: 1_000,
+      change: { operation: "replace", path: "status.txt" },
+    });
+    const consumer = { consume: vi.fn().mockResolvedValue(true) };
+    const executorWithConsumer = executor(effects, consumer);
+    const pending = await executorWithConsumer.execute({
+      actorId: "operator-1",
+      invocation: item,
+      policy: policy(),
+      approvals: [],
+    });
+    expect(pending).toMatchObject({ status: "failed", output: { code: "approval-required" } });
+    expect(effects.calls).toEqual([]);
+
+    const approval = await approvalFor(item, "destructive");
+    const completed = await executorWithConsumer.execute({
+      actorId: "operator-1",
+      invocation: item,
+      policy: policy(),
+      approvals: [approval],
+    });
+    expect(completed.status).toBe("succeeded");
+    expect(effects.calls).toEqual(["shell", "write"]);
+  });
+
+  it("does not require a staged result for a shell delete and blocks delayed code targets", async () => {
+    const effects = fakeEffects({
+      async executeProcess() {
+        effects.calls.push("shell");
+        return { summary: "runner", output: { exitCode: 0 }, evidence: [] };
+      },
+    });
+    const deletion = invocation("shell.execute", "shell.execute", scope("workspace", "status.txt"), {
+      mode: "staged-write",
+      command: ":",
+      timeoutMs: 1_000,
+      change: { operation: "delete", path: "status.txt" },
+    });
+    const approval = await approvalFor(deletion, "destructive");
+    const output = await executor(effects, { consume: vi.fn().mockResolvedValue(true) }).execute({
+      actorId: "operator-1",
+      invocation: deletion,
+      policy: policy(),
+      approvals: [approval],
+    });
+    expect(output.status).toBe("succeeded");
+    expect(effects.calls).toEqual(["shell", "delete"]);
+
+    const delayedCode = invocation(
+      "shell.execute",
+      "shell.execute",
+      scope("workspace", "datapacks/example/data/example/functions/load.mcfunction"),
+      {
+        mode: "staged-write",
+        command: ":",
+        timeoutMs: 1_000,
+        change: { operation: "replace", path: "datapacks/example/data/example/functions/load.mcfunction" },
+      }
+    );
+    const denied = await run(effects, delayedCode);
+    expect(denied).toMatchObject({ status: "failed", output: { code: "denied" } });
+  });
+
   it.each(["plugins/example.jar", "paper.jar", "scripts/start.sh", "runtime/agent", "server.properties"])(
     "requires an operator content identity for executable/runtime/config target %s",
     async (target) => {
@@ -453,6 +544,11 @@ describe("direct-live executor policy, backup, and cancellation", () => {
       "network.download",
       "network.outbound",
       { url: "https://downloads.example.invalid/server.properties", destination: "server.properties" },
+    ],
+    [
+      "shell.execute",
+      "shell.execute",
+      { mode: "staged-write", change: { operation: "replace", path: "server.properties" } },
     ],
   ] as const)("classifies canonical root server.properties %s as destructive", (toolId, capability, args) => {
     const item = invocation(toolId, capability, scope("workspace", "server.properties"), args as JsonObject);
@@ -1103,7 +1199,7 @@ describe("direct-live executor allowed operations", () => {
       "shell.execute",
       "shell.execute",
       scope("workspace", "."),
-      { executable: "/usr/bin/grep", args: ["motd", "server.properties"] },
+      { mode: "read-only", command: "grep motd server.properties", timeoutMs: 1_000 },
       "shell",
     ],
     ["console.execute", "console.execute", scope("console", "server"), { command: "list" }, "console"],

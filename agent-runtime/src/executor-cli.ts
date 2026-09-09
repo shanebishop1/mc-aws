@@ -26,7 +26,9 @@ interface ExecutorConfig {
   workspaceRoot: "/workspace";
   scratchRoot: "/scratch";
   persistentWorldRoots: string[];
-  allowedExecutables: Record<string, string>;
+  shellReadSocketPath: "/run/mc-agent/shell-read.sock";
+  shellWriteSocketPath: "/run/mc-agent/shell-write.sock";
+  hostBrokerSocketPath: "/run/mc-agent/host-broker.sock";
 }
 
 function parseConfig(value: unknown): ExecutorConfig {
@@ -48,7 +50,9 @@ function parseConfig(value: unknown): ExecutorConfig {
     "workspaceRoot",
     "scratchRoot",
     "persistentWorldRoots",
-    "allowedExecutables",
+    "shellReadSocketPath",
+    "shellWriteSocketPath",
+    "hostBrokerSocketPath",
   ];
   if (
     Object.keys(item).some((key) => !keys.includes(key)) ||
@@ -72,20 +76,11 @@ function parseConfig(value: unknown): ExecutorConfig {
     item.workspaceRoot !== "/workspace" ||
     item.scratchRoot !== "/scratch" ||
     !Array.isArray(item.persistentWorldRoots) ||
-    !item.allowedExecutables ||
-    typeof item.allowedExecutables !== "object" ||
-    Array.isArray(item.allowedExecutables)
+    item.shellReadSocketPath !== "/run/mc-agent/shell-read.sock" ||
+    item.shellWriteSocketPath !== "/run/mc-agent/shell-write.sock" ||
+    item.hostBrokerSocketPath !== "/run/mc-agent/host-broker.sock"
   ) {
     throw new Error("Executor configuration paths are invalid.");
-  }
-  for (const [name, executable] of Object.entries(item.allowedExecutables as Record<string, unknown>)) {
-    if (
-      !/^[a-z0-9._+-]{1,64}$/.test(name) ||
-      typeof executable !== "string" ||
-      executable !== `/runtime/commands/${name}`
-    ) {
-      throw new Error("Executor allowlist is invalid.");
-    }
   }
   return {
     ...item,
@@ -122,12 +117,14 @@ async function main(): Promise<void> {
     {
       journalCredentialPath: credentials.journal.path,
       worldRootTransactionAuthenticationKey: credentials.journal.value,
+      shellReadSocketPath: config.shellReadSocketPath,
+      shellWriteSocketPath: config.shellWriteSocketPath,
+      hostBrokerSocketPath: config.hostBrokerSocketPath,
     }
   );
   const executor = createDirectLiveExecutor(effects, {
     workspaceRoot: config.workspaceRoot,
     scratchRoot: config.scratchRoot,
-    allowedExecutables: Object.freeze(config.allowedExecutables),
     persistentWorldRoots: config.persistentWorldRoots,
     acceptGatewayAuthorizations: true,
     requireDownloadAuthorization: true,

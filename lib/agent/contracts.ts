@@ -13,6 +13,7 @@ export const AGENT_CAPABILITIES = [
   "network.outbound",
   "backup.create",
   "extension.load",
+  "maintenance.apply",
 ] as const;
 
 export type AgentCapability = (typeof AGENT_CAPABILITIES)[number];
@@ -36,6 +37,24 @@ export interface TargetScope {
 }
 
 export type SideEffectClass = "read" | "write" | "delete" | "execute" | "network" | "backup" | "extension";
+
+export type ShellMode = "read-only" | "staged-write";
+export type ShellChangeOperation = "replace" | "delete";
+
+/** The only command authority exposed by the shell tool. */
+export interface ShellChange {
+  operation: ShellChangeOperation;
+  /** Canonical workspace-relative regular-file target. */
+  path: string;
+}
+
+export interface ShellCommand {
+  mode: ShellMode;
+  /** A bounded POSIX shell program, evaluated by the reviewed shell toolchain. */
+  command: string;
+  timeoutMs: number;
+  change?: ShellChange;
+}
 
 export interface ToolDefinition {
   schemaVersion: 1;
@@ -70,7 +89,7 @@ export interface ToolProgress {
 export interface MutationCommit {
   /** False is an authenticated no-effect result; omission remains reserved for unknown effect truth. */
   committed: boolean;
-  point?: "atomic-rename" | "console-dispatch" | "server-properties-root-generation";
+  point?: "atomic-rename" | "console-dispatch" | "server-properties-root-generation" | "maintenance-edit";
 }
 
 export interface ToolResult {

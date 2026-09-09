@@ -6,7 +6,7 @@ import type { FileHandle } from "node:fs/promises";
 import { createConnection } from "node:net";
 import path from "node:path";
 import { canonicalJson } from "../../lib/agent/canonical-json";
-import { assertWorkspaceProcessRequest, contained } from "../../lib/agent/executor/guards";
+import { contained } from "../../lib/agent/executor/guards";
 import type {
   CanonicalPath,
   DirectLiveHostEffects,
@@ -17,8 +17,16 @@ import type {
 } from "../../lib/agent/executor/types";
 import { IndeterminateHostEffectError } from "../../lib/agent/executor/types";
 import { isImmutableAgentAssetDirectory, isImmutableAgentAssetPath } from "../../lib/agent/immutable-assets";
+import type {
+  ConsoleBridgeRequest,
+  HostBrokerRequest,
+  MaintenanceApplyRequest,
+  MaintenanceInvocationIdentity,
+} from "../../lib/agent/maintenance";
 import type { GatewayDownloadRelayClient } from "./download-relay";
 import { EXECUTOR_JOURNAL_CREDENTIAL_PATH, assertExecutorJournalCredentialNamespace } from "./protected-input";
+import { type ShellRunnerClient, UnixShellRunnerClient } from "./shell-client";
+import { MAX_SHELL_OUTPUT_BYTES } from "./shell-runner";
 
 interface ResolvedParent {
   parent: FileHandle;
@@ -30,7 +38,6 @@ interface ResolvedParent {
 const ROOTS = ["/workspace", "/scratch"] as const;
 const MAX_CONSOLE_BYTES = 4096;
 const SESSION_DIRECTORY_MODE = 0o700;
-const WORKSPACE_COMMAND = "/runtime/commands/workspace";
 const MAX_WORKSPACE_COMMAND_ENTRIES = 10_000;
 const MAX_RECURSIVE_DELETE_DEPTH = 64;
 const MAX_RECURSIVE_DELETE_MS = 30_000;
@@ -41,6 +48,7 @@ const SERVER_PROPERTIES_TRANSACTION_COMMIT = Object.freeze({
   committed: true as const,
   point: "server-properties-root-generation" as const,
 });
+const MAINTENANCE_EDIT_COMMIT = Object.freeze({ committed: true as const, point: "maintenance-edit" as const });
 const SERVER_PROPERTIES_PATH = "/workspace/server.properties";
 const WORLD_ROOT_TRANSACTION_SOCKET = "/run/mc-agent-world-roots/transaction.sock";
 const EMPTY_SHA256 = createHash("sha256").update(Buffer.alloc(0)).digest("hex");
@@ -427,7 +435,18 @@ export async function canonicalizeDescriptorConfinedPath(
   });
 }
 
-async function processOutput(request: ProcessRequest): Promise<HostEffectResult> {
+interface ConsoleProcessRequest {
+  executable: string;
+  args: string[];
+  cwd: string;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  signal: AbortSignal;
+  env: Readonly<Record<string, string>>;
+  onProgress(bytesProduced: number): void;
+}
+
+async function processOutput(request: ConsoleProcessRequest): Promise<HostEffectResult> {
   return await new Promise((resolve, reject) => {
     const child = spawn(request.executable, request.args, {
       cwd: request.cwd,
@@ -506,13 +525,13 @@ export async function dispatchMinecraftConsole(
   command: string,
   timeoutMs: number,
   signal: AbortSignal,
-  dispatch: (request: ProcessRequest) => Promise<HostEffectResult> = processOutput,
+  dispatch: (request: ConsoleProcessRequest) => Promise<HostEffectResult> = processOutput,
   hooks: ConsoleDispatchHooks = {}
 ): Promise<HostEffectResult> {
   if (!command || Buffer.byteLength(command) > MAX_CONSOLE_BYTES || /[\r\n\0]/.test(command)) {
     throw new Error("Console command is invalid.");
   }
-  const request: ProcessRequest = {
+  const request: ConsoleProcessRequest = {
     executable: "/usr/bin/screen",
     args: ["-S", "mc-server", "-p", "0", "-X", "stuff", `${command}\r`],
     cwd: "/workspace",
@@ -585,6 +604,9 @@ export interface ProductionSandboxOptions {
   journalCredentialPath?: string;
   /** Domain-separated authentication for the root-owned world-root transaction broker. */
   worldRootTransactionAuthenticationKey?: Uint8Array;
+  shellReadSocketPath?: string;
+  shellWriteSocketPath?: string;
+  hostBrokerSocketPath?: string;
 }
 
 interface WorldRootTransactionInput {
@@ -675,6 +697,116 @@ class WorldRootTransactionClient {
   }
 }
 
+export class HostBrokerClient {
+  readonly #authenticationKey: Buffer;
+
+  constructor(
+    authenticationKey: Uint8Array,
+    private readonly socketPath: string,
+    private readonly responseTimeoutMs = 120_000
+  ) {
+    if (authenticationKey.byteLength < 32 || authenticationKey.byteLength > 1024)
+      throw new Error("Host broker authentication is invalid.");
+    this.#authenticationKey = Buffer.from(authenticationKey);
+  }
+
+  async execute(
+    request: HostBrokerRequest,
+    signal: AbortSignal,
+    assertCommitAllowed?: () => Promise<void>
+  ): Promise<HostEffectResult> {
+    assertNotCancelled(signal);
+    await assertCommitAllowed?.();
+    const unsigned = { ...request };
+    const mac = createHmac("sha256", this.#authenticationKey)
+      .update(`mc-aws-host-broker:v1\n${canonicalJson(unsigned as never)}`)
+      .digest("base64url");
+    return await new Promise((resolve, reject) => {
+      const socket = createConnection({ path: this.socketPath });
+      let sent = false;
+      let settled = false;
+      let received = Buffer.alloc(0);
+      const point = request.operation === "maintenance.apply" ? "maintenance-edit" : "console-dispatch";
+      const finish = (error?: Error, value?: HostEffectResult, effectMayHaveStarted = true) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        socket.destroy();
+        if (error) reject(sent && effectMayHaveStarted ? new IndeterminateHostEffectError(point) : error);
+        else resolve(value as HostEffectResult);
+      };
+      socket.once("connect", () => {
+        void (async () => {
+          assertNotCancelled(signal);
+          sent = true;
+          socket.end(`${canonicalJson({ ...unsigned, mac } as never)}\n`);
+        })().catch((error: Error) => finish(error));
+      });
+      socket.on("data", (chunk: Buffer) => {
+        received = Buffer.concat([received, chunk]);
+        if (received.byteLength > 64 * 1024) finish(new Error("Host broker response exceeded its bound."));
+      });
+      // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: The bounded broker response is validated in one fail-closed transport boundary.
+      socket.once("end", () => {
+        try {
+          const value = JSON.parse(received.toString("utf8")) as Record<string, unknown>;
+          if (
+            value.schemaVersion !== 1 ||
+            typeof value.ok !== "boolean" ||
+            !["not-entered", "committed", "unknown"].includes(String(value.effectState)) ||
+            typeof value.output !== "object" ||
+            value.output === null ||
+            Array.isArray(value.output)
+          ) {
+            throw new Error("Host broker returned an invalid response.");
+          }
+          const committed = value.committed === true;
+          if (
+            (value.ok === true &&
+              (value.verification !== "observed" ||
+                value.effectState === "unknown" ||
+                (value.effectState === "committed") !== committed)) ||
+            (value.ok === false &&
+              ((value.effectState === "not-entered" && value.verification !== "not-required") ||
+                (value.effectState !== "not-entered" && value.verification !== "unresolved")))
+          ) {
+            throw new Error("Host broker returned inconsistent effect truth.");
+          }
+          if (value.effectState === "unknown" || value.verification === "unresolved") {
+            throw new IndeterminateHostEffectError(point);
+          }
+          if (value.ok !== true) {
+            finish(new Error("Host broker rejected the request before effect entry."), undefined, false);
+            return;
+          }
+          finish(undefined, {
+            summary:
+              typeof value.summary === "string" ? value.summary : "Authenticated host broker operation completed.",
+            output: value.output as HostEffectResult["output"],
+            evidence: [],
+            ...(value.committed === true
+              ? { mutationCommit: point === "maintenance-edit" ? MAINTENANCE_EDIT_COMMIT : CONSOLE_DISPATCH_COMMIT }
+              : {}),
+          });
+        } catch (error) {
+          finish(error as Error);
+        }
+      });
+      socket.once("error", (error) => finish(error));
+      const timer = setTimeout(() => finish(new Error("Host broker timed out.")), this.responseTimeoutMs);
+      timer.unref();
+      signal.addEventListener(
+        "abort",
+        () => {
+          socket.destroy();
+          finish(new DOMException("Invocation cancelled", "AbortError"));
+        },
+        { once: true }
+      );
+    });
+  }
+}
+
 /** Linux-only production adapter; construction fails unless the systemd sandbox is observable. */
 export class ProductionDirectLiveHostEffects implements DirectLiveHostEffects {
   readonly securityCapabilities = Object.freeze({
@@ -685,7 +817,10 @@ export class ProductionDirectLiveHostEffects implements DirectLiveHostEffects {
 
   private constructor(
     private readonly downloadRelay: GatewayDownloadRelayClient,
-    private readonly worldRootTransactions: WorldRootTransactionClient
+    private readonly worldRootTransactions: WorldRootTransactionClient,
+    private readonly shellReadRunner: ShellRunnerClient,
+    private readonly shellWriteRunner: ShellRunnerClient,
+    private readonly hostBroker: HostBrokerClient
   ) {}
 
   static async create(
@@ -697,9 +832,17 @@ export class ProductionDirectLiveHostEffects implements DirectLiveHostEffects {
     if (!options?.worldRootTransactionAuthenticationKey) {
       throw new Error("Executor requires world-root transaction authentication.");
     }
+    const shellReadSocketPath = options.shellReadSocketPath ?? "/run/mc-agent/shell-read.sock";
+    const shellWriteSocketPath = options.shellWriteSocketPath ?? "/run/mc-agent/shell-write.sock";
     return new ProductionDirectLiveHostEffects(
       downloadRelay,
-      new WorldRootTransactionClient(options.worldRootTransactionAuthenticationKey)
+      new WorldRootTransactionClient(options.worldRootTransactionAuthenticationKey),
+      new UnixShellRunnerClient(shellReadSocketPath),
+      new UnixShellRunnerClient(shellWriteSocketPath),
+      new HostBrokerClient(
+        options.worldRootTransactionAuthenticationKey,
+        options.hostBrokerSocketPath ?? "/run/mc-agent/host-broker.sock"
+      )
     );
   }
 
@@ -894,24 +1037,51 @@ export class ProductionDirectLiveHostEffects implements DirectLiveHostEffects {
   }
 
   async executeProcess(request: ProcessRequest): Promise<HostEffectResult> {
-    if (request.cwd !== "/workspace") throw new Error("Process cwd must be the mounted workspace root.");
-    if (request.env.HOME !== "/workspace" || request.env.TMPDIR !== "/workspace") {
-      throw new Error("Process environment must not expose executor scratch.");
+    if (request.cwd !== "/workspace" || request.mode === undefined || request.command.length === 0) {
+      throw new Error("Shell runner request is invalid.");
     }
-    assertWorkspaceProcessRequest(request.executable, request.args, request.cwd);
-    if (request.executable !== WORKSPACE_COMMAND) throw new Error("Raw executables are unavailable to shell tools.");
-    return await this.executeWorkspaceCommand(request);
+    if (request.maxOutputBytes > MAX_SHELL_OUTPUT_BYTES)
+      throw new Error("Shell output bound exceeds the runner limit.");
+    const runner = request.mode === "read-only" ? this.shellReadRunner : this.shellWriteRunner;
+    const response = await runner.execute(request, request.signal);
+    return {
+      summary: "Reviewed shell runner returned untrusted command data.",
+      output: {
+        exitCode: response.exitCode,
+        output: response.output,
+        outputBytes: response.outputBytes,
+        outputSha256: response.outputSha256,
+        truncated: response.truncated,
+      },
+      evidence: [],
+      ...(response.stagedResult ? { stagedResult: response.stagedResult } : {}),
+    };
   }
 
   async executeConsole(
     command: string,
     timeoutMs: number,
     signal: AbortSignal,
+    assertCommitAllowed?: () => Promise<void>,
+    invocation?: MaintenanceInvocationIdentity
+  ): Promise<HostEffectResult> {
+    if (!invocation) throw new Error("Minecraft console bridge is unavailable under the separated executor identity.");
+    const request: ConsoleBridgeRequest = {
+      schemaVersion: 1,
+      operation: "console.execute",
+      invocation,
+      command,
+      timeoutMs,
+    };
+    return await this.hostBroker.execute(request, signal, assertCommitAllowed);
+  }
+
+  async applyMaintenance(
+    request: MaintenanceApplyRequest,
+    signal: AbortSignal,
     assertCommitAllowed?: () => Promise<void>
   ): Promise<HostEffectResult> {
-    return await dispatchMinecraftConsole(command, timeoutMs, signal, undefined, {
-      assertFenceOwned: assertCommitAllowed,
-    });
+    return await this.hostBroker.execute(request, signal, assertCommitAllowed);
   }
 
   async download(request: DownloadRequest): Promise<HostEffectResult> {
@@ -1001,7 +1171,7 @@ export class ProductionDirectLiveHostEffects implements DirectLiveHostEffects {
   }
 
   // biome-ignore lint/complexity/noExcessiveCognitiveComplexity: Exact command grammar and bounded read-only actions share one fail-closed dispatcher.
-  private async executeWorkspaceCommand(request: ProcessRequest): Promise<HostEffectResult> {
+  private async executeWorkspaceCommand(request: ConsoleProcessRequest): Promise<HostEffectResult> {
     const [action, ...rawArgs] = request.args;
     if (!action) throw new Error("Workspace command requires an action.");
     const lines: string[] = [];

@@ -115,9 +115,15 @@ MC_HOST_OPERATION_HELPER="${MC_HOST_OPERATION_HELPER:-/usr/local/bin/mc-host-ope
 BACKUP_JOURNAL="${MC_BACKUP_JOURNAL:-/var/lib/mc-aws/mc-backup-journal.json}"
 MCSTATUS_BIN="${MC_STATUS_BIN:-/usr/local/bin/mcstatus}"
 WORLD_ROOTS_HELPER="${MC_WORLD_ROOTS_HELPER:-/usr/local/bin/mc-agent-world-roots.py}"
+WORKSPACE_DAC_HELPER="${MC_WORKSPACE_DAC_HELPER:-/usr/local/bin/mc-agent-workspace-dac.py}"
 MAINTENANCE_OWNER="${MC_MAINTENANCE_OWNER:-backup-$$-$(python3 -c 'import secrets; print(secrets.token_hex(8))')}"
-QUIESCE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service)
+QUIESCE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service)
 declare -A SERVICE_WAS_ACTIVE SERVICE_WAS_RUNTIME_MASKED
+
+reconcile_workspace_dac() {
+  [[ -x "$WORKSPACE_DAC_HELPER" ]] || { log "ERROR: Workspace DAC helper is unavailable"; return 1; }
+  "$WORKSPACE_DAC_HELPER" reconcile
+}
 
 write_maintenance_state() {
   python3 - "$MAINTENANCE_LOCK" "${MAINTENANCE_OWNER}" "$AGENT_TWO_PHASE" "$BACKUP_MODE" "$MAINTENANCE_OPERATION" <<'PY'
@@ -280,9 +286,9 @@ quiesce_runtime() {
   systemctl mask --runtime "${QUIESCE_UNITS[@]}" || return 1
   SERVICES_QUIESCED=1
   if (( AGENT_TWO_PHASE == 1 )); then
-    systemctl stop mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service || return 1
+      systemctl stop mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service || return 1
   else
-    systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service || return 1
+    systemctl stop mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service || return 1
   fi
   # A stop can race a final journal write.  Require a second authenticated idle
   # observation after all effect-producing units are stopped.
@@ -757,6 +763,7 @@ if [[ -z "$RECOVERY_PHASE" ]]; then
   BACKUP_GENERATION=0
   resolve_root_volume_identity || exit 1
   capture_service_states || { log "ERROR: Could not capture exact service pre-state"; exit 1; }
+  reconcile_workspace_dac || exit 1
   write_backup_journal prepared
 fi
 acquire_or_adopt_boot_hold || exit 1

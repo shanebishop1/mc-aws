@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
@@ -23,6 +23,101 @@ function releaseFixture() {
   }));
   writeFileSync(manifest, JSON.stringify({ files }));
   return { root, manifest, inventory, files };
+}
+
+const reviewedPluginUrl = "https://plugins.example.org/reviewed.jar";
+const reviewedPluginBytes = Buffer.from("reviewed-plugin-fixture-v1\n");
+const reviewedPluginSha256 = "234c7bd0265aac116c4f9b673f36b34fc7cefda326ba3289036780c8c533541f";
+const pluginLoopStart = "  while IFS=$'\\t' read -r name destination url digest expected_bytes; do";
+
+function pluginProducer(): string {
+  return embeddedPython(/python3 - "\$lock" "\$SERVER_ROOT" > "\$plugin_list" <<'PY'\n([\s\S]*?)\nPY/);
+}
+
+function pluginReconciler(): string {
+  return embeddedPython(/python3 - "\$SERVER_ROOT" "\$plugin_list" <<'PY'\n([\s\S]*?)\nPY/);
+}
+
+function pluginDownloadLoop(): string {
+  const start = script.indexOf(pluginLoopStart);
+  const endMarker = '  done < "$plugin_list"';
+  const end = script.indexOf(endMarker, start);
+  if (start < 0 || end < 0) throw new Error("Could not locate the plugin download loop");
+  return script.slice(start, end + endMarker.length);
+}
+
+function shellQuote(value: string): string {
+  return `'${value.replaceAll("'", "'\\''")}'`;
+}
+
+function pluginLock(bytes?: number) {
+  return {
+    version: 1,
+    plugins: [
+      {
+        name: "Reviewed",
+        destination: "Reviewed.jar",
+        url: reviewedPluginUrl,
+        sha256: reviewedPluginSha256,
+        ...(bytes === undefined ? {} : { bytes }),
+      },
+    ],
+  };
+}
+
+function runPluginProducer(lock: string, server: string) {
+  return spawnSync("python3", ["-c", pluginProducer(), lock, server], { encoding: "utf8" });
+}
+
+function runPluginReconciler(server: string, pluginList: string) {
+  return spawnSync("python3", ["-c", pluginReconciler(), server, pluginList], { encoding: "utf8" });
+}
+
+function runPluginDownloadLoop(root: string, pluginList: string, iteration: string) {
+  const work = path.join(root, `download-${iteration}`);
+  const bin = path.join(work, "bin");
+  const pythonShim = path.join(work, "python");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(pythonShim);
+  const curl = path.join(bin, "curl");
+  writeFileSync(
+    curl,
+    `#!/bin/sh
+set -eu
+output=
+url=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --output) output=$2; shift 2 ;;
+    *) url=$1; shift ;;
+  esac
+done
+[ "$url" = ${shellQuote(reviewedPluginUrl)} ]
+[ -n "$output" ]
+cp ${shellQuote(path.join(root, "reviewed.jar"))} "$output"
+`,
+    { mode: 0o755 }
+  );
+  chmodSync(curl, 0o755);
+  writeFileSync(
+    path.join(pythonShim, "sitecustomize.py"),
+    "import os\nimport pwd\nfrom types import SimpleNamespace\npwd.getpwnam = lambda _name: SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid())\n"
+  );
+  const environment = {
+    ...process.env,
+    PATH: `${bin}:${process.env.PATH ?? ""}`,
+    PYTHONPATH: `${pythonShim}${process.env.PYTHONPATH ? `:${process.env.PYTHONPATH}` : ""}`,
+  };
+  const command = `set -euo pipefail
+MAX_PLUGIN_BYTES=$((32 * 1024 * 1024))
+work=${shellQuote(work)}
+SERVER_ROOT=${shellQuote(path.join(root, "server"))}
+plugin_list=${shellQuote(pluginList)}
+log() { :; }
+fail() { printf '%s\\n' "$*" >&2; exit 1; }
+${pluginDownloadLoop()}
+`;
+  return spawnSync("bash", ["-c", command], { env: environment, encoding: "utf8" });
 }
 
 describe("profile installer", () => {
@@ -77,7 +172,7 @@ describe("profile installer", () => {
     expect(script).toContain("mc-backup-auth.py");
     expect(script).toContain("systemctl enable minecraft.service minecraft-dns.service");
     expect(script).toContain(
-      "systemctl enable mc-agent-executor.socket mc-agent-gateway.service mc-agent-executor.service"
+      "systemctl enable mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-gateway.service mc-agent-executor.service"
     );
     expect(script).toContain('MC_AGENT_ENABLE="$ENABLE_AGENT" python3');
     expect(script).toContain("enabled gateway configuration contains a packaged placeholder");
@@ -153,12 +248,98 @@ describe("profile installer", () => {
     mkdirSync(path.join(plugins, "data"));
     writeFileSync(path.join(plugins, "data", "config.yml"), "keep");
     writeFileSync(path.join(plugins, "data", "nested.jar"), "remove");
-    writeFileSync(lock, `Reviewed\tReviewed.jar\thttps://example.invalid/Reviewed.jar\t${"a".repeat(64)}\n`);
+    writeFileSync(
+      lock,
+      "Reviewed\tReviewed.jar\thttps://example.invalid/Reviewed.jar\te4f934f321eb76c9bf8b5103e0a0d9afe72d6e62ace3d3ea849790619bf7487a\t\n"
+    );
     try {
       const result = spawnSync("python3", ["-c", python, server, lock], { encoding: "utf8" });
-      expect(result.status).toBe(0);
+      expect(result.status, result.stderr).toBe(0);
       expect(readdirSync(plugins).sort()).toEqual(["Reviewed.jar", "data"]);
       expect(readFileSync(path.join(plugins, "data", "config.yml"), "utf8")).toBe("keep");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("installs and reconciles a reviewed nonempty plugin with exact bytes, repeatably and offline", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "mc-plugin-offline-"));
+    const server = path.join(root, "server");
+    const plugins = path.join(server, "plugins");
+    const lock = path.join(root, "plugins.lock.json");
+    const pluginList = path.join(root, "plugins.tsv");
+    mkdirSync(server);
+    mkdirSync(plugins);
+    writeFileSync(path.join(root, "reviewed.jar"), reviewedPluginBytes);
+    writeFileSync(lock, JSON.stringify(pluginLock(reviewedPluginBytes.byteLength)));
+    writeFileSync(path.join(plugins, "stale.jar"), "unreviewed\n");
+    try {
+      const produced = runPluginProducer(lock, server);
+      expect(produced.status, produced.stderr).toBe(0);
+      writeFileSync(pluginList, produced.stdout);
+      expect(produced.stdout.trim().split("\t")).toEqual([
+        "Reviewed",
+        "Reviewed.jar",
+        reviewedPluginUrl,
+        reviewedPluginSha256,
+        String(reviewedPluginBytes.byteLength),
+      ]);
+
+      const firstInstall = runPluginDownloadLoop(root, pluginList, "first");
+      expect(firstInstall.status, `${firstInstall.stdout}\n${firstInstall.stderr}`).toBe(0);
+      const firstReconcile = runPluginReconciler(server, pluginList);
+      expect(firstReconcile.status, firstReconcile.stderr).toBe(0);
+      expect(readFileSync(path.join(plugins, "Reviewed.jar"))).toEqual(reviewedPluginBytes);
+      expect(readdirSync(plugins).sort()).toEqual(["Reviewed.jar"]);
+
+      const secondInstall = runPluginDownloadLoop(root, pluginList, "repeat");
+      expect(secondInstall.status, secondInstall.stderr).toBe(0);
+      const secondReconcile = runPluginReconciler(server, pluginList);
+      expect(secondReconcile.status, secondReconcile.stderr).toBe(0);
+      expect(readFileSync(path.join(plugins, "Reviewed.jar"))).toEqual(reviewedPluginBytes);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts only matching installed legacy digests and rejects missing or mismatched byte identity", () => {
+    const root = mkdtempSync(path.join(tmpdir(), "mc-plugin-identity-"));
+    const server = path.join(root, "server");
+    const plugins = path.join(server, "plugins");
+    const lock = path.join(root, "plugins.lock.json");
+    const pluginList = path.join(root, "plugins.tsv");
+    mkdirSync(plugins, { recursive: true });
+    writeFileSync(path.join(root, "reviewed.jar"), reviewedPluginBytes);
+    try {
+      writeFileSync(lock, JSON.stringify(pluginLock()));
+      const missingLegacy = runPluginProducer(lock, server);
+      expect(missingLegacy.status).not.toBe(0);
+      expect(missingLegacy.stderr).toContain("exact bytes field");
+
+      writeFileSync(path.join(plugins, "Reviewed.jar"), reviewedPluginBytes);
+      const matchingLegacy = runPluginProducer(lock, server);
+      expect(matchingLegacy.status, matchingLegacy.stderr).toBe(0);
+      writeFileSync(pluginList, matchingLegacy.stdout);
+      const legacyFields = matchingLegacy.stdout.replace(/\n$/, "").split("\t");
+      expect(legacyFields, matchingLegacy.stdout).toHaveLength(5);
+      expect(legacyFields[4]).toBe("");
+      const legacyInstall = runPluginDownloadLoop(root, pluginList, "legacy");
+      expect(legacyInstall.status, legacyInstall.stderr).toBe(0);
+      expect(runPluginReconciler(server, pluginList).status).toBe(0);
+
+      writeFileSync(lock, JSON.stringify(pluginLock(reviewedPluginBytes.byteLength + 1)));
+      const wrongSize = runPluginProducer(lock, server);
+      expect(wrongSize.status, wrongSize.stderr).toBe(0);
+      writeFileSync(pluginList, wrongSize.stdout);
+      const rejectedSize = runPluginDownloadLoop(root, pluginList, "wrong-size");
+      expect(rejectedSize.status).not.toBe(0);
+      expect(rejectedSize.stderr).toContain("plugin byte identity mismatch");
+
+      writeFileSync(path.join(plugins, "Reviewed.jar"), "not-reviewed\n");
+      writeFileSync(lock, JSON.stringify(pluginLock()));
+      const mismatchedLegacy = runPluginProducer(lock, server);
+      expect(mismatchedLegacy.status).not.toBe(0);
+      expect(mismatchedLegacy.stderr).toContain("exact bytes field");
     } finally {
       rmSync(root, { recursive: true, force: true });
     }

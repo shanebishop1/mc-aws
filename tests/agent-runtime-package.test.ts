@@ -37,7 +37,7 @@ describe("standalone agent runtime package", () => {
     const profileInstaller = readFileSync(path.join(root, "infra/src/ec2/mc-profile-install.sh"), "utf8");
     expect(socketUnit).toContain("ListenStream=/run/mc-agent/executor.sock");
     expect(socketUnit).toContain("SocketUser=root");
-    expect(socketUnit).toContain("SocketGroup=mc-agent");
+    expect(socketUnit).toContain("SocketGroup=mc-agent-gateway-client");
     expect(socketUnit).toContain("SocketMode=0660");
     expect(profileInstaller).toContain('"$SETUP_ROOT/runtime/mc-agent-executor.socket"');
     expect(profileInstaller).toContain('executor_config.get("journalCredentialName") != "executor-journal-hmac"');

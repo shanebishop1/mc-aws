@@ -51,7 +51,8 @@ export function isPersistentWorldMutation(
 ): boolean {
   return (
     invocation.targetScope.kind === "workspace" &&
-    (invocation.capability === "workspace.write" ||
+    (invocation.capability === "shell.execute" ||
+      invocation.capability === "workspace.write" ||
       invocation.capability === "workspace.delete" ||
       invocation.toolId === "network.download") &&
     isPersistentWorldPath(invocation.targetScope.normalizedTarget, roots)
@@ -83,7 +84,8 @@ export function isRootServerPropertiesMutation(invocation: ToolInvocation): bool
   return (
     invocation.targetScope.kind === "workspace" &&
     isRootServerPropertiesPath(invocation.targetScope.normalizedTarget) &&
-    (invocation.capability === "workspace.write" ||
+    (invocation.capability === "shell.execute" ||
+      invocation.capability === "workspace.write" ||
       invocation.capability === "workspace.delete" ||
       invocation.toolId === "network.download")
   );

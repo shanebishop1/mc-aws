@@ -29,7 +29,7 @@ GATEWAY_RECONCILIATION_JOURNAL="${MC_GATEWAY_RECONCILIATION_JOURNAL:-/var/lib/mc
 EXECUTOR_JOURNAL_CHECKPOINT="${MC_EXECUTOR_JOURNAL_CHECKPOINT:-0}"
 AGENT_DRAIN_MAX_ATTEMPTS="${MC_AGENT_DRAIN_MAX_ATTEMPTS:-30}"
 AGENT_DRAIN_INTERVAL="${MC_AGENT_DRAIN_INTERVAL:-1}"
-QUIESCE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service)
+QUIESCE_UNITS=(minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service mc-agent-host-broker.socket mc-agent-host-broker.service)
 
 # Helper function to get instance ID (IMDSv2)
 get_instance_id() {

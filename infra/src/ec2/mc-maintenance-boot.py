@@ -41,6 +41,10 @@ OPERATION_PHASES = {
         "prepared", "quiescing", "quiesced", "uploading", "archive-uploaded",
         "publishing-manifest", "uploaded", "terminal-quiesced", "restoring-services",
     },
+    "agent-maintenance": {
+        "prepared", "quiescing", "quiesced", "editing", "restarting", "verified", "restoring-services",
+        "effect-unknown", "verification-unresolved", "restoration-unresolved", "recovery",
+    },
 }
 
 
@@ -105,7 +109,10 @@ def read_marker(path: Path) -> dict[str, object]:
         os.close(descriptor)
     if (
         not isinstance(value, dict)
-        or set(value) != {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId"}
+        or set(value) not in (
+            {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId"},
+            {"schemaVersion", "operation", "owner", "attempt", "phase", "bootId", "details"},
+        )
         or value.get("schemaVersion") != SCHEMA_VERSION
         or value.get("operation") not in OPERATION_PHASES
         or not isinstance(value.get("owner"), str)
@@ -115,6 +122,11 @@ def read_marker(path: Path) -> dict[str, object]:
         or value["phase"] not in OPERATION_PHASES[value["operation"]]
         or not isinstance(value.get("bootId"), str)
         or not value["bootId"]
+        or ("details" in value and (
+            value["operation"] != "agent-maintenance"
+            or not isinstance(value["details"], dict)
+            or len(json.dumps(value["details"], ensure_ascii=True, separators=(",", ":"))) > 32768
+        ))
     ):
         fail("maintenance boot hold has an invalid schema")
     return value
@@ -127,10 +139,25 @@ def boot_id(path: Path) -> str:
     return value
 
 
+def parsed_details(raw: str | None, operation: str) -> dict[str, object] | None:
+    if raw is None:
+        return None
+    if operation != "agent-maintenance":
+        fail("maintenance boot hold details are reserved for agent maintenance")
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        fail("maintenance boot hold details are malformed")
+    if not isinstance(value, dict) or len(json.dumps(value, ensure_ascii=True, separators=(",", ":"))) > 32768:
+        fail("maintenance boot hold details must be one bounded object")
+    return value
+
+
 def create(args: argparse.Namespace) -> None:
     path = Path(args.marker)
     if args.phase not in OPERATION_PHASES[args.operation]:
         fail("maintenance boot hold phase is invalid for its operation")
+    details = parsed_details(args.details_json, args.operation)
     value = {
         "schemaVersion": SCHEMA_VERSION,
         "operation": args.operation,
@@ -138,6 +165,7 @@ def create(args: argparse.Namespace) -> None:
         "attempt": args.attempt,
         "phase": args.phase,
         "bootId": boot_id(Path(args.boot_id_file)),
+        **({"details": details} if details is not None else {}),
     }
     atomic_write(path, canonical(value), exclusive=True)
 
@@ -163,6 +191,8 @@ def update(args: argparse.Namespace) -> None:
     value["bootId"] = boot_id(Path(args.boot_id_file))
     if args.attempt is not None:
         value["attempt"] = args.attempt
+    if args.details_json is not None:
+        value["details"] = parsed_details(args.details_json, str(value["operation"]))
     atomic_write(path, canonical(value))
 
 
@@ -203,6 +233,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("--operation", choices=tuple(OPERATION_PHASES), default="runtime-rollout")
     start.add_argument("--attempt", default="")
     start.add_argument("--phase", default="fencing")
+    start.add_argument("--details-json")
     start.set_defaults(handler=create)
     show = commands.add_parser("inspect")
     show.set_defaults(handler=inspect)
@@ -213,6 +244,7 @@ def parser() -> argparse.ArgumentParser:
     phase.add_argument("--owner", required=True)
     phase.add_argument("--phase", required=True)
     phase.add_argument("--attempt")
+    phase.add_argument("--details-json")
     phase.set_defaults(handler=update)
     remove = commands.add_parser("clear")
     remove.add_argument("--owner", required=True)

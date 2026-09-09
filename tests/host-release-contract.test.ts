@@ -28,12 +28,20 @@ const required = [
   "mc-aws-maintenance-generator",
   "mc-backup-auth.py",
   "mc-host-operation.py",
+  "mc-agent-host-broker.py",
+  "mc-agent-workspace-dac.py",
   "host-operation-contract.json",
   "mc-agent-gateway.json",
   "mc-agent-executor.json",
   "mc-agent-gateway.service",
   "mc-agent-executor.service",
   "mc-agent-executor.socket",
+  "mc-agent-tool-read.service",
+  "mc-agent-tool-read.socket",
+  "mc-agent-tool-write.service",
+  "mc-agent-tool-write.socket",
+  "mc-agent-host-broker.service",
+  "mc-agent-host-broker.socket",
   "mc-agent-world-roots.service",
   "mc-maintenance-recovery.service",
   "mc-agent-runtime.tmpfiles",
@@ -84,7 +92,7 @@ a=z.read(m['agentRuntime']['path']); assert len(a)==m['agentRuntime']['bytes'] a
     ).toBe(0);
   }, 240_000);
 
-  it("keeps the fresh bootstrap inventory at the complete 29-member contract", () => {
+  it("keeps the fresh bootstrap inventory at the complete 37-member contract", () => {
     const output = JSON.parse(execFileSync(process.execPath, [builder, "package"], { cwd: root, encoding: "utf8" }));
     const manifest = JSON.parse(
       execFileSync(
@@ -97,11 +105,11 @@ a=z.read(m['agentRuntime']['path']); assert len(a)==m['agentRuntime']['bytes'] a
         { encoding: "utf8" }
       )
     );
-    expect(manifest.files).toHaveLength(29);
+    expect(manifest.files).toHaveLength(37);
     expect(manifest.bootstrapPins.manifest.artifacts.paper.minecraftVersion).toBe(
       pins.artifacts.paper.minecraftVersion
     );
-    expect(new Set(manifest.files.map((item: { destination: string }) => item.destination)).size).toBe(29);
+    expect(new Set(manifest.files.map((item: { destination: string }) => item.destination)).size).toBe(37);
   }, 240_000);
 
   it("fails closed for omitted, stale, or digest-mismatched members and partial activation", () => {
@@ -112,7 +120,7 @@ a=z.read(m['agentRuntime']['path']); assert len(a)==m['agentRuntime']['bytes'] a
     expect(installer).toContain('release_members="$release_rollback/release-members"');
     expect(installer).toContain(".runtime-rollback");
     expect(installer).toContain(
-      "systemctl mask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-executor.socket mc-agent-executor.service minecraft.service minecraft-dns.service"
+      "systemctl mask --runtime mc-agent-world-roots.service mc-agent-gateway.service mc-agent-tool-read.socket mc-agent-tool-read.service mc-agent-tool-write.socket mc-agent-tool-write.service mc-agent-executor.socket mc-agent-executor.service mc-agent-host-broker.socket mc-agent-host-broker.service minecraft.service minecraft-dns.service"
     );
     expect(installer).toContain("live plugin tree contains a link or special file");
     expect(installer).toContain('entry.name.lower().endswith(".jar")');

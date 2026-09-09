@@ -23,6 +23,34 @@ const cleanupDirs: string[] = [];
 const fixtureRoot = mkdtempSync(path.join(os.tmpdir(), "mc-restore-fixtures-"));
 const archiveFixtures = new Map<ArchiveKind, string>();
 const manifestFixtures = new Map<string, string>();
+const canonicalServiceUnits = [
+  "minecraft-dns.service",
+  "minecraft.service",
+  "mc-agent-world-roots.service",
+  "mc-agent-tool-read.socket",
+  "mc-agent-tool-read.service",
+  "mc-agent-tool-write.socket",
+  "mc-agent-tool-write.service",
+  "mc-agent-executor.socket",
+  "mc-agent-executor.service",
+  "mc-agent-gateway.service",
+  "mc-agent-host-broker.socket",
+  "mc-agent-host-broker.service",
+] as const;
+const canonicalServiceStates = JSON.stringify([
+  { unit: "minecraft-dns.service", active: false, enablement: "disabled" },
+  { unit: "minecraft.service", active: true, enablement: "disabled" },
+  { unit: "mc-agent-world-roots.service", active: false, enablement: "disabled" },
+  { unit: "mc-agent-tool-read.socket", active: false, enablement: "disabled" },
+  { unit: "mc-agent-tool-read.service", active: false, enablement: "disabled" },
+  { unit: "mc-agent-tool-write.socket", active: false, enablement: "disabled" },
+  { unit: "mc-agent-tool-write.service", active: false, enablement: "disabled" },
+  { unit: "mc-agent-executor.socket", active: true, enablement: "disabled" },
+  { unit: "mc-agent-executor.service", active: false, enablement: "disabled" },
+  { unit: "mc-agent-gateway.service", active: false, enablement: "disabled" },
+  { unit: "mc-agent-host-broker.socket", active: false, enablement: "disabled" },
+  { unit: "mc-agent-host-broker.service", active: false, enablement: "disabled" },
+]);
 
 const makeExecutable = (filePath: string, contents: string): void => {
   writeFileSync(filePath, contents, "utf8");
@@ -134,6 +162,7 @@ const createHarness = (): Harness => {
   const executorJournal = path.join(stateDir, "executor-effect-journal.json");
   const gatewayJournal = path.join(stateDir, "executor-reconciliations.json");
   const worldGeneration = path.join(stateDir, "world-generation");
+  const workspaceDacHelper = path.join(binDir, "mc-agent-workspace-dac");
 
   mkdirSync(binDir, { recursive: true });
   mkdirSync(archiveDir, { recursive: true });
@@ -167,6 +196,14 @@ const createHarness = (): Harness => {
   writeFileSync(executorKey, Buffer.alloc(32, 9), { mode: 0o400 });
   writeFileSync(gatewayJournal, JSON.stringify({ schemaVersion: 1, entries: [] }));
   writeFileSync(worldGeneration, `${"a".repeat(64)}\n`);
+
+  makeExecutable(
+    workspaceDacHelper,
+    `#!/usr/bin/env bash
+set -euo pipefail
+[[ "\${1:-}" == "reconcile" ]]
+`
+  );
 
   makeExecutable(
     path.join(binDir, "aws"),
@@ -232,15 +269,21 @@ case "\${1:-}" in
       capture)
         systemctl is-active --quiet minecraft.service || true
         if [[ "\${RESTORE_TEST_HEALTH_FAIL_ONCE:-0}" == "1" ]]; then printf '0\\n' > "${healthCount}"; fi
-        minecraft_active=true
-        [[ "\${RESTORE_TEST_MINECRAFT_INACTIVE:-0}" == "1" ]] && minecraft_active=false
-        gateway_active=false
-        [[ "\${RESTORE_TEST_GATEWAY_ACTIVE:-0}" == "1" ]] && gateway_active=true
-         printf '[{"unit":"minecraft-dns.service","active":false,"enablement":"disabled"},{"unit":"minecraft.service","active":%s,"enablement":"disabled"},{"unit":"mc-agent-world-roots.service","active":false,"enablement":"disabled"},{"unit":"mc-agent-executor.socket","active":true,"enablement":"disabled"},{"unit":"mc-agent-executor.service","active":false,"enablement":"disabled"},{"unit":"mc-agent-gateway.service","active":%s,"enablement":"disabled"}]\\n' "$minecraft_active" "$gateway_active"
-        ;;
-      restore)
-         systemctl unmask --runtime minecraft-dns.service minecraft.service mc-agent-world-roots.service mc-agent-executor.socket mc-agent-executor.service mc-agent-gateway.service
-        systemctl stop minecraft-dns.service
+         minecraft_active=true
+         [[ "\${RESTORE_TEST_MINECRAFT_INACTIVE:-0}" == "1" ]] && minecraft_active=false
+         gateway_active=false
+         [[ "\${RESTORE_TEST_GATEWAY_ACTIVE:-0}" == "1" ]] && gateway_active=true
+          python3 - "$minecraft_active" "$gateway_active" <<'PY'
+import json, sys
+states = json.loads('${canonicalServiceStates}')
+states[1]["active"] = sys.argv[1] == "true"
+states[9]["active"] = sys.argv[2] == "true"
+print(json.dumps(states, separators=(",", ":")))
+PY
+         ;;
+         restore)
+         systemctl unmask --runtime ${canonicalServiceUnits.join(" ")}
+         systemctl stop minecraft-dns.service
         if [[ "\${RESTORE_TEST_MINECRAFT_INACTIVE:-0}" != "1" ]]; then systemctl start minecraft.service; fi
         systemctl start mc-agent-executor.socket
         systemctl stop mc-agent-executor.service
@@ -612,6 +655,7 @@ for _ in range(8):
           MC_EXECUTOR_JOURNAL: executorJournal,
           MC_GATEWAY_RECONCILIATION_JOURNAL: gatewayJournal,
           MC_RESTORE_STAGING_PARENT: serverParent,
+          MC_WORKSPACE_DAC_HELPER: workspaceDacHelper,
           MC_RESTORE_DEBUG: process.env.MC_RESTORE_DEBUG,
           MC_WORLD_ROOTS_HELPER: worldRootsHelper,
           MC_SETUP_ROOT: rootDir,

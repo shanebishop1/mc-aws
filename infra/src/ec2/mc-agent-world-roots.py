@@ -733,7 +733,7 @@ def serve(_args):
         fail("world-root transaction authentication key is invalid")
     TRANSACTION_SOCKET.parent.mkdir(mode=0o750, parents=True, exist_ok=True)
     socket_parent = TRANSACTION_SOCKET.parent.lstat()
-    expected_group = grp.getgrnam("mc-agent").gr_gid
+    expected_group = grp.getgrnam(os.environ.get("MC_AGENT_WORLD_ROOT_CLIENT_GROUP", "mc-agent-world-root-client")).gr_gid
     if (
         not stat.S_ISDIR(socket_parent.st_mode)
         or socket_parent.st_uid != 0

@@ -1153,7 +1153,7 @@ function reviewedHostRelease(options: Options): {
       sha256: string;
       fileCount: number;
       totalBytes: number;
-      plugins: Array<{ name: string; destination: string; url: string; sha256: string }>;
+      plugins: Array<{ name: string; destination: string; url: string; sha256: string; bytes?: number }>;
     };
   };
 } {
@@ -1195,7 +1195,7 @@ function reviewedHostRelease(options: Options): {
     sha256: string;
     fileCount: number;
     totalBytes: number;
-    plugins: Array<{ name: string; destination: string; url: string; sha256: string }>;
+    plugins: Array<{ name: string; destination: string; url: string; sha256: string; bytes?: number }>;
   };
   if (
     !published ||
