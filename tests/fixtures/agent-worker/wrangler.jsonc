@@ -1,0 +1,37 @@
+{
+  "$schema": "../../../node_modules/wrangler/config-schema.json",
+  "name": "mc-aws-agent-worker-fixture",
+  "compatibility_date": "2024-09-23",
+  "compatibility_flags": ["nodejs_compat"],
+  "main": "worker.ts",
+  "durable_objects": {
+    "bindings": [
+      {
+        "name": "AGENT_SESSION_DURABLE_OBJECT",
+        "class_name": "AgentSessionDurableObject"
+      },
+      {
+        "name": "AGENT_SESSION_INDEX_DURABLE_OBJECT",
+        "class_name": "AgentSessionIndexDurableObject"
+      },
+      {
+        "name": "AGENT_SESSION_SHARD_DURABLE_OBJECT",
+        "class_name": "AgentSessionShardDurableObject"
+      }
+    ]
+  },
+  "migrations": [
+    {
+      "tag": "fixture-agent-session-shards-v1",
+      "new_sqlite_classes": [
+        "AgentSessionDurableObject",
+        "AgentSessionIndexDurableObject",
+        "AgentSessionShardDurableObject"
+      ]
+    }
+  ],
+  "vars": {
+    "MC_AGENT_RUNTIME_ENABLED": "true",
+    "MC_AGENT_RUNTIME_ID": "fixture-runtime"
+  }
+}
