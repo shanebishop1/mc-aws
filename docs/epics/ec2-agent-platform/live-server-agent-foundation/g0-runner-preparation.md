@@ -216,3 +216,133 @@ Before G3 execution, reviewers must separately approve and record:
 Until these are recorded, G0 remains incomplete and G3 remains **implementation candidate, validation blocked**. The
 next feasible work is to stage reviewed dependencies/artifacts through an approved process, then run the bounded local
 checks above; no unrestricted audit or new authority protocol is needed.
+
+## 7. Bounded local preparation execution (2026-09-09)
+
+This section records the separately approved local preparation pass. It did not identify an account, profile, or region,
+and it performed no AWS API call, provisioning, deployment, service operation, credential copy, or shell-toolchain/Paper/
+plugin acquisition.
+
+### Official AWS CLI ARM64 input
+
+- Source URL: `https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip`
+- Signature URL: `https://awscli.amazonaws.com/awscli-exe-linux-aarch64.zip.sig`
+- Official verification documentation: `https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html`
+- Published AWS CLI key fingerprint matched: `FB5D B77F D5C1 18B8 0511 ADA8 A631 0ACC 4672 475C`
+- Signature key: `A6310ACC4672475C` (`AWS CLI Team <aws-cli@amazon.com>`)
+- ZIP: `70,853,622` bytes; SHA-256 `cf64084aafa091b68392ca585c87325c67137ab6d740f9d43f12c55f7fd6b297`
+- Detached signature: `566` bytes; SHA-256 `660bff5685067cfa41f4f7d345c2a0c18d29bf89f012f8cb068f317fd5722150`
+- Verification: **GOOD signature** by the published AWS CLI key; GnuPG reported `TRUST_UNDEFINED` because the
+  documentation-published key was imported directly into the isolated verification keyring, which is expected here.
+- Artifact identity: `aws-cli/2.36.42`, ARM64 ELF; installed without sudo under
+  `/tmp/opencode/aws-cli-arm64-prep/{install,bin}`. The isolated install's `aws` executable SHA-256 is
+  `d192338e53c48c2bdc528be062f4f52f8bb9ec6374e7e81dfd4d96a422712d1f`.
+
+The install script was inspected after signature verification and before execution. No system path was modified.
+
+### Frozen repository dependencies
+
+Using the already-installed exact pins Node `22.19.0` and pnpm `10.30.3`:
+
+```text
+pnpm install --frozen-lockfile --ignore-scripts       PASS, 26.78 s, 635 packages
+pnpm rebuild @biomejs/biome esbuild sharp workerd       PASS, 7.54 s
+```
+
+The lifecycle sources were inspected before the approved rebuild. Biome only resolves its package-local platform
+binary. esbuild `0.25.4`, `0.27.2`, and `0.28.1` and workerd `1.20260811.1` have package-local ARM64 optional binaries;
+their inspected fallback npm/network paths were not entered. sharp has no install lifecycle script. Native ARM64 inputs
+observed include Biome (`25,424,512` bytes, SHA-256
+`f0f0f3e7cdec78420a600b05bfc364aa9b804811bd3bbae04e7bf090828ae970`), esbuild `0.27.2` (`10,158,264` bytes,
+SHA-256 `136015b18f887187ebaeb5f1fc48caf3e82fd86b4a4aefa53780fc0be5e4d41a`), workerd (`155,273,552` bytes,
+SHA-256 `6a46e193de0f414814d52d47368e543a9a1d8099fda349b6b941e2d156bcb898`), sharp (`530,120` bytes, SHA-256
+`ca16f6b4af700f2eb8fb43e9f32103b50c39a16fe882bb1282d3d76c975069ac`), and libvips (`17,800,568` bytes, SHA-256
+`56f7e7c98d134371c07990a318e41178cf0b6a956b8d5cd73779881c17deaaab`). No dependency version or lockfile entry was
+changed.
+
+Focused checks then ran serially:
+
+| Command | Result | Elapsed |
+| --- | --- | ---: |
+| `pnpm exec vitest run agent-runtime/src/shell-toolchain.test.ts agent-runtime/src/shell-runner.test.ts agent-runtime/src/shell-client.test.ts tests/agent-runtime-services.test.ts` | PASS; 4 files, 32 tests | `1.32 s` |
+| `pnpm docs:check` | PASS | `0.64 s` |
+
+The reviewed shell toolchain remains unavailable: `config/shell-toolchain.json`, `/config/shell-toolchain.json`, and
+`/opt/mc-agent/toolchain/bin/sh` were absent. No host `/bin/sh` substitution, source build, or acquisition was attempted.
+The next artifact proposal requires an explicitly approved ARM64 source build that produces exactly one root-owned,
+non-writable `/toolchain/bin/sh` plus the schema-v1 `linux-arm64` manifest containing its exact bytes, mode, and SHA-256;
+the source/toolchain choice and useful applet composition are not declared by this checkout.
+
+Two local-only AWS CLI probes were accidentally included in a combined final version probe. `aws configure list` read
+the local CLI configuration sources and printed profile/access-key/secret-key/region as `<not set>`. An attempted
+`aws sts get-caller-identity --dry-run` was rejected by the CLI as an unknown option before any request. No credential
+values were exposed or copied, no AWS API request was made, and neither command was repeated.
+
+## 8. Current local qualification pass (2026-09-09)
+
+The current source was `HEAD 654905906f3d134cc91055a4b6eafa08a00ce750`, tree
+`c814d052bcf853cf5e2de24ad856408242e443ec`. The only tracked worktree change during the gate was this evidence document.
+Untracked `3` and `infra/src/ec2/__pycache__/` appeared during local validation; they were absent at the initial clean
+checkout, and are left unstaged. Logs are retained in the ignored
+directory `.local-artifacts/current-gate-6549059/`.
+
+The runtime and host builders were inspected before execution. They read checked-in manifests and local dependency
+trees, invoke local esbuild/Python, and copy the explicit checked-in host file list. They contain no artifact fetch,
+`curl`, `wget`, npm/pnpm install, mise install, Paper, plugin, or shell-toolchain acquisition path. `host-release:check`
+records the checked-in bootstrap URLs and digests but does not fetch those artifacts. All commands below used the
+already-installed Node `22.19.0` and pnpm `10.30.3`, with `MISE_AUTO_INSTALL=0`; no service, credential, account/profile/
+region, or AWS configuration probe was run in this pass.
+
+| Command | Result | Elapsed | Log |
+| --- | --- | ---: | --- |
+| `pnpm check` | PASS; Biome 563 files and Lambda type check | `15.06 s` | `01-pnpm-check.log` |
+| `pnpm typecheck` | PASS | `82.54 s` | `02-pnpm-typecheck.log` |
+| `pnpm docs:check` | PASS; final evidence-document validation also PASS | `0.88 s; final 0.42 s` | `03-pnpm-docs-check.log`, `11-pnpm-docs-check-final.log` |
+| `pnpm test` | FAIL; 14/200 files, 108/2,547 tests failed; 722.10 s | `722.10 s` | `04-pnpm-test.log` |
+| `NODE_ENV=test pnpm test` | FAIL; 8/200 files, 43/2,547 tests failed; diagnostic PATH/test-only build rerun | `379.49 s` | `05-pnpm-test-node-env-test.log` |
+| `NODE_ENV=test pnpm test -- --no-file-parallelism --maxWorkers=1` | FAIL; 7/200 files, 46/2,547 tests failed; 2,501 passed | `391.76 s` | `06-pnpm-test-serial.log` |
+| `NODE_ENV=test pnpm test:agent:e2e` | PASS; 2 files, 15/15 tests | `3.74 s` | `07-test-agent-e2e.log` |
+| `NODE_ENV=test pnpm agent-runtime:check` | PASS; reproducibility check | `5.02 s` | `08-agent-runtime-check.log` |
+| `NODE_ENV=test pnpm host-release:check` | PASS | `2.55 s` | `09-host-release-check.log` |
+
+The exact first `pnpm test` run exposed an untrusted mise config through a child PATH and then accumulated workstation
+timeouts. The constrained rerun removed mise shims from PATH and used the repository's test-only build path rather than
+attempting the unavailable privileged production namespace. Its remaining failures are timeout/cleanup and protocol,
+backup, restore, journal, offline-provider, and destroy test failures. Subsequent bounded
+[ARM triage](ARM-local-gate-triage.md) reran every previously failing file: five complete files passed, while protocol
+and executor-journal retained timing-sensitive failures that passed individually. No concrete source defect was
+established, no timeout was increased, and the full-suite gate remains failed. These are not target authority
+qualification or release evidence.
+
+### Produced package identities
+
+- Runtime archive: `12,290,197` bytes; SHA-256
+  `4e72c1711a7c693d4981410586a5b501950435c007b7f7051de4571dfddfaadc`.
+- Runtime bundle manifest: `8,449` bytes; SHA-256
+  `2d9a9ed12b6e36f13790b796d2b89472a9eb6006fb96d9ea320f8151c711783c`.
+- Host release archive: `12,957,538` bytes; SHA-256
+  `8a48d9c5513b0f2624194d6881cd2a89a5cabc554c427bc50d7335bc2947a3ec`.
+- Host release manifest: `12,028` bytes; SHA-256
+  `127d0de3ce8ac407f337d262dc51a5ef5e226c9b17ceadaf285d480d7700d5b8`.
+
+These are cloud-free local package identities only. They do not establish an installed target, real systemd/socket
+activation, effective isolation, Minecraft behavior, resource qualification, G3 assembly, or release readiness.
+
+## 9. Updated EC2 authorization and pending target
+
+The operator subsequently authorized disposable EC2 matching the intended Minecraft server specifications, with the
+explicit requirement to shut it down when not in use and use the lowest necessary running time. Official ARM64 AWS CLI
+and repository-pinned dependency acquisition were separately approved. This supersedes the earlier prohibition on paid
+runner creation only within that disposable qualification scope; it does not authorize production deployment, production
+secrets/backups, real-provider calls, or arbitrary shell-toolchain acquisition.
+
+The checked-in default is `t4g.medium`, ARM64 AL2023, and an encrypted 8 GiB gp3 root disk. Region and exact AMI are
+operator-selected. No account/profile/region is configured here, and the operator is checking the deployment machine.
+No EC2 instance or other AWS resource has been created. Exact image, shell-toolchain provenance, network boundaries,
+regional cost including CPU credits, and privileged runner operations remain subject to the pre-launch proposal.
+
+Preparation and local builds happen before paid runtime. The proposed disposable lifecycle must explicitly set and
+verify root-volume deletion on termination, collect evidence before termination, and verify no run-owned billable
+resources remain. A guest shutdown-to-terminate setting and cleanup deadline are planned, not implemented safeguards;
+an independent cleanup mechanism must cover a failed guest or lost workstation. Stopping alone leaves EBS charges.
+No NAT gateway, Elastic IP, retained snapshot, production instance role, or production security group is proposed.
