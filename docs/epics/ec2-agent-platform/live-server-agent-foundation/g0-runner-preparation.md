@@ -328,7 +328,10 @@ qualification or release evidence.
 These are cloud-free local package identities only. They do not establish an installed target, real systemd/socket
 activation, effective isolation, Minecraft behavior, resource qualification, G3 assembly, or release readiness.
 
-## 9. Updated EC2 authorization and pending target
+## 9. Updated EC2 authorization and historical pending-target state
+
+This section records the pre-launch state and is superseded by section 10 and the final [ARM EC2 qualification
+handoff](arm-ec2-qualification-handoff.md). It must not be read as a current claim that no disposable run occurred.
 
 The operator subsequently authorized disposable EC2 matching the intended Minecraft server specifications, with the
 explicit requirement to shut it down when not in use and use the lowest necessary running time. Official ARM64 AWS CLI
@@ -336,13 +339,20 @@ and repository-pinned dependency acquisition were separately approved. This supe
 runner creation only within that disposable qualification scope; it does not authorize production deployment, production
 secrets/backups, real-provider calls, or arbitrary shell-toolchain acquisition.
 
-The checked-in default is `t4g.medium`, ARM64 AL2023, and an encrypted 8 GiB gp3 root disk. Region and exact AMI are
-operator-selected. No account/profile/region is configured here, and the operator is checking the deployment machine.
-No EC2 instance or other AWS resource has been created. Exact image, shell-toolchain provenance, network boundaries,
-regional cost including CPU credits, and privileged runner operations remain subject to the pre-launch proposal.
+The checked-in default was `t4g.medium`, ARM64 AL2023, and an encrypted 8 GiB gp3 root disk. Region and exact AMI were
+operator-selected. At this historical checkpoint no EC2 instance or other AWS resource had been created. The subsequent
+11 disposable attempts and their parent-reconciled cleanup are recorded in section 10.
 
 Preparation and local builds happen before paid runtime. The proposed disposable lifecycle must explicitly set and
 verify root-volume deletion on termination, collect evidence before termination, and verify no run-owned billable
 resources remain. A guest shutdown-to-terminate setting and cleanup deadline are planned, not implemented safeguards;
 an independent cleanup mechanism must cover a failed guest or lost workstation. Stopping alone leaves EBS charges.
 No NAT gateway, Elastic IP, retained snapshot, production instance role, or production security group is proposed.
+
+## 10. Current disposable qualification handoff (2026-09-10)
+
+The authorized disposable ARM64 EC2 qualification attempts are documented in the current [ARM EC2 qualification
+handoff](arm-ec2-qualification-handoff.md). It inventories all 11 cleaned local run records, exact final artifact
+manifests, bounded failure phases, parent-corroborated cleanup, remaining billing evidence gaps, and the recommendation not to run another paid attempt
+until the `226/NAMESPACE` failure has a bounded fix with strong evidence. This link supersedes the pending-target
+language above for the current qualification status; it does not authorize AWS calls or deployment.
