@@ -8,6 +8,7 @@ const root = process.cwd();
 const builder = path.join(root, "scripts/setup/build-host-release.mjs");
 const builderSource = readFileSync(builder, "utf8");
 const installer = readFileSync(path.join(root, "infra/src/ec2/mc-profile-install.sh"), "utf8");
+const agentInstaller = readFileSync(path.join(root, "infra/src/ec2/mc-agent-install.sh"), "utf8");
 const pins = validateBootstrapPins(JSON.parse(readFileSync(path.join(root, "config/bootstrap-pins.json"), "utf8")));
 const required = [
   "check-mc-idle.sh",
@@ -48,10 +49,23 @@ const required = [
   "minecraft.service",
   "minecraft-dns.service",
 ];
+const requiredToolchain = [
+  "toolchain/bin/sh",
+  "toolchain/src/busybox-1.38.0.tar.bz2",
+  "toolchain/src/busybox-1.38.0.tar.bz2.sig",
+  "toolchain/src/vda_pubkey.gpg",
+  "toolchain/build/busybox-1.38.0.config",
+  "toolchain/build/busybox-1.38.0.config.fragment",
+  "toolchain/build/build-shell-toolchain.sh",
+  "toolchain/build/shell-toolchain-lock.json",
+  "toolchain/shell-toolchain.json",
+];
 
 describe("single host release contract", () => {
   it("publishes every cooperating asset in one deterministic, member-hashed release", () => {
-    const output = JSON.parse(execFileSync(process.execPath, [builder, "package"], { cwd: root, encoding: "utf8" }));
+    const output = JSON.parse(
+      execFileSync(process.execPath, [builder, "package", "--local-disposable"], { cwd: root, encoding: "utf8" })
+    );
     const listing = execFileSync(
       "python3",
       ["-c", "import sys,zipfile; print('\\n'.join(zipfile.ZipFile(sys.argv[1]).namelist()))", output.archive],
@@ -75,9 +89,11 @@ describe("single host release contract", () => {
     expect(listing).toContain("release-manifest.json");
     expect(listing).toContain("agent-runtime.zip");
     for (const name of required) expect(listing).toContain(`host/${name}`);
+    for (const name of requiredToolchain) expect(listing).toContain(name);
+    expect(releaseManifest.shellToolchain).toMatchObject({ path: "toolchain/shell-toolchain.json" });
     expect(output.releaseManifestSha256).toMatch(/^[a-f0-9]{64}$/);
     expect(output.releaseManifestBytes).toBeGreaterThan(0);
-    expect(releaseManifest.files).toHaveLength(required.length);
+    expect(releaseManifest.files).toHaveLength(required.length + requiredToolchain.length);
     expect(
       spawnSync("python3", [
         "-c",
@@ -92,8 +108,10 @@ a=z.read(m['agentRuntime']['path']); assert len(a)==m['agentRuntime']['bytes'] a
     ).toBe(0);
   }, 240_000);
 
-  it("keeps the fresh bootstrap inventory at the complete 37-member contract", () => {
-    const output = JSON.parse(execFileSync(process.execPath, [builder, "package"], { cwd: root, encoding: "utf8" }));
+  it("keeps the fresh bootstrap inventory at the complete host and shell-toolchain contract", () => {
+    const output = JSON.parse(
+      execFileSync(process.execPath, [builder, "package", "--local-disposable"], { cwd: root, encoding: "utf8" })
+    );
     const manifest = JSON.parse(
       execFileSync(
         "python3",
@@ -105,17 +123,36 @@ a=z.read(m['agentRuntime']['path']); assert len(a)==m['agentRuntime']['bytes'] a
         { encoding: "utf8" }
       )
     );
-    expect(manifest.files).toHaveLength(37);
+    expect(manifest.files).toHaveLength(46);
+    expect(manifest.packagingMode).toBe("local-disposable");
     expect(manifest.bootstrapPins.manifest.artifacts.paper.minecraftVersion).toBe(
       pins.artifacts.paper.minecraftVersion
     );
-    expect(new Set(manifest.files.map((item: { destination: string }) => item.destination)).size).toBe(37);
+    expect(new Set(manifest.files.map((item: { destination: string }) => item.destination)).size).toBe(46);
+  }, 240_000);
+
+  it("rejects blocked-license packaging unless local-disposable mode is explicit", () => {
+    const environment = { ...process.env };
+    environment.MC_SHELL_TOOLCHAIN_PACKAGE_MODE = undefined;
+    const result = spawnSync(process.execPath, [builder, "package"], {
+      cwd: root,
+      env: environment,
+      encoding: "utf8",
+    });
+    expect(result.status).not.toBe(0);
+    expect(`${result.stdout}\n${result.stderr}`).toContain("--local-disposable");
+    expect(builderSource).toContain('packagingMode: localDisposablePackageMode ? "local-disposable" : "qualified"');
   }, 240_000);
 
   it("fails closed for omitted, stale, or digest-mismatched members and partial activation", () => {
     expect(installer).toContain("host release contains an omitted or unmanifested script");
     expect(installer).toContain("host release member digest or size mismatch");
     expect(installer).toContain("release manifest digest or size mismatch");
+    expect(agentInstaller).toContain("REVIEWED_TOOLCHAIN_MANIFEST_SHA256");
+    expect(agentInstaller).toContain("shell-toolchain-lock.json");
+    expect(agentInstaller).toContain("MC_AGENT_TOOLCHAIN_FAULT_AFTER");
+    expect(agentInstaller).toContain("manifest-backed-up");
+    expect(agentInstaller).toContain("toolchain_transaction_cleanup");
     expect(installer).toContain("Host release activation failed; every cooperating member was rolled back");
     expect(installer).toContain('release_members="$release_rollback/release-members"');
     expect(installer).toContain(".runtime-rollback");

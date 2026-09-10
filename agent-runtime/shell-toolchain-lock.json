@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "manifest": {
+    "bytes": 2678,
+    "sha256": "42995aec9022b04e5c11809347acbaa8b7150d9bd0d4da35a95ee3be8c2d312a"
+  },
+  "executable": {
+    "path": "bin/sh",
+    "bytes": 1127576,
+    "sha256": "a00157aada30be47277accd8f4ee8e93bbc55f3ac9722dd5e7008114d86a21c2"
+  }
+}

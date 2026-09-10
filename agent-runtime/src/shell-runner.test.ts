@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from "node:child_process";
+import { constants } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -8,6 +9,9 @@ import {
   type ChildSpawn,
   type ChildSpawnOptions,
   type ProcessStateReader,
+  assertInaccessible,
+  assertStagedChangesMount,
+  classifyRunMount,
   createChildSpawn,
   runShellCommand,
 } from "./shell-runner";
@@ -87,6 +91,126 @@ function permissionFailureReader(): ProcessStateReader {
 }
 
 describe("shell runner", () => {
+  const stagedChangesMount = (
+    options: string,
+    filesystem = "tmpfs",
+    superOptions = "rw,size=8192k,mode=700,uid=995,gid=995,inode64"
+  ): string => `42 35 0:39 / /changes ${options} - ${filesystem} tmpfs ${superOptions}\n`;
+
+  it("accepts staged tmpfs VFS restrictions from the per-mount options field", () => {
+    expect(() => assertStagedChangesMount(stagedChangesMount("rw,nosuid,nodev,noexec,relatime"))).not.toThrow();
+  });
+
+  it.each(["rw", "nosuid", "nodev", "noexec"])(
+    "rejects a staged tmpfs missing the %s per-mount option even if super options contain it",
+    (missing) => {
+      const options = ["rw", "nosuid", "nodev", "noexec", "relatime"].filter((option) => option !== missing);
+      expect(() =>
+        assertStagedChangesMount(stagedChangesMount(options.join(","), "tmpfs", "rw,nosuid,nodev,noexec,size=8192k"))
+      ).toThrow("Shell runner changes mount is unsafe.");
+    }
+  );
+
+  it("rejects a non-tmpfs staged changes mount", () => {
+    expect(() => assertStagedChangesMount(stagedChangesMount("rw,nosuid,nodev,noexec,relatime", "ext4"))).toThrow(
+      "Shell runner changes mount is unsafe."
+    );
+  });
+
+  it("classifies /run mount identity and VFS flags without retaining raw metadata", () => {
+    const runMount = (root: string, options: string, filesystem = "tmpfs", id = "42", point = "/run"): string =>
+      `${id} 35 0:39 ${root} ${point} ${options} - ${filesystem} private-source rw,size=4096k,mode=755\n`;
+
+    const stackedMounts =
+      runMount("/", "rw,nosuid,nodev", "tmpfs", "41") + runMount("/systemd/inaccessible/dir", "ro,nosuid,nodev,noexec");
+    expect(classifyRunMount(stackedMounts, "42")).toEqual({
+      root: "systemd-inaccessible",
+      filesystem: "tmpfs",
+      access: "ro",
+      suid: "nosuid",
+      devices: "nodev",
+      execution: "noexec",
+    });
+    expect(classifyRunMount(runMount("/", "rw,nosuid,nodev", "tmpfs"), "42")).toEqual({
+      root: "filesystem-root",
+      filesystem: "tmpfs",
+      access: "rw",
+      suid: "nosuid",
+      devices: "nodev",
+      execution: "exec",
+    });
+    expect(classifyRunMount(runMount("/host-private-path", "rw", "ext4"), "42")).toEqual({
+      root: "other",
+      filesystem: "other",
+      access: "rw",
+      suid: "suid",
+      devices: "dev",
+      execution: "exec",
+    });
+    expect(classifyRunMount("", "42")).toEqual({
+      root: "missing",
+      filesystem: "unknown",
+      access: "unknown",
+      suid: "unknown",
+      devices: "unknown",
+      execution: "unknown",
+    });
+    expect(classifyRunMount("42 malformed\n", "42")).toEqual({
+      root: "malformed",
+      filesystem: "unknown",
+      access: "unknown",
+      suid: "unknown",
+      devices: "unknown",
+      execution: "unknown",
+    });
+    expect(classifyRunMount(runMount("/", "ro,nosuid,nodev,noexec", "tmpfs", "42", "/"), "42").root).toBe(
+      "not-mountpoint"
+    );
+    expect(classifyRunMount(runMount("/", "rw,nosuid,nodev"))).toEqual({
+      root: "unresolved",
+      filesystem: "unknown",
+      access: "unknown",
+      suid: "unknown",
+      devices: "unknown",
+      execution: "unknown",
+    });
+  });
+
+  it("tests path access rather than mount-point metadata for systemd inaccessible paths", async () => {
+    for (const code of ["EACCES", "ENOENT"]) {
+      const denied = new Error("path unavailable");
+      Object.assign(denied, { code });
+      await expect(
+        assertInaccessible("/masked", async () => {
+          throw denied;
+        })
+      ).resolves.toBeUndefined();
+    }
+
+    const symlink = new Error("symbolic link rejected");
+    Object.assign(symlink, { code: "ELOOP" });
+    await expect(
+      assertInaccessible("/masked", async () => {
+        throw symlink;
+      })
+    ).rejects.toMatchObject({ code: "ELOOP" });
+
+    let closed = false;
+    let openFlags = 0;
+    await expect(
+      assertInaccessible("/exposed", async (_value, flags) => {
+        openFlags = flags;
+        return {
+          close: async () => {
+            closed = true;
+          },
+        };
+      })
+    ).rejects.toThrow("Runner namespace exposes /exposed.");
+    expect(closed).toBe(true);
+    expect(openFlags & constants.O_NOFOLLOW).toBe(constants.O_NOFOLLOW);
+  });
+
   it("reconciles a descendant that exits between cgroup membership and identity reads", async () => {
     const response = await runShellCommand(
       "/bin/sh",

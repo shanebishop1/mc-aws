@@ -9,7 +9,18 @@ readonly NODE_RELEASES="$ROOT/node-releases"
 readonly MAX_NODE_ARCHIVE_BYTES=$((64 * 1024 * 1024))
 readonly MAX_RUNTIME_ARCHIVE_BYTES=$((64 * 1024 * 1024))
 readonly MAX_RUNTIME_EXPANDED_BYTES=$((128 * 1024 * 1024))
+readonly MAX_TOOLCHAIN_MANIFEST_BYTES=$((64 * 1024))
+readonly MAX_TOOLCHAIN_FILE_BYTES=$((64 * 1024 * 1024))
+readonly MAX_TOOLCHAIN_METADATA_BYTES=$((256 * 1024))
+readonly REVIEWED_TOOLCHAIN_MANIFEST_BYTES=2678
+readonly REVIEWED_TOOLCHAIN_MANIFEST_SHA256=42995aec9022b04e5c11809347acbaa8b7150d9bd0d4da35a95ee3be8c2d312a
+readonly REVIEWED_TOOLCHAIN_BINARY_BYTES=1127576
+readonly REVIEWED_TOOLCHAIN_BINARY_SHA256=a00157aada30be47277accd8f4ee8e93bbc55f3ac9722dd5e7008114d86a21c2
+readonly REVIEWED_TOOLCHAIN_LOCK_BYTES=294
+readonly REVIEWED_TOOLCHAIN_LOCK_SHA256=0abf0af10e87923383055304fdd167664e5a2dbab887db491e0c3e34ee5a3ffc
+readonly TOOLCHAIN_FAULT_PHASES=(toolchain-swapped manifest-backed-up manifest-swapped)
 readonly NODE_VERSION=22.19.0
+readonly TOOLCHAIN_MANIFEST=/etc/mc-agent/shell-toolchain.json
 readonly RECEIPT_ROTATION_JOURNAL=/var/lib/mc-agent-executor/executor-receipt-rotation.json
 readonly RECEIPT_ROTATION_BACKUP=/etc/mc-agent/.executor-receipt-private.retiring.pem
 MAINTENANCE_LOCK="${MC_MAINTENANCE_LOCK:-}"
@@ -98,8 +109,8 @@ ensure_host_layout() {
   install -d -o root -g root -m 0755 "$ROOT" "$RELEASES" "$NODE_RELEASES"
   install -d -o root -g root -m 0755 "$ROOT/executor-root"/{workspace,scratch,runtime,config,usr/bin,usr/local/bin,usr/lib,usr/lib64,lib64,run/mc-agent,run/mc-agent-download}
   install -d -o root -g root -m 0755 "$ROOT"/{tool-read-root,tool-write-root,toolchain}
-  install -d -o root -g root -m 0755 "$ROOT/tool-read-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64}
-  install -d -o root -g root -m 0755 "$ROOT/tool-write-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64}
+  install -d -o root -g root -m 0755 "$ROOT/tool-read-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64,run}
+  install -d -o root -g root -m 0755 "$ROOT/tool-write-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64,run}
   install -d -o mc-agent-executor -g mc-agent-executor -m 0700 /var/lib/mc-agent-executor
   install -d -o mc-agent-gateway -g mc-agent-gateway -m 0700 /var/lib/mc-agent-gateway /var/lib/mc-agent-gateway/{work,pi}
   install -d -o root -g root -m 0755 /run/mc-agent
@@ -292,6 +303,162 @@ PY
   chown -R root:root "$temporary"; chmod 0755 "$temporary" "$temporary/bin" "$temporary/bin/node"
   mv -- "$temporary" "$release"
   trap - RETURN
+}
+
+install_toolchain() {
+  assert_maintenance_fence
+  local payload="$1" manifest_sha256="$2" manifest_bytes="$3"
+  [[ -d "$payload" && ! -L "$payload" ]] || fail "shell toolchain payload is not a real directory"
+  [[ "$manifest_sha256" == "$REVIEWED_TOOLCHAIN_MANIFEST_SHA256" && "$manifest_bytes" == "$REVIEWED_TOOLCHAIN_MANIFEST_BYTES" ]] || \
+    fail "shell toolchain manifest is not the repository-pinned artifact"
+  validate_file "$payload/shell-toolchain.json" "$manifest_sha256" "$manifest_bytes" "$MAX_TOOLCHAIN_MANIFEST_BYTES" "shell toolchain manifest"
+  local temporary; temporary="$(mktemp -d "$ROOT/.toolchain.XXXXXX")"
+  local old_toolchain="$ROOT/.toolchain-previous.$$" old_manifest="/etc/mc-agent/.shell-toolchain-previous.$$"
+  local toolchain_moved=0 manifest_moved=0 toolchain_published=0 manifest_published=0
+  toolchain_transaction_cleanup() {
+    local status="$1"
+    trap - RETURN
+    if (( status != 0 )); then
+      rm -f -- "/etc/mc-agent/.shell-toolchain-new.$$"
+      if (( manifest_published == 1 )); then rm -f -- "$TOOLCHAIN_MANIFEST"; fi
+      if (( manifest_moved == 1 )); then mv -Tf -- "$old_manifest" "$TOOLCHAIN_MANIFEST" || true; fi
+      if (( toolchain_published == 1 )); then rm -rf -- "$ROOT/toolchain"; fi
+      if (( toolchain_moved == 1 )); then mv -Tf -- "$old_toolchain" "$ROOT/toolchain" || true; fi
+    else
+      rm -rf -- "$old_toolchain"
+      rm -f -- "$old_manifest"
+    fi
+    rm -rf -- "$temporary"
+    return "$status"
+  }
+  trap 'toolchain_transaction_cleanup "$?"' RETURN
+  python3 - "$payload" "$temporary" "$MAX_TOOLCHAIN_FILE_BYTES" "$REVIEWED_TOOLCHAIN_MANIFEST_BYTES" "$REVIEWED_TOOLCHAIN_MANIFEST_SHA256" "$REVIEWED_TOOLCHAIN_BINARY_BYTES" "$REVIEWED_TOOLCHAIN_BINARY_SHA256" "$REVIEWED_TOOLCHAIN_LOCK_BYTES" "$REVIEWED_TOOLCHAIN_LOCK_SHA256" <<'PY'
+import hashlib, json, os, pathlib, shutil, stat, sys
+
+payload, destination = map(pathlib.Path, sys.argv[1:3])
+maximum = int(sys.argv[3])
+expected_manifest_bytes, expected_manifest_sha, expected_binary_bytes, expected_binary_sha, expected_lock_bytes, expected_lock_sha = sys.argv[4:]
+expected_manifest_bytes = int(expected_manifest_bytes)
+expected_binary_bytes = int(expected_binary_bytes)
+expected_lock_bytes = int(expected_lock_bytes)
+manifest = json.loads((payload / "shell-toolchain.json").read_text(encoding="ascii"))
+applets = [
+    "ash", "awk", "basename", "cat", "chmod", "chown", "cmp", "cp", "cut", "date", "dd", "df", "dirname",
+    "echo", "env", "expr", "false", "find", "grep", "head", "id", "kill", "ln", "ls", "mkdir", "mktemp",
+    "mv", "printenv", "printf", "pwd", "readlink", "realpath", "rm", "rmdir", "sed", "seq", "sh", "sleep",
+    "sort", "stat", "tail", "tee", "test", "touch", "tr", "true", "uname", "uniq", "wc", "which", "xargs",
+]
+if set(manifest) != {"schemaVersion", "platform", "source", "build", "applets", "executables"} or manifest["schemaVersion"] != 1 or manifest["platform"] != "linux-arm64":
+    raise SystemExit("shell toolchain manifest schema is invalid")
+if manifest["applets"] != applets:
+    raise SystemExit("shell toolchain applet inventory is invalid")
+source = manifest["source"]
+signature = source["signature"]
+build = manifest["build"]
+if set(source) != {"path", "bytes", "sha256", "url", "signature", "publicKey", "license"} or source["path"] != "/toolchain/src/busybox-1.38.0.tar.bz2" or source["url"] != "https://busybox.net/downloads/busybox-1.38.0.tar.bz2" or source["license"] != "GPL-2.0-only":
+    raise SystemExit("shell toolchain source provenance is invalid")
+if set(signature) != {"path", "bytes", "sha256", "url", "signerFingerprint"} or signature["path"] != "/toolchain/src/busybox-1.38.0.tar.bz2.sig" or signature["url"] != "https://busybox.net/downloads/busybox-1.38.0.tar.bz2.sig" or signature["signerFingerprint"] != "C9E9416F76E610DBD09D040F47B70C55ACC9965B":
+    raise SystemExit("shell toolchain signature provenance is invalid")
+public_key = source["publicKey"]
+if set(public_key) != {"path", "bytes", "sha256", "url"} or public_key["path"] != "/toolchain/src/vda_pubkey.gpg" or public_key["url"] != "https://busybox.net/~vda/vda_pubkey.gpg":
+    raise SystemExit("shell toolchain public key provenance is invalid")
+expected_build = {
+    "version": "1.38.0", "compiler": "gcc 13.3.0", "libc": "glibc 2.39", "binutils": "binutils 2.42",
+    "configPath": "/toolchain/build/busybox-1.38.0.config", "configFragmentPath": "/toolchain/build/busybox-1.38.0.config.fragment",
+    "recipePath": "/toolchain/build/build-shell-toolchain.sh", "static": True, "standaloneApplets": True,
+}
+if any(build.get(key) != value for key, value in expected_build.items()) or set(build) != set(expected_build) | {"configBytes", "configSha256", "configFragmentBytes", "configFragmentSha256", "recipeBytes", "recipeSha256", "licenseStatus", "licenseNote"}:
+    raise SystemExit("shell toolchain build provenance is invalid")
+if build["licenseStatus"] not in ("qualified", "local-disposable-testing-only;-public-distribution-blocked") or not isinstance(build["licenseNote"], str) or not build["licenseNote"]:
+    raise SystemExit("shell toolchain license provenance is invalid")
+if build["licenseStatus"] == "local-disposable-testing-only;-public-distribution-blocked" and build["licenseNote"] != "BusyBox source is retained; static glibc corresponding-source obligations are not staged.":
+    raise SystemExit("shell toolchain local-disposable license note is invalid")
+expected_files = {
+    "bin/sh", "src/busybox-1.38.0.tar.bz2", "src/busybox-1.38.0.tar.bz2.sig", "src/vda_pubkey.gpg",
+    "build/busybox-1.38.0.config", "build/busybox-1.38.0.config.fragment", "build/build-shell-toolchain.sh",
+    "build/shell-toolchain-lock.json",
+}
+def record(path, expected_bytes, expected_sha, expected_mode, file_maximum=maximum):
+    if not isinstance(expected_bytes, int) or expected_bytes < 1 or expected_bytes > file_maximum or not isinstance(expected_sha, str) or len(expected_sha) != 64 or any(c not in "0123456789abcdef" for c in expected_sha):
+        raise SystemExit("shell toolchain file identity is invalid")
+    metadata = path.lstat()
+    if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1 or metadata.st_size != expected_bytes or stat.S_IMODE(metadata.st_mode) != expected_mode:
+        raise SystemExit("shell toolchain file metadata is unsafe")
+    if hashlib.sha256(path.read_bytes()).hexdigest() != expected_sha:
+        raise SystemExit("shell toolchain file digest mismatch")
+record(payload / "src/busybox-1.38.0.tar.bz2", source["bytes"], source["sha256"], 0o644)
+record(payload / "src/busybox-1.38.0.tar.bz2.sig", signature["bytes"], signature["sha256"], 0o644)
+record(payload / "src/vda_pubkey.gpg", public_key["bytes"], public_key["sha256"], 0o644)
+record(payload / "build/busybox-1.38.0.config", build["configBytes"], build["configSha256"], 0o644, 256 * 1024)
+record(payload / "build/busybox-1.38.0.config.fragment", build["configFragmentBytes"], build["configFragmentSha256"], 0o644, 256 * 1024)
+record(payload / "build/build-shell-toolchain.sh", build["recipeBytes"], build["recipeSha256"], 0o755, 256 * 1024)
+record(payload / "build/shell-toolchain-lock.json", expected_lock_bytes, expected_lock_sha, 0o644, 256 * 1024)
+manifest_metadata = (payload / "shell-toolchain.json").lstat()
+if not stat.S_ISREG(manifest_metadata.st_mode) or manifest_metadata.st_nlink != 1 or stat.S_IMODE(manifest_metadata.st_mode) != 0o644:
+    raise SystemExit("shell toolchain manifest metadata is unsafe")
+executable = manifest["executables"]
+if not isinstance(executable, list) or len(executable) != 1 or executable[0] != {"name": "sh", "path": "/toolchain/bin/sh", "bytes": executable[0].get("bytes"), "sha256": executable[0].get("sha256"), "mode": "0755"}:
+    raise SystemExit("shell toolchain executable inventory is invalid")
+if executable[0]["bytes"] != expected_binary_bytes or executable[0]["sha256"] != expected_binary_sha:
+    raise SystemExit("shell toolchain executable is not the repository-pinned artifact")
+if manifest_metadata.st_size != expected_manifest_bytes:
+    raise SystemExit("shell toolchain manifest is not the repository-pinned artifact")
+if hashlib.sha256((payload / "shell-toolchain.json").read_bytes()).hexdigest() != expected_manifest_sha:
+    raise SystemExit("shell toolchain manifest is not the repository-pinned artifact")
+lock = json.loads((payload / "build/shell-toolchain-lock.json").read_text(encoding="ascii"))
+if lock != {"schemaVersion": 1, "manifest": {"bytes": expected_manifest_bytes, "sha256": expected_manifest_sha}, "executable": {"path": "bin/sh", "bytes": expected_binary_bytes, "sha256": expected_binary_sha}}:
+    raise SystemExit("shell toolchain lock is not the repository-pinned artifact")
+record(payload / "bin/sh", executable[0]["bytes"], executable[0]["sha256"], 0o755, 16 * 1024 * 1024)
+actual = {str(path.relative_to(payload)) for path in payload.rglob("*") if path.is_file()}
+if actual != expected_files | {"shell-toolchain.json"}:
+    raise SystemExit("shell toolchain payload contains an unreviewed file")
+for path in payload.rglob("*"):
+    if path.is_symlink():
+        raise SystemExit("shell toolchain payload contains a link")
+for relative in sorted(expected_files):
+    source_path = payload / relative
+    target = destination / relative
+    target.parent.mkdir(mode=0o755, parents=True, exist_ok=True)
+    shutil.copyfile(source_path, target)
+    os.chmod(target, 0o755 if relative in {"bin/sh", "build/build-shell-toolchain.sh"} else 0o644)
+for current, directories, _ in os.walk(destination):
+    os.chmod(current, 0o755)
+PY
+  [[ ! -e "/etc/mc-agent/.shell-toolchain-new.$$" && ! -L "/etc/mc-agent/.shell-toolchain-new.$$" ]] || fail "temporary shell toolchain manifest path is unsafe"
+  if [[ -e "$TOOLCHAIN_MANIFEST" || -L "$TOOLCHAIN_MANIFEST" ]]; then
+    [[ -f "$TOOLCHAIN_MANIFEST" && ! -L "$TOOLCHAIN_MANIFEST" && ! -e "$old_manifest" ]] || fail "existing shell toolchain manifest is unsafe"
+  fi
+  install -o root -g root -m 0644 "$payload/shell-toolchain.json" "/etc/mc-agent/.shell-toolchain-new.$$"
+  if [[ -e "$ROOT/toolchain" || -L "$ROOT/toolchain" ]]; then
+    [[ -d "$ROOT/toolchain" && ! -L "$ROOT/toolchain" && ! -e "$old_toolchain" ]] || fail "existing shell toolchain path is unsafe"
+    mv -Tf -- "$ROOT/toolchain" "$old_toolchain"
+    toolchain_moved=1
+  fi
+  mv -Tf -- "$temporary" "$ROOT/toolchain"
+  temporary=""
+  toolchain_published=1
+  if [[ "${MC_AGENT_TOOLCHAIN_FAULT_AFTER:-}" == toolchain-swapped ]]; then
+    [[ "${MC_AGENT_TOOLCHAIN_TEST_MODE:-0}" == "1" ]] || fail "toolchain fault injection requires isolated test mode"
+    toolchain_transaction_cleanup 1 || true
+    fail "injected shell toolchain failure after toolchain swap"
+  fi
+  if [[ -e "$TOOLCHAIN_MANIFEST" || -L "$TOOLCHAIN_MANIFEST" ]]; then
+    mv -Tf -- "$TOOLCHAIN_MANIFEST" "$old_manifest"
+    manifest_moved=1
+  fi
+  if [[ "${MC_AGENT_TOOLCHAIN_FAULT_AFTER:-}" == manifest-backed-up ]]; then
+    [[ "${MC_AGENT_TOOLCHAIN_TEST_MODE:-0}" == "1" ]] || fail "toolchain fault injection requires isolated test mode"
+    toolchain_transaction_cleanup 1 || true
+    fail "injected shell toolchain failure after manifest backup"
+  fi
+  mv -Tf -- "/etc/mc-agent/.shell-toolchain-new.$$" "$TOOLCHAIN_MANIFEST"
+  manifest_published=1
+  if [[ "${MC_AGENT_TOOLCHAIN_FAULT_AFTER:-}" == manifest-swapped ]]; then
+    [[ "${MC_AGENT_TOOLCHAIN_TEST_MODE:-0}" == "1" ]] || fail "toolchain fault injection requires isolated test mode"
+    toolchain_transaction_cleanup 1 || true
+    fail "injected shell toolchain failure after manifest swap"
+  fi
+  toolchain_transaction_cleanup 0
 }
 
 install_runtime() {
@@ -635,6 +802,15 @@ case "${1:-}" in
     ensure_host_layout "${2:-}"
     exit 0
     ;;
+  install-toolchain)
+    (( $# == 4 )) || fail "Usage: mc-agent-install.sh install-toolchain <toolchain-payload> <manifest-sha256> <manifest-bytes>"
+    [[ "$3" =~ ^[a-f0-9]{64}$ ]] || fail "shell toolchain manifest digest is invalid"
+    recover_receipt_key_rotation
+    ensure_host_layout
+    validate_file "$2/shell-toolchain.json" "$3" "$4" "$MAX_TOOLCHAIN_MANIFEST_BYTES" "shell toolchain manifest"
+    install_toolchain "$2" "$3" "$4"
+    exit 0
+    ;;
 esac
 
 recover_receipt_key_rotation
@@ -679,5 +855,5 @@ rollback-transition)
       fail "Usage: mc-agent-install.sh rotate-receipt-key --confirm-hard-stop ROTATE-EXECUTOR-RECEIPT-KEY"
     rotate_receipt_key "$3"
     ;;
-  *) fail "Usage: mc-agent-install.sh <install|install-runtime-only|rollback-transition|rotate-clean-start-epoch|rotate-receipt-key> ..." ;;
+  *) fail "Usage: mc-agent-install.sh <install|install-toolchain|install-runtime-only|rollback-transition|rotate-clean-start-epoch|rotate-receipt-key> ..." ;;
 esac

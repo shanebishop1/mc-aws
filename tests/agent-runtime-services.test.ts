@@ -264,11 +264,26 @@ describe("agent runtime host services", () => {
       expect(unit).toContain("BindReadOnlyPaths=/opt/mc-agent/toolchain:/toolchain");
       expect(unit).toContain("KillMode=control-group");
       expect(unit).not.toContain("LoadCredential=");
+      const accessPathDirectives = unit.match(/^(?:NoExecPaths|ExecPaths|InaccessiblePaths)=.*$/gm) ?? [];
+      expect(accessPathDirectives).toHaveLength(3);
+      for (const directive of accessPathDirectives) {
+        const paths = directive.slice(directive.indexOf("=") + 1).split(" ");
+        expect(paths.every((entry) => /^(?:-)?\+\//.test(entry))).toBe(true);
+      }
+      expect(unit).toContain("NoExecPaths=+/workspace");
+      expect(unit).toContain("InaccessiblePaths=-+/root -+/home -+/etc/mc-agent +/run +/run/credentials");
+      expect(unit).not.toContain("TemporaryFileSystem=/run");
     }
     expect(toolRead).toContain("shell-runner-cli.mjs --read-only");
     expect(installer).toContain("usermod --gid mc-agent-tool --groups mc-agent-workspace mc-agent-tool");
     expect(toolWrite).toContain("shell-runner-cli.mjs --staged-write");
-    expect(toolWrite).toContain("TemporaryFileSystem=/changes:rw");
+    expect(toolWrite).toContain("TemporaryFileSystem=/changes:rw,nosuid,nodev,noexec");
+    expect(installer).toContain(
+      '"$ROOT/tool-read-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64,run}'
+    );
+    expect(installer).toContain(
+      '"$ROOT/tool-write-root"/{workspace,runtime,config,toolchain,usr/lib,usr/lib64,lib64,run}'
+    );
     expect(toolReadSocket).toContain("SocketGroup=mc-agent-executor-client");
     expect(toolWriteSocket).toContain("SocketGroup=mc-agent-executor-client");
     expect(toolReadSocket).toContain("ListenStream=/run/mc-agent/shell-read.sock");

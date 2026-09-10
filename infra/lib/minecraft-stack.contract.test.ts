@@ -85,6 +85,7 @@ const stackEnvironmentNames = [
   "MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_CHECKPOINT_BACKUP_ID",
   "MC_BACKUP_RECOVERY_CAPSULE_EFFECTIVE_FLOOR_BACKUP_ID",
   "MC_AWS_SETUP_CLAIM_TOKEN",
+  "MC_SHELL_TOOLCHAIN_PACKAGE_MODE",
 ] as const;
 
 const backupFencePrivateKey = generateKeyPairSync("ed25519")
@@ -138,6 +139,7 @@ const synthesizeStack = (stackEnvironment: Partial<Record<(typeof stackEnvironme
   Object.assign(process.env, {
     AL2023_ARM64_AMI_ID: `ami-${"1".repeat(17)}`,
     MC_ALLOW_EMPTY_WHITELIST: "true",
+    MC_SHELL_TOOLCHAIN_PACKAGE_MODE: "local-disposable",
     ...stackEnvironment,
   });
 

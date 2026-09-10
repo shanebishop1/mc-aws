@@ -773,6 +773,11 @@ import hashlib, json, os, sys
 manifest_path, evidence_path = sys.argv[1:]
 manifest = json.load(open(manifest_path, encoding="utf-8"))
 evidence = set(open(evidence_path, encoding="utf-8").read().splitlines())
+shell = manifest.get("shellToolchain")
+if manifest.get("packagingMode") not in ("qualified", "local-disposable"):
+    raise SystemExit("installed host release packaging mode is invalid")
+if not isinstance(shell, dict) or set(shell) != {"path", "bytes", "sha256"} or shell.get("path") != "toolchain/shell-toolchain.json":
+    raise SystemExit("installed shell toolchain release identity is incomplete")
 transformed = {
     "/etc/mc-agent/world-roots-current/gateway.json",
     "/etc/mc-agent/world-roots-current/executor.json",

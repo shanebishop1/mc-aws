@@ -7,6 +7,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import type { ShellCommand } from "../../lib/agent/contracts";
 import { MAX_SHELL_COMMAND_BYTES, MAX_SHELL_TIMEOUT_MS, parseShellCommand } from "../../lib/agent/executor/guards";
 import type { UntrustedStagedResult } from "../../lib/agent/executor/types";
+import type { ShellRunnerRunMountDiagnostic, ShellRunnerSandboxPhaseReporter } from "./shell-runner-startup";
 
 export const MAX_SHELL_OUTPUT_BYTES = 1024 * 1024;
 export const MAX_SHELL_RESULT_BYTES = 1024 * 1024;
@@ -123,14 +124,20 @@ async function cgroupSnapshot(cgroupPath: string, reader: ProcessStateReader): P
   return result;
 }
 
-export async function assertCurrentRunnerCgroup(): Promise<void> {
+export async function assertCurrentRunnerCgroup(
+  reportPhase: ShellRunnerSandboxPhaseReporter = () => {}
+): Promise<void> {
+  reportPhase("cgroup-path");
   const cgroupPath = await cgroupProcsPath();
+  reportPhase("cgroup-membership");
   const members = await cgroupSnapshot(cgroupPath, defaultProcessStateReader);
   if (!members.has(process.pid)) throw new Error("Runner is not in its service cgroup.");
+  reportPhase("cgroup-memory");
   const memory = (await readFile(cgroupPath.replace(/cgroup\.procs$/, "memory.max"), "utf8")).trim();
-  const pids = (await readFile(cgroupPath.replace(/cgroup\.procs$/, "pids.max"), "utf8")).trim();
   if (!/^\d+$/.test(memory) || Number(memory) < 1 || Number(memory) > 96 * 1024 * 1024)
     throw new Error("Runner memory cgroup bound is unavailable.");
+  reportPhase("cgroup-tasks");
+  const pids = (await readFile(cgroupPath.replace(/cgroup\.procs$/, "pids.max"), "utf8")).trim();
   if (!/^\d+$/.test(pids) || Number(pids) < 1 || Number(pids) > 32)
     throw new Error("Runner process cgroup bound is unavailable.");
 }
@@ -323,22 +330,79 @@ export async function runShellCommand(
   }
 }
 
-function mountInfo(
-  mounts: string,
-  mountPoint: string
-): { options: string[]; filesystem: string; superOptions: string[] } {
-  const line = mounts.split("\n").find((candidate) => candidate.split(" - ")[0]?.split(" ")[4] === mountPoint);
-  if (!line) throw new Error(`Required mount is unavailable: ${mountPoint}`);
+interface MountInfo {
+  mountId: string;
+  root: string;
+  mountPoint: string;
+  options: string[];
+  filesystem: string;
+}
+
+function parseMountInfoLine(line: string, mountPoint: string): MountInfo {
   const [left, right] = line.split(" - ");
   const leftFields = left.split(" ");
   const rightFields = right?.split(" ");
-  if (!rightFields?.[0] || !leftFields[5] || !rightFields[2])
+  if (!rightFields?.[0] || !leftFields[0] || !leftFields[3] || !leftFields[4] || !leftFields[5] || !rightFields[2])
     throw new Error(`Mount metadata is invalid: ${mountPoint}`);
   return {
+    mountId: leftFields[0],
+    root: leftFields[3],
+    mountPoint: leftFields[4],
     options: leftFields[5].split(","),
     filesystem: rightFields[0],
-    superOptions: rightFields[2].split(","),
   };
+}
+
+function mountInfo(mounts: string, mountPoint: string): MountInfo {
+  const line = mounts.split("\n").find((candidate) => candidate.split(" - ")[0]?.split(" ")[4] === mountPoint);
+  if (!line) throw new Error(`Required mount is unavailable: ${mountPoint}`);
+  return parseMountInfoLine(line, mountPoint);
+}
+
+const UNKNOWN_RUN_MOUNT: Omit<ShellRunnerRunMountDiagnostic, "root"> = {
+  filesystem: "unknown",
+  access: "unknown",
+  suid: "unknown",
+  devices: "unknown",
+  execution: "unknown",
+};
+
+function classifyRunMountRoot(mount: MountInfo): ShellRunnerRunMountDiagnostic["root"] {
+  if (mount.mountPoint !== "/run") return "not-mountpoint";
+  if (mount.root === "/systemd/inaccessible/dir") return "systemd-inaccessible";
+  return mount.root === "/" ? "filesystem-root" : "other";
+}
+
+/** Reduces the exact mount reached by an open /run fd to fixed identifiers without disclosing paths or sources. */
+export function classifyRunMount(mounts: string, mountId?: string): ShellRunnerRunMountDiagnostic {
+  if (!mountId) return { root: "unresolved", ...UNKNOWN_RUN_MOUNT };
+  const line = mounts.split("\n").find((candidate) => candidate.split(" ")[0] === mountId);
+  if (!line) return { root: "missing", ...UNKNOWN_RUN_MOUNT };
+
+  let mount: MountInfo;
+  try {
+    mount = parseMountInfoLine(line, "/run");
+  } catch {
+    return { root: "malformed", ...UNKNOWN_RUN_MOUNT };
+  }
+
+  return {
+    root: classifyRunMountRoot(mount),
+    filesystem: mount.filesystem === "tmpfs" ? "tmpfs" : "other",
+    access: mount.options.includes("rw") ? "rw" : mount.options.includes("ro") ? "ro" : "unknown",
+    suid: mount.options.includes("nosuid") ? "nosuid" : "suid",
+    devices: mount.options.includes("nodev") ? "nodev" : "dev",
+    execution: mount.options.includes("noexec") ? "noexec" : "exec",
+  };
+}
+
+async function mountIdForFileDescriptor(fd: number): Promise<string | undefined> {
+  try {
+    const fdinfo = await readFile(`/proc/self/fdinfo/${fd}`, "utf8");
+    return fdinfo.match(/^mnt_id:\s+(\d+)$/m)?.[1];
+  } catch {
+    return undefined;
+  }
 }
 
 function assertMount(mounts: string, mountPoint: string, required: readonly string[]): void {
@@ -347,38 +411,86 @@ function assertMount(mounts: string, mountPoint: string, required: readonly stri
     throw new Error(`Mount options are unsafe: ${mountPoint}`);
 }
 
-async function assertInaccessible(value: string): Promise<void> {
+/** Validates tmpfs identity and the per-mount VFS flags reported in mountinfo field 6. */
+export function assertStagedChangesMount(mounts: string): void {
+  const mount = mountInfo(mounts, SHELL_CHANGES_ROOT);
+  if (
+    mount.filesystem !== "tmpfs" ||
+    ["rw", "nosuid", "nodev", "noexec"].some((option) => !mount.options.includes(option))
+  )
+    throw new Error("Shell runner changes mount is unsafe.");
+}
+
+export interface InaccessiblePathHandle {
+  close(): Promise<void>;
+}
+
+export type InaccessiblePathOpener = (value: string, flags: number) => Promise<InaccessiblePathHandle>;
+
+/** Proves that a path cannot be opened; stat alone can see a systemd mode-000 inaccessible mount point. */
+export async function assertInaccessible(value: string, openPath: InaccessiblePathOpener = open): Promise<void> {
+  let handle: InaccessiblePathHandle;
   try {
-    await stat(value);
-    throw new Error(`Runner namespace exposes ${value}.`);
+    handle = await openPath(value, constants.O_RDONLY | constants.O_NOFOLLOW);
   } catch (error) {
     const code = (error as NodeJS.ErrnoException).code;
-    if (code !== "ENOENT" && code !== "EACCES") throw error;
+    if (code === "ENOENT" || code === "EACCES") return;
+    throw error;
+  }
+  try {
+    throw new Error(`Runner namespace exposes ${value}.`);
+  } finally {
+    await handle.close();
   }
 }
 
 /** Proves the installed service namespace, not a caller-selected environment flag. */
-export async function assertShellRunnerSandbox(mode: ShellCommand["mode"]): Promise<void> {
-  if (process.platform !== "linux" || process.arch !== "arm64" || process.getuid?.() === 0)
+export async function assertShellRunnerSandbox(
+  mode: ShellCommand["mode"],
+  reportPhase: ShellRunnerSandboxPhaseReporter = () => {}
+): Promise<void> {
+  reportPhase("principal-platform");
+  if (process.platform !== "linux" || process.arch !== "arm64")
     throw new Error("Shell runner must run as an unprivileged Linux ARM64 user.");
+  reportPhase("principal-user");
+  if (process.getuid?.() === 0) throw new Error("Shell runner must run as an unprivileged Linux ARM64 user.");
+  reportPhase("principal-groups");
   const groups = process.getgroups?.() ?? [];
   if (process.getgid?.() === 0 || groups.includes(0)) throw new Error("Shell runner group isolation failed.");
-  await assertCurrentRunnerCgroup();
+  await assertCurrentRunnerCgroup(reportPhase);
+  reportPhase("mount-table");
   const mounts = await readFile("/proc/self/mountinfo", "utf8");
+  reportPhase("workspace-metadata");
   const workspace = await stat(SHELL_WORKSPACE_ROOT);
   if (!workspace.isDirectory()) throw new Error("Shell runner workspace mount is unavailable.");
+  reportPhase("workspace-mount");
   assertMount(mounts, SHELL_WORKSPACE_ROOT, ["ro"]);
+  reportPhase("toolchain-mount");
   assertMount(mounts, "/toolchain", ["ro"]);
+  reportPhase("runtime-current-mount");
   assertMount(mounts, "/runtime/current", ["ro"]);
+  reportPhase("runtime-node-mount");
   assertMount(mounts, "/runtime/node-current", ["ro"]);
-  await assertInaccessible("/run");
+  reportPhase("inaccessible-run");
+  await assertInaccessible("/run", async (value, flags) => {
+    const handle = await open(value, flags);
+    reportPhase("inaccessible-run", classifyRunMount(mounts, await mountIdForFileDescriptor(handle.fd)));
+    return handle;
+  });
+  reportPhase("inaccessible-credentials");
   await assertInaccessible("/run/credentials");
+  reportPhase("inaccessible-config");
   await assertInaccessible("/etc/mc-agent");
+  reportPhase("inaccessible-executor-state");
   await assertInaccessible("/var/lib/mc-agent-executor");
+  reportPhase("inaccessible-executor-root");
   await assertInaccessible("/runtime/executor-root");
+  reportPhase("inaccessible-read-root");
   await assertInaccessible("/runtime/tool-read-root");
+  reportPhase("inaccessible-write-root");
   await assertInaccessible("/runtime/tool-write-root");
   if (mode === "staged-write") {
+    reportPhase("changes-metadata");
     const changes = await stat(SHELL_CHANGES_ROOT);
     if (
       !changes.isDirectory() ||
@@ -387,16 +499,10 @@ export async function assertShellRunnerSandbox(mode: ShellCommand["mode"]): Prom
       (changes.mode & 0o777) !== 0o700
     )
       throw new Error("Shell runner changes mount ownership or mode is unsafe.");
-    const mount = mountInfo(mounts, SHELL_CHANGES_ROOT);
-    if (
-      mount.filesystem !== "tmpfs" ||
-      !mount.options.includes("rw") ||
-      !mount.superOptions.includes("nosuid") ||
-      !mount.superOptions.includes("nodev") ||
-      !mount.superOptions.includes("noexec")
-    )
-      throw new Error("Shell runner changes mount is unsafe.");
+    reportPhase("changes-mount");
+    assertStagedChangesMount(mounts);
   } else {
+    reportPhase("changes-inaccessible");
     await assertInaccessible(SHELL_CHANGES_ROOT);
   }
 }

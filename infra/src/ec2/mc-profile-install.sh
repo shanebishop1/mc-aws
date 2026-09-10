@@ -536,6 +536,7 @@ chown -R root:root "$runtime_release" "$profile_release"
 find "$runtime_release" "$profile_release" -type d -exec chmod 0755 {} +
 find "$runtime_release" "$profile_release" -type f -exec chmod 0644 {} +
 chmod 0755 "$runtime_release/host"/*.sh "$runtime_release/host"/*.py
+chmod 0755 "$runtime_release/toolchain/bin/sh" "$runtime_release/toolchain/build/build-shell-toolchain.sh"
 
 # Config files are release members too.  Stage them under the transaction's
 # private directory before any /etc destination is inspected; reconciliation
@@ -557,21 +558,30 @@ python3 - "$runtime_release/release-manifest.json" "$runtime_release" <<'PY'
 import hashlib, json, os, stat, sys
 manifest_path, root = sys.argv[1:]
 value = json.load(open(manifest_path, encoding="utf-8"))
-if set(value) != {"schemaVersion", "release", "releaseVersion", "bootstrapPins", "files", "agentRuntime"} or value["schemaVersion"] != 1 or value["release"] != "mc-aws-host-runtime" or value["releaseVersion"] != 1:
+if set(value) != {"schemaVersion", "release", "releaseVersion", "packagingMode", "bootstrapPins", "files", "agentRuntime", "shellToolchain"} or value["schemaVersion"] != 1 or value["release"] != "mc-aws-host-runtime" or value["releaseVersion"] != 1 or value["packagingMode"] not in ("qualified", "local-disposable"):
     raise SystemExit("invalid host release manifest")
 if not isinstance(value["files"], list) or not value["files"]:
     raise SystemExit("host release inventory is empty")
+shell = value["shellToolchain"]
+if not isinstance(shell, dict) or set(shell) != {"path", "bytes", "sha256"} or shell["path"] != "toolchain/shell-toolchain.json" or not isinstance(shell["bytes"], int) or shell["bytes"] < 1 or shell["bytes"] > 65536 or not isinstance(shell["sha256"], str) or not __import__("re").fullmatch(r"[a-f0-9]{64}", shell["sha256"]):
+    raise SystemExit("invalid shell toolchain release identity")
 seen = set()
 config_destinations = {
     "/etc/mc-agent/world-roots-current/gateway.json",
     "/etc/mc-agent/world-roots-current/executor.json",
+    "/etc/mc-agent/shell-toolchain.json",
 }
 for item in value["files"]:
     if not isinstance(item, dict) or set(item) != {"path", "destination", "bytes", "sha256", "mode"}:
         raise SystemExit("invalid host release member record")
     path = item["path"]
-    if path in seen or not path.startswith("host/") or ".." in path.split("/") or not isinstance(item["destination"], str) or not isinstance(item["bytes"], int) or not isinstance(item["sha256"], str) or item["mode"] not in ("0644", "0755"):
+    if path in seen or not (path.startswith("host/") or path.startswith("toolchain/")) or ".." in path.split("/") or not isinstance(item["destination"], str) or not isinstance(item["bytes"], int) or not isinstance(item["sha256"], str) or item["mode"] not in ("0644", "0755"):
         raise SystemExit("invalid host release member")
+    if path == "toolchain/shell-toolchain.json":
+        if item["destination"] != "/etc/mc-agent/shell-toolchain.json" or item["bytes"] != shell["bytes"] or item["sha256"] != shell["sha256"]:
+            raise SystemExit("shell toolchain release identity does not match its member")
+    elif path.startswith("toolchain/") and item["destination"] != "/opt/mc-agent/toolchain/" + path.removeprefix("toolchain/"):
+        raise SystemExit("shell toolchain member destination is invalid")
     seen.add(path)
     target = os.path.join(root, *path.split("/"))
     # The two config members are intentionally transformed by root
@@ -581,7 +591,16 @@ for item in value["files"]:
         continue
     if not os.path.isfile(target) or os.path.islink(target) or os.path.getsize(target) != item["bytes"] or hashlib.sha256(open(target, "rb").read()).hexdigest() != item["sha256"]:
         raise SystemExit("host release member digest or size mismatch")
-actual = {os.path.join("host", name) for name in os.listdir(os.path.join(root, "host"))}
+actual = set()
+for directory in ("host", "toolchain"):
+    base = os.path.join(root, directory)
+    for current, directories, names in os.walk(base, followlinks=False):
+        for name in directories + names:
+            entry = os.path.join(current, name)
+            if os.path.islink(entry) or not (os.path.isdir(entry) or os.path.isfile(entry)):
+                raise SystemExit("host release contains a link or special file")
+        for name in names:
+            actual.add(os.path.relpath(os.path.join(current, name), root))
 if actual != seen:
     raise SystemExit("host release contains an omitted or unmanifested script")
 agent = value["agentRuntime"]
@@ -603,7 +622,7 @@ for name in host-release-manifest.json runtime-hashes.sha256; do
   fi
 done
 install -o root -g root -m 0644 "$runtime_release/release-manifest.json" "$release_rollback/release-manifest.json"
-python3 - "$runtime_release/release-manifest.json" "$release_members" <<'PY'
+  python3 - "$runtime_release/release-manifest.json" "$release_members" <<'PY'
 import json, os, shutil, sys
 manifest, inventory = sys.argv[1:]
 items = json.load(open(manifest, encoding="utf-8"))["files"]
@@ -724,6 +743,18 @@ ln -sfn "$(basename -- "$runtime_release")/host" "$SETUP_ROOT/.runtime-current"
 mv -Tf -- "$SETUP_ROOT/.runtime-current" "$SETUP_ROOT/runtime"
 ln -sfn "$(basename -- "$profile_release")" "$SETUP_ROOT/.profile-current"
 mv -Tf -- "$SETUP_ROOT/.profile-current" "$SETUP_ROOT/profile"
+
+if (( RESTORE_STAGING == 0 )); then
+  readarray -t shell_toolchain_evidence < <(python3 - "$runtime_release/release-manifest.json" <<'PY'
+import json, sys
+item = json.load(open(sys.argv[1], encoding="utf-8"))["shellToolchain"]
+print(item["sha256"]); print(item["bytes"])
+PY
+  )
+  (( ${#shell_toolchain_evidence[@]} == 2 )) || fail "shell toolchain release evidence is incomplete"
+  MC_MAINTENANCE_LOCK="$MAINTENANCE_LOCK" MC_MAINTENANCE_OWNER="$MAINTENANCE_OWNER" MC_MAINTENANCE_PARENT_OPERATION="$MAINTENANCE_PARENT_OPERATION" \
+    bash "$runtime_release/host/mc-agent-install.sh" install-toolchain "$runtime_release/toolchain" "${shell_toolchain_evidence[0]}" "${shell_toolchain_evidence[1]}"
+fi
 
 for script in check-mc-idle.sh mc-rclone-config.sh mc-backup.sh mc-restore.sh mc-hibernate.sh mc-resume.sh mc-wait-ready.sh mc-runtime-rollout.sh update-dns.sh mc-profile-install.sh mc-stop.sh mc-agent-install.sh mc-agent-world-roots.py mc-release-journal.py mc-agent-host-broker.py mc-agent-workspace-dac.py; do
   replace_release_file "$SETUP_ROOT/runtime/$script" "/usr/local/bin/$script" 0755

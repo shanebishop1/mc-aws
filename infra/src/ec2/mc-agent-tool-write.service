@@ -25,8 +25,9 @@ TasksMax=32
 NoNewPrivileges=true
 CapabilityBoundingSet=
 AmbientCapabilities=
-NoExecPaths=/workspace /changes
-ExecPaths=/runtime/current /runtime/node-current /toolchain/bin/sh
+# Access-path directives are host-relative unless + prefixes paths into RootDirectory.
+NoExecPaths=+/workspace
+ExecPaths=+/runtime/current +/runtime/node-current +/toolchain/bin/sh
 ProtectSystem=strict
 ProtectHome=true
 PrivateTmp=true
@@ -62,4 +63,4 @@ BindReadOnlyPaths=/usr/lib64:/usr/lib64
 BindReadOnlyPaths=/lib64:/lib64
 BindReadOnlyPaths=-/etc/mc-agent/shell-toolchain.json:/config/shell-toolchain.json
 TemporaryFileSystem=/changes:rw,nosuid,nodev,noexec,size=8M,mode=0700,uid=mc-agent-tool,gid=mc-agent-tool
-InaccessiblePaths=/root /home /etc/mc-agent /run /run/credentials /var/lib/mc-agent-executor /runtime/executor-root /runtime/tool-read-root /runtime/tool-write-root
+InaccessiblePaths=-+/root -+/home -+/etc/mc-agent +/run +/run/credentials -+/var/lib/mc-agent-executor -+/runtime/executor-root -+/runtime/tool-read-root -+/runtime/tool-write-root

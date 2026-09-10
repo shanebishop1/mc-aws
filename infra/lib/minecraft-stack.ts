@@ -517,7 +517,11 @@ export class MinecraftStack extends cdk.Stack {
       (JSON.parse(
         requireSuccessfulIsolatedBuildChild(
           process.execPath,
-          [path.join(repositoryRoot, "scripts/setup/build-host-release.mjs"), "package"],
+          [
+            path.join(repositoryRoot, "scripts/setup/build-host-release.mjs"),
+            "package",
+            ...(process.env.MC_SHELL_TOOLCHAIN_PACKAGE_MODE === "local-disposable" ? ["--local-disposable"] : []),
+          ],
           repositoryRoot,
           {
             cwd: repositoryRoot,
@@ -627,7 +631,7 @@ print(json.dumps({"ok":True}))`,
         const sourcePath = path.join(source, entry.name);
         if (
           source === profileValidation.directory &&
-          ["bootstrap-pins.json", "mise-pins.json"].includes(entry.name.toLowerCase())
+          ["bootstrap-pins.json", "busybox-1.38.0.config.fragment", "mise-pins.json"].includes(entry.name.toLowerCase())
         ) {
           continue;
         }

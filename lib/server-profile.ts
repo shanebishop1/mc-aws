@@ -38,7 +38,7 @@ const allowedRootFiles = new Set([
 // are never copied into the Minecraft asset. They are still scanned when config/
 // is used as the source so a repository control file cannot smuggle secrets into
 // the staging tree.
-const repositorySupportFiles = new Set(["bootstrap-pins.json", "mise-pins.json"]);
+const repositorySupportFiles = new Set(["bootstrap-pins.json", "busybox-1.38.0.config.fragment", "mise-pins.json"]);
 const allowedDirectories = new Set([
   "config",
   "datapacks",
